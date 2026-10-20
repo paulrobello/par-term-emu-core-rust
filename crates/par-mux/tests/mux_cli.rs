@@ -1962,6 +1962,55 @@ fn wait_output_does_not_block_other_clients() {
     );
 }
 
+/// A `wait-output` parked for seconds on a pane printing continuously
+/// still answers with exactly the matched line: the CLI's reply path is
+/// unaffected by the `%output` stream it discards while waiting (the
+/// no-queue bound itself is pinned by client.rs's
+/// `discarded_notifications_are_never_queued`).
+#[cfg(unix)]
+#[test]
+fn wait_output_under_continuous_output_exits_zero() {
+    let fixture = MuxFixture::new("cliwaitflood");
+    let _daemon = daemon_with_session(&fixture, "cliwaitflood");
+    let socket = fixture.socket();
+    let pane = pane_ids(&cmd_ok(socket, "list-panes"))
+        .first()
+        .expect("the session has a pane")
+        .clone();
+    let socket_path = socket.to_path_buf();
+    let wait_pane = pane.clone();
+    let waiter = std::thread::spawn(move || {
+        cmd(
+            &socket_path,
+            &format!("wait-output -t {wait_pane} -r '^FLOOD-DONE$' -T 30000"),
+        )
+    });
+    std::thread::sleep(Duration::from_millis(300));
+    let started = Instant::now();
+    cmd_ok(
+        socket,
+        &format!(
+            "send-keys -t {pane} -l 'for i in $(seq 1 150); do echo TICK-$i; sleep 0.02; done; \
+             echo FLOOD\"\"-DONE'"
+        ),
+    );
+    cmd_ok(socket, &format!("send-keys -t {pane} Enter"));
+    let run = waiter.join().expect("the waiting CLI");
+    assert_eq!(
+        run.code,
+        Some(0),
+        "stdout={:?} stderr={:?}",
+        run.stdout,
+        run.stderr
+    );
+    assert_eq!(run.stdout, "FLOOD-DONE\n");
+    assert!(
+        started.elapsed() >= Duration::from_secs(3),
+        "the wait spanned the whole loop: {:?}",
+        started.elapsed()
+    );
+}
+
 /// H-API: `--print-schema` needs no daemon and prints the same JSON a
 /// live daemon serves for `list-commands -J`.
 #[test]

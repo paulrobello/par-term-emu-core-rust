@@ -537,6 +537,7 @@ fn run_command(path: &std::path::Path, command: &str) -> std::process::ExitCode 
             return ExitCode::from(1);
         }
     };
+    client.discard_notifications();
     let sent = match par_mux::mux::command::reply_timeout(command) {
         Some(budget) => client.send_checked_timeout(command, budget),
         None => client.send_checked(command),

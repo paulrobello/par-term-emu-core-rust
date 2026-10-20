@@ -13,7 +13,9 @@ use par_term_emu_core::tmux_control::{TmuxControlParser, TmuxNotification};
 use std::collections::VecDeque;
 use std::io::{self, BufRead, BufReader, Write};
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{channel, Receiver, RecvTimeoutError, Sender};
+use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 /// How long `send` waits for a reply block before giving up.
@@ -33,6 +35,9 @@ pub struct MuxClient {
     writer: LocalStream,
     reply_rx: Receiver<Reply>,
     notifications_rx: Receiver<TmuxNotification>,
+    /// Set by [`MuxClient::discard_notifications`]: the reader parses
+    /// pushed lines but drops them instead of queueing them.
+    discard_notifications: Arc<AtomicBool>,
     /// The daemon this client spawned, when it started one. Held so the
     /// spawner can end what it created via [`MuxClient::kill_spawned_daemon`];
     /// `None` when the client attached to an existing server.
@@ -224,11 +229,14 @@ impl MuxClient {
         let writer = stream.try_clone()?;
         let (reply_tx, reply_rx) = channel::<Reply>();
         let (notification_tx, notifications_rx) = channel::<TmuxNotification>();
-        std::thread::spawn(move || reader_loop(stream, reply_tx, notification_tx));
+        let discard_notifications = Arc::new(AtomicBool::new(false));
+        let discard = Arc::clone(&discard_notifications);
+        std::thread::spawn(move || reader_loop(stream, reply_tx, notification_tx, &discard));
         Ok(Self {
             writer,
             reply_rx,
             notifications_rx,
+            discard_notifications,
             spawned_daemon: None,
             owed: VecDeque::new(),
             completed: VecDeque::new(),
@@ -335,6 +343,17 @@ impl MuxClient {
         &self.notifications_rx
     }
 
+    /// Stop queueing pushed notifications: from now on the reader drops
+    /// them as they arrive. For a caller that only reads replies (the
+    /// `par-mux --cmd` client) — the channel is unbounded, so an unread
+    /// queue grows with every `%output` line for as long as a command
+    /// such as `wait-output` stays parked. The socket is still read in
+    /// full, so the daemon never sees this client back up.
+    pub fn discard_notifications(&self) {
+        self.discard_notifications.store(true, Ordering::Relaxed);
+        while self.notifications_rx.try_recv().is_ok() {}
+    }
+
     /// Terminate the daemon this client spawned, if it started one.
     ///
     /// The tmux model is daemon-outlives-client, so this is deliberately
@@ -378,6 +397,7 @@ fn reader_loop(
     stream: LocalStream,
     reply_tx: Sender<Reply>,
     notification_tx: Sender<TmuxNotification>,
+    discard: &AtomicBool,
 ) {
     let mut reader = BufReader::new(stream);
     let mut parser = TmuxControlParser::new(true);
@@ -433,6 +453,9 @@ fn reader_loop(
                     framed.push(b'\n');
                     let mut forwarded = true;
                     for notification in parser.parse(&framed) {
+                        if discard.load(Ordering::Relaxed) {
+                            continue;
+                        }
                         if notification_tx.send(notification).is_err() {
                             forwarded = false;
                         }
@@ -982,6 +1005,54 @@ mod tests {
 
         let err = client.send("list-panes").expect_err("server hung up");
         assert_eq!(err.kind(), io::ErrorKind::ConnectionAborted, "{err}");
+        server.join().expect("server thread");
+        drop(dir);
+    }
+
+    /// A reply-only client under a stream of pushed output: with
+    /// `discard_notifications` none of the thousands of `%output` lines
+    /// sent ahead of the reply is queued (the reader handles every line
+    /// before the block that follows them), while a default client queues
+    /// them all — the control that proves the count measures the channel.
+    #[cfg(unix)]
+    #[test]
+    fn discarded_notifications_are_never_queued() {
+        use std::io::{BufRead as _, Write as _};
+        const PUSHED: usize = 5000;
+        let (dir, socket) = temp_socket("discard.sock");
+        let listener = bind_local_listener(&socket).expect("bind");
+        let server = std::thread::spawn(move || {
+            for _ in 0..2 {
+                let stream = listener.accept().expect("accept");
+                let mut writer = stream.try_clone().expect("clone");
+                let mut lines = std::io::BufReader::new(stream).lines();
+                assert_eq!(lines.next().unwrap().unwrap(), "wait-output -t %1 -m X");
+                for n in 0..PUSHED {
+                    writeln!(writer, "%output %1 line-{n}\\012").unwrap();
+                }
+                writer.write_all(b"%begin 1 1 1\nX\n%end 1 1 1\n").unwrap();
+            }
+        });
+
+        let mut discarding = MuxClient::connect(&socket).expect("connect");
+        discarding.discard_notifications();
+        let reply = discarding
+            .send_checked("wait-output -t %1 -m X")
+            .expect("reply");
+        assert!(reply.ok);
+        assert_eq!(
+            discarding.notifications().try_iter().count(),
+            0,
+            "a discarding client queues no pushed output"
+        );
+
+        let mut keeping = MuxClient::connect(&socket).expect("connect");
+        let reply = keeping
+            .send_checked("wait-output -t %1 -m X")
+            .expect("reply");
+        assert!(reply.ok);
+        assert_eq!(keeping.notifications().try_iter().count(), PUSHED);
+
         server.join().expect("server thread");
         drop(dir);
     }
