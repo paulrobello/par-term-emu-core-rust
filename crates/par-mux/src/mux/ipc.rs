@@ -43,18 +43,13 @@ pub mod fuzz_support {
 #[cfg(unix)]
 pub use interprocess::local_socket::Listener as LocalListener;
 
-/// Bind a local listener at `path`, owned by the current user only.
-///
-/// Unix: the socket file is created with mode `0600`. Windows: the pipe is
-/// created with an SDDL security descriptor granting access to the system and
-/// the creating user only, and a marker file is written at `path`.
 /// The named-pipe prefix a Windows `--socket` may carry. The pipe path
-/// users write (`\\.\pipe\par-mux`) names the same object as the bare
-/// stem: `to_ns_name::<GenericNamespaced>` PREPENDS `\\.\pipe\` itself,
+/// users write (`\\.\\pipe\\par-mux`) names the same object as the bare
+/// stem: `to_ns_name::<GenericNamespaced>` PREPENDS `\\.\\pipe\\` itself,
 /// so a prefixed path would double-prefix the pipe and the bind path's
 /// marker-file write into the device namespace fails with a bare
 /// os error 2 (measured on the Win11 VM 2026-10-21:
-/// `--socket \\.\pipe\name --foreground` never came up). Every ipc
+/// `--socket \\.\\pipe\\name --foreground` never came up). Every ipc
 /// entry strips it, so both spellings name the same pipe — the contract
 /// the .ps1 hook transport documents.
 #[cfg(windows)]
@@ -63,7 +58,7 @@ pub fn strip_pipe_prefix(path: &Path) -> std::path::PathBuf {
     if let Some(name) = text.strip_prefix(r"\\.\pipe\") {
         return std::path::PathBuf::from(name);
     }
-    // Case-insensitive spelling (`\\.\PIPE\x`): compare lowercased.
+    // Case-insensitive spelling (`\\.\\PIPE\\x`): compare lowercased.
     let lowered = text.to_lowercase();
     if let Some(name) = lowered.strip_prefix(r"\\.\pipe\") {
         return std::path::PathBuf::from(name);
@@ -71,6 +66,11 @@ pub fn strip_pipe_prefix(path: &Path) -> std::path::PathBuf {
     path.to_path_buf()
 }
 
+/// Bind a local listener at `path`, owned by the current user only.
+///
+/// Unix: the socket file is created with mode `0600`. Windows: the pipe is
+/// created with an SDDL security descriptor granting access to the system and
+/// the creating user only, and a marker file is written at `path`.
 pub fn bind_local_listener(path: &Path) -> io::Result<LocalListener> {
     #[cfg(unix)]
     {
