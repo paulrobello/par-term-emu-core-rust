@@ -30,6 +30,7 @@ from pathlib import Path
 BIN_NAME = "par-mux"
 LICENSE_NAME = "LICENSE"
 INSTALL_NOTE_NAME = "INSTALL.md"
+COMPLETIONS_DIR_NAME = "completions"
 
 WINDOWS_TARGET_SUFFIX = "-windows-msvc"
 
@@ -74,6 +75,13 @@ def install_note(version: str, target: str, windows: bool) -> str:
         ]
     lines += [
         "",
+        "Shell completions (also in the archive's completions/ directory, and printable",
+        "any time with `par-mux completion <shell>`):",
+        "  bash:       par-mux completion bash > ~/.local/share/bash-completion/completions/par-mux",
+        "  zsh:        par-mux completion zsh > ~/.zfunc/_par-mux   (a directory on $fpath)",
+        "  fish:       par-mux completion fish > ~/.config/fish/completions/par-mux.fish",
+        "  powershell: see completions/_par-mux.ps1 in the archive",
+        "",
         "The executable is standalone: no Python and no par-term installation required.",
         "It includes the `attach` client. Docs: https://github.com/paulrobello/par-term-emu-core-rust",
     ]
@@ -86,6 +94,7 @@ def package(
     target: str,
     output_dir: Path,
     license_path: Path,
+    completions_dir: Path | None = None,
 ) -> list[Path]:
     """Stage and archive one binary. Returns the created archive + checksum paths."""
     if not bin_path.is_file():
@@ -106,23 +115,42 @@ def package(
         (stage / INSTALL_NOTE_NAME).write_text(
             install_note(version, target, windows), encoding="utf-8"
         )
+        staged_completions: list[tuple[Path, int]] = []
+        if completions_dir is not None:
+            scripts = sorted(p for p in completions_dir.iterdir() if p.is_file())
+            if not scripts:
+                raise SystemExit(
+                    f"ERROR: no completion scripts under {completions_dir}"
+                )
+            comp_stage = stage / COMPLETIONS_DIR_NAME
+            comp_stage.mkdir()
+            for script in scripts:
+                staged = comp_stage / script.name
+                staged.write_bytes(script.read_bytes())
+                staged_completions.append((staged, 0o644))
 
-        members = [staged_bin, stage / LICENSE_NAME, stage / INSTALL_NOTE_NAME]
-        modes = [0o755, 0o644, 0o644]
+        entries = [
+            (staged_bin, staged_bin.name, 0o755),
+            (stage / LICENSE_NAME, LICENSE_NAME, 0o644),
+            (stage / INSTALL_NOTE_NAME, INSTALL_NOTE_NAME, 0o644),
+        ] + [
+            (path, f"{COMPLETIONS_DIR_NAME}/{path.name}", 0o644)
+            for path, _ in staged_completions
+        ]
         archive = output_dir / archive_name(version, target)
         if windows:
             with zipfile.ZipFile(archive, "w", zipfile.ZIP_DEFLATED) as zf:
-                for member, mode in zip(members, modes):
+                for member, arcname, mode in entries:
                     info = zipfile.ZipInfo(
-                        f"{top}/{member.name}", date_time=(1980, 1, 1, 0, 0, 0)
+                        f"{top}/{arcname}", date_time=(1980, 1, 1, 0, 0, 0)
                     )
                     info.external_attr = mode << 16
                     info.compress_type = zipfile.ZIP_DEFLATED
                     zf.writestr(info, member.read_bytes())
         else:
 
-            def tar_info(member: Path, mode: int) -> tarfile.TarInfo:
-                info = tarfile.TarInfo(f"{top}/{member.name}")
+            def tar_info(member: Path, arcname: str, mode: int) -> tarfile.TarInfo:
+                info = tarfile.TarInfo(f"{top}/{arcname}")
                 info.size = member.stat().st_size
                 info.mode = mode
                 info.mtime = 0
@@ -134,8 +162,8 @@ def package(
                 return info
 
             with tarfile.open(archive, "w:gz") as tf:
-                for member, mode in zip(members, modes):
-                    tf.addfile(tar_info(member, mode), member.open("rb"))
+                for member, arcname, mode in entries:
+                    tf.addfile(tar_info(member, arcname, mode), member.open("rb"))
 
     checksum = output_dir / checksum_name(version, target)
     digest = hashlib.sha256(archive.read_bytes()).hexdigest()
@@ -159,12 +187,18 @@ def self_test() -> int:
         fake_bin.chmod(0o755)
         fake_license = root / "LICENSE"
         fake_license.write_text("MIT\n")
+        fake_completions = root / "completions"
+        fake_completions.mkdir()
+        (fake_completions / "par-mux.bash").write_text("# bash\n")
+        (fake_completions / "_par-mux").write_text("# zsh\n")
         out = root / "out"
         version = "9.9.9"
 
         for target in ("x86_64-unknown-linux-gnu", "x86_64-pc-windows-msvc"):
             windows = target.endswith(WINDOWS_TARGET_SUFFIX)
-            created = package(fake_bin, version, target, out, fake_license)
+            created = package(
+                fake_bin, version, target, out, fake_license, fake_completions
+            )
             check(len(created) == 2, f"{target}: expected 2 artifacts")
             archive = out / archive_name(version, target)
             check(archive.is_file(), f"{target}: archive missing")
@@ -179,6 +213,10 @@ def self_test() -> int:
                     check(
                         f"{top}/{INSTALL_NOTE_NAME}" in names,
                         f"{target}: INSTALL.md not in zip",
+                    )
+                    check(
+                        f"{top}/{COMPLETIONS_DIR_NAME}/par-mux.bash" in names,
+                        f"{target}: completions not in zip",
                     )
                     check(
                         zf.getinfo(bin_member).external_attr >> 16 == 0o755,
@@ -196,6 +234,10 @@ def self_test() -> int:
                     check(
                         infos[bin_member].mode == 0o755,
                         f"{target}: tar exec mode not 0755",
+                    )
+                    check(
+                        f"{top}/{COMPLETIONS_DIR_NAME}/par-mux.bash" in infos,
+                        f"{target}: completions not in tar",
                     )
                     check(
                         all(ti.mtime == 0 for ti in infos.values()),
@@ -244,6 +286,15 @@ def main() -> int:
         help="license file to ship inside the archive",
     )
     parser.add_argument(
+        "--completions-dir",
+        type=Path,
+        default=Path(__file__).resolve().parent.parent
+        / "crates"
+        / "par-mux"
+        / "completions",
+        help="completion scripts directory to ship inside the archive",
+    )
+    parser.add_argument(
         "--self-test", action="store_true", help="run the built-in checks"
     )
     args = parser.parse_args()
@@ -252,7 +303,14 @@ def main() -> int:
         return self_test()
     if not (args.bin and args.version and args.target):
         parser.error("--bin, --version and --target are required without --self-test")
-    package(args.bin, args.version, args.target, args.output_dir, args.license)
+    package(
+        args.bin,
+        args.version,
+        args.target,
+        args.output_dir,
+        args.license,
+        args.completions_dir,
+    )
     return 0
 
 

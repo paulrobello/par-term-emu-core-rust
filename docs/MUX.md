@@ -67,6 +67,14 @@ from the release that introduces them on. Each release carries one archive per p
 | macOS Apple Silicon | `par-mux-v<version>-aarch64-apple-darwin.tar.gz` |
 | Windows x86_64 | `par-mux-v<version>-x86_64-pc-windows-msvc.zip` |
 
+Every archive also ships the five shell-completion scripts (bash, zsh, fish, PowerShell, elvish) under `completions/` — or print one any time with `par-mux completion <shell>`:
+
+```bash
+par-mux completion bash > ~/.local/share/bash-completion/completions/par-mux
+par-mux completion zsh   > ~/.zfunc/_par-mux        # a directory on $fpath
+par-mux completion fish  > ~/.config/fish/completions/par-mux.fish
+```
+
 Install on Linux/macOS (pick the archive for your target; each archive
 extracts to a `par-mux-v<version>-<target>/` directory containing the
 executable, `LICENSE`, and an install note):
