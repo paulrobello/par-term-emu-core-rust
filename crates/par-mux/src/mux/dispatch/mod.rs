@@ -23,7 +23,7 @@ use crate::mux::pane::{MuxError, OutputSink, PaneFactory};
 use crate::mux::persist::{PersistState, SaveOrigin};
 use crate::mux::server::{
     broadcast_layout_change, broadcast_notification, capture_range, layout_change_notification,
-    pane_output_sink, replay_pane_exited_lines, Clients,
+    pane_output_sink, replay_pane_exited_lines, Clients, OutputEpoch,
 };
 use crate::mux::tree::{MuxTree, SpawnPlan};
 use base64::Engine as _;
@@ -98,6 +98,9 @@ pub(super) struct Ctx<'a> {
     /// configured server: `reload-config` then reports every setting
     /// restart-required (there is no applied copy to diff or update).
     pub(super) config: Option<&'a Mutex<crate::mux::config::EffectiveConfig>>,
+    /// The daemon-wide output epoch — the pane-stream seed's race check
+    /// (see [`crate::mux::server`]'s `pane_output_sink`).
+    pub(super) output_epoch: &'a OutputEpoch,
 }
 
 /// What one handler produced: the reply block plus everything the shared
@@ -365,7 +368,11 @@ fn spawn_and_wire<P: SpawnPlan>(
 ) -> Result<P::Done, MuxError> {
     let pane_id = plan.pane_id();
     let (cols, rows) = plan.size();
-    let sink = OutputSink(Arc::new(pane_output_sink(ctx.clients, pane_id)));
+    let sink = OutputSink(Arc::new(pane_output_sink(
+        ctx.clients,
+        pane_id,
+        ctx.output_epoch,
+    )));
     let pane = {
         let mut context = plan.spawn_context();
         context.output = Some(&sink);

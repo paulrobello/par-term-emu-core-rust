@@ -632,7 +632,11 @@ pub(super) fn cmd_respawn_pane(
         // is the live pane again, so it resumes forwarding as before the
         // command.
         if let Some(pane) = ctx.tree.lock().pane_mut(pane_id) {
-            pane.on_output_sink(OutputSink(Arc::new(pane_output_sink(ctx.clients, pane_id))));
+            pane.on_output_sink(OutputSink(Arc::new(pane_output_sink(
+                ctx.clients,
+                pane_id,
+                ctx.output_epoch,
+            ))));
         }
     }
     match outcome {

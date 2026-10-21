@@ -409,3 +409,95 @@ fn a_wedged_daemon_still_fails_a_positive_wait_at_its_ceiling() {
         "the wait failed at its ceiling, not before and not long after: {elapsed:?}"
     );
 }
+
+/// The seed export runs OFF the clients lock (a deep-scrollback pane
+/// would otherwise pause every pane's `%output` fan-out for the whole
+/// export), with the output epoch closing the ordering race: every
+/// `%output` that reaches an observer BEFORE the seed must already be
+/// reflected in it. A hammering connection whose send-keys the tty
+/// echoes continuously makes the race window all but certain, so a fast
+/// path that enqueued a stale seed ahead of racing output fails here.
+#[test]
+fn seed_export_racing_output_stays_ordered() {
+    let fixture = MuxFixture::new("obs-race");
+    let _daemon = spawn_daemon(&fixture);
+    wait_listening(fixture.socket());
+    let mut ctl = Conn::connect(fixture.socket());
+    ctl.command("new-session -s race -x 200 -y 24");
+    // Deep scrollback: 8000 wide lines is a multi-megabyte restore export.
+    ctl.command(
+        "send-keys -t %0 -l 'for i in $(seq 1 20000); do printf \"SEED-%06d\\n\" $i; done'",
+    );
+    ctl.command("send-keys -t %0 Enter");
+    let deadline = Instant::now() + common::CEILING;
+    loop {
+        let screen = ctl.command("capture-pane -t %0 -S -5").join("");
+        if screen.contains("SEED-020000") {
+            break;
+        }
+        assert!(
+            Instant::now() < deadline,
+            "the scrollback fill never landed: {screen:?}"
+        );
+    }
+
+    // The racing writer: a hammering connection whose send-keys the tty
+    // echoes continuously, so %output is in flight the whole time the
+    // seed export runs.
+    let hammer_path = fixture.socket().to_path_buf();
+    let hammer = std::thread::spawn(move || {
+        let mut hammer = Conn::connect(&hammer_path);
+        for i in 0..300 {
+            // Default mode joins the payload tokens with nothing and the
+            // trailing Enter KEY executes the line, so the tty keeps
+            // echoing — a canonical-mode line stops echoing past its
+            // ~1 KiB buffer, which would silence the hammer mid-run.
+            hammer.command(&format!("send-keys -t %0 RACEH{i:03} MARKER Enter"));
+        }
+    });
+    // Let the hammer reach full flow before opening the stream.
+    std::thread::sleep(Duration::from_millis(50));
+    let mut observer = Conn::connect(fixture.socket());
+    observer.send("observe-pane -t %0");
+
+    // The seed block: everything through its %end. %output lines that
+    // slipped in ahead of it land between the stream marker and %begin.
+    let reply = observer.until(|l| l.starts_with("%end"), "the seed block");
+    let begin = reply
+        .iter()
+        .position(|l| l.starts_with("%begin"))
+        .expect("the seed block opens with %begin");
+    let seed: String = reply[begin..].concat();
+    let pre_seed: String = reply[..begin].concat();
+    let raced_markers: Vec<&str> = pre_seed
+        .split_whitespace()
+        .filter(|w| w.starts_with("RACEH"))
+        .collect();
+    // Positive control: the hammer ran before the stream opened, so the
+    // export raced real output and its seed reflects it.
+    assert!(
+        seed.contains("RACEH"),
+        "the seed does not reflect the hammering output at all"
+    );
+    // A marker that DID slip in ahead of the seed (only possible when
+    // its output was produced during the export window) must be in the
+    // seed — with the epoch check the slow path re-exports, so this list
+    // stays empty-or-reflected; without it, the fast path loses racing
+    // output and fails here.
+    for marker in &raced_markers {
+        assert!(
+            seed.contains(marker),
+            "{marker} reached the observer before the seed but the seed \
+             does not reflect it — the fast path lost racing output"
+        );
+    }
+
+    // The stream stays live: the hammer's last marker streams through
+    // (the hammer joins only after its final reply).
+    hammer.join().expect("hammer finished");
+    let tail = observer.until(|l| l.contains("RACEH299"), "the last racing marker");
+    assert!(
+        tail.iter().any(|l| l.starts_with("%output")),
+        "the marker arrives as pane output: {tail:?}"
+    );
+}

@@ -90,6 +90,7 @@ impl Registration {
 /// use — never receives pushed notifications. On disconnect, only this
 /// client's broadcast sender is removed — the accept loop and the tree are
 /// untouched.
+#[allow(clippy::too_many_arguments)]
 pub(super) fn handle_client(
     stream: LocalStream,
     tree: Arc<Mutex<MuxTree>>,
@@ -98,6 +99,7 @@ pub(super) fn handle_client(
     shutdown: Option<Arc<AtomicBool>>,
     abort: ConnectionAbort,
     config: Option<Arc<Mutex<EffectiveConfig>>>,
+    output_epoch: OutputEpoch,
 ) {
     use interprocess::local_socket::traits::Stream as _;
 
@@ -158,6 +160,7 @@ pub(super) fn handle_client(
         registration,
         command_number: 0,
         stream: None,
+        output_epoch,
     };
     connection.serve(&mut reader);
     connection.teardown();
@@ -389,6 +392,8 @@ struct Connection {
     registration: Registration,
     command_number: u32,
     stream: Option<PaneStreamMode>,
+    /// The daemon-wide output epoch — the seed export's race check.
+    output_epoch: OutputEpoch,
 }
 
 impl Connection {
@@ -512,6 +517,7 @@ impl Connection {
             shutdown: self.shutdown.as_deref(),
             config: self.config.as_deref(),
             client_id: Some(client_id),
+            output_epoch: &self.output_epoch,
         };
         let dispatch_started = std::time::Instant::now();
         let reply = dispatch_contained(command, &ctx, self.persist.as_ref(), Some(&self.tx));
@@ -583,21 +589,45 @@ impl Connection {
                 pane.exit_code()
                     .map_or_else(|| " exited=?".to_string(), |code| format!(" exited={code}"))
             });
-            let _clients = self.clients.lock();
+            let seed_item = |seed: &str, cols: usize, rows: usize| {
+                let body = format!(
+                    "pane {pane_id} {cols}x{rows}{}\n{seed}",
+                    exited.as_deref().unwrap_or_default()
+                );
+                format!(
+                    "{}{}",
+                    stream_marker(pane_id),
+                    emit_block(command_number, &body, true)
+                )
+            };
+            // The seed must reach this client BEFORE any %output the seed
+            // does not already reflect, and every %output enqueue needs
+            // the clients lock — so the ORDERING needs the lock, not the
+            // export. Export off the lock (a pane with deep scrollback
+            // would otherwise pause every pane's fan-out for the whole
+            // export), then take the lock and re-check the output epoch:
+            // it only bumped if some pane produced output meanwhile, and
+            // then the export raced a fan-out — re-export under the lock
+            // instead (the original, ordered shape; bounded by one
+            // re-export, and a quiet pane never pays it).
             let (seed, (cols, rows)) = {
                 let terminal = pane.terminal();
                 let term = terminal.read();
                 (term.export_screen_restore_sequence(), term.size())
             };
-            let body = format!(
-                "pane {pane_id} {cols}x{rows}{}\n{seed}",
-                exited.unwrap_or_default()
-            );
-            let item = format!(
-                "{}{}",
-                stream_marker(pane_id),
-                emit_block(command_number, &body, true)
-            );
+            let before = self.output_epoch.load(std::sync::atomic::Ordering::Acquire);
+            let _clients = self.clients.lock();
+            let raced = self.output_epoch.load(std::sync::atomic::Ordering::Acquire) != before;
+            let item = if raced {
+                let (seed, (cols, rows)) = {
+                    let terminal = pane.terminal();
+                    let term = terminal.read();
+                    (term.export_screen_restore_sequence(), term.size())
+                };
+                seed_item(&seed, cols, rows)
+            } else {
+                seed_item(&seed, cols, rows)
+            };
             match self.tx.try_send(item) {
                 Ok(()) => pane_id,
                 Err(_) => return Flow::Close,

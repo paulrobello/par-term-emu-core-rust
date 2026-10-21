@@ -129,6 +129,12 @@ pub(crate) fn broadcast_notification(clients: &Clients, notification: &TmuxNotif
     push_to_clients(clients, emit(notification));
 }
 
+/// The daemon-wide output epoch: bumped once per `%output` fan-out
+/// BEFORE the push, so the pane-stream seed's race check can tell that a
+/// quiet pane stayed quiet (a bumped epoch means some pane produced
+/// output, and the seed re-exports under the lock instead).
+pub(crate) type OutputEpoch = std::sync::Arc<std::sync::atomic::AtomicU64>;
+
 /// The per-pane output sink: PTY bytes become `%output` lines pushed to every
 /// connected client as they are produced.
 ///
@@ -138,9 +144,12 @@ pub(crate) fn broadcast_notification(clients: &Clients, notification: &TmuxNotif
 pub(crate) fn pane_output_sink(
     clients: &Clients,
     pane_id: PaneId,
+    epoch: &OutputEpoch,
 ) -> impl Fn(&[u8]) + Send + Sync + 'static {
     let sinks = Arc::clone(clients);
+    let epoch = Arc::clone(epoch);
     move |bytes: &[u8]| {
+        epoch.fetch_add(1, std::sync::atomic::Ordering::Release);
         let line = emit(&TmuxNotification::Output {
             pane_id: pane_id.to_string(),
             data: bytes.to_vec(),
@@ -155,7 +164,11 @@ pub(crate) fn pane_output_sink(
 /// every pane before `clients` exists, and no client can connect before the
 /// accept loop starts, so no audience exists for the early bytes. They
 /// still land in the grid that clients seed from.
-pub(super) fn wire_all_pane_outputs(tree: &Arc<Mutex<MuxTree>>, clients: &Clients) {
+pub(super) fn wire_all_pane_outputs(
+    tree: &Arc<Mutex<MuxTree>>,
+    clients: &Clients,
+    epoch: &OutputEpoch,
+) {
     let pane_ids: Vec<PaneId> = {
         let guard = tree.lock();
         guard
@@ -170,7 +183,9 @@ pub(super) fn wire_all_pane_outputs(tree: &Arc<Mutex<MuxTree>>, clients: &Client
     let mut guard = tree.lock();
     for pane_id in pane_ids {
         if let Some(pane) = guard.pane_mut(pane_id) {
-            pane.on_output_sink(OutputSink(Arc::new(pane_output_sink(clients, pane_id))));
+            pane.on_output_sink(OutputSink(Arc::new(pane_output_sink(
+                clients, pane_id, epoch,
+            ))));
         }
     }
 }

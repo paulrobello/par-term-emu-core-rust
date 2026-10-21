@@ -57,6 +57,7 @@ pub(super) fn reap_dead_panes(
     clients: &Clients,
     config: Option<&Arc<Mutex<crate::mux::config::EffectiveConfig>>>,
     persist: Option<&Sender<(SaveOrigin, PersistState)>>,
+    epoch: &OutputEpoch,
 ) {
     // No published config (an embedded `run()` server) keeps the library's
     // historical held-dead behavior; the daemon binary always publishes one,
@@ -192,6 +193,7 @@ pub(super) fn reap_dead_panes(
             command_number: 0,
             shutdown: None,
             config: config.map(|config| &**config),
+            output_epoch: epoch,
         };
         // The reply has no reader; the command broadcasts
         // `%pane-respawned` and saves the state itself.

@@ -17,7 +17,9 @@ fn clear_history_wipes_scrollback_and_screen() {
         ShellPaneFactory::default(),
     ))));
     let clients = Arc::new(Mutex::new(Vec::new()));
+    let __output_epoch: crate::mux::server::OutputEpoch = std::sync::Arc::default();
     let ctx = Ctx {
+        output_epoch: &__output_epoch,
         tree: &tree,
         clients: &clients,
         command_number: 1,
@@ -79,7 +81,9 @@ fn target_less_refresh_client_sizes_the_newest_active_window() {
         ShellPaneFactory::default(),
     ))));
     let clients = Arc::new(Mutex::new(Vec::new()));
+    let __output_epoch: crate::mux::server::OutputEpoch = std::sync::Arc::default();
     let ctx = Ctx {
+        output_epoch: &__output_epoch,
         tree: &tree,
         clients: &clients,
         command_number: 1,
@@ -196,7 +200,9 @@ fn size_reports_take_the_minimum_and_wake_only_on_a_move() {
     let (_tx3, three) = channel(&clients, 3);
     let run_as =
         |client_id: u64, line: &str, issuer: &std::sync::mpsc::SyncSender<String>| -> String {
+            let __output_epoch: crate::mux::server::OutputEpoch = std::sync::Arc::default();
             let ctx = Ctx {
+                output_epoch: &__output_epoch,
                 tree: &tree,
                 clients: &clients,
                 command_number: 7,
@@ -291,7 +297,9 @@ fn target_less_refresh_client_with_no_sessions_errors_cleanly() {
         ShellPaneFactory::default(),
     ))));
     let clients = Arc::new(Mutex::new(Vec::new()));
+    let __output_epoch: crate::mux::server::OutputEpoch = std::sync::Arc::default();
     let ctx = Ctx {
+        output_epoch: &__output_epoch,
         tree: &tree,
         clients: &clients,
         command_number: 1,
@@ -320,7 +328,9 @@ fn target_less_refresh_client_never_replays_a_screen() {
         ShellPaneFactory::default(),
     ))));
     let clients = Arc::new(Mutex::new(Vec::new()));
+    let __output_epoch: crate::mux::server::OutputEpoch = std::sync::Arc::default();
     let ctx = Ctx {
+        output_epoch: &__output_epoch,
         tree: &tree,
         clients: &clients,
         command_number: 1,
@@ -387,7 +397,9 @@ fn a_failed_respawn_keeps_the_live_panes_output_forwarding() {
         AtomicBool::new(false),
     )))));
     let clients = Arc::new(Mutex::new(Vec::new()));
+    let __output_epoch: crate::mux::server::OutputEpoch = std::sync::Arc::default();
     let ctx = Ctx {
+        output_epoch: &__output_epoch,
         tree: &tree,
         clients: &clients,
         command_number: 1,
@@ -555,7 +567,9 @@ fn reload_config_reports_restart_required_per_changed_setting() {
         state_dir: "/tmp/old-state".to_string(),
         ..crate::mux::config::EffectiveConfig::default()
     }));
+    let __output_epoch: crate::mux::server::OutputEpoch = std::sync::Arc::default();
     let ctx = Ctx {
+        output_epoch: &__output_epoch,
         client_id: None,
         tree: &tree,
         clients: &clients,
@@ -601,7 +615,9 @@ fn reload_config_without_an_applied_copy_errors() {
         ShellPaneFactory::default(),
     ))));
     let clients = Arc::new(Mutex::new(Vec::new()));
+    let __output_epoch: crate::mux::server::OutputEpoch = std::sync::Arc::default();
     let ctx = Ctx {
+        output_epoch: &__output_epoch,
         tree: &tree,
         clients: &clients,
         command_number: 1,
@@ -623,7 +639,9 @@ fn reload_config_without_an_applied_copy_errors() {
 fn reload_config_broadcasts_config_changed_only_on_success() {
     let h = Harness::new();
     let applied = Arc::new(Mutex::new(crate::mux::config::EffectiveConfig::default()));
+    let __output_epoch: crate::mux::server::OutputEpoch = std::sync::Arc::default();
     let ctx = Ctx {
+        output_epoch: &__output_epoch,
         client_id: None,
         tree: &h.tree,
         clients: &h.clients,
@@ -684,7 +702,9 @@ fn unknown_typed_ids_are_rejected_as_missing_not_misreported() {
         ShellPaneFactory::default(),
     ))));
     let clients = Arc::new(Mutex::new(Vec::new()));
+    let __output_epoch: crate::mux::server::OutputEpoch = std::sync::Arc::default();
     let ctx = Ctx {
+        output_epoch: &__output_epoch,
         tree: &tree,
         clients: &clients,
         command_number: 1,
@@ -771,7 +791,9 @@ impl Harness {
     }
 
     fn run_as(&self, client_id: Option<u64>, line: &str) -> String {
+        let __output_epoch: crate::mux::server::OutputEpoch = std::sync::Arc::default();
         let ctx = Ctx {
+            output_epoch: &__output_epoch,
             tree: &self.tree,
             clients: &self.clients,
             command_number: 7,
@@ -1509,7 +1531,9 @@ fn set_option_and_show_options_round_trip_the_live_booleans() {
     let h = Harness::new();
     let config = Mutex::new(crate::mux::config::EffectiveConfig::default());
     let run = |line: &str| {
+        let __output_epoch: crate::mux::server::OutputEpoch = std::sync::Arc::default();
         let ctx = Ctx {
+            output_epoch: &__output_epoch,
             tree: &h.tree,
             clients: &h.clients,
             command_number: 7,
@@ -1969,7 +1993,9 @@ fn wait_output_times_out_on_a_live_pane_and_rejects_unknown_targets() {
         ShellPaneFactory::default(),
     ))));
     let clients = Arc::new(Mutex::new(Vec::new()));
+    let __output_epoch: crate::mux::server::OutputEpoch = std::sync::Arc::default();
     let ctx = Ctx {
+        output_epoch: &__output_epoch,
         tree: &tree,
         clients: &clients,
         command_number: 1,
@@ -2012,7 +2038,9 @@ fn wait_output_holds_no_lock_and_ends_when_the_pane_closes() {
         ShellPaneFactory::default(),
     ))));
     let clients = Arc::new(Mutex::new(Vec::new()));
+    let __output_epoch: crate::mux::server::OutputEpoch = std::sync::Arc::default();
     let ctx = |n: u32| Ctx {
+        output_epoch: &__output_epoch,
         tree: &tree,
         clients: &clients,
         command_number: n,
@@ -2058,7 +2086,9 @@ fn wait_output_ends_when_its_client_disconnects() {
     ))));
     let clients = Arc::new(Mutex::new(Vec::new()));
     let run = |client_id: Option<u64>, line: &str| {
+        let __output_epoch: crate::mux::server::OutputEpoch = std::sync::Arc::default();
         let ctx = Ctx {
+            output_epoch: &__output_epoch,
             tree: &tree,
             clients: &clients,
             command_number: 1,

@@ -41,7 +41,9 @@ impl Fixture {
     }
 
     fn run(&self, line: &str) -> String {
+        let __output_epoch: crate::mux::server::OutputEpoch = std::sync::Arc::default();
         let ctx = Ctx {
+            output_epoch: &__output_epoch,
             tree: &self.tree,
             clients: &self.clients,
             command_number: 1,

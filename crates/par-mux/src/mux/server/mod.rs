@@ -130,7 +130,7 @@ mod reap;
 use broadcast::*;
 pub(crate) use broadcast::{
     broadcast_layout_change, broadcast_notification, capture_range, layout_change_notification,
-    pane_output_sink, replay_pane_exited_lines,
+    pane_output_sink, replay_pane_exited_lines, OutputEpoch,
 };
 use client::*;
 pub use endpoint::sweep_pane_endpoint_remnants;
@@ -193,6 +193,9 @@ pub struct MuxServer {
     /// `reload-config` then answers with an explicit error rather than a
     /// fake reload.
     config: Option<Arc<Mutex<crate::mux::config::EffectiveConfig>>>,
+    /// The daemon-wide output epoch (see `pane_output_sink`): bumped by
+    /// every `%output` fan-out, read by the pane-stream seed's race check.
+    output_epoch: OutputEpoch,
 }
 
 impl MuxServer {
@@ -224,7 +227,8 @@ impl MuxServer {
 
         let clients: Clients = Arc::new(Mutex::new(Vec::new()));
         let tree = Arc::new(Mutex::new(tree));
-        wire_all_pane_outputs(&tree, &clients);
+        let output_epoch: OutputEpoch = Arc::default();
+        wire_all_pane_outputs(&tree, &clients, &output_epoch);
 
         Ok(Self {
             listener,
@@ -234,6 +238,7 @@ impl MuxServer {
             shutdown: Arc::new(AtomicBool::new(false)),
             pane_connections: None,
             config: None,
+            output_epoch,
         })
     }
 
@@ -388,6 +393,7 @@ impl MuxServer {
                     let persist = persist_tx.clone();
                     let shutdown = Arc::clone(&self.shutdown);
                     let config = self.config.clone();
+                    let output_epoch = Arc::clone(&self.output_epoch);
                     std::thread::spawn(move || {
                         handle_client(
                             stream,
@@ -397,6 +403,7 @@ impl MuxServer {
                             Some(shutdown),
                             abort,
                             config,
+                            output_epoch,
                         )
                     });
                 }
@@ -428,6 +435,7 @@ impl MuxServer {
                             &self.clients,
                             self.config.as_ref(),
                             persist_tx.as_ref(),
+                            &self.output_epoch,
                         );
                         last_reap = std::time::Instant::now();
                     }
@@ -726,6 +734,7 @@ fn dispatch_issued(
 ) -> String {
     match parse_command(line) {
         Ok(command) => {
+            let output_epoch: OutputEpoch = Arc::default();
             let ctx = Ctx {
                 tree,
                 clients,
@@ -733,6 +742,7 @@ fn dispatch_issued(
                 shutdown: None,
                 config: None,
                 client_id: None,
+                output_epoch: &output_epoch,
             };
             dispatch_command(command, &ctx, persist, issuer)
         }

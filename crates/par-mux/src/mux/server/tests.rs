@@ -36,7 +36,9 @@ fn held_state_replay_reports_held_panes_and_zoomed_windows() {
         crate::mux::dispatch::tests::DeadPaneFactory,
     ))));
     let clients = Arc::new(Mutex::new(Vec::new()));
+    let __output_epoch: crate::mux::server::OutputEpoch = std::sync::Arc::default();
     let ctx = Ctx {
+        output_epoch: &__output_epoch,
         tree: &tree,
         clients: &clients,
         command_number: 1,
@@ -104,7 +106,9 @@ fn registration_after_a_death_delivers_the_held_exit_once() {
         crate::mux::dispatch::tests::DeadPaneFactory,
     ))));
     let clients = Arc::new(Mutex::new(Vec::new()));
+    let __output_epoch: crate::mux::server::OutputEpoch = std::sync::Arc::default();
     let ctx = Ctx {
+        output_epoch: &__output_epoch,
         tree: &tree,
         clients: &clients,
         command_number: 1,
@@ -2425,7 +2429,16 @@ fn an_evicted_clients_connection_closes() {
     let (tree, _) = harness();
     std::thread::spawn(
         move || match crate::mux::ipc::accept_connection(&listener) {
-            Ok((stream, abort)) => handle_client(stream, tree, registry, None, None, abort, None),
+            Ok((stream, abort)) => handle_client(
+                stream,
+                tree,
+                registry,
+                None,
+                None,
+                abort,
+                None,
+                std::sync::Arc::default(),
+            ),
             Err(err) => panic!("accept_connection failed: {err}"),
         },
     );
@@ -2521,9 +2534,11 @@ fn a_pane_streams_exit_closes_the_connection_while_the_client_stays_silent() {
         crate::mux::dispatch::tests::DeadPaneFactory,
     ))));
     let clients: Clients = Arc::new(Mutex::new(Vec::new()));
+    let __output_epoch: crate::mux::server::OutputEpoch = std::sync::Arc::default();
     let created = dispatch_command(
         parse_command("new-session -s s").expect("parses"),
         &Ctx {
+            output_epoch: &__output_epoch,
             tree: &tree,
             clients: &clients,
             command_number: 1,
@@ -2539,9 +2554,16 @@ fn a_pane_streams_exit_closes_the_connection_while_the_client_stays_silent() {
     let (server_tree, registry) = (Arc::clone(&tree), Arc::clone(&clients));
     std::thread::spawn(
         move || match crate::mux::ipc::accept_connection(&listener) {
-            Ok((stream, abort)) => {
-                handle_client(stream, server_tree, registry, None, None, abort, None)
-            }
+            Ok((stream, abort)) => handle_client(
+                stream,
+                server_tree,
+                registry,
+                None,
+                None,
+                abort,
+                None,
+                std::sync::Arc::default(),
+            ),
             Err(err) => panic!("accept_connection failed: {err}"),
         },
     );
@@ -2604,9 +2626,11 @@ fn a_pane_streams_exit_closes_the_connection_while_the_client_stays_silent() {
         .map(|(id, ..)| *id)
         .expect("the stream registered");
 
+    let __output_epoch: crate::mux::server::OutputEpoch = std::sync::Arc::default();
     let killed = dispatch_command(
         parse_command("kill-pane -t %0").expect("parses"),
         &Ctx {
+            output_epoch: &__output_epoch,
             tree: &tree,
             clients: &clients,
             command_number: 2,
@@ -2655,7 +2679,9 @@ fn a_panicking_command_yields_an_error_block_and_the_next_command_survives() {
     let (tree, clients) = harness();
 
     crate::mux::dispatch::PANIC_ON_COMMAND.with(|flag| flag.set(true));
+    let __output_epoch: crate::mux::server::OutputEpoch = std::sync::Arc::default();
     let ctx = Ctx {
+        output_epoch: &__output_epoch,
         tree: &tree,
         clients: &clients,
         command_number: 1,
@@ -2665,6 +2691,7 @@ fn a_panicking_command_yields_an_error_block_and_the_next_command_survives() {
     };
     let poisoned = parse_command("list-sessions").expect("parses");
     let reply = dispatch_contained(poisoned, &ctx, None, None);
+    let __output_epoch: crate::mux::server::OutputEpoch = std::sync::Arc::default();
     assert!(
         reply.contains("%error") && reply.contains("internal error"),
         "a panicked command answers with an error block: {reply}"
@@ -2674,6 +2701,7 @@ fn a_panicking_command_yields_an_error_block_and_the_next_command_survives() {
     // The tree lock unwound free; the next command on the same
     // connection dispatches normally.
     let ctx = Ctx {
+        output_epoch: &__output_epoch,
         tree: &tree,
         clients: &clients,
         command_number: 2,
