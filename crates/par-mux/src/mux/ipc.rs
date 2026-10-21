@@ -48,6 +48,29 @@ pub use interprocess::local_socket::Listener as LocalListener;
 /// Unix: the socket file is created with mode `0600`. Windows: the pipe is
 /// created with an SDDL security descriptor granting access to the system and
 /// the creating user only, and a marker file is written at `path`.
+/// The named-pipe prefix a Windows `--socket` may carry. The pipe path
+/// users write (`\\.\pipe\par-mux`) names the same object as the bare
+/// stem: `to_ns_name::<GenericNamespaced>` PREPENDS `\\.\pipe\` itself,
+/// so a prefixed path would double-prefix the pipe and the bind path's
+/// marker-file write into the device namespace fails with a bare
+/// os error 2 (measured on the Win11 VM 2026-10-21:
+/// `--socket \\.\pipe\name --foreground` never came up). Every ipc
+/// entry strips it, so both spellings name the same pipe — the contract
+/// the .ps1 hook transport documents.
+#[cfg(windows)]
+fn strip_pipe_prefix(path: &Path) -> std::path::PathBuf {
+    let text = path.to_string_lossy();
+    if let Some(name) = text.strip_prefix(r"\\.\pipe\") {
+        return std::path::PathBuf::from(name);
+    }
+    // Case-insensitive spelling (`\\.\PIPE\x`): compare lowercased.
+    let lowered = text.to_lowercase();
+    if let Some(name) = lowered.strip_prefix(r"\\.\pipe\") {
+        return std::path::PathBuf::from(name);
+    }
+    path.to_path_buf()
+}
+
 pub fn bind_local_listener(path: &Path) -> io::Result<LocalListener> {
     #[cfg(unix)]
     {
@@ -75,6 +98,7 @@ pub fn bind_local_listener(path: &Path) -> io::Result<LocalListener> {
         use interprocess::os::windows::security_descriptor::SecurityDescriptor;
         use widestring::U16CString;
 
+        let path = &strip_pipe_prefix(path);
         // Owner-only DACL: full access for the system and the creating user,
         // nothing for anyone else on the machine.
         let sddl = U16CString::from_str("D:P(A;;GA;;;SY)(A;;GA;;;OW)")
@@ -468,6 +492,7 @@ pub fn connect_local_stream(path: &Path) -> io::Result<LocalStream> {
     {
         use interprocess::local_socket::{prelude::*, GenericNamespaced};
 
+        let path = &strip_pipe_prefix(path);
         let name = path
             .to_string_lossy()
             .to_string()
@@ -649,6 +674,8 @@ pub fn connect_local_stream_bounded(
 /// instance is busy — the live-socket prepare test hung forever there — so
 /// `pipe_server_alive_bounded` decides on the name alone, bounded.
 pub fn prepare_socket_path(path: &Path) -> io::Result<()> {
+    #[cfg(windows)]
+    let path = &strip_pipe_prefix(path);
     #[cfg(unix)]
     guard_fallback_socket_dir(path)?;
     if let Some(parent) = path.parent() {
@@ -822,6 +849,7 @@ const ERROR_PIPE_BUSY: i32 = 231;
 fn connect_windows_bounded(path: &Path, deadline: std::time::Instant) -> io::Result<LocalStream> {
     use interprocess::local_socket::{prelude::*, GenericNamespaced};
 
+    let path = &strip_pipe_prefix(path);
     loop {
         let now = std::time::Instant::now();
         if now >= deadline {
