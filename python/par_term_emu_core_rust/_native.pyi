@@ -9307,13 +9307,16 @@ class TmuxNotification:
     @property
     def message(self) -> Any:
         """The agent state's message (the blocked reason, for
-        `agent-state-changed`; None when the daemon sent no `msg=` token)
+        `agent-state-changed`; the `notification` type's body rides here
+        too). None when the daemon sent no `msg=` token or empty body
         """
     @message.setter
     def message(self, value: Any) -> None: ...
     @property
     def name(self) -> Any:
-        """Name (for window/session rename notifications)"""
+        """Name (for window/session rename notifications; the `notification`
+        type's title rides here too)
+        """
     @name.setter
     def name(self, value: Any) -> None: ...
     @property
