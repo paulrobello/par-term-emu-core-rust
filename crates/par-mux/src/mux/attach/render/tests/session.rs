@@ -4255,7 +4255,7 @@ fn notify_jump_chord_focuses_the_last_notified_pane() {
     };
     // %1 is in the shown window: no notification, so no target.
     push(&mut session, "%1", "blocked");
-    assert_eq!(session.notify.last_target, None);
+    assert!(session.notify.jump_targets.is_empty());
     // Background the agents; %3 then %1 notify — the latest wins.
     session
         .renderer
@@ -4263,9 +4263,13 @@ fn notify_jump_chord_focuses_the_last_notified_pane() {
     push(&mut session, "%3", "working");
     push(&mut session, "%3", "blocked");
     push(&mut session, "%1", "working");
-    assert_eq!(session.notify.last_target, Some(3), "unselected keeps it");
+    assert_eq!(
+        session.notify.jump_targets.last(),
+        Some(&3),
+        "unselected keeps it"
+    );
     push(&mut session, "%1", "blocked");
-    assert_eq!(session.notify.last_target, Some(1));
+    assert_eq!(session.notify.jump_targets.last(), Some(&1));
     assert!(session.renderer.toast.is_some());
     drained(&rx);
     chord(&mut session, &mut conn, b'j');
@@ -4273,6 +4277,18 @@ fn notify_jump_chord_focuses_the_last_notified_pane() {
     assert!(
         drained(&rx).iter().any(|line| line == "select-pane -t %1"),
         "the chord lands on the last notified pane"
+    );
+    // The jump CONSUMED %1: a second jump walks back to %3 (herdr's
+    // consume-and-promote), a third finds the backlog empty.
+    chord(&mut session, &mut conn, b'j');
+    assert!(
+        drained(&rx).iter().any(|line| line == "select-pane -t %3"),
+        "the second jump walks to the previous notification"
+    );
+    chord(&mut session, &mut conn, b'j');
+    assert_eq!(
+        session.chrome.flash_text(),
+        Some("no notification to jump to")
     );
 }
 
@@ -4290,6 +4306,10 @@ fn adhoc_notification_delivers_through_the_channel_without_a_target() {
     session.refresh_status_facts(&mut conn).expect("seed");
     drained(&rx);
     let adhoc = |session: &mut WindowSession, body: &str| {
+        // The delivery's 1/s rate gate (herdr's bound) is a clock, so the
+        // test clears it between calls — each delivery below is its own
+        // first.
+        session.notify.last_adhoc_at = None;
         session.handle_event(TmuxNotification::Notification {
             title: "build failed".to_string(),
             body: body.to_string(),
@@ -4320,7 +4340,7 @@ fn adhoc_notification_delivers_through_the_channel_without_a_target() {
     assert_eq!(toast.title, "build failed");
     assert_eq!(toast.body, "see the log");
     assert_eq!(toast.pane, None);
-    assert_eq!(session.notify.last_target, None, "no jump target");
+    assert!(session.notify.jump_targets.is_empty(), "no jump target");
     let (tx, ty, _, _) = session.renderer.toast_rect().expect("on screen");
     let (hx, hy) = session.geometry.frame_to_host(tx + 2, ty + 1);
     session.route_mouse(&mut conn, sgr(0, hx + 1, hy + 1, false));
@@ -4329,6 +4349,41 @@ fn adhoc_notification_delivers_through_the_channel_without_a_target() {
     assert!(
         !drained(&rx).iter().any(|l| l.starts_with("select-pane")),
         "an ad-hoc toast has no pane to focus"
+    );
+}
+
+/// `show-notification` is rate-limited to one per second per client —
+/// herdr's own `API_NOTIFICATION_RATE_LIMIT` bound: a second delivery
+/// inside the window is dropped with a status flash, whatever the
+/// channel, so a looping script cannot spawn an osascript per call or
+/// flood the terminal escapes.
+#[test]
+fn adhoc_notifications_are_rate_limited_to_one_per_second() {
+    use super::super::notify::NotifyDelivery;
+    let (rx, mut conn) = fake_daemon("snaprate", snapshot_script());
+    let mut session = snapshot_session();
+    session.notify.delivery = NotifyDelivery::Terminal;
+    session.refresh_status_facts(&mut conn).expect("seed");
+    drained(&rx);
+    session.handle_event(TmuxNotification::Notification {
+        title: "build failed".to_string(),
+        body: "1".to_string(),
+    });
+    session.handle_event(TmuxNotification::Notification {
+        title: "build failed".to_string(),
+        body: "2".to_string(),
+    });
+    let mut sink = RecordingSink::default();
+    session.frame(&mut sink);
+    let raw = String::from_utf8(sink.raw.clone()).unwrap();
+    assert_eq!(
+        raw.matches("\x1b]9;").count(),
+        1,
+        "only the first delivery inside the window lands: {raw:?}"
+    );
+    assert_eq!(
+        session.chrome.flash_text(),
+        Some("notification rate-limited (1/s)")
     );
 }
 

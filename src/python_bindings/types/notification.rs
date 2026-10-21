@@ -26,7 +26,8 @@ pub struct PyTmuxNotification {
     /// Session ID (for notifications that involve a session)
     pub session_id: Option<String>,
 
-    /// Name (for window/session rename notifications)
+    /// Name (for window/session rename notifications; the `notification`
+    /// type's title rides here too)
     pub name: Option<String>,
 
     /// Exit code of the pane's process (for `pane-exited`); None on signal
@@ -74,7 +75,8 @@ pub struct PyTmuxNotification {
     pub workspace_id: Option<String>,
 
     /// The agent state's message (the blocked reason, for
-    /// `agent-state-changed`; None when the daemon sent no `msg=` token)
+    /// `agent-state-changed`; the `notification` type's body rides here
+    /// too). None when the daemon sent no `msg=` token or empty body
     pub message: Option<String>,
 }
 

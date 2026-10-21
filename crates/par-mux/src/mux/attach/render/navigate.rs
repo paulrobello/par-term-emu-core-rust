@@ -72,10 +72,13 @@ impl WindowSession {
     /// The notification-jump chord (herdr's `open_notification_target`):
     /// focus the pane behind the most recent agent notification this
     /// client delivered — across windows and workspaces, through the same
-    /// select+land path a toast click takes — and dismiss the toast.
+    /// select+land path a toast click takes — and dismiss the toast. The
+    /// jump CONSUMES that target (herdr consumes the visible notification
+    /// and promotes the next queued one), so a second jump walks to the
+    /// previous notification instead of re-landing on the same pane.
     /// Nothing delivered yet flashes instead.
     fn chord_notify_jump(&mut self, conn: &mut crate::mux::attach::conn::AttachConn) {
-        let Some(pane) = self.notify.last_target else {
+        let Some(pane) = self.notify.jump_targets.pop() else {
             self.chrome.flash("no notification to jump to".to_string());
             self.draw_status_row();
             return;

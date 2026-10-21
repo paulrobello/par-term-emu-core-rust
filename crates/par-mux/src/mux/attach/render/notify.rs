@@ -202,7 +202,7 @@ impl WindowSession {
         } else {
             ws.to_string()
         };
-        self.notify.last_target = Some(pane);
+        self.push_jump_target(pane);
         let workspace = self
             .status
             .workspaces()
@@ -277,14 +277,32 @@ impl WindowSession {
     /// `title` / `body` through the configured channel. Unlike an agent
     /// transition it ignores `notify-states` and the background-only rule
     /// (a script asked for it explicitly), carries no pane, and so never
-    /// moves the notification-jump target.
+    /// moves the notification-jump target. Rate-limited to one per second
+    /// per client (herdr's `API_NOTIFICATION_RATE_LIMIT`): a script that
+    /// loops `show-notification` must not spawn an osascript per call or
+    /// flood the terminal escapes — a second inside the window is dropped
+    /// with a status flash, and the inside delivery also refuses while one
+    /// of its toasts is still up (herdr's `Busy`).
     pub(super) fn notify_adhoc(&mut self, title: &str, body: &str) {
+        let now = std::time::Instant::now();
+        if let Some(last) = self.notify.last_adhoc_at {
+            if now.duration_since(last) < ADHOC_NOTIFICATION_RATE_LIMIT {
+                self.chrome
+                    .flash("notification rate-limited (1/s)".to_string());
+                self.draw_status_row();
+                return;
+            }
+        }
         match self.notify.delivery {
             NotifyDelivery::Off => {}
             NotifyDelivery::Inside => {
+                if self.renderer.toast.is_some() {
+                    self.chrome.flash("notification busy".to_string());
+                    self.draw_status_row();
+                    return;
+                }
                 let status = crate::mux::attach::panels::AgentStatus::None;
-                self.notify.toast_until =
-                    Some(std::time::Instant::now() + super::toast::toast_lifetime(status));
+                self.notify.toast_until = Some(now + super::toast::toast_lifetime(status));
                 self.renderer.set_toast(Some(super::toast::Toast {
                     title: sanitize(title),
                     body: sanitize(body),
@@ -300,8 +318,17 @@ impl WindowSession {
             }
             NotifyDelivery::System => system_notification(title, body),
         }
+        self.notify.last_adhoc_at = Some(now);
     }
 }
+
+/// The minimum spacing between delivered `show-notification`s — herdr's
+/// bound, one per second.
+const ADHOC_NOTIFICATION_RATE_LIMIT: std::time::Duration = std::time::Duration::from_secs(1);
+
+/// How many notification-jump targets the backlog keeps — the jump
+/// chord walks at most this many panes back.
+const JUMP_TARGET_CAP: usize = 8;
 
 /// The session's notification settings and the terminal escapes waiting
 /// for the next frame.
@@ -314,9 +341,17 @@ pub(super) struct NotifyState {
     pub outbox: Vec<u8>,
     /// When the in-app toast on screen expires.
     pub toast_until: Option<std::time::Instant>,
-    /// The pane behind the most recent agent notification this client
-    /// delivered — the notification-jump chord's target.
-    pub last_target: Option<u32>,
+    /// The panes this client has notified, oldest first, capped — the
+    /// notification-jump chord's backlog. A jump CONSUMES the newest
+    /// entry (herdr's `focus_visible_notification` takes the visible
+    /// notification and promotes the next queued one), so repeated jumps
+    /// walk back through earlier notifications instead of ping-ponging
+    /// on the same pane forever. A pane that notifies again moves to the
+    /// back (newest).
+    pub jump_targets: Vec<u32>,
+    /// When the last delivered ad-hoc `show-notification` was shown — the
+    /// 1/s rate gate's clock.
+    pub last_adhoc_at: Option<std::time::Instant>,
     /// The agent state-change sounds (config `sound*`).
     pub sound: crate::mux::config::SoundSettings,
     /// Each agent pane's state as the PUSH stream last announced it — the
@@ -336,7 +371,8 @@ impl Default for NotifyState {
             states: Vec::new(),
             outbox: Vec::new(),
             toast_until: None,
-            last_target: None,
+            jump_targets: Vec::new(),
+            last_adhoc_at: None,
             sound: crate::mux::config::SoundSettings::default(),
             transitions: None,
         }
@@ -344,6 +380,20 @@ impl Default for NotifyState {
 }
 
 impl WindowSession {
+    /// Record `pane` as the newest notification-jump target: deduplicated
+    /// (a repeat moves the pane to the back) and capped, so the backlog
+    /// the jump chord walks stays bounded.
+    fn push_jump_target(&mut self, pane: u32) {
+        self.notify.jump_targets.retain(|&p| p != pane);
+        self.notify.jump_targets.push(pane);
+        let excess = self
+            .notify
+            .jump_targets
+            .len()
+            .saturating_sub(JUMP_TARGET_CAP);
+        self.notify.jump_targets.drain(0..excess);
+    }
+
     /// Seed the transition baseline from the roster, once: the first
     /// committed roster is what this client already knows, so neither the
     /// first load nor a later refresh notifies.
