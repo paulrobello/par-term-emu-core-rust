@@ -132,7 +132,15 @@ fn unknown(label: &str, machines: &std::collections::BTreeMap<String, MachinePro
 /// The host part of an ssh target — `user@host:port` → `host` — as the
 /// default label for `machine add`.
 fn default_label(target: &str) -> String {
-    let without_port = target.rsplit_once(':').map_or(target, |(host, _)| host);
+    // Strip `:port` only when it is exactly one colon plus digits — an
+    // IPv6 literal or a malformed target keeps its full spelling.
+    let without_port = target.rsplit_once(':').map_or(target, |(host, port)| {
+        if !port.is_empty() && port.chars().all(|ch| ch.is_ascii_digit()) && !host.contains(':') {
+            host
+        } else {
+            target
+        }
+    });
     let host = without_port
         .rsplit_once('@')
         .map_or(without_port, |(_, host)| host);
