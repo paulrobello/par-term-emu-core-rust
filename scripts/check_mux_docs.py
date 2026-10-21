@@ -107,7 +107,6 @@ FOREIGN_FLAGS: dict[str, str] = {
     "mux-socket": "par-term-streamer --mux-socket (MUX.md Streaming Panes)",
     "resume": "claude/grok --resume <id> (agent resume argv)",
     "last": "muse resume --last (muse CLI, agent resume argv)",
-    "session": "pi --session <file> (agent resume argv)",
     "others": "git ls-files --others (host telemetry probe)",
     "no-optional-locks": "git --no-optional-locks status (worktree dirty check)",
     "enter": "send-keys --enter (wire command flag: append the Enter byte)",

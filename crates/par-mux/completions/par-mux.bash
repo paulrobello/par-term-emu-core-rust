@@ -34,6 +34,9 @@ _par__mux() {
             par__mux,ls)
                 cmd="par__mux__subcmd__ls"
                 ;;
+            par__mux,machine)
+                cmd="par__mux__subcmd__machine"
+                ;;
             par__mux,observe)
                 cmd="par__mux__subcmd__observe"
                 ;;
@@ -67,6 +70,9 @@ _par__mux() {
             par__mux__subcmd__help,ls)
                 cmd="par__mux__subcmd__help__subcmd__ls"
                 ;;
+            par__mux__subcmd__help,machine)
+                cmd="par__mux__subcmd__help__subcmd__machine"
+                ;;
             par__mux__subcmd__help,observe)
                 cmd="par__mux__subcmd__help__subcmd__observe"
                 ;;
@@ -82,6 +88,66 @@ _par__mux() {
             par__mux__subcmd__help,stop)
                 cmd="par__mux__subcmd__help__subcmd__stop"
                 ;;
+            par__mux__subcmd__help__subcmd__machine,add)
+                cmd="par__mux__subcmd__help__subcmd__machine__subcmd__add"
+                ;;
+            par__mux__subcmd__help__subcmd__machine,disable)
+                cmd="par__mux__subcmd__help__subcmd__machine__subcmd__disable"
+                ;;
+            par__mux__subcmd__help__subcmd__machine,enable)
+                cmd="par__mux__subcmd__help__subcmd__machine__subcmd__enable"
+                ;;
+            par__mux__subcmd__help__subcmd__machine,list)
+                cmd="par__mux__subcmd__help__subcmd__machine__subcmd__list"
+                ;;
+            par__mux__subcmd__help__subcmd__machine,remove)
+                cmd="par__mux__subcmd__help__subcmd__machine__subcmd__remove"
+                ;;
+            par__mux__subcmd__help__subcmd__machine,rename)
+                cmd="par__mux__subcmd__help__subcmd__machine__subcmd__rename"
+                ;;
+            par__mux__subcmd__machine,add)
+                cmd="par__mux__subcmd__machine__subcmd__add"
+                ;;
+            par__mux__subcmd__machine,disable)
+                cmd="par__mux__subcmd__machine__subcmd__disable"
+                ;;
+            par__mux__subcmd__machine,enable)
+                cmd="par__mux__subcmd__machine__subcmd__enable"
+                ;;
+            par__mux__subcmd__machine,help)
+                cmd="par__mux__subcmd__machine__subcmd__help"
+                ;;
+            par__mux__subcmd__machine,list)
+                cmd="par__mux__subcmd__machine__subcmd__list"
+                ;;
+            par__mux__subcmd__machine,remove)
+                cmd="par__mux__subcmd__machine__subcmd__remove"
+                ;;
+            par__mux__subcmd__machine,rename)
+                cmd="par__mux__subcmd__machine__subcmd__rename"
+                ;;
+            par__mux__subcmd__machine__subcmd__help,add)
+                cmd="par__mux__subcmd__machine__subcmd__help__subcmd__add"
+                ;;
+            par__mux__subcmd__machine__subcmd__help,disable)
+                cmd="par__mux__subcmd__machine__subcmd__help__subcmd__disable"
+                ;;
+            par__mux__subcmd__machine__subcmd__help,enable)
+                cmd="par__mux__subcmd__machine__subcmd__help__subcmd__enable"
+                ;;
+            par__mux__subcmd__machine__subcmd__help,help)
+                cmd="par__mux__subcmd__machine__subcmd__help__subcmd__help"
+                ;;
+            par__mux__subcmd__machine__subcmd__help,list)
+                cmd="par__mux__subcmd__machine__subcmd__help__subcmd__list"
+                ;;
+            par__mux__subcmd__machine__subcmd__help,remove)
+                cmd="par__mux__subcmd__machine__subcmd__help__subcmd__remove"
+                ;;
+            par__mux__subcmd__machine__subcmd__help,rename)
+                cmd="par__mux__subcmd__machine__subcmd__help__subcmd__rename"
+                ;;
             *)
                 ;;
         esac
@@ -89,7 +155,7 @@ _par__mux() {
 
     case "${cmd}" in
         par__mux)
-            opts="-c -h -V --socket --state-dir --stop --restart --foreground --no-attach --cmd --list-servers --pane-endpoints --expose-control-socket --gen-config --force --install-skill --skills-dir --install-agent-hooks --uninstall-agent-hooks --agent-hooks-status --integration-status --install-agent-extensions --uninstall-agent-extensions --heal-agent-hooks --print-schema --print-completions --help --version start stop restart status ls attach config observe control completion help"
+            opts="-c -h -V --socket --state-dir --machine --stop --restart --foreground --no-attach --cmd --list-servers --pane-endpoints --expose-control-socket --gen-config --force --install-skill --skills-dir --install-agent-hooks --uninstall-agent-hooks --agent-hooks-status --integration-status --install-agent-extensions --uninstall-agent-extensions --heal-agent-hooks --print-schema --print-completions --help --version start stop restart status ls attach config observe control completion machine help"
             if [[ ${cur} == -* || ${COMP_CWORD} -eq 1 ]] ; then
                 COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
                 return 0
@@ -100,6 +166,10 @@ _par__mux() {
                     return 0
                     ;;
                 --state-dir)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                --machine)
                     COMPREPLY=($(compgen -f "${cur}"))
                     return 0
                     ;;
@@ -127,7 +197,7 @@ _par__mux() {
             return 0
             ;;
         par__subcmd__mux__subcmd__attach)
-            opts="-t -h --prefix --mode --socket --help"
+            opts="-t -h --prefix --mode --socket --machine --help"
             if [[ ${cur} == -* || ${COMP_CWORD} -eq 2 ]] ; then
                 COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
                 return 0
@@ -149,6 +219,10 @@ _par__mux() {
                     COMPREPLY=($(compgen -f "${cur}"))
                     return 0
                     ;;
+                --machine)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
                 *)
                     COMPREPLY=()
                     ;;
@@ -157,12 +231,16 @@ _par__mux() {
             return 0
             ;;
         par__subcmd__mux__subcmd__completion)
-            opts="-h --help bash elvish fish powershell zsh"
+            opts="-h --machine --help bash elvish fish powershell zsh"
             if [[ ${cur} == -* || ${COMP_CWORD} -eq 2 ]] ; then
                 COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
                 return 0
             fi
             case "${prev}" in
+                --machine)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
                 *)
                     COMPREPLY=()
                     ;;
@@ -171,12 +249,16 @@ _par__mux() {
             return 0
             ;;
         par__subcmd__mux__subcmd__config)
-            opts="-h --force --help"
+            opts="-h --force --machine --help"
             if [[ ${cur} == -* || ${COMP_CWORD} -eq 2 ]] ; then
                 COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
                 return 0
             fi
             case "${prev}" in
+                --machine)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
                 *)
                     COMPREPLY=()
                     ;;
@@ -185,7 +267,7 @@ _par__mux() {
             return 0
             ;;
         par__subcmd__mux__subcmd__control)
-            opts="-t -h --no-seed --size --socket --state-dir --help"
+            opts="-t -h --no-seed --size --socket --state-dir --machine --help"
             if [[ ${cur} == -* || ${COMP_CWORD} -eq 2 ]] ; then
                 COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
                 return 0
@@ -207,6 +289,10 @@ _par__mux() {
                     COMPREPLY=($(compgen -f "${cur}"))
                     return 0
                     ;;
+                --machine)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
                 *)
                     COMPREPLY=()
                     ;;
@@ -215,7 +301,7 @@ _par__mux() {
             return 0
             ;;
         par__subcmd__mux__subcmd__help)
-            opts="start stop restart status ls attach config observe control completion help"
+            opts="start stop restart status ls attach config observe control completion machine help"
             if [[ ${cur} == -* || ${COMP_CWORD} -eq 2 ]] ; then
                 COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
                 return 0
@@ -312,6 +398,104 @@ _par__mux() {
             COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
             return 0
             ;;
+        par__subcmd__mux__subcmd__help__subcmd__machine)
+            opts="add list remove rename enable disable"
+            if [[ ${cur} == -* || ${COMP_CWORD} -eq 3 ]] ; then
+                COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+                return 0
+            fi
+            case "${prev}" in
+                *)
+                    COMPREPLY=()
+                    ;;
+            esac
+            COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+            return 0
+            ;;
+        par__subcmd__mux__subcmd__help__subcmd__machine__subcmd__add)
+            opts=""
+            if [[ ${cur} == -* || ${COMP_CWORD} -eq 4 ]] ; then
+                COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+                return 0
+            fi
+            case "${prev}" in
+                *)
+                    COMPREPLY=()
+                    ;;
+            esac
+            COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+            return 0
+            ;;
+        par__subcmd__mux__subcmd__help__subcmd__machine__subcmd__disable)
+            opts=""
+            if [[ ${cur} == -* || ${COMP_CWORD} -eq 4 ]] ; then
+                COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+                return 0
+            fi
+            case "${prev}" in
+                *)
+                    COMPREPLY=()
+                    ;;
+            esac
+            COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+            return 0
+            ;;
+        par__subcmd__mux__subcmd__help__subcmd__machine__subcmd__enable)
+            opts=""
+            if [[ ${cur} == -* || ${COMP_CWORD} -eq 4 ]] ; then
+                COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+                return 0
+            fi
+            case "${prev}" in
+                *)
+                    COMPREPLY=()
+                    ;;
+            esac
+            COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+            return 0
+            ;;
+        par__subcmd__mux__subcmd__help__subcmd__machine__subcmd__list)
+            opts=""
+            if [[ ${cur} == -* || ${COMP_CWORD} -eq 4 ]] ; then
+                COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+                return 0
+            fi
+            case "${prev}" in
+                *)
+                    COMPREPLY=()
+                    ;;
+            esac
+            COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+            return 0
+            ;;
+        par__subcmd__mux__subcmd__help__subcmd__machine__subcmd__remove)
+            opts=""
+            if [[ ${cur} == -* || ${COMP_CWORD} -eq 4 ]] ; then
+                COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+                return 0
+            fi
+            case "${prev}" in
+                *)
+                    COMPREPLY=()
+                    ;;
+            esac
+            COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+            return 0
+            ;;
+        par__subcmd__mux__subcmd__help__subcmd__machine__subcmd__rename)
+            opts=""
+            if [[ ${cur} == -* || ${COMP_CWORD} -eq 4 ]] ; then
+                COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+                return 0
+            fi
+            case "${prev}" in
+                *)
+                    COMPREPLY=()
+                    ;;
+            esac
+            COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+            return 0
+            ;;
         par__subcmd__mux__subcmd__help__subcmd__observe)
             opts=""
             if [[ ${cur} == -* || ${COMP_CWORD} -eq 3 ]] ; then
@@ -383,7 +567,7 @@ _par__mux() {
             return 0
             ;;
         par__subcmd__mux__subcmd__ls)
-            opts="-h --socket --state-dir --help"
+            opts="-h --socket --state-dir --machine --help"
             if [[ ${cur} == -* || ${COMP_CWORD} -eq 2 ]] ; then
                 COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
                 return 0
@@ -397,6 +581,260 @@ _par__mux() {
                     COMPREPLY=($(compgen -f "${cur}"))
                     return 0
                     ;;
+                --machine)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                *)
+                    COMPREPLY=()
+                    ;;
+            esac
+            COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+            return 0
+            ;;
+        par__subcmd__mux__subcmd__machine)
+            opts="-h --machine --help add list remove rename enable disable help"
+            if [[ ${cur} == -* || ${COMP_CWORD} -eq 2 ]] ; then
+                COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+                return 0
+            fi
+            case "${prev}" in
+                --machine)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                *)
+                    COMPREPLY=()
+                    ;;
+            esac
+            COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+            return 0
+            ;;
+        par__subcmd__mux__subcmd__machine__subcmd__add)
+            opts="-h --label --session --machine --help"
+            if [[ ${cur} == -* || ${COMP_CWORD} -eq 3 ]] ; then
+                COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+                return 0
+            fi
+            case "${prev}" in
+                --label)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                --session)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                --machine)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                *)
+                    COMPREPLY=()
+                    ;;
+            esac
+            COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+            return 0
+            ;;
+        par__subcmd__mux__subcmd__machine__subcmd__disable)
+            opts="-h --machine --help"
+            if [[ ${cur} == -* || ${COMP_CWORD} -eq 3 ]] ; then
+                COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+                return 0
+            fi
+            case "${prev}" in
+                --machine)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                *)
+                    COMPREPLY=()
+                    ;;
+            esac
+            COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+            return 0
+            ;;
+        par__subcmd__mux__subcmd__machine__subcmd__enable)
+            opts="-h --machine --help"
+            if [[ ${cur} == -* || ${COMP_CWORD} -eq 3 ]] ; then
+                COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+                return 0
+            fi
+            case "${prev}" in
+                --machine)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                *)
+                    COMPREPLY=()
+                    ;;
+            esac
+            COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+            return 0
+            ;;
+        par__subcmd__mux__subcmd__machine__subcmd__help)
+            opts="add list remove rename enable disable help"
+            if [[ ${cur} == -* || ${COMP_CWORD} -eq 3 ]] ; then
+                COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+                return 0
+            fi
+            case "${prev}" in
+                *)
+                    COMPREPLY=()
+                    ;;
+            esac
+            COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+            return 0
+            ;;
+        par__subcmd__mux__subcmd__machine__subcmd__help__subcmd__add)
+            opts=""
+            if [[ ${cur} == -* || ${COMP_CWORD} -eq 4 ]] ; then
+                COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+                return 0
+            fi
+            case "${prev}" in
+                *)
+                    COMPREPLY=()
+                    ;;
+            esac
+            COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+            return 0
+            ;;
+        par__subcmd__mux__subcmd__machine__subcmd__help__subcmd__disable)
+            opts=""
+            if [[ ${cur} == -* || ${COMP_CWORD} -eq 4 ]] ; then
+                COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+                return 0
+            fi
+            case "${prev}" in
+                *)
+                    COMPREPLY=()
+                    ;;
+            esac
+            COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+            return 0
+            ;;
+        par__subcmd__mux__subcmd__machine__subcmd__help__subcmd__enable)
+            opts=""
+            if [[ ${cur} == -* || ${COMP_CWORD} -eq 4 ]] ; then
+                COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+                return 0
+            fi
+            case "${prev}" in
+                *)
+                    COMPREPLY=()
+                    ;;
+            esac
+            COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+            return 0
+            ;;
+        par__subcmd__mux__subcmd__machine__subcmd__help__subcmd__help)
+            opts=""
+            if [[ ${cur} == -* || ${COMP_CWORD} -eq 4 ]] ; then
+                COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+                return 0
+            fi
+            case "${prev}" in
+                *)
+                    COMPREPLY=()
+                    ;;
+            esac
+            COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+            return 0
+            ;;
+        par__subcmd__mux__subcmd__machine__subcmd__help__subcmd__list)
+            opts=""
+            if [[ ${cur} == -* || ${COMP_CWORD} -eq 4 ]] ; then
+                COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+                return 0
+            fi
+            case "${prev}" in
+                *)
+                    COMPREPLY=()
+                    ;;
+            esac
+            COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+            return 0
+            ;;
+        par__subcmd__mux__subcmd__machine__subcmd__help__subcmd__remove)
+            opts=""
+            if [[ ${cur} == -* || ${COMP_CWORD} -eq 4 ]] ; then
+                COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+                return 0
+            fi
+            case "${prev}" in
+                *)
+                    COMPREPLY=()
+                    ;;
+            esac
+            COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+            return 0
+            ;;
+        par__subcmd__mux__subcmd__machine__subcmd__help__subcmd__rename)
+            opts=""
+            if [[ ${cur} == -* || ${COMP_CWORD} -eq 4 ]] ; then
+                COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+                return 0
+            fi
+            case "${prev}" in
+                *)
+                    COMPREPLY=()
+                    ;;
+            esac
+            COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+            return 0
+            ;;
+        par__subcmd__mux__subcmd__machine__subcmd__list)
+            opts="-h --machine --help"
+            if [[ ${cur} == -* || ${COMP_CWORD} -eq 3 ]] ; then
+                COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+                return 0
+            fi
+            case "${prev}" in
+                --machine)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                *)
+                    COMPREPLY=()
+                    ;;
+            esac
+            COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+            return 0
+            ;;
+        par__subcmd__mux__subcmd__machine__subcmd__remove)
+            opts="-h --machine --help"
+            if [[ ${cur} == -* || ${COMP_CWORD} -eq 3 ]] ; then
+                COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+                return 0
+            fi
+            case "${prev}" in
+                --machine)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                *)
+                    COMPREPLY=()
+                    ;;
+            esac
+            COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+            return 0
+            ;;
+        par__subcmd__mux__subcmd__machine__subcmd__rename)
+            opts="-h --to --machine --help"
+            if [[ ${cur} == -* || ${COMP_CWORD} -eq 3 ]] ; then
+                COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+                return 0
+            fi
+            case "${prev}" in
+                --to)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                --machine)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
                 *)
                     COMPREPLY=()
                     ;;
@@ -405,7 +843,7 @@ _par__mux() {
             return 0
             ;;
         par__subcmd__mux__subcmd__observe)
-            opts="-t -h --no-seed --size --socket --state-dir --help"
+            opts="-t -h --no-seed --size --socket --state-dir --machine --help"
             if [[ ${cur} == -* || ${COMP_CWORD} -eq 2 ]] ; then
                 COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
                 return 0
@@ -427,6 +865,10 @@ _par__mux() {
                     COMPREPLY=($(compgen -f "${cur}"))
                     return 0
                     ;;
+                --machine)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
                 *)
                     COMPREPLY=()
                     ;;
@@ -435,7 +877,7 @@ _par__mux() {
             return 0
             ;;
         par__subcmd__mux__subcmd__restart)
-            opts="-h --socket --state-dir --help"
+            opts="-h --socket --state-dir --machine --help"
             if [[ ${cur} == -* || ${COMP_CWORD} -eq 2 ]] ; then
                 COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
                 return 0
@@ -446,6 +888,10 @@ _par__mux() {
                     return 0
                     ;;
                 --state-dir)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                --machine)
                     COMPREPLY=($(compgen -f "${cur}"))
                     return 0
                     ;;
@@ -457,7 +903,7 @@ _par__mux() {
             return 0
             ;;
         par__subcmd__mux__subcmd__start)
-            opts="-h --socket --state-dir --foreground --no-attach --pane-endpoints --expose-control-socket --help"
+            opts="-h --socket --state-dir --foreground --no-attach --pane-endpoints --expose-control-socket --machine --help"
             if [[ ${cur} == -* || ${COMP_CWORD} -eq 2 ]] ; then
                 COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
                 return 0
@@ -468,6 +914,10 @@ _par__mux() {
                     return 0
                     ;;
                 --state-dir)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                --machine)
                     COMPREPLY=($(compgen -f "${cur}"))
                     return 0
                     ;;
@@ -479,7 +929,7 @@ _par__mux() {
             return 0
             ;;
         par__subcmd__mux__subcmd__status)
-            opts="-h --socket --state-dir --help"
+            opts="-h --socket --state-dir --machine --help"
             if [[ ${cur} == -* || ${COMP_CWORD} -eq 2 ]] ; then
                 COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
                 return 0
@@ -490,6 +940,10 @@ _par__mux() {
                     return 0
                     ;;
                 --state-dir)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                --machine)
                     COMPREPLY=($(compgen -f "${cur}"))
                     return 0
                     ;;
@@ -501,7 +955,7 @@ _par__mux() {
             return 0
             ;;
         par__subcmd__mux__subcmd__stop)
-            opts="-h --socket --state-dir --help"
+            opts="-h --socket --state-dir --machine --help"
             if [[ ${cur} == -* || ${COMP_CWORD} -eq 2 ]] ; then
                 COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
                 return 0
@@ -512,6 +966,10 @@ _par__mux() {
                     return 0
                     ;;
                 --state-dir)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                --machine)
                     COMPREPLY=($(compgen -f "${cur}"))
                     return 0
                     ;;

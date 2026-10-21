@@ -100,6 +100,14 @@ struct Cli {
     #[arg(long, value_name = "DIR")]
     state_dir: Option<std::path::PathBuf>,
 
+    /// Relay this invocation to a saved machine over SSH (the machine's
+    /// profile in `[machines.<label>]` names the ssh target; credentials
+    /// stay with ssh itself). One-shot commands (`--cmd`, `status`, `ls`,
+    /// `observe`, `control`, `--stop`) run non-interactively; `attach`
+    /// forces passthrough under a pty — the thin client.
+    #[arg(long, value_name = "LABEL", global = true)]
+    machine: Option<String>,
+
     /// Stop the daemon serving this socket cleanly (final state save,
     /// `%exit` to clients) and wait for it to exit. Flags rather than
     /// subcommands: the positional NAME would otherwise be ambiguous with a
@@ -415,6 +423,49 @@ enum Sub {
     /// Print the shell-completion script for SHELL, herdr's spelling of
     /// `--print-completions`. Never contacts a daemon.
     Completion(CompletionArgs),
+    /// Manage saved machines (`[machines.<label>]` in the config): SSH
+    /// thin-client profiles for `--machine`. Never contacts a daemon.
+    Machine(MachineArgs),
+}
+
+/// `par-mux machine <VERB>` — the saved-machine manager.
+#[derive(clap::Subcommand, Debug)]
+enum MachineCommand {
+    /// Save `[machines.<LABEL>]` (or replace it): the ssh target, an
+    /// optional default remote session, enabled by default. Nothing is
+    /// contacted — the first attach relays whenever ssh is ready.
+    Add {
+        /// The ssh target as openssh spells it (`user@host`, a config
+        /// alias, `host:port`).
+        target: String,
+        /// The machine's label (defaults to the target's host part).
+        #[arg(long)]
+        label: Option<String>,
+        /// The remote session `--machine <LABEL> attach` lands on.
+        #[arg(long)]
+        session: Option<String>,
+    },
+    /// One line per saved machine: `label  target  [session]  enabled|disabled`.
+    List,
+    /// Remove a machine's profile (remote sessions keep running).
+    Remove { label: String },
+    /// Rename a machine's label.
+    Rename {
+        label: String,
+        #[arg(long)]
+        to: String,
+    },
+    /// Mark a machine enabled.
+    Enable { label: String },
+    /// Mark a machine disabled (listed, never auto-attached).
+    Disable { label: String },
+}
+
+/// `par-mux machine <VERB> [...]` — the verb's arguments.
+#[derive(clap::Args, Debug)]
+struct MachineArgs {
+    #[command(subcommand)]
+    command: MachineCommand,
 }
 
 /// `par-mux completion <SHELL>` — the completion verb.
@@ -950,6 +1001,10 @@ fn run_agent_extension_action(install: bool) -> std::process::ExitCode {
     }
 }
 
+mod machine;
+
+use machine::{run_machine_command, run_machine_relay};
+
 fn main() -> std::process::ExitCode {
     let mut cli = Cli::parse();
 
@@ -960,6 +1015,12 @@ fn main() -> std::process::ExitCode {
     if let Some(shell) = cli.print_completions {
         print!("{}", completion_script(shell));
         return std::process::ExitCode::SUCCESS;
+    }
+
+    // The machine relay owns the whole invocation before anything local
+    // resolves: `par-mux --machine m …` becomes `ssh m -- par-mux …`.
+    if let Some(label) = cli.machine.take() {
+        return run_machine_relay(&label);
     }
 
     // The verb surface (R1): translate a subcommand into the flag fields
@@ -1057,6 +1118,7 @@ fn main() -> std::process::ExitCode {
             }
             #[cfg(feature = "attach")]
             Sub::Attach(args) => attach_cmd = Some(AttachCommand::Attach(args)),
+            Sub::Machine(args) => return run_machine_command(args),
             Sub::Config(args) => {
                 cli.gen_config = true;
                 cli.force |= args.force;

@@ -1547,6 +1547,172 @@ fn install_agent_hooks_skips_absent_droid_copilot_and_cursor() {
     }
 }
 
+/// Machine profiles: add/list/rename/disable/enable/remove against a temp
+/// config, and the credentials contract — the file holds only label,
+/// target, session, and enabled state.
+#[test]
+fn machine_profiles_round_trip_through_the_config() {
+    let root = tempfile::tempdir().expect("temp dir");
+    let config = root.path().join("config.toml");
+    let config_str = config.to_str().expect("utf-8 path");
+    let env = [("PAR_MUX_CONFIG", config_str)];
+
+    let run = par_mux_with(&["machine", "add", "paul@10.0.0.4:2222"], &env);
+    assert_eq!(run.code, Some(0), "stderr: {}", run.stderr);
+    assert!(run
+        .stdout
+        .contains("machine 10.0.0.4 saved: paul@10.0.0.4:2222"));
+    let text = std::fs::read_to_string(&config).unwrap();
+    assert!(
+        text.contains("[machines.10.0.0.4]") || text.contains("[machines.\"10.0.0.4\"]"),
+        "labeled by host (a digit-leading key rides toml's quoted form): {text}"
+    );
+    assert!(text.contains("target = \"paul@10.0.0.4:2222\""));
+    assert!(!text.contains("password"), "no credentials, ever");
+    assert!(!text.contains("key"), "no key material, ever");
+
+    let run = par_mux_with(
+        &[
+            "machine",
+            "add",
+            "lab",
+            "--label",
+            "lab",
+            "--session",
+            "main",
+        ],
+        &env,
+    );
+    assert_eq!(run.code, Some(0), "stderr: {}", run.stderr);
+    let run = par_mux_with(&["machine", "list"], &env);
+    assert_eq!(run.code, Some(0), "stderr: {}", run.stderr);
+    assert!(
+        run.stdout.contains("lab  main  enabled  lab"),
+        "{}",
+        run.stdout
+    );
+    assert!(run
+        .stdout
+        .contains("10.0.0.4  -  enabled  paul@10.0.0.4:2222"));
+
+    let run = par_mux_with(&["machine", "disable", "lab"], &env);
+    assert_eq!(run.code, Some(0), "stderr: {}", run.stderr);
+    assert!(std::fs::read_to_string(&config)
+        .unwrap()
+        .contains("enabled = false"));
+    let run = par_mux_with(&["machine", "list"], &env);
+    assert!(run.stdout.contains("lab  main  disabled"));
+
+    let run = par_mux_with(&["machine", "rename", "lab", "--to", "workshop"], &env);
+    assert_eq!(run.code, Some(0), "stderr: {}", run.stderr);
+    let run = par_mux_with(&["machine", "remove", "workshop"], &env);
+    assert_eq!(run.code, Some(0), "stderr: {}", run.stderr);
+    let run = par_mux_with(&["machine", "list"], &env);
+    assert!(!run.stdout.contains("workshop"), "{}", run.stdout);
+
+    let run = par_mux_with(&["machine", "remove", "nope"], &env);
+    assert_eq!(run.code, Some(0), "an absent machine removes as a no-op");
+}
+
+/// A user config with comments keeps every comment through machine edits.
+#[test]
+fn machine_edits_preserve_the_users_comments() {
+    let root = tempfile::tempdir().expect("temp dir");
+    let config = root.path().join("config.toml");
+    std::fs::write(
+        &config,
+        "# paul's config\n[client]\nprefix = \"C-a\"\n# end\n",
+    )
+    .unwrap();
+    let env = [("PAR_MUX_CONFIG", config.to_str().expect("utf-8 path"))];
+
+    par_mux_with(&["machine", "add", "lab", "--label", "lab"], &env);
+    par_mux_with(&["machine", "remove", "lab"], &env);
+
+    let text = std::fs::read_to_string(&config).unwrap();
+    assert!(text.contains("# paul's config"), "{text}");
+    assert!(text.contains("# end"));
+    assert!(text.contains("prefix = \"C-a\""));
+}
+
+/// The `--machine` relay rebuilds the invocation as an ssh command line:
+/// non-interactive one-shots (BatchMode), attach forcing passthrough under
+/// -tt, `--machine` stripped, and ssh's exit code relayed. A stub ssh on
+/// PATH captures what par-mux would have run.
+#[cfg(unix)]
+#[test]
+fn machine_relay_builds_the_ssh_invocation() {
+    use std::os::unix::fs::PermissionsExt;
+
+    let root = tempfile::tempdir().expect("temp dir");
+    let config = root.path().join("config.toml");
+    std::fs::write(
+        &config,
+        "[machines.lab]\ntarget = \"paul@10.0.0.4\"\nsession = \"main\"\n",
+    )
+    .unwrap();
+    let bin = root.path().join("bin");
+    std::fs::create_dir(&bin).unwrap();
+    let args_file = root.path().join("ssh-args");
+    let stub = bin.join("ssh");
+    let args_str = args_file.to_str().expect("utf-8 path");
+    std::fs::write(
+        &stub,
+        format!("#!/bin/sh\nprintf '%s\\n' \"$@\" > '{args_str}'\nexit 7\n"),
+    )
+    .unwrap();
+    std::fs::set_permissions(&stub, std::fs::Permissions::from_mode(0o755)).unwrap();
+
+    let env = [
+        (
+            "PAR_MUX_CONFIG",
+            config.to_str().expect("utf-8 path").to_string(),
+        ),
+        ("PATH", format!("{}:/usr/bin:/bin", bin.display())),
+    ];
+    let env_ref: [(&str, &str); 2] = [
+        ("PAR_MUX_CONFIG", env[0].1.as_str()),
+        ("PATH", env[1].1.as_str()),
+    ];
+
+    let run = par_mux_with(
+        &["--machine", "lab", "--cmd", "send-keys -t %0 hello world"],
+        &env_ref,
+    );
+    assert_eq!(run.code, Some(7), "ssh's exit code relays: {}", run.stderr);
+    let relayed = std::fs::read_to_string(&args_file).unwrap();
+    assert_eq!(
+        relayed, "-o\nBatchMode=yes\npaul@10.0.0.4\npar-mux --cmd 'send-keys -t %0 hello world'\n",
+        "the exact ssh argv"
+    );
+
+    std::fs::write(&args_file, "").unwrap();
+    let run = par_mux_with(&["--machine", "lab", "attach", "-t", "a b"], &env_ref);
+    assert_eq!(run.code, Some(7), "stderr: {}", run.stderr);
+    let relayed = std::fs::read_to_string(&args_file).unwrap();
+    assert_eq!(
+        relayed, "-tt\npaul@10.0.0.4\npar-mux attach -t 'a b' --mode passthrough\n",
+        "attach rides a pty and forces passthrough"
+    );
+
+    std::fs::write(&args_file, "").unwrap();
+    let run = par_mux_with(&["--machine=lab", "attach", "--mode", "render"], &env_ref);
+    assert_eq!(run.code, Some(7), "stderr: {}", run.stderr);
+    let relayed = std::fs::read_to_string(&args_file).unwrap();
+    assert!(
+        relayed.contains("--mode render") && !relayed.contains("passthrough"),
+        "an explicit --mode wins: {relayed}"
+    );
+
+    // Local-only flags refuse to relay, and an unknown machine errors.
+    let run = par_mux_with(&["--machine", "lab", "--gen-config"], &env_ref);
+    assert_eq!(run.code, Some(2), "stderr: {}", run.stderr);
+    assert!(run.stderr.contains("does not relay over --machine"));
+    let run = par_mux_with(&["--machine", "ghost", "--cmd", "list-sessions"], &env_ref);
+    assert_eq!(run.code, Some(2), "stderr: {}", run.stderr);
+    assert!(run.stderr.contains("no saved machine"), "{}", run.stderr);
+}
+
 /// `--integration-status` covers every bundled asset in one grammar: the
 /// hook lines (4 own-config agents + the 8 registry arms), the two
 /// extension lines, and the skill line, each

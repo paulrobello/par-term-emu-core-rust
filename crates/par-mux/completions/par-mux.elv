@@ -20,6 +20,7 @@ set edit:completion:arg-completer[par-mux] = {|@words|
         &'par-mux'= {
             cand --socket 'Bind an explicit socket path instead of the named default'
             cand --state-dir 'Override the platform state directory (D3.4) that persisted session trees are written under, instead of the OS-standard state/data dir'
+            cand --machine 'Relay this invocation to a saved machine over SSH (the machine''s profile in `[machines.<label>]` names the ssh target; credentials stay with ssh itself). One-shot commands (`--cmd`, `status`, `ls`, `observe`, `control`, `--stop`) run non-interactively; `attach` forces passthrough under a pty — the thin client'
             cand -c 'Client mode: send one control command to the daemon on this socket, print its reply body to stdout (one line per reply line), and exit. A `%error` reply prints to stderr and exits non-zero. Never starts a daemon. A flag, like --stop, so the positional NAME stays unambiguous'
             cand --cmd 'Client mode: send one control command to the daemon on this socket, print its reply body to stdout (one line per reply line), and exit. A `%error` reply prints to stderr and exits non-zero. Never starts a daemon. A flag, like --stop, so the positional NAME stays unambiguous'
             cand --skills-dir 'With --install-skill: write under this skills root instead of the Claude Code default (tests, other agent harnesses)'
@@ -56,11 +57,13 @@ set edit:completion:arg-completer[par-mux] = {|@words|
             cand observe 'Stream one pane''s raw output to stdout, read-only (`observe-pane`): the screen seed, then live PTY bytes until the pane closes. Any number of observers may watch the same pane'
             cand control 'Drive one pane (`control-pane`): stream its output to stdout like `observe`, forward stdin bytes to it until EOF (no raw mode — for pipes and scripts; interactive use is `attach -t %N`), and report this terminal''s size (polled) or `--size` as a viewer of the pane''s window'
             cand completion 'Print the shell-completion script for SHELL, herdr''s spelling of `--print-completions`. Never contacts a daemon'
+            cand machine 'Manage saved machines (`[machines.<label>]` in the config): SSH thin-client profiles for `--machine`. Never contacts a daemon'
             cand help 'Print this message or the help of the given subcommand(s)'
         }
         &'par-mux;start'= {
             cand --socket 'Bind an explicit socket path instead of the named default'
             cand --state-dir 'Override the platform state directory'
+            cand --machine 'Relay this invocation to a saved machine over SSH (the machine''s profile in `[machines.<label>]` names the ssh target; credentials stay with ssh itself). One-shot commands (`--cmd`, `status`, `ls`, `observe`, `control`, `--stop`) run non-interactively; `attach` forces passthrough under a pty — the thin client'
             cand --foreground 'Serve in this process instead of detaching'
             cand --no-attach 'Skip the auto-attach of the invoking terminal'
             cand --pane-endpoints 'Give each pane its own hook-only socket endpoint'
@@ -71,24 +74,28 @@ set edit:completion:arg-completer[par-mux] = {|@words|
         &'par-mux;stop'= {
             cand --socket 'Connect to an explicit socket path instead of the named default'
             cand --state-dir 'Override the platform state directory (the registry base for discovery-flavored reads)'
+            cand --machine 'Relay this invocation to a saved machine over SSH (the machine''s profile in `[machines.<label>]` names the ssh target; credentials stay with ssh itself). One-shot commands (`--cmd`, `status`, `ls`, `observe`, `control`, `--stop`) run non-interactively; `attach` forces passthrough under a pty — the thin client'
             cand -h 'Print help'
             cand --help 'Print help'
         }
         &'par-mux;restart'= {
             cand --socket 'Connect to an explicit socket path instead of the named default'
             cand --state-dir 'Override the platform state directory (the registry base for discovery-flavored reads)'
+            cand --machine 'Relay this invocation to a saved machine over SSH (the machine''s profile in `[machines.<label>]` names the ssh target; credentials stay with ssh itself). One-shot commands (`--cmd`, `status`, `ls`, `observe`, `control`, `--stop`) run non-interactively; `attach` forces passthrough under a pty — the thin client'
             cand -h 'Print help'
             cand --help 'Print help'
         }
         &'par-mux;status'= {
             cand --socket 'Connect to an explicit socket path instead of the named default'
             cand --state-dir 'Override the platform state directory (the registry base for discovery-flavored reads)'
+            cand --machine 'Relay this invocation to a saved machine over SSH (the machine''s profile in `[machines.<label>]` names the ssh target; credentials stay with ssh itself). One-shot commands (`--cmd`, `status`, `ls`, `observe`, `control`, `--stop`) run non-interactively; `attach` forces passthrough under a pty — the thin client'
             cand -h 'Print help'
             cand --help 'Print help'
         }
         &'par-mux;ls'= {
             cand --socket 'Connect to an explicit socket path instead of the named default'
             cand --state-dir 'Override the platform state directory (the registry base for discovery-flavored reads)'
+            cand --machine 'Relay this invocation to a saved machine over SSH (the machine''s profile in `[machines.<label>]` names the ssh target; credentials stay with ssh itself). One-shot commands (`--cmd`, `status`, `ls`, `observe`, `control`, `--stop`) run non-interactively; `attach` forces passthrough under a pty — the thin client'
             cand -h 'Print help'
             cand --help 'Print help'
         }
@@ -97,10 +104,12 @@ set edit:completion:arg-completer[par-mux] = {|@words|
             cand --prefix 'Detach prefix key, tmux spelling (e.g. `C-b`); Phase A routes it'
             cand --mode 'Render pipeline: `render` (the default — the Phase B pane renderer with the input router: mode-aware key re-encode, mouse routing, wheel scrollback) or `passthrough` (pane bytes to the host terminal verbatim, Phase A). Absent = the `[client] mode` from the config file, else render'
             cand --socket 'Connect to an explicit socket path instead of the named default'
+            cand --machine 'Relay this invocation to a saved machine over SSH (the machine''s profile in `[machines.<label>]` names the ssh target; credentials stay with ssh itself). One-shot commands (`--cmd`, `status`, `ls`, `observe`, `control`, `--stop`) run non-interactively; `attach` forces passthrough under a pty — the thin client'
             cand -h 'Print help'
             cand --help 'Print help'
         }
         &'par-mux;config'= {
+            cand --machine 'Relay this invocation to a saved machine over SSH (the machine''s profile in `[machines.<label>]` names the ssh target; credentials stay with ssh itself). One-shot commands (`--cmd`, `status`, `ls`, `observe`, `control`, `--stop`) run non-interactively; `attach` forces passthrough under a pty — the thin client'
             cand --force 'Overwrite an existing config file'
             cand -h 'Print help'
             cand --help 'Print help'
@@ -110,6 +119,7 @@ set edit:completion:arg-completer[par-mux] = {|@words|
             cand --size '`control` only: report this fixed size (`WxH`) instead of following the terminal''s'
             cand --socket 'Connect to an explicit socket path instead of the named default'
             cand --state-dir 'Override the platform state directory (the registry base for discovery-flavored reads)'
+            cand --machine 'Relay this invocation to a saved machine over SSH (the machine''s profile in `[machines.<label>]` names the ssh target; credentials stay with ssh itself). One-shot commands (`--cmd`, `status`, `ls`, `observe`, `control`, `--stop`) run non-interactively; `attach` forces passthrough under a pty — the thin client'
             cand --no-seed 'Skip the screen seed: stdout carries only output that follows'
             cand -h 'Print help'
             cand --help 'Print help'
@@ -119,13 +129,83 @@ set edit:completion:arg-completer[par-mux] = {|@words|
             cand --size '`control` only: report this fixed size (`WxH`) instead of following the terminal''s'
             cand --socket 'Connect to an explicit socket path instead of the named default'
             cand --state-dir 'Override the platform state directory (the registry base for discovery-flavored reads)'
+            cand --machine 'Relay this invocation to a saved machine over SSH (the machine''s profile in `[machines.<label>]` names the ssh target; credentials stay with ssh itself). One-shot commands (`--cmd`, `status`, `ls`, `observe`, `control`, `--stop`) run non-interactively; `attach` forces passthrough under a pty — the thin client'
             cand --no-seed 'Skip the screen seed: stdout carries only output that follows'
             cand -h 'Print help'
             cand --help 'Print help'
         }
         &'par-mux;completion'= {
+            cand --machine 'Relay this invocation to a saved machine over SSH (the machine''s profile in `[machines.<label>]` names the ssh target; credentials stay with ssh itself). One-shot commands (`--cmd`, `status`, `ls`, `observe`, `control`, `--stop`) run non-interactively; `attach` forces passthrough under a pty — the thin client'
             cand -h 'Print help'
             cand --help 'Print help'
+        }
+        &'par-mux;machine'= {
+            cand --machine 'Relay this invocation to a saved machine over SSH (the machine''s profile in `[machines.<label>]` names the ssh target; credentials stay with ssh itself). One-shot commands (`--cmd`, `status`, `ls`, `observe`, `control`, `--stop`) run non-interactively; `attach` forces passthrough under a pty — the thin client'
+            cand -h 'Print help'
+            cand --help 'Print help'
+            cand add 'Save `[machines.<LABEL>]` (or replace it): the ssh target, an optional default remote session, enabled by default. Nothing is contacted — the first attach relays whenever ssh is ready'
+            cand list 'One line per saved machine: `label  target  [session]  enabled|disabled`'
+            cand remove 'Remove a machine''s profile (remote sessions keep running)'
+            cand rename 'Rename a machine''s label'
+            cand enable 'Mark a machine enabled'
+            cand disable 'Mark a machine disabled (listed, never auto-attached)'
+            cand help 'Print this message or the help of the given subcommand(s)'
+        }
+        &'par-mux;machine;add'= {
+            cand --label 'The machine''s label (defaults to the target''s host part)'
+            cand --session 'The remote session `--machine <LABEL> attach` lands on'
+            cand --machine 'Relay this invocation to a saved machine over SSH (the machine''s profile in `[machines.<label>]` names the ssh target; credentials stay with ssh itself). One-shot commands (`--cmd`, `status`, `ls`, `observe`, `control`, `--stop`) run non-interactively; `attach` forces passthrough under a pty — the thin client'
+            cand -h 'Print help'
+            cand --help 'Print help'
+        }
+        &'par-mux;machine;list'= {
+            cand --machine 'Relay this invocation to a saved machine over SSH (the machine''s profile in `[machines.<label>]` names the ssh target; credentials stay with ssh itself). One-shot commands (`--cmd`, `status`, `ls`, `observe`, `control`, `--stop`) run non-interactively; `attach` forces passthrough under a pty — the thin client'
+            cand -h 'Print help'
+            cand --help 'Print help'
+        }
+        &'par-mux;machine;remove'= {
+            cand --machine 'Relay this invocation to a saved machine over SSH (the machine''s profile in `[machines.<label>]` names the ssh target; credentials stay with ssh itself). One-shot commands (`--cmd`, `status`, `ls`, `observe`, `control`, `--stop`) run non-interactively; `attach` forces passthrough under a pty — the thin client'
+            cand -h 'Print help'
+            cand --help 'Print help'
+        }
+        &'par-mux;machine;rename'= {
+            cand --to 'to'
+            cand --machine 'Relay this invocation to a saved machine over SSH (the machine''s profile in `[machines.<label>]` names the ssh target; credentials stay with ssh itself). One-shot commands (`--cmd`, `status`, `ls`, `observe`, `control`, `--stop`) run non-interactively; `attach` forces passthrough under a pty — the thin client'
+            cand -h 'Print help'
+            cand --help 'Print help'
+        }
+        &'par-mux;machine;enable'= {
+            cand --machine 'Relay this invocation to a saved machine over SSH (the machine''s profile in `[machines.<label>]` names the ssh target; credentials stay with ssh itself). One-shot commands (`--cmd`, `status`, `ls`, `observe`, `control`, `--stop`) run non-interactively; `attach` forces passthrough under a pty — the thin client'
+            cand -h 'Print help'
+            cand --help 'Print help'
+        }
+        &'par-mux;machine;disable'= {
+            cand --machine 'Relay this invocation to a saved machine over SSH (the machine''s profile in `[machines.<label>]` names the ssh target; credentials stay with ssh itself). One-shot commands (`--cmd`, `status`, `ls`, `observe`, `control`, `--stop`) run non-interactively; `attach` forces passthrough under a pty — the thin client'
+            cand -h 'Print help'
+            cand --help 'Print help'
+        }
+        &'par-mux;machine;help'= {
+            cand add 'Save `[machines.<LABEL>]` (or replace it): the ssh target, an optional default remote session, enabled by default. Nothing is contacted — the first attach relays whenever ssh is ready'
+            cand list 'One line per saved machine: `label  target  [session]  enabled|disabled`'
+            cand remove 'Remove a machine''s profile (remote sessions keep running)'
+            cand rename 'Rename a machine''s label'
+            cand enable 'Mark a machine enabled'
+            cand disable 'Mark a machine disabled (listed, never auto-attached)'
+            cand help 'Print this message or the help of the given subcommand(s)'
+        }
+        &'par-mux;machine;help;add'= {
+        }
+        &'par-mux;machine;help;list'= {
+        }
+        &'par-mux;machine;help;remove'= {
+        }
+        &'par-mux;machine;help;rename'= {
+        }
+        &'par-mux;machine;help;enable'= {
+        }
+        &'par-mux;machine;help;disable'= {
+        }
+        &'par-mux;machine;help;help'= {
         }
         &'par-mux;help'= {
             cand start 'Start the daemon (the default action): detached, auto-attaching this terminal unless --no-attach. Same as bare `par-mux [NAME]`'
@@ -138,6 +218,7 @@ set edit:completion:arg-completer[par-mux] = {|@words|
             cand observe 'Stream one pane''s raw output to stdout, read-only (`observe-pane`): the screen seed, then live PTY bytes until the pane closes. Any number of observers may watch the same pane'
             cand control 'Drive one pane (`control-pane`): stream its output to stdout like `observe`, forward stdin bytes to it until EOF (no raw mode — for pipes and scripts; interactive use is `attach -t %N`), and report this terminal''s size (polled) or `--size` as a viewer of the pane''s window'
             cand completion 'Print the shell-completion script for SHELL, herdr''s spelling of `--print-completions`. Never contacts a daemon'
+            cand machine 'Manage saved machines (`[machines.<label>]` in the config): SSH thin-client profiles for `--machine`. Never contacts a daemon'
             cand help 'Print this message or the help of the given subcommand(s)'
         }
         &'par-mux;help;start'= {
@@ -159,6 +240,26 @@ set edit:completion:arg-completer[par-mux] = {|@words|
         &'par-mux;help;control'= {
         }
         &'par-mux;help;completion'= {
+        }
+        &'par-mux;help;machine'= {
+            cand add 'Save `[machines.<LABEL>]` (or replace it): the ssh target, an optional default remote session, enabled by default. Nothing is contacted — the first attach relays whenever ssh is ready'
+            cand list 'One line per saved machine: `label  target  [session]  enabled|disabled`'
+            cand remove 'Remove a machine''s profile (remote sessions keep running)'
+            cand rename 'Rename a machine''s label'
+            cand enable 'Mark a machine enabled'
+            cand disable 'Mark a machine disabled (listed, never auto-attached)'
+        }
+        &'par-mux;help;machine;add'= {
+        }
+        &'par-mux;help;machine;list'= {
+        }
+        &'par-mux;help;machine;remove'= {
+        }
+        &'par-mux;help;machine;rename'= {
+        }
+        &'par-mux;help;machine;enable'= {
+        }
+        &'par-mux;help;machine;disable'= {
         }
         &'par-mux;help;help'= {
         }

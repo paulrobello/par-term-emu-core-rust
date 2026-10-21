@@ -23,6 +23,7 @@ Register-ArgumentCompleter -Native -CommandName 'par-mux' -ScriptBlock {
         'par-mux' {
             [CompletionResult]::new('--socket', '--socket', [CompletionResultType]::ParameterName, 'Bind an explicit socket path instead of the named default')
             [CompletionResult]::new('--state-dir', '--state-dir', [CompletionResultType]::ParameterName, 'Override the platform state directory (D3.4) that persisted session trees are written under, instead of the OS-standard state/data dir')
+            [CompletionResult]::new('--machine', '--machine', [CompletionResultType]::ParameterName, 'Relay this invocation to a saved machine over SSH (the machine''s profile in `[machines.<label>]` names the ssh target; credentials stay with ssh itself). One-shot commands (`--cmd`, `status`, `ls`, `observe`, `control`, `--stop`) run non-interactively; `attach` forces passthrough under a pty — the thin client')
             [CompletionResult]::new('-c', '-c', [CompletionResultType]::ParameterName, 'Client mode: send one control command to the daemon on this socket, print its reply body to stdout (one line per reply line), and exit. A `%error` reply prints to stderr and exits non-zero. Never starts a daemon. A flag, like --stop, so the positional NAME stays unambiguous')
             [CompletionResult]::new('--cmd', '--cmd', [CompletionResultType]::ParameterName, 'Client mode: send one control command to the daemon on this socket, print its reply body to stdout (one line per reply line), and exit. A `%error` reply prints to stderr and exits non-zero. Never starts a daemon. A flag, like --stop, so the positional NAME stays unambiguous')
             [CompletionResult]::new('--skills-dir', '--skills-dir', [CompletionResultType]::ParameterName, 'With --install-skill: write under this skills root instead of the Claude Code default (tests, other agent harnesses)')
@@ -59,12 +60,14 @@ Register-ArgumentCompleter -Native -CommandName 'par-mux' -ScriptBlock {
             [CompletionResult]::new('observe', 'observe', [CompletionResultType]::ParameterValue, 'Stream one pane''s raw output to stdout, read-only (`observe-pane`): the screen seed, then live PTY bytes until the pane closes. Any number of observers may watch the same pane')
             [CompletionResult]::new('control', 'control', [CompletionResultType]::ParameterValue, 'Drive one pane (`control-pane`): stream its output to stdout like `observe`, forward stdin bytes to it until EOF (no raw mode — for pipes and scripts; interactive use is `attach -t %N`), and report this terminal''s size (polled) or `--size` as a viewer of the pane''s window')
             [CompletionResult]::new('completion', 'completion', [CompletionResultType]::ParameterValue, 'Print the shell-completion script for SHELL, herdr''s spelling of `--print-completions`. Never contacts a daemon')
+            [CompletionResult]::new('machine', 'machine', [CompletionResultType]::ParameterValue, 'Manage saved machines (`[machines.<label>]` in the config): SSH thin-client profiles for `--machine`. Never contacts a daemon')
             [CompletionResult]::new('help', 'help', [CompletionResultType]::ParameterValue, 'Print this message or the help of the given subcommand(s)')
             break
         }
         'par-mux;start' {
             [CompletionResult]::new('--socket', '--socket', [CompletionResultType]::ParameterName, 'Bind an explicit socket path instead of the named default')
             [CompletionResult]::new('--state-dir', '--state-dir', [CompletionResultType]::ParameterName, 'Override the platform state directory')
+            [CompletionResult]::new('--machine', '--machine', [CompletionResultType]::ParameterName, 'Relay this invocation to a saved machine over SSH (the machine''s profile in `[machines.<label>]` names the ssh target; credentials stay with ssh itself). One-shot commands (`--cmd`, `status`, `ls`, `observe`, `control`, `--stop`) run non-interactively; `attach` forces passthrough under a pty — the thin client')
             [CompletionResult]::new('--foreground', '--foreground', [CompletionResultType]::ParameterName, 'Serve in this process instead of detaching')
             [CompletionResult]::new('--no-attach', '--no-attach', [CompletionResultType]::ParameterName, 'Skip the auto-attach of the invoking terminal')
             [CompletionResult]::new('--pane-endpoints', '--pane-endpoints', [CompletionResultType]::ParameterName, 'Give each pane its own hook-only socket endpoint')
@@ -76,6 +79,7 @@ Register-ArgumentCompleter -Native -CommandName 'par-mux' -ScriptBlock {
         'par-mux;stop' {
             [CompletionResult]::new('--socket', '--socket', [CompletionResultType]::ParameterName, 'Connect to an explicit socket path instead of the named default')
             [CompletionResult]::new('--state-dir', '--state-dir', [CompletionResultType]::ParameterName, 'Override the platform state directory (the registry base for discovery-flavored reads)')
+            [CompletionResult]::new('--machine', '--machine', [CompletionResultType]::ParameterName, 'Relay this invocation to a saved machine over SSH (the machine''s profile in `[machines.<label>]` names the ssh target; credentials stay with ssh itself). One-shot commands (`--cmd`, `status`, `ls`, `observe`, `control`, `--stop`) run non-interactively; `attach` forces passthrough under a pty — the thin client')
             [CompletionResult]::new('-h', '-h', [CompletionResultType]::ParameterName, 'Print help')
             [CompletionResult]::new('--help', '--help', [CompletionResultType]::ParameterName, 'Print help')
             break
@@ -83,6 +87,7 @@ Register-ArgumentCompleter -Native -CommandName 'par-mux' -ScriptBlock {
         'par-mux;restart' {
             [CompletionResult]::new('--socket', '--socket', [CompletionResultType]::ParameterName, 'Connect to an explicit socket path instead of the named default')
             [CompletionResult]::new('--state-dir', '--state-dir', [CompletionResultType]::ParameterName, 'Override the platform state directory (the registry base for discovery-flavored reads)')
+            [CompletionResult]::new('--machine', '--machine', [CompletionResultType]::ParameterName, 'Relay this invocation to a saved machine over SSH (the machine''s profile in `[machines.<label>]` names the ssh target; credentials stay with ssh itself). One-shot commands (`--cmd`, `status`, `ls`, `observe`, `control`, `--stop`) run non-interactively; `attach` forces passthrough under a pty — the thin client')
             [CompletionResult]::new('-h', '-h', [CompletionResultType]::ParameterName, 'Print help')
             [CompletionResult]::new('--help', '--help', [CompletionResultType]::ParameterName, 'Print help')
             break
@@ -90,6 +95,7 @@ Register-ArgumentCompleter -Native -CommandName 'par-mux' -ScriptBlock {
         'par-mux;status' {
             [CompletionResult]::new('--socket', '--socket', [CompletionResultType]::ParameterName, 'Connect to an explicit socket path instead of the named default')
             [CompletionResult]::new('--state-dir', '--state-dir', [CompletionResultType]::ParameterName, 'Override the platform state directory (the registry base for discovery-flavored reads)')
+            [CompletionResult]::new('--machine', '--machine', [CompletionResultType]::ParameterName, 'Relay this invocation to a saved machine over SSH (the machine''s profile in `[machines.<label>]` names the ssh target; credentials stay with ssh itself). One-shot commands (`--cmd`, `status`, `ls`, `observe`, `control`, `--stop`) run non-interactively; `attach` forces passthrough under a pty — the thin client')
             [CompletionResult]::new('-h', '-h', [CompletionResultType]::ParameterName, 'Print help')
             [CompletionResult]::new('--help', '--help', [CompletionResultType]::ParameterName, 'Print help')
             break
@@ -97,6 +103,7 @@ Register-ArgumentCompleter -Native -CommandName 'par-mux' -ScriptBlock {
         'par-mux;ls' {
             [CompletionResult]::new('--socket', '--socket', [CompletionResultType]::ParameterName, 'Connect to an explicit socket path instead of the named default')
             [CompletionResult]::new('--state-dir', '--state-dir', [CompletionResultType]::ParameterName, 'Override the platform state directory (the registry base for discovery-flavored reads)')
+            [CompletionResult]::new('--machine', '--machine', [CompletionResultType]::ParameterName, 'Relay this invocation to a saved machine over SSH (the machine''s profile in `[machines.<label>]` names the ssh target; credentials stay with ssh itself). One-shot commands (`--cmd`, `status`, `ls`, `observe`, `control`, `--stop`) run non-interactively; `attach` forces passthrough under a pty — the thin client')
             [CompletionResult]::new('-h', '-h', [CompletionResultType]::ParameterName, 'Print help')
             [CompletionResult]::new('--help', '--help', [CompletionResultType]::ParameterName, 'Print help')
             break
@@ -106,11 +113,13 @@ Register-ArgumentCompleter -Native -CommandName 'par-mux' -ScriptBlock {
             [CompletionResult]::new('--prefix', '--prefix', [CompletionResultType]::ParameterName, 'Detach prefix key, tmux spelling (e.g. `C-b`); Phase A routes it')
             [CompletionResult]::new('--mode', '--mode', [CompletionResultType]::ParameterName, 'Render pipeline: `render` (the default — the Phase B pane renderer with the input router: mode-aware key re-encode, mouse routing, wheel scrollback) or `passthrough` (pane bytes to the host terminal verbatim, Phase A). Absent = the `[client] mode` from the config file, else render')
             [CompletionResult]::new('--socket', '--socket', [CompletionResultType]::ParameterName, 'Connect to an explicit socket path instead of the named default')
+            [CompletionResult]::new('--machine', '--machine', [CompletionResultType]::ParameterName, 'Relay this invocation to a saved machine over SSH (the machine''s profile in `[machines.<label>]` names the ssh target; credentials stay with ssh itself). One-shot commands (`--cmd`, `status`, `ls`, `observe`, `control`, `--stop`) run non-interactively; `attach` forces passthrough under a pty — the thin client')
             [CompletionResult]::new('-h', '-h', [CompletionResultType]::ParameterName, 'Print help')
             [CompletionResult]::new('--help', '--help', [CompletionResultType]::ParameterName, 'Print help')
             break
         }
         'par-mux;config' {
+            [CompletionResult]::new('--machine', '--machine', [CompletionResultType]::ParameterName, 'Relay this invocation to a saved machine over SSH (the machine''s profile in `[machines.<label>]` names the ssh target; credentials stay with ssh itself). One-shot commands (`--cmd`, `status`, `ls`, `observe`, `control`, `--stop`) run non-interactively; `attach` forces passthrough under a pty — the thin client')
             [CompletionResult]::new('--force', '--force', [CompletionResultType]::ParameterName, 'Overwrite an existing config file')
             [CompletionResult]::new('-h', '-h', [CompletionResultType]::ParameterName, 'Print help')
             [CompletionResult]::new('--help', '--help', [CompletionResultType]::ParameterName, 'Print help')
@@ -121,6 +130,7 @@ Register-ArgumentCompleter -Native -CommandName 'par-mux' -ScriptBlock {
             [CompletionResult]::new('--size', '--size', [CompletionResultType]::ParameterName, '`control` only: report this fixed size (`WxH`) instead of following the terminal''s')
             [CompletionResult]::new('--socket', '--socket', [CompletionResultType]::ParameterName, 'Connect to an explicit socket path instead of the named default')
             [CompletionResult]::new('--state-dir', '--state-dir', [CompletionResultType]::ParameterName, 'Override the platform state directory (the registry base for discovery-flavored reads)')
+            [CompletionResult]::new('--machine', '--machine', [CompletionResultType]::ParameterName, 'Relay this invocation to a saved machine over SSH (the machine''s profile in `[machines.<label>]` names the ssh target; credentials stay with ssh itself). One-shot commands (`--cmd`, `status`, `ls`, `observe`, `control`, `--stop`) run non-interactively; `attach` forces passthrough under a pty — the thin client')
             [CompletionResult]::new('--no-seed', '--no-seed', [CompletionResultType]::ParameterName, 'Skip the screen seed: stdout carries only output that follows')
             [CompletionResult]::new('-h', '-h', [CompletionResultType]::ParameterName, 'Print help')
             [CompletionResult]::new('--help', '--help', [CompletionResultType]::ParameterName, 'Print help')
@@ -131,14 +141,99 @@ Register-ArgumentCompleter -Native -CommandName 'par-mux' -ScriptBlock {
             [CompletionResult]::new('--size', '--size', [CompletionResultType]::ParameterName, '`control` only: report this fixed size (`WxH`) instead of following the terminal''s')
             [CompletionResult]::new('--socket', '--socket', [CompletionResultType]::ParameterName, 'Connect to an explicit socket path instead of the named default')
             [CompletionResult]::new('--state-dir', '--state-dir', [CompletionResultType]::ParameterName, 'Override the platform state directory (the registry base for discovery-flavored reads)')
+            [CompletionResult]::new('--machine', '--machine', [CompletionResultType]::ParameterName, 'Relay this invocation to a saved machine over SSH (the machine''s profile in `[machines.<label>]` names the ssh target; credentials stay with ssh itself). One-shot commands (`--cmd`, `status`, `ls`, `observe`, `control`, `--stop`) run non-interactively; `attach` forces passthrough under a pty — the thin client')
             [CompletionResult]::new('--no-seed', '--no-seed', [CompletionResultType]::ParameterName, 'Skip the screen seed: stdout carries only output that follows')
             [CompletionResult]::new('-h', '-h', [CompletionResultType]::ParameterName, 'Print help')
             [CompletionResult]::new('--help', '--help', [CompletionResultType]::ParameterName, 'Print help')
             break
         }
         'par-mux;completion' {
+            [CompletionResult]::new('--machine', '--machine', [CompletionResultType]::ParameterName, 'Relay this invocation to a saved machine over SSH (the machine''s profile in `[machines.<label>]` names the ssh target; credentials stay with ssh itself). One-shot commands (`--cmd`, `status`, `ls`, `observe`, `control`, `--stop`) run non-interactively; `attach` forces passthrough under a pty — the thin client')
             [CompletionResult]::new('-h', '-h', [CompletionResultType]::ParameterName, 'Print help')
             [CompletionResult]::new('--help', '--help', [CompletionResultType]::ParameterName, 'Print help')
+            break
+        }
+        'par-mux;machine' {
+            [CompletionResult]::new('--machine', '--machine', [CompletionResultType]::ParameterName, 'Relay this invocation to a saved machine over SSH (the machine''s profile in `[machines.<label>]` names the ssh target; credentials stay with ssh itself). One-shot commands (`--cmd`, `status`, `ls`, `observe`, `control`, `--stop`) run non-interactively; `attach` forces passthrough under a pty — the thin client')
+            [CompletionResult]::new('-h', '-h', [CompletionResultType]::ParameterName, 'Print help')
+            [CompletionResult]::new('--help', '--help', [CompletionResultType]::ParameterName, 'Print help')
+            [CompletionResult]::new('add', 'add', [CompletionResultType]::ParameterValue, 'Save `[machines.<LABEL>]` (or replace it): the ssh target, an optional default remote session, enabled by default. Nothing is contacted — the first attach relays whenever ssh is ready')
+            [CompletionResult]::new('list', 'list', [CompletionResultType]::ParameterValue, 'One line per saved machine: `label  target  [session]  enabled|disabled`')
+            [CompletionResult]::new('remove', 'remove', [CompletionResultType]::ParameterValue, 'Remove a machine''s profile (remote sessions keep running)')
+            [CompletionResult]::new('rename', 'rename', [CompletionResultType]::ParameterValue, 'Rename a machine''s label')
+            [CompletionResult]::new('enable', 'enable', [CompletionResultType]::ParameterValue, 'Mark a machine enabled')
+            [CompletionResult]::new('disable', 'disable', [CompletionResultType]::ParameterValue, 'Mark a machine disabled (listed, never auto-attached)')
+            [CompletionResult]::new('help', 'help', [CompletionResultType]::ParameterValue, 'Print this message or the help of the given subcommand(s)')
+            break
+        }
+        'par-mux;machine;add' {
+            [CompletionResult]::new('--label', '--label', [CompletionResultType]::ParameterName, 'The machine''s label (defaults to the target''s host part)')
+            [CompletionResult]::new('--session', '--session', [CompletionResultType]::ParameterName, 'The remote session `--machine <LABEL> attach` lands on')
+            [CompletionResult]::new('--machine', '--machine', [CompletionResultType]::ParameterName, 'Relay this invocation to a saved machine over SSH (the machine''s profile in `[machines.<label>]` names the ssh target; credentials stay with ssh itself). One-shot commands (`--cmd`, `status`, `ls`, `observe`, `control`, `--stop`) run non-interactively; `attach` forces passthrough under a pty — the thin client')
+            [CompletionResult]::new('-h', '-h', [CompletionResultType]::ParameterName, 'Print help')
+            [CompletionResult]::new('--help', '--help', [CompletionResultType]::ParameterName, 'Print help')
+            break
+        }
+        'par-mux;machine;list' {
+            [CompletionResult]::new('--machine', '--machine', [CompletionResultType]::ParameterName, 'Relay this invocation to a saved machine over SSH (the machine''s profile in `[machines.<label>]` names the ssh target; credentials stay with ssh itself). One-shot commands (`--cmd`, `status`, `ls`, `observe`, `control`, `--stop`) run non-interactively; `attach` forces passthrough under a pty — the thin client')
+            [CompletionResult]::new('-h', '-h', [CompletionResultType]::ParameterName, 'Print help')
+            [CompletionResult]::new('--help', '--help', [CompletionResultType]::ParameterName, 'Print help')
+            break
+        }
+        'par-mux;machine;remove' {
+            [CompletionResult]::new('--machine', '--machine', [CompletionResultType]::ParameterName, 'Relay this invocation to a saved machine over SSH (the machine''s profile in `[machines.<label>]` names the ssh target; credentials stay with ssh itself). One-shot commands (`--cmd`, `status`, `ls`, `observe`, `control`, `--stop`) run non-interactively; `attach` forces passthrough under a pty — the thin client')
+            [CompletionResult]::new('-h', '-h', [CompletionResultType]::ParameterName, 'Print help')
+            [CompletionResult]::new('--help', '--help', [CompletionResultType]::ParameterName, 'Print help')
+            break
+        }
+        'par-mux;machine;rename' {
+            [CompletionResult]::new('--to', '--to', [CompletionResultType]::ParameterName, 'to')
+            [CompletionResult]::new('--machine', '--machine', [CompletionResultType]::ParameterName, 'Relay this invocation to a saved machine over SSH (the machine''s profile in `[machines.<label>]` names the ssh target; credentials stay with ssh itself). One-shot commands (`--cmd`, `status`, `ls`, `observe`, `control`, `--stop`) run non-interactively; `attach` forces passthrough under a pty — the thin client')
+            [CompletionResult]::new('-h', '-h', [CompletionResultType]::ParameterName, 'Print help')
+            [CompletionResult]::new('--help', '--help', [CompletionResultType]::ParameterName, 'Print help')
+            break
+        }
+        'par-mux;machine;enable' {
+            [CompletionResult]::new('--machine', '--machine', [CompletionResultType]::ParameterName, 'Relay this invocation to a saved machine over SSH (the machine''s profile in `[machines.<label>]` names the ssh target; credentials stay with ssh itself). One-shot commands (`--cmd`, `status`, `ls`, `observe`, `control`, `--stop`) run non-interactively; `attach` forces passthrough under a pty — the thin client')
+            [CompletionResult]::new('-h', '-h', [CompletionResultType]::ParameterName, 'Print help')
+            [CompletionResult]::new('--help', '--help', [CompletionResultType]::ParameterName, 'Print help')
+            break
+        }
+        'par-mux;machine;disable' {
+            [CompletionResult]::new('--machine', '--machine', [CompletionResultType]::ParameterName, 'Relay this invocation to a saved machine over SSH (the machine''s profile in `[machines.<label>]` names the ssh target; credentials stay with ssh itself). One-shot commands (`--cmd`, `status`, `ls`, `observe`, `control`, `--stop`) run non-interactively; `attach` forces passthrough under a pty — the thin client')
+            [CompletionResult]::new('-h', '-h', [CompletionResultType]::ParameterName, 'Print help')
+            [CompletionResult]::new('--help', '--help', [CompletionResultType]::ParameterName, 'Print help')
+            break
+        }
+        'par-mux;machine;help' {
+            [CompletionResult]::new('add', 'add', [CompletionResultType]::ParameterValue, 'Save `[machines.<LABEL>]` (or replace it): the ssh target, an optional default remote session, enabled by default. Nothing is contacted — the first attach relays whenever ssh is ready')
+            [CompletionResult]::new('list', 'list', [CompletionResultType]::ParameterValue, 'One line per saved machine: `label  target  [session]  enabled|disabled`')
+            [CompletionResult]::new('remove', 'remove', [CompletionResultType]::ParameterValue, 'Remove a machine''s profile (remote sessions keep running)')
+            [CompletionResult]::new('rename', 'rename', [CompletionResultType]::ParameterValue, 'Rename a machine''s label')
+            [CompletionResult]::new('enable', 'enable', [CompletionResultType]::ParameterValue, 'Mark a machine enabled')
+            [CompletionResult]::new('disable', 'disable', [CompletionResultType]::ParameterValue, 'Mark a machine disabled (listed, never auto-attached)')
+            [CompletionResult]::new('help', 'help', [CompletionResultType]::ParameterValue, 'Print this message or the help of the given subcommand(s)')
+            break
+        }
+        'par-mux;machine;help;add' {
+            break
+        }
+        'par-mux;machine;help;list' {
+            break
+        }
+        'par-mux;machine;help;remove' {
+            break
+        }
+        'par-mux;machine;help;rename' {
+            break
+        }
+        'par-mux;machine;help;enable' {
+            break
+        }
+        'par-mux;machine;help;disable' {
+            break
+        }
+        'par-mux;machine;help;help' {
             break
         }
         'par-mux;help' {
@@ -152,6 +247,7 @@ Register-ArgumentCompleter -Native -CommandName 'par-mux' -ScriptBlock {
             [CompletionResult]::new('observe', 'observe', [CompletionResultType]::ParameterValue, 'Stream one pane''s raw output to stdout, read-only (`observe-pane`): the screen seed, then live PTY bytes until the pane closes. Any number of observers may watch the same pane')
             [CompletionResult]::new('control', 'control', [CompletionResultType]::ParameterValue, 'Drive one pane (`control-pane`): stream its output to stdout like `observe`, forward stdin bytes to it until EOF (no raw mode — for pipes and scripts; interactive use is `attach -t %N`), and report this terminal''s size (polled) or `--size` as a viewer of the pane''s window')
             [CompletionResult]::new('completion', 'completion', [CompletionResultType]::ParameterValue, 'Print the shell-completion script for SHELL, herdr''s spelling of `--print-completions`. Never contacts a daemon')
+            [CompletionResult]::new('machine', 'machine', [CompletionResultType]::ParameterValue, 'Manage saved machines (`[machines.<label>]` in the config): SSH thin-client profiles for `--machine`. Never contacts a daemon')
             [CompletionResult]::new('help', 'help', [CompletionResultType]::ParameterValue, 'Print this message or the help of the given subcommand(s)')
             break
         }
@@ -183,6 +279,33 @@ Register-ArgumentCompleter -Native -CommandName 'par-mux' -ScriptBlock {
             break
         }
         'par-mux;help;completion' {
+            break
+        }
+        'par-mux;help;machine' {
+            [CompletionResult]::new('add', 'add', [CompletionResultType]::ParameterValue, 'Save `[machines.<LABEL>]` (or replace it): the ssh target, an optional default remote session, enabled by default. Nothing is contacted — the first attach relays whenever ssh is ready')
+            [CompletionResult]::new('list', 'list', [CompletionResultType]::ParameterValue, 'One line per saved machine: `label  target  [session]  enabled|disabled`')
+            [CompletionResult]::new('remove', 'remove', [CompletionResultType]::ParameterValue, 'Remove a machine''s profile (remote sessions keep running)')
+            [CompletionResult]::new('rename', 'rename', [CompletionResultType]::ParameterValue, 'Rename a machine''s label')
+            [CompletionResult]::new('enable', 'enable', [CompletionResultType]::ParameterValue, 'Mark a machine enabled')
+            [CompletionResult]::new('disable', 'disable', [CompletionResultType]::ParameterValue, 'Mark a machine disabled (listed, never auto-attached)')
+            break
+        }
+        'par-mux;help;machine;add' {
+            break
+        }
+        'par-mux;help;machine;list' {
+            break
+        }
+        'par-mux;help;machine;remove' {
+            break
+        }
+        'par-mux;help;machine;rename' {
+            break
+        }
+        'par-mux;help;machine;enable' {
+            break
+        }
+        'par-mux;help;machine;disable' {
             break
         }
         'par-mux;help;help' {

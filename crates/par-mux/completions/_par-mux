@@ -17,6 +17,7 @@ _par-mux() {
     _arguments "${_arguments_options[@]}" : \
 '--socket=[Bind an explicit socket path instead of the named default]:PATH:_files' \
 '--state-dir=[Override the platform state directory (D3.4) that persisted session trees are written under, instead of the OS-standard state/data dir]:DIR:_files' \
+'--machine=[Relay this invocation to a saved machine over SSH (the machine'\''s profile in \`\[machines.<label>\]\` names the ssh target; credentials stay with ssh itself). One-shot commands (\`--cmd\`, \`status\`, \`ls\`, \`observe\`, \`control\`, \`--stop\`) run non-interactively; \`attach\` forces passthrough under a pty — the thin client]:LABEL:_default' \
 '(--state-dir)-c+[Client mode\: send one control command to the daemon on this socket, print its reply body to stdout (one line per reply line), and exit. A \`%error\` reply prints to stderr and exits non-zero. Never starts a daemon. A flag, like --stop, so the positional NAME stays unambiguous]:COMMAND:_default' \
 '(--state-dir)--cmd=[Client mode\: send one control command to the daemon on this socket, print its reply body to stdout (one line per reply line), and exit. A \`%error\` reply prints to stderr and exits non-zero. Never starts a daemon. A flag, like --stop, so the positional NAME stays unambiguous]:COMMAND:_default' \
 '--skills-dir=[With --install-skill\: write under this skills root instead of the Claude Code default (tests, other agent harnesses)]:DIR:_files' \
@@ -57,6 +58,7 @@ _par-mux() {
 _arguments "${_arguments_options[@]}" : \
 '--socket=[Bind an explicit socket path instead of the named default]:PATH:_files' \
 '--state-dir=[Override the platform state directory]:DIR:_files' \
+'--machine=[Relay this invocation to a saved machine over SSH (the machine'\''s profile in \`\[machines.<label>\]\` names the ssh target; credentials stay with ssh itself). One-shot commands (\`--cmd\`, \`status\`, \`ls\`, \`observe\`, \`control\`, \`--stop\`) run non-interactively; \`attach\` forces passthrough under a pty — the thin client]:LABEL:_default' \
 '--foreground[Serve in this process instead of detaching]' \
 '--no-attach[Skip the auto-attach of the invoking terminal]' \
 '--pane-endpoints[Give each pane its own hook-only socket endpoint]' \
@@ -70,6 +72,7 @@ _arguments "${_arguments_options[@]}" : \
 _arguments "${_arguments_options[@]}" : \
 '--socket=[Connect to an explicit socket path instead of the named default]:PATH:_files' \
 '--state-dir=[Override the platform state directory (the registry base for discovery-flavored reads)]:DIR:_files' \
+'--machine=[Relay this invocation to a saved machine over SSH (the machine'\''s profile in \`\[machines.<label>\]\` names the ssh target; credentials stay with ssh itself). One-shot commands (\`--cmd\`, \`status\`, \`ls\`, \`observe\`, \`control\`, \`--stop\`) run non-interactively; \`attach\` forces passthrough under a pty — the thin client]:LABEL:_default' \
 '-h[Print help]' \
 '--help[Print help]' \
 '::name -- Named default socket path:_default' \
@@ -79,6 +82,7 @@ _arguments "${_arguments_options[@]}" : \
 _arguments "${_arguments_options[@]}" : \
 '--socket=[Connect to an explicit socket path instead of the named default]:PATH:_files' \
 '--state-dir=[Override the platform state directory (the registry base for discovery-flavored reads)]:DIR:_files' \
+'--machine=[Relay this invocation to a saved machine over SSH (the machine'\''s profile in \`\[machines.<label>\]\` names the ssh target; credentials stay with ssh itself). One-shot commands (\`--cmd\`, \`status\`, \`ls\`, \`observe\`, \`control\`, \`--stop\`) run non-interactively; \`attach\` forces passthrough under a pty — the thin client]:LABEL:_default' \
 '-h[Print help]' \
 '--help[Print help]' \
 '::name -- Named default socket path:_default' \
@@ -88,6 +92,7 @@ _arguments "${_arguments_options[@]}" : \
 _arguments "${_arguments_options[@]}" : \
 '--socket=[Connect to an explicit socket path instead of the named default]:PATH:_files' \
 '--state-dir=[Override the platform state directory (the registry base for discovery-flavored reads)]:DIR:_files' \
+'--machine=[Relay this invocation to a saved machine over SSH (the machine'\''s profile in \`\[machines.<label>\]\` names the ssh target; credentials stay with ssh itself). One-shot commands (\`--cmd\`, \`status\`, \`ls\`, \`observe\`, \`control\`, \`--stop\`) run non-interactively; \`attach\` forces passthrough under a pty — the thin client]:LABEL:_default' \
 '-h[Print help]' \
 '--help[Print help]' \
 '::name -- Named default socket path:_default' \
@@ -97,6 +102,7 @@ _arguments "${_arguments_options[@]}" : \
 _arguments "${_arguments_options[@]}" : \
 '--socket=[Connect to an explicit socket path instead of the named default]:PATH:_files' \
 '--state-dir=[Override the platform state directory (the registry base for discovery-flavored reads)]:DIR:_files' \
+'--machine=[Relay this invocation to a saved machine over SSH (the machine'\''s profile in \`\[machines.<label>\]\` names the ssh target; credentials stay with ssh itself). One-shot commands (\`--cmd\`, \`status\`, \`ls\`, \`observe\`, \`control\`, \`--stop\`) run non-interactively; \`attach\` forces passthrough under a pty — the thin client]:LABEL:_default' \
 '-h[Print help]' \
 '--help[Print help]' \
 '::name -- Named default socket path:_default' \
@@ -108,6 +114,7 @@ _arguments "${_arguments_options[@]}" : \
 '--prefix=[Detach prefix key, tmux spelling (e.g. \`C-b\`); Phase A routes it]:KEY:_default' \
 '--mode=[Render pipeline\: \`render\` (the default — the Phase B pane renderer with the input router\: mode-aware key re-encode, mouse routing, wheel scrollback) or \`passthrough\` (pane bytes to the host terminal verbatim, Phase A). Absent = the \`\[client\] mode\` from the config file, else render]:MODE:_default' \
 '--socket=[Connect to an explicit socket path instead of the named default]:PATH:_files' \
+'--machine=[Relay this invocation to a saved machine over SSH (the machine'\''s profile in \`\[machines.<label>\]\` names the ssh target; credentials stay with ssh itself). One-shot commands (\`--cmd\`, \`status\`, \`ls\`, \`observe\`, \`control\`, \`--stop\`) run non-interactively; \`attach\` forces passthrough under a pty — the thin client]:LABEL:_default' \
 '-h[Print help]' \
 '--help[Print help]' \
 '::name -- Named default socket path. Only STARTING a daemon named "attach" needs --socket (the subcommand shadows the NAME form there); attaching by this NAME form works, including for "attach":_default' \
@@ -115,6 +122,7 @@ _arguments "${_arguments_options[@]}" : \
 ;;
 (config)
 _arguments "${_arguments_options[@]}" : \
+'--machine=[Relay this invocation to a saved machine over SSH (the machine'\''s profile in \`\[machines.<label>\]\` names the ssh target; credentials stay with ssh itself). One-shot commands (\`--cmd\`, \`status\`, \`ls\`, \`observe\`, \`control\`, \`--stop\`) run non-interactively; \`attach\` forces passthrough under a pty — the thin client]:LABEL:_default' \
 '--force[Overwrite an existing config file]' \
 '-h[Print help]' \
 '--help[Print help]' \
@@ -126,6 +134,7 @@ _arguments "${_arguments_options[@]}" : \
 '--size=[\`control\` only\: report this fixed size (\`WxH\`) instead of following the terminal'\''s]:WxH:_default' \
 '--socket=[Connect to an explicit socket path instead of the named default]:PATH:_files' \
 '--state-dir=[Override the platform state directory (the registry base for discovery-flavored reads)]:DIR:_files' \
+'--machine=[Relay this invocation to a saved machine over SSH (the machine'\''s profile in \`\[machines.<label>\]\` names the ssh target; credentials stay with ssh itself). One-shot commands (\`--cmd\`, \`status\`, \`ls\`, \`observe\`, \`control\`, \`--stop\`) run non-interactively; \`attach\` forces passthrough under a pty — the thin client]:LABEL:_default' \
 '--no-seed[Skip the screen seed\: stdout carries only output that follows]' \
 '-h[Print help]' \
 '--help[Print help]' \
@@ -138,6 +147,7 @@ _arguments "${_arguments_options[@]}" : \
 '--size=[\`control\` only\: report this fixed size (\`WxH\`) instead of following the terminal'\''s]:WxH:_default' \
 '--socket=[Connect to an explicit socket path instead of the named default]:PATH:_files' \
 '--state-dir=[Override the platform state directory (the registry base for discovery-flavored reads)]:DIR:_files' \
+'--machine=[Relay this invocation to a saved machine over SSH (the machine'\''s profile in \`\[machines.<label>\]\` names the ssh target; credentials stay with ssh itself). One-shot commands (\`--cmd\`, \`status\`, \`ls\`, \`observe\`, \`control\`, \`--stop\`) run non-interactively; \`attach\` forces passthrough under a pty — the thin client]:LABEL:_default' \
 '--no-seed[Skip the screen seed\: stdout carries only output that follows]' \
 '-h[Print help]' \
 '--help[Print help]' \
@@ -146,10 +156,124 @@ _arguments "${_arguments_options[@]}" : \
 ;;
 (completion)
 _arguments "${_arguments_options[@]}" : \
+'--machine=[Relay this invocation to a saved machine over SSH (the machine'\''s profile in \`\[machines.<label>\]\` names the ssh target; credentials stay with ssh itself). One-shot commands (\`--cmd\`, \`status\`, \`ls\`, \`observe\`, \`control\`, \`--stop\`) run non-interactively; \`attach\` forces passthrough under a pty — the thin client]:LABEL:_default' \
 '-h[Print help]' \
 '--help[Print help]' \
 ':shell -- The shell to print for (bash, zsh, fish, powershell, elvish):(bash elvish fish powershell zsh)' \
 && ret=0
+;;
+(machine)
+_arguments "${_arguments_options[@]}" : \
+'--machine=[Relay this invocation to a saved machine over SSH (the machine'\''s profile in \`\[machines.<label>\]\` names the ssh target; credentials stay with ssh itself). One-shot commands (\`--cmd\`, \`status\`, \`ls\`, \`observe\`, \`control\`, \`--stop\`) run non-interactively; \`attach\` forces passthrough under a pty — the thin client]:LABEL:_default' \
+'-h[Print help]' \
+'--help[Print help]' \
+":: :_par-mux__subcmd__machine_commands" \
+"*::: :->machine" \
+&& ret=0
+
+    case $state in
+    (machine)
+        words=($line[1] "${words[@]}")
+        (( CURRENT += 1 ))
+        curcontext="${curcontext%:*:*}:par-mux-machine-command-$line[1]:"
+        case $line[1] in
+            (add)
+_arguments "${_arguments_options[@]}" : \
+'--label=[The machine'\''s label (defaults to the target'\''s host part)]:LABEL:_default' \
+'--session=[The remote session \`--machine <LABEL> attach\` lands on]:SESSION:_default' \
+'--machine=[Relay this invocation to a saved machine over SSH (the machine'\''s profile in \`\[machines.<label>\]\` names the ssh target; credentials stay with ssh itself). One-shot commands (\`--cmd\`, \`status\`, \`ls\`, \`observe\`, \`control\`, \`--stop\`) run non-interactively; \`attach\` forces passthrough under a pty — the thin client]:LABEL:_default' \
+'-h[Print help]' \
+'--help[Print help]' \
+':target -- The ssh target as openssh spells it (`user@host`, a config alias, `host\:port`):_default' \
+&& ret=0
+;;
+(list)
+_arguments "${_arguments_options[@]}" : \
+'--machine=[Relay this invocation to a saved machine over SSH (the machine'\''s profile in \`\[machines.<label>\]\` names the ssh target; credentials stay with ssh itself). One-shot commands (\`--cmd\`, \`status\`, \`ls\`, \`observe\`, \`control\`, \`--stop\`) run non-interactively; \`attach\` forces passthrough under a pty — the thin client]:LABEL:_default' \
+'-h[Print help]' \
+'--help[Print help]' \
+&& ret=0
+;;
+(remove)
+_arguments "${_arguments_options[@]}" : \
+'--machine=[Relay this invocation to a saved machine over SSH (the machine'\''s profile in \`\[machines.<label>\]\` names the ssh target; credentials stay with ssh itself). One-shot commands (\`--cmd\`, \`status\`, \`ls\`, \`observe\`, \`control\`, \`--stop\`) run non-interactively; \`attach\` forces passthrough under a pty — the thin client]:LABEL:_default' \
+'-h[Print help]' \
+'--help[Print help]' \
+':label:_default' \
+&& ret=0
+;;
+(rename)
+_arguments "${_arguments_options[@]}" : \
+'--to=[]:TO:_default' \
+'--machine=[Relay this invocation to a saved machine over SSH (the machine'\''s profile in \`\[machines.<label>\]\` names the ssh target; credentials stay with ssh itself). One-shot commands (\`--cmd\`, \`status\`, \`ls\`, \`observe\`, \`control\`, \`--stop\`) run non-interactively; \`attach\` forces passthrough under a pty — the thin client]:LABEL:_default' \
+'-h[Print help]' \
+'--help[Print help]' \
+':label:_default' \
+&& ret=0
+;;
+(enable)
+_arguments "${_arguments_options[@]}" : \
+'--machine=[Relay this invocation to a saved machine over SSH (the machine'\''s profile in \`\[machines.<label>\]\` names the ssh target; credentials stay with ssh itself). One-shot commands (\`--cmd\`, \`status\`, \`ls\`, \`observe\`, \`control\`, \`--stop\`) run non-interactively; \`attach\` forces passthrough under a pty — the thin client]:LABEL:_default' \
+'-h[Print help]' \
+'--help[Print help]' \
+':label:_default' \
+&& ret=0
+;;
+(disable)
+_arguments "${_arguments_options[@]}" : \
+'--machine=[Relay this invocation to a saved machine over SSH (the machine'\''s profile in \`\[machines.<label>\]\` names the ssh target; credentials stay with ssh itself). One-shot commands (\`--cmd\`, \`status\`, \`ls\`, \`observe\`, \`control\`, \`--stop\`) run non-interactively; \`attach\` forces passthrough under a pty — the thin client]:LABEL:_default' \
+'-h[Print help]' \
+'--help[Print help]' \
+':label:_default' \
+&& ret=0
+;;
+(help)
+_arguments "${_arguments_options[@]}" : \
+":: :_par-mux__subcmd__machine__subcmd__help_commands" \
+"*::: :->help" \
+&& ret=0
+
+    case $state in
+    (help)
+        words=($line[1] "${words[@]}")
+        (( CURRENT += 1 ))
+        curcontext="${curcontext%:*:*}:par-mux-machine-help-command-$line[1]:"
+        case $line[1] in
+            (add)
+_arguments "${_arguments_options[@]}" : \
+&& ret=0
+;;
+(list)
+_arguments "${_arguments_options[@]}" : \
+&& ret=0
+;;
+(remove)
+_arguments "${_arguments_options[@]}" : \
+&& ret=0
+;;
+(rename)
+_arguments "${_arguments_options[@]}" : \
+&& ret=0
+;;
+(enable)
+_arguments "${_arguments_options[@]}" : \
+&& ret=0
+;;
+(disable)
+_arguments "${_arguments_options[@]}" : \
+&& ret=0
+;;
+(help)
+_arguments "${_arguments_options[@]}" : \
+&& ret=0
+;;
+        esac
+    ;;
+esac
+;;
+        esac
+    ;;
+esac
 ;;
 (help)
 _arguments "${_arguments_options[@]}" : \
@@ -203,6 +327,46 @@ _arguments "${_arguments_options[@]}" : \
 _arguments "${_arguments_options[@]}" : \
 && ret=0
 ;;
+(machine)
+_arguments "${_arguments_options[@]}" : \
+":: :_par-mux__subcmd__help__subcmd__machine_commands" \
+"*::: :->machine" \
+&& ret=0
+
+    case $state in
+    (machine)
+        words=($line[1] "${words[@]}")
+        (( CURRENT += 1 ))
+        curcontext="${curcontext%:*:*}:par-mux-help-machine-command-$line[1]:"
+        case $line[1] in
+            (add)
+_arguments "${_arguments_options[@]}" : \
+&& ret=0
+;;
+(list)
+_arguments "${_arguments_options[@]}" : \
+&& ret=0
+;;
+(remove)
+_arguments "${_arguments_options[@]}" : \
+&& ret=0
+;;
+(rename)
+_arguments "${_arguments_options[@]}" : \
+&& ret=0
+;;
+(enable)
+_arguments "${_arguments_options[@]}" : \
+&& ret=0
+;;
+(disable)
+_arguments "${_arguments_options[@]}" : \
+&& ret=0
+;;
+        esac
+    ;;
+esac
+;;
 (help)
 _arguments "${_arguments_options[@]}" : \
 && ret=0
@@ -229,6 +393,7 @@ _par-mux_commands() {
 'observe:Stream one pane'\''s raw output to stdout, read-only (\`observe-pane\`)\: the screen seed, then live PTY bytes until the pane closes. Any number of observers may watch the same pane' \
 'control:Drive one pane (\`control-pane\`)\: stream its output to stdout like \`observe\`, forward stdin bytes to it until EOF (no raw mode — for pipes and scripts; interactive use is \`attach -t %N\`), and report this terminal'\''s size (polled) or \`--size\` as a viewer of the pane'\''s window' \
 'completion:Print the shell-completion script for SHELL, herdr'\''s spelling of \`--print-completions\`. Never contacts a daemon' \
+'machine:Manage saved machines (\`\[machines.<label>\]\` in the config)\: SSH thin-client profiles for \`--machine\`. Never contacts a daemon' \
 'help:Print this message or the help of the given subcommand(s)' \
     )
     _describe -t commands 'par-mux commands' commands "$@"
@@ -266,6 +431,7 @@ _par-mux__subcmd__help_commands() {
 'observe:Stream one pane'\''s raw output to stdout, read-only (\`observe-pane\`)\: the screen seed, then live PTY bytes until the pane closes. Any number of observers may watch the same pane' \
 'control:Drive one pane (\`control-pane\`)\: stream its output to stdout like \`observe\`, forward stdin bytes to it until EOF (no raw mode — for pipes and scripts; interactive use is \`attach -t %N\`), and report this terminal'\''s size (polled) or \`--size\` as a viewer of the pane'\''s window' \
 'completion:Print the shell-completion script for SHELL, herdr'\''s spelling of \`--print-completions\`. Never contacts a daemon' \
+'machine:Manage saved machines (\`\[machines.<label>\]\` in the config)\: SSH thin-client profiles for \`--machine\`. Never contacts a daemon' \
 'help:Print this message or the help of the given subcommand(s)' \
     )
     _describe -t commands 'par-mux help commands' commands "$@"
@@ -300,6 +466,48 @@ _par-mux__subcmd__help__subcmd__ls_commands() {
     local commands; commands=()
     _describe -t commands 'par-mux help ls commands' commands "$@"
 }
+(( $+functions[_par-mux__subcmd__help__subcmd__machine_commands] )) ||
+_par-mux__subcmd__help__subcmd__machine_commands() {
+    local commands; commands=(
+'add:Save \`\[machines.<LABEL>\]\` (or replace it)\: the ssh target, an optional default remote session, enabled by default. Nothing is contacted — the first attach relays whenever ssh is ready' \
+'list:One line per saved machine\: \`label  target  \[session\]  enabled|disabled\`' \
+'remove:Remove a machine'\''s profile (remote sessions keep running)' \
+'rename:Rename a machine'\''s label' \
+'enable:Mark a machine enabled' \
+'disable:Mark a machine disabled (listed, never auto-attached)' \
+    )
+    _describe -t commands 'par-mux help machine commands' commands "$@"
+}
+(( $+functions[_par-mux__subcmd__help__subcmd__machine__subcmd__add_commands] )) ||
+_par-mux__subcmd__help__subcmd__machine__subcmd__add_commands() {
+    local commands; commands=()
+    _describe -t commands 'par-mux help machine add commands' commands "$@"
+}
+(( $+functions[_par-mux__subcmd__help__subcmd__machine__subcmd__disable_commands] )) ||
+_par-mux__subcmd__help__subcmd__machine__subcmd__disable_commands() {
+    local commands; commands=()
+    _describe -t commands 'par-mux help machine disable commands' commands "$@"
+}
+(( $+functions[_par-mux__subcmd__help__subcmd__machine__subcmd__enable_commands] )) ||
+_par-mux__subcmd__help__subcmd__machine__subcmd__enable_commands() {
+    local commands; commands=()
+    _describe -t commands 'par-mux help machine enable commands' commands "$@"
+}
+(( $+functions[_par-mux__subcmd__help__subcmd__machine__subcmd__list_commands] )) ||
+_par-mux__subcmd__help__subcmd__machine__subcmd__list_commands() {
+    local commands; commands=()
+    _describe -t commands 'par-mux help machine list commands' commands "$@"
+}
+(( $+functions[_par-mux__subcmd__help__subcmd__machine__subcmd__remove_commands] )) ||
+_par-mux__subcmd__help__subcmd__machine__subcmd__remove_commands() {
+    local commands; commands=()
+    _describe -t commands 'par-mux help machine remove commands' commands "$@"
+}
+(( $+functions[_par-mux__subcmd__help__subcmd__machine__subcmd__rename_commands] )) ||
+_par-mux__subcmd__help__subcmd__machine__subcmd__rename_commands() {
+    local commands; commands=()
+    _describe -t commands 'par-mux help machine rename commands' commands "$@"
+}
 (( $+functions[_par-mux__subcmd__help__subcmd__observe_commands] )) ||
 _par-mux__subcmd__help__subcmd__observe_commands() {
     local commands; commands=()
@@ -329,6 +537,97 @@ _par-mux__subcmd__help__subcmd__stop_commands() {
 _par-mux__subcmd__ls_commands() {
     local commands; commands=()
     _describe -t commands 'par-mux ls commands' commands "$@"
+}
+(( $+functions[_par-mux__subcmd__machine_commands] )) ||
+_par-mux__subcmd__machine_commands() {
+    local commands; commands=(
+'add:Save \`\[machines.<LABEL>\]\` (or replace it)\: the ssh target, an optional default remote session, enabled by default. Nothing is contacted — the first attach relays whenever ssh is ready' \
+'list:One line per saved machine\: \`label  target  \[session\]  enabled|disabled\`' \
+'remove:Remove a machine'\''s profile (remote sessions keep running)' \
+'rename:Rename a machine'\''s label' \
+'enable:Mark a machine enabled' \
+'disable:Mark a machine disabled (listed, never auto-attached)' \
+'help:Print this message or the help of the given subcommand(s)' \
+    )
+    _describe -t commands 'par-mux machine commands' commands "$@"
+}
+(( $+functions[_par-mux__subcmd__machine__subcmd__add_commands] )) ||
+_par-mux__subcmd__machine__subcmd__add_commands() {
+    local commands; commands=()
+    _describe -t commands 'par-mux machine add commands' commands "$@"
+}
+(( $+functions[_par-mux__subcmd__machine__subcmd__disable_commands] )) ||
+_par-mux__subcmd__machine__subcmd__disable_commands() {
+    local commands; commands=()
+    _describe -t commands 'par-mux machine disable commands' commands "$@"
+}
+(( $+functions[_par-mux__subcmd__machine__subcmd__enable_commands] )) ||
+_par-mux__subcmd__machine__subcmd__enable_commands() {
+    local commands; commands=()
+    _describe -t commands 'par-mux machine enable commands' commands "$@"
+}
+(( $+functions[_par-mux__subcmd__machine__subcmd__help_commands] )) ||
+_par-mux__subcmd__machine__subcmd__help_commands() {
+    local commands; commands=(
+'add:Save \`\[machines.<LABEL>\]\` (or replace it)\: the ssh target, an optional default remote session, enabled by default. Nothing is contacted — the first attach relays whenever ssh is ready' \
+'list:One line per saved machine\: \`label  target  \[session\]  enabled|disabled\`' \
+'remove:Remove a machine'\''s profile (remote sessions keep running)' \
+'rename:Rename a machine'\''s label' \
+'enable:Mark a machine enabled' \
+'disable:Mark a machine disabled (listed, never auto-attached)' \
+'help:Print this message or the help of the given subcommand(s)' \
+    )
+    _describe -t commands 'par-mux machine help commands' commands "$@"
+}
+(( $+functions[_par-mux__subcmd__machine__subcmd__help__subcmd__add_commands] )) ||
+_par-mux__subcmd__machine__subcmd__help__subcmd__add_commands() {
+    local commands; commands=()
+    _describe -t commands 'par-mux machine help add commands' commands "$@"
+}
+(( $+functions[_par-mux__subcmd__machine__subcmd__help__subcmd__disable_commands] )) ||
+_par-mux__subcmd__machine__subcmd__help__subcmd__disable_commands() {
+    local commands; commands=()
+    _describe -t commands 'par-mux machine help disable commands' commands "$@"
+}
+(( $+functions[_par-mux__subcmd__machine__subcmd__help__subcmd__enable_commands] )) ||
+_par-mux__subcmd__machine__subcmd__help__subcmd__enable_commands() {
+    local commands; commands=()
+    _describe -t commands 'par-mux machine help enable commands' commands "$@"
+}
+(( $+functions[_par-mux__subcmd__machine__subcmd__help__subcmd__help_commands] )) ||
+_par-mux__subcmd__machine__subcmd__help__subcmd__help_commands() {
+    local commands; commands=()
+    _describe -t commands 'par-mux machine help help commands' commands "$@"
+}
+(( $+functions[_par-mux__subcmd__machine__subcmd__help__subcmd__list_commands] )) ||
+_par-mux__subcmd__machine__subcmd__help__subcmd__list_commands() {
+    local commands; commands=()
+    _describe -t commands 'par-mux machine help list commands' commands "$@"
+}
+(( $+functions[_par-mux__subcmd__machine__subcmd__help__subcmd__remove_commands] )) ||
+_par-mux__subcmd__machine__subcmd__help__subcmd__remove_commands() {
+    local commands; commands=()
+    _describe -t commands 'par-mux machine help remove commands' commands "$@"
+}
+(( $+functions[_par-mux__subcmd__machine__subcmd__help__subcmd__rename_commands] )) ||
+_par-mux__subcmd__machine__subcmd__help__subcmd__rename_commands() {
+    local commands; commands=()
+    _describe -t commands 'par-mux machine help rename commands' commands "$@"
+}
+(( $+functions[_par-mux__subcmd__machine__subcmd__list_commands] )) ||
+_par-mux__subcmd__machine__subcmd__list_commands() {
+    local commands; commands=()
+    _describe -t commands 'par-mux machine list commands' commands "$@"
+}
+(( $+functions[_par-mux__subcmd__machine__subcmd__remove_commands] )) ||
+_par-mux__subcmd__machine__subcmd__remove_commands() {
+    local commands; commands=()
+    _describe -t commands 'par-mux machine remove commands' commands "$@"
+}
+(( $+functions[_par-mux__subcmd__machine__subcmd__rename_commands] )) ||
+_par-mux__subcmd__machine__subcmd__rename_commands() {
+    local commands; commands=()
+    _describe -t commands 'par-mux machine rename commands' commands "$@"
 }
 (( $+functions[_par-mux__subcmd__observe_commands] )) ||
 _par-mux__subcmd__observe_commands() {

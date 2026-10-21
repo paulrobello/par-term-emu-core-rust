@@ -22,6 +22,7 @@ The daemon is feature-gated (Rust `mux` feature for the library, `mux-bin` for t
 - [Agent Hook Reports](#agent-hook-reports)
 - [Host Telemetry Probe](#host-telemetry-probe)
 - [Agent Scrape Tier](#agent-scrape-tier)
+- [Saved Machines and the SSH Thin Client](#saved-machines-and-the-ssh-thin-client)
 - [Persistence and Restart](#persistence-and-restart)
 - [Pane Reaping](#pane-reaping)
 - [Shutdown Semantics](#shutdown-semantics)
@@ -1191,6 +1192,14 @@ An override that fails to parse or validate falls back to the bundled set with a
 Two mismatching ticks (not interrupted by a proven match) clear the whole claim and broadcast `%agent-released`, exactly as a release report would. The verdict is conservative in every ambiguous direction: a probe that goes blind (unreadable argv — the fresh-spawn window where macOS cannot read a mid-`exec` argv) keeps its recorded misses and never adds one, and Windows has no portable process-tree/argv access, so the sweep is inert there and hook release remains the only claim-clearing path.
 
 One constraint follows from the argv match: an agent launched through a STAND-IN program whose argv carries no agent-name component — pi's or omp's `-x <program>` runs the named program in the pane instead of the agent CLI — can never match, so its claim is released after the two mismatching ticks however healthy the stand-in is. Name the stand-in after its agent and the sweep holds the claim: `pi -x 'sh -c "exec -a pi <program>"'` sets argv[0] to `pi`, which the label match takes verbatim.
+
+## Saved Machines and the SSH Thin Client
+
+`par-mux machine add <ssh-target> [--label L] [--session S]` saves a remote host profile under `[machines.<label>]` in the config file (`machine list` / `rename --to` / `enable` / `disable` / `remove` manage it; the edits are surgical, preserving every comment and neighboring key). The profile holds only a label, the ssh target, an optional default remote session, and an enabled flag — **no credentials, ever**: ssh itself owns authentication through the user's config, agent, and askpass, exactly as herdr's machines do. A digit-leading label rides TOML's quoted-key form (`[machines."10.0.0.4"]`) — the same label when parsed back.
+
+`par-mux --machine <label> …` relays the invocation to that host: the command line is rebuilt as `ssh <target> par-mux <args>` with each argument quoted for the remote login shell, `--machine` itself stripped, and ssh's exit code returned. One-shot client verbs (`--cmd`, `status`, `ls`, `observe`, `control`, `--stop`) run under `BatchMode=yes` — a scripted relay fails fast instead of hanging on a prompt. `--machine <label> attach` is the **thin client**: it forces `--mode passthrough` (an explicit `--mode` wins) under `ssh -tt`, so the remote passthrough client drives the remote terminal and ssh owns the local terminal's raw mode; the local render TUI does not cross ssh in this form. Local-machine verbs (`--gen-config`, the agent-hook/extension/skill installers and status flags, `--foreground`, `--restart`, and `machine` itself) refuse the relay with the reason. Remote scripting needs no TUI at all: `par-mux --machine lab --cmd 'list-sessions'` answers over one ssh round trip.
+
+Removing or disabling a machine leaves its remote sessions running — the profile is a pointer, not a lease.
 
 ## Persistence and Restart
 

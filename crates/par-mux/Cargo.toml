@@ -99,7 +99,7 @@ mux = ["dep:interprocess", "dep:toml", "dep:dirs", "dep:nix", "dep:widestring", 
 serde = ["par-term-emu-core/serde"]
 # The `par-mux` daemon binary: `mux` plus its CLI parser and the
 # agent-integration / skill installers its one-shot flags run (ARC-143).
-mux-bin = ["mux", "dep:clap", "dep:clap_complete", "dep:jsonc-parser"]
+mux-bin = ["mux", "dep:clap", "dep:clap_complete", "dep:jsonc-parser", "dep:toml_edit"]
 # The `par-mux attach` client TUI; rides the daemon binary's clap surface.
 attach = ["mux-bin", "dep:crossterm", "dep:ratatui", "dep:toml_edit"]
 # Linux only: hold a logind delay lock and save the session tree when the

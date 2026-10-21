@@ -35,6 +35,38 @@ pub struct ConfigFile {
     /// Daemon defaults.
     #[serde(default)]
     pub daemon: DaemonSection,
+    /// Saved remote hosts (`[machines.<label>]`): SSH thin-client profiles.
+    #[serde(default, skip_serializing_if = "std::collections::BTreeMap::is_empty")]
+    pub machines: std::collections::BTreeMap<String, MachineProfile>,
+}
+
+/// `[machines.<label>]`: one saved remote par-mux host. The profile stores
+/// no credentials — ssh (the user's own config, agent, and askpass) owns
+/// authentication, exactly as herdr's machines do.
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
+pub struct MachineProfile {
+    /// The ssh target as openssh spells it (`user@host`, `host`, an alias
+    /// the user's ssh config resolves; a `user@host:port` colon form is
+    /// kept verbatim for ssh's `-p`-less spelling).
+    pub target: String,
+    /// The remote session this machine's attach lands on by default.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub session: Option<String>,
+    /// Disabled machines are listed but never attached without naming
+    /// them explicitly.
+    #[serde(
+        default = "machine_enabled_by_default",
+        skip_serializing_if = "machine_enabled"
+    )]
+    pub enabled: bool,
+}
+
+fn machine_enabled_by_default() -> bool {
+    true
+}
+
+fn machine_enabled(enabled: &bool) -> bool {
+    *enabled
 }
 
 /// `[client]`: what the attach client reads.
@@ -742,6 +774,7 @@ pub fn render(eff: &EffectiveConfig) -> String {
             remain_on_exit: Some(eff.remain_on_exit),
             exit_empty: Some(eff.exit_empty),
         },
+        machines: Default::default(),
     };
     let mut out = String::from(
         "# par-mux configuration.\n\
@@ -1472,6 +1505,7 @@ remain-on-exit = true
                 pane_endpoints: Some(true),
                 ..Default::default()
             },
+            machines: Default::default(),
         };
         let eff = resolve(&file, &Overrides::default());
         assert_eq!(eff.prefix, "C-a");
