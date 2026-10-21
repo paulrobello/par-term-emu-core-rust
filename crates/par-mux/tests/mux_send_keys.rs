@@ -52,6 +52,71 @@ fn literal_multi_token_payload_drops_the_separator_like_tmux() {
     );
 }
 
+/// A pane whose child never reads (`sleep`) fills its kernel PTY buffer,
+/// after which any further input write parks in `write_all`. The parked
+/// write must not hold the tree mutex: a control command on a second
+/// connection (QA-225, the paste-buffer shape) still has to answer.
+#[cfg(unix)]
+#[test]
+fn send_keys_does_not_stall_other_commands_behind_a_full_pty() {
+    let fixture = MuxFixture::new("skf");
+    let path = fixture.socket();
+    let server = MuxServer::bind(path).expect("bind");
+    thread::spawn(move || server.run());
+    common::wait_listening(path);
+
+    let stream = connect_local_stream(path).expect("connect");
+    let mut writer = stream.try_clone().expect("clone");
+    let mut reader = BufReader::new(stream);
+    command(
+        &mut writer,
+        &mut reader,
+        "new-session -s skf -- sh -c 'stty raw -echo; sleep 60'",
+    );
+
+    // ~512 KiB of literal input against a ~64 KiB kernel buffer: after a
+    // handful of commands the daemon is parked in a PTY write that cannot
+    // complete while `sleep` never reads. The thread stays parked on the
+    // reply for the rest of the test — the pane is never drained.
+    let writer_path = path.to_path_buf();
+    thread::spawn(move || {
+        let stream = connect_local_stream(&writer_path).expect("connect writer");
+        let mut writer = stream.try_clone().expect("clone");
+        let mut reader = BufReader::new(stream);
+        let payload = "A".repeat(8 * 1024);
+        for _ in 0..64 {
+            command(
+                &mut writer,
+                &mut reader,
+                &format!("send-keys -t %0 -l {payload}"),
+            );
+        }
+    });
+
+    // Let the writer fill the kernel buffer and park before probing.
+    thread::sleep(Duration::from_secs(2));
+
+    // A fresh connection's `list-sessions` must answer while the stalled
+    // write is in flight. The query runs on its own thread so a stuck
+    // daemon cannot hang the test body — the bounded recv fails it.
+    let (tx, rx) = std::sync::mpsc::channel();
+    let query_path = path.to_path_buf();
+    thread::spawn(move || {
+        let stream = connect_local_stream(&query_path).expect("connect query");
+        let mut writer = stream.try_clone().expect("clone");
+        let mut reader = BufReader::new(stream);
+        let reply = command(&mut writer, &mut reader, "list-sessions");
+        let _ = tx.send(reply);
+    });
+    let reply = rx
+        .recv_timeout(Duration::from_secs(5))
+        .expect("list-sessions stalled behind the tree lock held across a PTY write");
+    assert!(
+        reply.iter().any(|l| l.contains("skf")),
+        "expected the session name in the reply: {reply:?}"
+    );
+}
+
 /// The quoted single-argument form is how a space survives: the shell
 /// executes the typed `echo LEFT` and the pane shows its output.
 #[cfg(unix)]

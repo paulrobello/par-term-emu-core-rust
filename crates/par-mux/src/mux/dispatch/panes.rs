@@ -162,23 +162,30 @@ pub(super) fn cmd_send_keys(
     pane: Target<PaneId>,
     keys: &SendKeysPayload,
 ) -> Outcome {
-    let mut guard = ctx.tree.lock();
-    let pane = match guard.resolve_pane_target(pane) {
-        Ok(id) => id,
-        Err(err) => return Outcome::err(ctx, &err.to_string()),
-    };
-    match guard.pane_mut(pane) {
-        Some(target) => {
-            // Navigation/function keys encode against the pane's live modes
-            // (DECCKM, kitty flags); the read guard drops before the write.
-            let terminal = target.terminal();
-            let bytes = keys.encode(|| terminal.read());
-            match target.write(&bytes) {
-                Ok(()) => Outcome::ok(ctx, ""),
-                Err(err) => Outcome::err(ctx, &err.to_string()),
-            }
+    // QA-225 (the paste-buffer shape): a PTY write can block on a full
+    // kernel buffer, so it must not run under the tree mutex. Snapshot
+    // the terminal (key encoding reads live modes) and the input handle
+    // under the lock, then encode and write with the lock released.
+    let (terminal, input) = {
+        let guard = ctx.tree.lock();
+        let pane = match guard.resolve_pane_target(pane) {
+            Ok(id) => id,
+            Err(err) => return Outcome::err(ctx, &err.to_string()),
+        };
+        let Some(target) = guard.pane(pane) else {
+            return Outcome::err(ctx, &format!("no such pane: {pane}"));
+        };
+        match target.input_handle() {
+            Ok(handle) => (target.terminal(), handle),
+            Err(err) => return Outcome::err(ctx, &err.to_string()),
         }
-        None => Outcome::err(ctx, &format!("no such pane: {pane}")),
+    };
+    // Navigation/function keys encode against the pane's live modes
+    // (DECCKM, kitty flags); the read guard drops before the write.
+    let bytes = keys.encode(|| terminal.read());
+    match input.write(&bytes) {
+        Ok(()) => Outcome::ok(ctx, ""),
+        Err(err) => Outcome::err(ctx, &err.to_string()),
     }
 }
 
