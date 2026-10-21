@@ -58,7 +58,7 @@ pub use interprocess::local_socket::Listener as LocalListener;
 /// entry strips it, so both spellings name the same pipe — the contract
 /// the .ps1 hook transport documents.
 #[cfg(windows)]
-fn strip_pipe_prefix(path: &Path) -> std::path::PathBuf {
+pub fn strip_pipe_prefix(path: &Path) -> std::path::PathBuf {
     let text = path.to_string_lossy();
     if let Some(name) = text.strip_prefix(r"\\.\pipe\") {
         return std::path::PathBuf::from(name);

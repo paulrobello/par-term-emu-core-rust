@@ -1386,6 +1386,13 @@ fn run_status(path: &std::path::Path) -> std::process::ExitCode {
 /// with an auto-attach by default (unix), or in the foreground with
 /// --foreground.
 fn run_daemon(cli: Cli, path: std::path::PathBuf) -> std::io::Result<std::process::ExitCode> {
+    // Windows: a pipe-path --socket (\\.\pipe\name) names the same pipe
+    // as the bare stem — strip the prefix ONCE here so every consumer
+    // downstream (bind, the state-file stem, the panes' PAR_MUX_SOCKET env
+    // contract, which the .ps1 hooks pass straight to NamedPipeClientStream)
+    // agrees on the bare name.
+    #[cfg(windows)]
+    let path = par_mux::mux::ipc::strip_pipe_prefix(&path);
     // Resolved before the stop phase so --restart can report, before the
     // fork, what the fresh daemon will restore — and so the serving half
     // and the peek see the same resolved config. `effective` is pure:
