@@ -32,6 +32,8 @@ pub mod persist;
 pub mod popup;
 pub mod scrape;
 pub mod server;
+#[cfg(all(target_os = "linux", feature = "shutdown-inhibit"))]
+pub mod shutdown_inhibit;
 #[cfg(feature = "mux-bin")]
 pub mod skill_installer;
 #[cfg(test)]

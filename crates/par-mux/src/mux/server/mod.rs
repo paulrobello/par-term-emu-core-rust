@@ -340,6 +340,19 @@ impl MuxServer {
             None => (None, None),
         };
 
+        // Linux + the shutdown-inhibit feature: hold a logind delay lock
+        // and push a Shutdown save to the worker when the host announces
+        // shutdown (par-mux.md D9). Absent elsewhere and when the system
+        // bus is unreachable — the daemon serves on without it.
+        #[cfg(all(target_os = "linux", feature = "shutdown-inhibit"))]
+        if let Some(tx) = persist_tx.as_ref() {
+            let saver = std::sync::Arc::new(crate::mux::shutdown_inhibit::SaveOnShutdown::new(
+                Arc::clone(&self.tree),
+                tx.clone(),
+            ));
+            crate::mux::shutdown_inhibit::spawn_shutdown_inhibitor(saver);
+        }
+
         // Card 01a0e3f1205371619309073eb5f803d6: the host-probe sweep
         // (disk + git per pane cwd) owns its own thread — its
         // deadline-bounded git invocations must never stall the accept

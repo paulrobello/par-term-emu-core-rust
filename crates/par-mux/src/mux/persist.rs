@@ -1255,6 +1255,7 @@ pub fn write_job(
 
     fs::rename(&tmp, target)?;
     maintain_lastgood(origin, state, target);
+    maintain_snapshot_history(origin, state, target);
     Ok(())
 }
 
@@ -1292,11 +1293,130 @@ fn maintain_lastgood(origin: SaveOrigin, state: &PersistState, target: &Path) {
     } else if matches!(origin, SaveOrigin::Command | SaveOrigin::ShutdownEmpty) {
         // Deliberately empty (kill-pane of the last pane, or the daemon
         // exiting because everything closed): the next start must be fresh,
-        // not a resurrection.
+        // not a resurrection — the history snapshots clear with it, or they
+        // would resurrect through the side door the lastgood removal closed
+        // (pinned by a_command_empty_save_clears_the_last_good_snapshot).
         let _ = fs::remove_file(&lastgood);
+        for stale in kept_snapshots(target) {
+            let _ = fs::remove_file(stale);
+        }
     }
     // An empty Shutdown save leaves the snapshot alone — the emptiness may
     // be the reboot race, not the user's intent.
+}
+
+/// Snapshot history (herdr's `session-snapshots/`, `SNAPSHOT_INTERVAL`
+/// and `SNAPSHOT_LIMIT` as measured there): every pane-bearing save that
+/// lands at least [`SNAPSHOT_INTERVAL`] after the newest kept snapshot
+/// copies the state file into `snapshots/` beside it, newest-last, capped
+/// at [`SNAPSHOT_LIMIT`]. Unlike herdr's layout-fingerprint dedupe, the
+/// throttle alone decides: par-mux's state embeds live screens, so
+/// successive saves are never layout-identical in bytes, and the interval
+/// is the bound that matters.
+const SNAPSHOT_INTERVAL: std::time::Duration = std::time::Duration::from_secs(15 * 60);
+const SNAPSHOT_LIMIT: usize = 48;
+
+/// Where `target`'s history snapshots live: `snapshots/` beside it.
+fn snapshots_dir(target: &Path) -> PathBuf {
+    target
+        .parent()
+        .map(|parent| parent.join("snapshots"))
+        .unwrap_or_else(|| PathBuf::from("snapshots"))
+}
+
+/// The kept snapshots for `target`, oldest first (the `<unix_ms>.state.json`
+/// names sort lexically while every name carries the same digit count).
+fn kept_snapshots(target: &Path) -> Vec<PathBuf> {
+    let stem = target
+        .file_stem()
+        .map(|stem| stem.to_string_lossy().into_owned())
+        .unwrap_or_default();
+    let Ok(entries) = fs::read_dir(snapshots_dir(target)) else {
+        return Vec::new();
+    };
+    let mut paths: Vec<PathBuf> = entries
+        .flatten()
+        .map(|entry| entry.path())
+        .filter(|path| {
+            path.file_name()
+                .and_then(|name| name.to_str())
+                .is_some_and(|name| {
+                    name.starts_with(&format!("{stem}-")) && name.ends_with(".state.json")
+                })
+        })
+        .collect();
+    paths.sort();
+    paths
+}
+
+/// The history tier of a save: throttled, pane-bearing states only, best
+/// effort — a snapshot failure warns and never fails the save itself.
+fn maintain_snapshot_history(origin: SaveOrigin, state: &PersistState, target: &Path) {
+    if origin == SaveOrigin::Reap || !state_has_panes(state) {
+        return;
+    }
+    if let Err(err) = maintain_snapshot_history_in(target, SNAPSHOT_INTERVAL, SNAPSHOT_LIMIT) {
+        log::warn!(
+            "par-mux: snapshot history update beside {} failed: {err}",
+            target.display()
+        );
+    }
+}
+
+/// [`maintain_snapshot_history`] with injectable throttle and cap (tests).
+fn maintain_snapshot_history_in(
+    target: &Path,
+    interval: std::time::Duration,
+    keep: usize,
+) -> std::io::Result<()> {
+    let existing = kept_snapshots(target);
+    if let Some(newest) = existing.last() {
+        let modified = fs::metadata(newest)?.modified()?;
+        if SystemTime::now()
+            .duration_since(modified)
+            .is_ok_and(|age| age < interval)
+        {
+            return Ok(());
+        }
+    }
+    let dir = snapshots_dir(target);
+    fs::create_dir_all(&dir)?;
+    let stem = target
+        .file_stem()
+        .map(|stem| stem.to_string_lossy().into_owned())
+        .unwrap_or_default();
+    fs::copy(
+        target,
+        dir.join(format!("{stem}-{:.0}.state.json", unix_ms())),
+    )?;
+    let excess = kept_snapshots(target);
+    if excess.len() > keep {
+        for stale in &excess[..excess.len() - keep] {
+            fs::remove_file(stale)?;
+        }
+    }
+    Ok(())
+}
+
+/// The newest snapshot that parses to a current pane-bearing state —
+/// persistence's third recovery tier, after the state file and `.lastgood`.
+fn load_newest_snapshot(target: &Path) -> Option<PersistState> {
+    for path in kept_snapshots(target).into_iter().rev() {
+        let Ok(bytes) = fs::read(&path) else {
+            continue;
+        };
+        let Ok(state) = serde_json::from_slice::<PersistState>(&bytes) else {
+            continue;
+        };
+        if state.format_version == FORMAT_VERSION && state_has_panes(&state) {
+            log::info!(
+                "par-mux: restoring the newest history snapshot {}",
+                path.display()
+            );
+            return Some(state);
+        }
+    }
+    None
 }
 
 /// What daemon startup found in the state file.
@@ -1342,6 +1462,9 @@ pub fn load_or_quarantine(target: &Path) -> Loaded {
                     );
                     return Loaded::State(Box::new(good));
                 }
+                if let Some(snapshot) = load_newest_snapshot(target) {
+                    return Loaded::State(Box::new(snapshot));
+                }
             }
             return Loaded::State(Box::new(state));
         }
@@ -1362,6 +1485,18 @@ pub fn load_or_quarantine(target: &Path) -> Loaded {
                 target.display(),
                 to.display()
             );
+            // The recovery tiers below the file itself: the last-good
+            // sibling, then the newest history snapshot. Both were written
+            // by earlier saves of this same daemon, so restoring from one
+            // loses at most the interval since its last snapshot — far
+            // less than a fresh start.
+            if let Some(good) = load_lastgood(target) {
+                log::info!("par-mux: restoring the last-good snapshot after the quarantine");
+                return Loaded::State(Box::new(good));
+            }
+            if let Some(snapshot) = load_newest_snapshot(target) {
+                return Loaded::State(Box::new(snapshot));
+            }
             Loaded::Quarantined {
                 from: target.to_path_buf(),
                 to,
@@ -2991,6 +3126,91 @@ mod tests {
     /// structural save, then the reaper persisting a burst of pane deaths
     /// (empty), then the daemon's own final save (still empty). The load
     /// must resurrect the pre-exit layout, not the raced emptiness.
+    #[test]
+    fn snapshot_history_writes_throttles_and_prunes() {
+        let (_dir, target) = temp_target("history");
+        let populated = populated_tree().to_persist_state();
+        write_job(SaveOrigin::Command, &populated, &target).unwrap();
+
+        // The save itself wrote the first snapshot (nothing to throttle).
+        let after_save = kept_snapshots(&target);
+        assert_eq!(after_save.len(), 1, "one snapshot per interval");
+
+        // A long interval throttles the next copy away.
+        maintain_snapshot_history_in(
+            &target,
+            std::time::Duration::from_secs(60 * 60),
+            SNAPSHOT_LIMIT,
+        )
+        .unwrap();
+        assert_eq!(kept_snapshots(&target).len(), 1);
+
+        // A short interval writes again, and the cap prunes the oldest.
+        for _ in 0..4 {
+            maintain_snapshot_history_in(&target, std::time::Duration::ZERO, 2).unwrap();
+        }
+        let kept = kept_snapshots(&target);
+        assert_eq!(kept.len(), 2, "capped at the configured count");
+        assert!(
+            kept.windows(2).all(|pair| pair[0] <= pair[1]),
+            "oldest first: {kept:?}"
+        );
+    }
+
+    /// A DELIBERATE empty save (Command origin) clears the history tier
+    /// with .lastgood — the next start is fresh. A raced empty save (Reap
+    /// origin keeps both tiers) restores, and with .lastgood gone the
+    /// history snapshot is the tier that answers.
+    #[test]
+    fn an_empty_state_recovers_through_the_history_tier_only_when_raced() {
+        let (_dir, target) = temp_target("empty-history");
+        let populated = populated_tree().to_persist_state();
+        write_job(SaveOrigin::Command, &populated, &target).unwrap();
+        write_job(SaveOrigin::Command, &tree().to_persist_state(), &target).unwrap();
+        match load_or_quarantine(&target) {
+            Loaded::State(state) => assert!(
+                !state_has_panes(&state),
+                "the deliberate empty is not resurrected from history"
+            ),
+            other => panic!("expected a state, got {other:?}"),
+        }
+
+        // The raced shape: a pane-bearing save, then the reaper persisting
+        // a burst of pane deaths with .lastgood lost.
+        write_job(SaveOrigin::Command, &populated, &target).unwrap();
+        write_job(SaveOrigin::Reap, &tree().to_persist_state(), &target).unwrap();
+        std::fs::remove_file(lastgood_path(&target)).unwrap();
+        match load_or_quarantine(&target) {
+            Loaded::State(state) => assert!(
+                state_has_panes(&state),
+                "the history snapshot restored the pane-bearing layout"
+            ),
+            other => panic!("expected a restored state, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn a_corrupt_state_recovers_through_lastgood_then_the_history_tier() {
+        let (dir, target) = temp_target("corrupt-history");
+        let populated = populated_tree().to_persist_state();
+        write_job(SaveOrigin::Command, &populated, &target).unwrap();
+        std::fs::remove_file(lastgood_path(&target)).unwrap();
+        std::fs::write(&target, "{ not json").unwrap();
+
+        match load_or_quarantine(&target) {
+            Loaded::State(state) => assert!(state_has_panes(&state)),
+            other => panic!("expected the history tier, got {other:?}"),
+        }
+        assert!(
+            dir.path().read_dir().unwrap().any(|entry| entry
+                .unwrap()
+                .file_name()
+                .to_string_lossy()
+                .contains(".quarantine-")),
+            "the corrupt file was still quarantined for inspection"
+        );
+    }
+
     /// A shutdown save whose state dir was deleted mid-run respects the
     /// deletion (D3: no resurrection) — the Windows VM measured the
     /// user-visible half of this card: saves failing 183 left no dir, and
@@ -3200,9 +3420,18 @@ mod tests {
         std::fs::write(&lastgood, b"not json").unwrap();
         write_job(SaveOrigin::Reap, &tree().to_persist_state(), &target).unwrap();
         match load_or_quarantine(&target) {
-            Loaded::State(state) => assert!(!state_has_panes(&state)),
+            // The corrupt lastgood is ignored as a source; the history
+            // snapshot the populated save left answers in its place (the
+            // same content .lastgood would have carried), and the corrupt
+            // file itself is left exactly as found.
+            Loaded::State(state) => assert!(state_has_panes(&state)),
             other => panic!("a readable state file loaded as {other:?}"),
         }
+        assert_eq!(
+            std::fs::read(&lastgood).unwrap(),
+            b"not json",
+            "the corrupt snapshot is never consumed or rewritten"
+        );
     }
 
     #[test]
