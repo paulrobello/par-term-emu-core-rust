@@ -275,6 +275,94 @@ esac
     ;;
 esac
 ;;
+(plugin)
+_arguments "${_arguments_options[@]}" : \
+'--machine=[Relay this invocation to a saved machine over SSH (the machine'\''s profile in \`\[machines.<label>\]\` names the ssh target; credentials stay with ssh itself). One-shot commands (\`--cmd\`, \`status\`, \`ls\`, \`observe\`, \`control\`, \`--stop\`) run non-interactively; \`attach\` forces passthrough under a pty — the thin client]:LABEL:_default' \
+'-h[Print help]' \
+'--help[Print help]' \
+":: :_par-mux__subcmd__plugin_commands" \
+"*::: :->plugin" \
+&& ret=0
+
+    case $state in
+    (plugin)
+        words=($line[1] "${words[@]}")
+        (( CURRENT += 1 ))
+        curcontext="${curcontext%:*:*}:par-mux-plugin-command-$line[1]:"
+        case $line[1] in
+            (install)
+_arguments "${_arguments_options[@]}" : \
+'--machine=[Relay this invocation to a saved machine over SSH (the machine'\''s profile in \`\[machines.<label>\]\` names the ssh target; credentials stay with ssh itself). One-shot commands (\`--cmd\`, \`status\`, \`ls\`, \`observe\`, \`control\`, \`--stop\`) run non-interactively; \`attach\` forces passthrough under a pty — the thin client]:LABEL:_default' \
+'--trust[Trust the previewed commands and install]' \
+'-h[Print help]' \
+'--help[Print help]' \
+':source -- A plugin directory or a git URL (depth-1 clone; the manifest at the root or one level down):_default' \
+&& ret=0
+;;
+(list)
+_arguments "${_arguments_options[@]}" : \
+'--machine=[Relay this invocation to a saved machine over SSH (the machine'\''s profile in \`\[machines.<label>\]\` names the ssh target; credentials stay with ssh itself). One-shot commands (\`--cmd\`, \`status\`, \`ls\`, \`observe\`, \`control\`, \`--stop\`) run non-interactively; \`attach\` forces passthrough under a pty — the thin client]:LABEL:_default' \
+'-h[Print help]' \
+'--help[Print help]' \
+&& ret=0
+;;
+(remove)
+_arguments "${_arguments_options[@]}" : \
+'--machine=[Relay this invocation to a saved machine over SSH (the machine'\''s profile in \`\[machines.<label>\]\` names the ssh target; credentials stay with ssh itself). One-shot commands (\`--cmd\`, \`status\`, \`ls\`, \`observe\`, \`control\`, \`--stop\`) run non-interactively; \`attach\` forces passthrough under a pty — the thin client]:LABEL:_default' \
+'-h[Print help]' \
+'--help[Print help]' \
+':name:_default' \
+&& ret=0
+;;
+(update)
+_arguments "${_arguments_options[@]}" : \
+'--machine=[Relay this invocation to a saved machine over SSH (the machine'\''s profile in \`\[machines.<label>\]\` names the ssh target; credentials stay with ssh itself). One-shot commands (\`--cmd\`, \`status\`, \`ls\`, \`observe\`, \`control\`, \`--stop\`) run non-interactively; \`attach\` forces passthrough under a pty — the thin client]:LABEL:_default' \
+'--trust[]' \
+'-h[Print help]' \
+'--help[Print help]' \
+':name:_default' \
+&& ret=0
+;;
+(help)
+_arguments "${_arguments_options[@]}" : \
+":: :_par-mux__subcmd__plugin__subcmd__help_commands" \
+"*::: :->help" \
+&& ret=0
+
+    case $state in
+    (help)
+        words=($line[1] "${words[@]}")
+        (( CURRENT += 1 ))
+        curcontext="${curcontext%:*:*}:par-mux-plugin-help-command-$line[1]:"
+        case $line[1] in
+            (install)
+_arguments "${_arguments_options[@]}" : \
+&& ret=0
+;;
+(list)
+_arguments "${_arguments_options[@]}" : \
+&& ret=0
+;;
+(remove)
+_arguments "${_arguments_options[@]}" : \
+&& ret=0
+;;
+(update)
+_arguments "${_arguments_options[@]}" : \
+&& ret=0
+;;
+(help)
+_arguments "${_arguments_options[@]}" : \
+&& ret=0
+;;
+        esac
+    ;;
+esac
+;;
+        esac
+    ;;
+esac
+;;
 (help)
 _arguments "${_arguments_options[@]}" : \
 ":: :_par-mux__subcmd__help_commands" \
@@ -367,6 +455,38 @@ _arguments "${_arguments_options[@]}" : \
     ;;
 esac
 ;;
+(plugin)
+_arguments "${_arguments_options[@]}" : \
+":: :_par-mux__subcmd__help__subcmd__plugin_commands" \
+"*::: :->plugin" \
+&& ret=0
+
+    case $state in
+    (plugin)
+        words=($line[1] "${words[@]}")
+        (( CURRENT += 1 ))
+        curcontext="${curcontext%:*:*}:par-mux-help-plugin-command-$line[1]:"
+        case $line[1] in
+            (install)
+_arguments "${_arguments_options[@]}" : \
+&& ret=0
+;;
+(list)
+_arguments "${_arguments_options[@]}" : \
+&& ret=0
+;;
+(remove)
+_arguments "${_arguments_options[@]}" : \
+&& ret=0
+;;
+(update)
+_arguments "${_arguments_options[@]}" : \
+&& ret=0
+;;
+        esac
+    ;;
+esac
+;;
 (help)
 _arguments "${_arguments_options[@]}" : \
 && ret=0
@@ -394,6 +514,7 @@ _par-mux_commands() {
 'control:Drive one pane (\`control-pane\`)\: stream its output to stdout like \`observe\`, forward stdin bytes to it until EOF (no raw mode — for pipes and scripts; interactive use is \`attach -t %N\`), and report this terminal'\''s size (polled) or \`--size\` as a viewer of the pane'\''s window' \
 'completion:Print the shell-completion script for SHELL, herdr'\''s spelling of \`--print-completions\`. Never contacts a daemon' \
 'machine:Manage saved machines (\`\[machines.<label>\]\` in the config)\: SSH thin-client profiles for \`--machine\`. Never contacts a daemon' \
+'plugin:Manage plugins\: manifests under the state dir'\''s \`plugins/\` whose hooks run on daemon events. Install previews every command; nothing runs until \`--trust\`. Never contacts a daemon' \
 'help:Print this message or the help of the given subcommand(s)' \
     )
     _describe -t commands 'par-mux commands' commands "$@"
@@ -432,6 +553,7 @@ _par-mux__subcmd__help_commands() {
 'control:Drive one pane (\`control-pane\`)\: stream its output to stdout like \`observe\`, forward stdin bytes to it until EOF (no raw mode — for pipes and scripts; interactive use is \`attach -t %N\`), and report this terminal'\''s size (polled) or \`--size\` as a viewer of the pane'\''s window' \
 'completion:Print the shell-completion script for SHELL, herdr'\''s spelling of \`--print-completions\`. Never contacts a daemon' \
 'machine:Manage saved machines (\`\[machines.<label>\]\` in the config)\: SSH thin-client profiles for \`--machine\`. Never contacts a daemon' \
+'plugin:Manage plugins\: manifests under the state dir'\''s \`plugins/\` whose hooks run on daemon events. Install previews every command; nothing runs until \`--trust\`. Never contacts a daemon' \
 'help:Print this message or the help of the given subcommand(s)' \
     )
     _describe -t commands 'par-mux help commands' commands "$@"
@@ -512,6 +634,36 @@ _par-mux__subcmd__help__subcmd__machine__subcmd__rename_commands() {
 _par-mux__subcmd__help__subcmd__observe_commands() {
     local commands; commands=()
     _describe -t commands 'par-mux help observe commands' commands "$@"
+}
+(( $+functions[_par-mux__subcmd__help__subcmd__plugin_commands] )) ||
+_par-mux__subcmd__help__subcmd__plugin_commands() {
+    local commands; commands=(
+'install:Resolve a plugin source (a directory or git URL) and PREVIEW it\: the source, its identity, and every command an event would run. Installs only with \`--trust\`' \
+'list:One line per installed plugin\: name, version, hook count, source' \
+'remove:Remove a plugin (its hooks stop after the daemon reloads)' \
+'update:Re-fetch a plugin from its recorded source (the preview and \`--trust\` apply again)' \
+    )
+    _describe -t commands 'par-mux help plugin commands' commands "$@"
+}
+(( $+functions[_par-mux__subcmd__help__subcmd__plugin__subcmd__install_commands] )) ||
+_par-mux__subcmd__help__subcmd__plugin__subcmd__install_commands() {
+    local commands; commands=()
+    _describe -t commands 'par-mux help plugin install commands' commands "$@"
+}
+(( $+functions[_par-mux__subcmd__help__subcmd__plugin__subcmd__list_commands] )) ||
+_par-mux__subcmd__help__subcmd__plugin__subcmd__list_commands() {
+    local commands; commands=()
+    _describe -t commands 'par-mux help plugin list commands' commands "$@"
+}
+(( $+functions[_par-mux__subcmd__help__subcmd__plugin__subcmd__remove_commands] )) ||
+_par-mux__subcmd__help__subcmd__plugin__subcmd__remove_commands() {
+    local commands; commands=()
+    _describe -t commands 'par-mux help plugin remove commands' commands "$@"
+}
+(( $+functions[_par-mux__subcmd__help__subcmd__plugin__subcmd__update_commands] )) ||
+_par-mux__subcmd__help__subcmd__plugin__subcmd__update_commands() {
+    local commands; commands=()
+    _describe -t commands 'par-mux help plugin update commands' commands "$@"
 }
 (( $+functions[_par-mux__subcmd__help__subcmd__restart_commands] )) ||
 _par-mux__subcmd__help__subcmd__restart_commands() {
@@ -633,6 +785,73 @@ _par-mux__subcmd__machine__subcmd__rename_commands() {
 _par-mux__subcmd__observe_commands() {
     local commands; commands=()
     _describe -t commands 'par-mux observe commands' commands "$@"
+}
+(( $+functions[_par-mux__subcmd__plugin_commands] )) ||
+_par-mux__subcmd__plugin_commands() {
+    local commands; commands=(
+'install:Resolve a plugin source (a directory or git URL) and PREVIEW it\: the source, its identity, and every command an event would run. Installs only with \`--trust\`' \
+'list:One line per installed plugin\: name, version, hook count, source' \
+'remove:Remove a plugin (its hooks stop after the daemon reloads)' \
+'update:Re-fetch a plugin from its recorded source (the preview and \`--trust\` apply again)' \
+'help:Print this message or the help of the given subcommand(s)' \
+    )
+    _describe -t commands 'par-mux plugin commands' commands "$@"
+}
+(( $+functions[_par-mux__subcmd__plugin__subcmd__help_commands] )) ||
+_par-mux__subcmd__plugin__subcmd__help_commands() {
+    local commands; commands=(
+'install:Resolve a plugin source (a directory or git URL) and PREVIEW it\: the source, its identity, and every command an event would run. Installs only with \`--trust\`' \
+'list:One line per installed plugin\: name, version, hook count, source' \
+'remove:Remove a plugin (its hooks stop after the daemon reloads)' \
+'update:Re-fetch a plugin from its recorded source (the preview and \`--trust\` apply again)' \
+'help:Print this message or the help of the given subcommand(s)' \
+    )
+    _describe -t commands 'par-mux plugin help commands' commands "$@"
+}
+(( $+functions[_par-mux__subcmd__plugin__subcmd__help__subcmd__help_commands] )) ||
+_par-mux__subcmd__plugin__subcmd__help__subcmd__help_commands() {
+    local commands; commands=()
+    _describe -t commands 'par-mux plugin help help commands' commands "$@"
+}
+(( $+functions[_par-mux__subcmd__plugin__subcmd__help__subcmd__install_commands] )) ||
+_par-mux__subcmd__plugin__subcmd__help__subcmd__install_commands() {
+    local commands; commands=()
+    _describe -t commands 'par-mux plugin help install commands' commands "$@"
+}
+(( $+functions[_par-mux__subcmd__plugin__subcmd__help__subcmd__list_commands] )) ||
+_par-mux__subcmd__plugin__subcmd__help__subcmd__list_commands() {
+    local commands; commands=()
+    _describe -t commands 'par-mux plugin help list commands' commands "$@"
+}
+(( $+functions[_par-mux__subcmd__plugin__subcmd__help__subcmd__remove_commands] )) ||
+_par-mux__subcmd__plugin__subcmd__help__subcmd__remove_commands() {
+    local commands; commands=()
+    _describe -t commands 'par-mux plugin help remove commands' commands "$@"
+}
+(( $+functions[_par-mux__subcmd__plugin__subcmd__help__subcmd__update_commands] )) ||
+_par-mux__subcmd__plugin__subcmd__help__subcmd__update_commands() {
+    local commands; commands=()
+    _describe -t commands 'par-mux plugin help update commands' commands "$@"
+}
+(( $+functions[_par-mux__subcmd__plugin__subcmd__install_commands] )) ||
+_par-mux__subcmd__plugin__subcmd__install_commands() {
+    local commands; commands=()
+    _describe -t commands 'par-mux plugin install commands' commands "$@"
+}
+(( $+functions[_par-mux__subcmd__plugin__subcmd__list_commands] )) ||
+_par-mux__subcmd__plugin__subcmd__list_commands() {
+    local commands; commands=()
+    _describe -t commands 'par-mux plugin list commands' commands "$@"
+}
+(( $+functions[_par-mux__subcmd__plugin__subcmd__remove_commands] )) ||
+_par-mux__subcmd__plugin__subcmd__remove_commands() {
+    local commands; commands=()
+    _describe -t commands 'par-mux plugin remove commands' commands "$@"
+}
+(( $+functions[_par-mux__subcmd__plugin__subcmd__update_commands] )) ||
+_par-mux__subcmd__plugin__subcmd__update_commands() {
+    local commands; commands=()
+    _describe -t commands 'par-mux plugin update commands' commands "$@"
 }
 (( $+functions[_par-mux__subcmd__restart_commands] )) ||
 _par-mux__subcmd__restart_commands() {

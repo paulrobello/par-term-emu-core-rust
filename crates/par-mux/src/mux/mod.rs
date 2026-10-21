@@ -26,13 +26,14 @@ pub mod ids;
 pub mod integrations;
 pub mod ipc;
 pub mod layout;
-/// Saved-machine profiles and the ssh relay command (mux-bin: the CLI's
-/// machine subcommands and --machine relay read it; toml_edit rides mux-bin).
 #[cfg(feature = "mux-bin")]
 pub mod machine_config;
 pub mod pane;
 pub mod pane_stream;
 pub mod persist;
+/// Saved-machine profiles and the ssh relay command (mux-bin: the CLI's
+/// machine subcommands and --machine relay read it; toml_edit rides mux-bin).
+pub mod plugins;
 pub mod popup;
 pub mod scrape;
 pub mod server;

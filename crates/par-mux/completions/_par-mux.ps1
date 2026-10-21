@@ -61,6 +61,7 @@ Register-ArgumentCompleter -Native -CommandName 'par-mux' -ScriptBlock {
             [CompletionResult]::new('control', 'control', [CompletionResultType]::ParameterValue, 'Drive one pane (`control-pane`): stream its output to stdout like `observe`, forward stdin bytes to it until EOF (no raw mode — for pipes and scripts; interactive use is `attach -t %N`), and report this terminal''s size (polled) or `--size` as a viewer of the pane''s window')
             [CompletionResult]::new('completion', 'completion', [CompletionResultType]::ParameterValue, 'Print the shell-completion script for SHELL, herdr''s spelling of `--print-completions`. Never contacts a daemon')
             [CompletionResult]::new('machine', 'machine', [CompletionResultType]::ParameterValue, 'Manage saved machines (`[machines.<label>]` in the config): SSH thin-client profiles for `--machine`. Never contacts a daemon')
+            [CompletionResult]::new('plugin', 'plugin', [CompletionResultType]::ParameterValue, 'Manage plugins: manifests under the state dir''s `plugins/` whose hooks run on daemon events. Install previews every command; nothing runs until `--trust`. Never contacts a daemon')
             [CompletionResult]::new('help', 'help', [CompletionResultType]::ParameterValue, 'Print this message or the help of the given subcommand(s)')
             break
         }
@@ -236,6 +237,66 @@ Register-ArgumentCompleter -Native -CommandName 'par-mux' -ScriptBlock {
         'par-mux;machine;help;help' {
             break
         }
+        'par-mux;plugin' {
+            [CompletionResult]::new('--machine', '--machine', [CompletionResultType]::ParameterName, 'Relay this invocation to a saved machine over SSH (the machine''s profile in `[machines.<label>]` names the ssh target; credentials stay with ssh itself). One-shot commands (`--cmd`, `status`, `ls`, `observe`, `control`, `--stop`) run non-interactively; `attach` forces passthrough under a pty — the thin client')
+            [CompletionResult]::new('-h', '-h', [CompletionResultType]::ParameterName, 'Print help')
+            [CompletionResult]::new('--help', '--help', [CompletionResultType]::ParameterName, 'Print help')
+            [CompletionResult]::new('install', 'install', [CompletionResultType]::ParameterValue, 'Resolve a plugin source (a directory or git URL) and PREVIEW it: the source, its identity, and every command an event would run. Installs only with `--trust`')
+            [CompletionResult]::new('list', 'list', [CompletionResultType]::ParameterValue, 'One line per installed plugin: name, version, hook count, source')
+            [CompletionResult]::new('remove', 'remove', [CompletionResultType]::ParameterValue, 'Remove a plugin (its hooks stop after the daemon reloads)')
+            [CompletionResult]::new('update', 'update', [CompletionResultType]::ParameterValue, 'Re-fetch a plugin from its recorded source (the preview and `--trust` apply again)')
+            [CompletionResult]::new('help', 'help', [CompletionResultType]::ParameterValue, 'Print this message or the help of the given subcommand(s)')
+            break
+        }
+        'par-mux;plugin;install' {
+            [CompletionResult]::new('--machine', '--machine', [CompletionResultType]::ParameterName, 'Relay this invocation to a saved machine over SSH (the machine''s profile in `[machines.<label>]` names the ssh target; credentials stay with ssh itself). One-shot commands (`--cmd`, `status`, `ls`, `observe`, `control`, `--stop`) run non-interactively; `attach` forces passthrough under a pty — the thin client')
+            [CompletionResult]::new('--trust', '--trust', [CompletionResultType]::ParameterName, 'Trust the previewed commands and install')
+            [CompletionResult]::new('-h', '-h', [CompletionResultType]::ParameterName, 'Print help')
+            [CompletionResult]::new('--help', '--help', [CompletionResultType]::ParameterName, 'Print help')
+            break
+        }
+        'par-mux;plugin;list' {
+            [CompletionResult]::new('--machine', '--machine', [CompletionResultType]::ParameterName, 'Relay this invocation to a saved machine over SSH (the machine''s profile in `[machines.<label>]` names the ssh target; credentials stay with ssh itself). One-shot commands (`--cmd`, `status`, `ls`, `observe`, `control`, `--stop`) run non-interactively; `attach` forces passthrough under a pty — the thin client')
+            [CompletionResult]::new('-h', '-h', [CompletionResultType]::ParameterName, 'Print help')
+            [CompletionResult]::new('--help', '--help', [CompletionResultType]::ParameterName, 'Print help')
+            break
+        }
+        'par-mux;plugin;remove' {
+            [CompletionResult]::new('--machine', '--machine', [CompletionResultType]::ParameterName, 'Relay this invocation to a saved machine over SSH (the machine''s profile in `[machines.<label>]` names the ssh target; credentials stay with ssh itself). One-shot commands (`--cmd`, `status`, `ls`, `observe`, `control`, `--stop`) run non-interactively; `attach` forces passthrough under a pty — the thin client')
+            [CompletionResult]::new('-h', '-h', [CompletionResultType]::ParameterName, 'Print help')
+            [CompletionResult]::new('--help', '--help', [CompletionResultType]::ParameterName, 'Print help')
+            break
+        }
+        'par-mux;plugin;update' {
+            [CompletionResult]::new('--machine', '--machine', [CompletionResultType]::ParameterName, 'Relay this invocation to a saved machine over SSH (the machine''s profile in `[machines.<label>]` names the ssh target; credentials stay with ssh itself). One-shot commands (`--cmd`, `status`, `ls`, `observe`, `control`, `--stop`) run non-interactively; `attach` forces passthrough under a pty — the thin client')
+            [CompletionResult]::new('--trust', '--trust', [CompletionResultType]::ParameterName, 'trust')
+            [CompletionResult]::new('-h', '-h', [CompletionResultType]::ParameterName, 'Print help')
+            [CompletionResult]::new('--help', '--help', [CompletionResultType]::ParameterName, 'Print help')
+            break
+        }
+        'par-mux;plugin;help' {
+            [CompletionResult]::new('install', 'install', [CompletionResultType]::ParameterValue, 'Resolve a plugin source (a directory or git URL) and PREVIEW it: the source, its identity, and every command an event would run. Installs only with `--trust`')
+            [CompletionResult]::new('list', 'list', [CompletionResultType]::ParameterValue, 'One line per installed plugin: name, version, hook count, source')
+            [CompletionResult]::new('remove', 'remove', [CompletionResultType]::ParameterValue, 'Remove a plugin (its hooks stop after the daemon reloads)')
+            [CompletionResult]::new('update', 'update', [CompletionResultType]::ParameterValue, 'Re-fetch a plugin from its recorded source (the preview and `--trust` apply again)')
+            [CompletionResult]::new('help', 'help', [CompletionResultType]::ParameterValue, 'Print this message or the help of the given subcommand(s)')
+            break
+        }
+        'par-mux;plugin;help;install' {
+            break
+        }
+        'par-mux;plugin;help;list' {
+            break
+        }
+        'par-mux;plugin;help;remove' {
+            break
+        }
+        'par-mux;plugin;help;update' {
+            break
+        }
+        'par-mux;plugin;help;help' {
+            break
+        }
         'par-mux;help' {
             [CompletionResult]::new('start', 'start', [CompletionResultType]::ParameterValue, 'Start the daemon (the default action): detached, auto-attaching this terminal unless --no-attach. Same as bare `par-mux [NAME]`')
             [CompletionResult]::new('stop', 'stop', [CompletionResultType]::ParameterValue, 'Stop the daemon serving the resolved socket cleanly. Same as `--stop`')
@@ -248,6 +309,7 @@ Register-ArgumentCompleter -Native -CommandName 'par-mux' -ScriptBlock {
             [CompletionResult]::new('control', 'control', [CompletionResultType]::ParameterValue, 'Drive one pane (`control-pane`): stream its output to stdout like `observe`, forward stdin bytes to it until EOF (no raw mode — for pipes and scripts; interactive use is `attach -t %N`), and report this terminal''s size (polled) or `--size` as a viewer of the pane''s window')
             [CompletionResult]::new('completion', 'completion', [CompletionResultType]::ParameterValue, 'Print the shell-completion script for SHELL, herdr''s spelling of `--print-completions`. Never contacts a daemon')
             [CompletionResult]::new('machine', 'machine', [CompletionResultType]::ParameterValue, 'Manage saved machines (`[machines.<label>]` in the config): SSH thin-client profiles for `--machine`. Never contacts a daemon')
+            [CompletionResult]::new('plugin', 'plugin', [CompletionResultType]::ParameterValue, 'Manage plugins: manifests under the state dir''s `plugins/` whose hooks run on daemon events. Install previews every command; nothing runs until `--trust`. Never contacts a daemon')
             [CompletionResult]::new('help', 'help', [CompletionResultType]::ParameterValue, 'Print this message or the help of the given subcommand(s)')
             break
         }
@@ -306,6 +368,25 @@ Register-ArgumentCompleter -Native -CommandName 'par-mux' -ScriptBlock {
             break
         }
         'par-mux;help;machine;disable' {
+            break
+        }
+        'par-mux;help;plugin' {
+            [CompletionResult]::new('install', 'install', [CompletionResultType]::ParameterValue, 'Resolve a plugin source (a directory or git URL) and PREVIEW it: the source, its identity, and every command an event would run. Installs only with `--trust`')
+            [CompletionResult]::new('list', 'list', [CompletionResultType]::ParameterValue, 'One line per installed plugin: name, version, hook count, source')
+            [CompletionResult]::new('remove', 'remove', [CompletionResultType]::ParameterValue, 'Remove a plugin (its hooks stop after the daemon reloads)')
+            [CompletionResult]::new('update', 'update', [CompletionResultType]::ParameterValue, 'Re-fetch a plugin from its recorded source (the preview and `--trust` apply again)')
+            break
+        }
+        'par-mux;help;plugin;install' {
+            break
+        }
+        'par-mux;help;plugin;list' {
+            break
+        }
+        'par-mux;help;plugin;remove' {
+            break
+        }
+        'par-mux;help;plugin;update' {
             break
         }
         'par-mux;help;help' {

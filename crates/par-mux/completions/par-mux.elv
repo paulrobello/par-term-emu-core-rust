@@ -58,6 +58,7 @@ set edit:completion:arg-completer[par-mux] = {|@words|
             cand control 'Drive one pane (`control-pane`): stream its output to stdout like `observe`, forward stdin bytes to it until EOF (no raw mode — for pipes and scripts; interactive use is `attach -t %N`), and report this terminal''s size (polled) or `--size` as a viewer of the pane''s window'
             cand completion 'Print the shell-completion script for SHELL, herdr''s spelling of `--print-completions`. Never contacts a daemon'
             cand machine 'Manage saved machines (`[machines.<label>]` in the config): SSH thin-client profiles for `--machine`. Never contacts a daemon'
+            cand plugin 'Manage plugins: manifests under the state dir''s `plugins/` whose hooks run on daemon events. Install previews every command; nothing runs until `--trust`. Never contacts a daemon'
             cand help 'Print this message or the help of the given subcommand(s)'
         }
         &'par-mux;start'= {
@@ -207,6 +208,55 @@ set edit:completion:arg-completer[par-mux] = {|@words|
         }
         &'par-mux;machine;help;help'= {
         }
+        &'par-mux;plugin'= {
+            cand --machine 'Relay this invocation to a saved machine over SSH (the machine''s profile in `[machines.<label>]` names the ssh target; credentials stay with ssh itself). One-shot commands (`--cmd`, `status`, `ls`, `observe`, `control`, `--stop`) run non-interactively; `attach` forces passthrough under a pty — the thin client'
+            cand -h 'Print help'
+            cand --help 'Print help'
+            cand install 'Resolve a plugin source (a directory or git URL) and PREVIEW it: the source, its identity, and every command an event would run. Installs only with `--trust`'
+            cand list 'One line per installed plugin: name, version, hook count, source'
+            cand remove 'Remove a plugin (its hooks stop after the daemon reloads)'
+            cand update 'Re-fetch a plugin from its recorded source (the preview and `--trust` apply again)'
+            cand help 'Print this message or the help of the given subcommand(s)'
+        }
+        &'par-mux;plugin;install'= {
+            cand --machine 'Relay this invocation to a saved machine over SSH (the machine''s profile in `[machines.<label>]` names the ssh target; credentials stay with ssh itself). One-shot commands (`--cmd`, `status`, `ls`, `observe`, `control`, `--stop`) run non-interactively; `attach` forces passthrough under a pty — the thin client'
+            cand --trust 'Trust the previewed commands and install'
+            cand -h 'Print help'
+            cand --help 'Print help'
+        }
+        &'par-mux;plugin;list'= {
+            cand --machine 'Relay this invocation to a saved machine over SSH (the machine''s profile in `[machines.<label>]` names the ssh target; credentials stay with ssh itself). One-shot commands (`--cmd`, `status`, `ls`, `observe`, `control`, `--stop`) run non-interactively; `attach` forces passthrough under a pty — the thin client'
+            cand -h 'Print help'
+            cand --help 'Print help'
+        }
+        &'par-mux;plugin;remove'= {
+            cand --machine 'Relay this invocation to a saved machine over SSH (the machine''s profile in `[machines.<label>]` names the ssh target; credentials stay with ssh itself). One-shot commands (`--cmd`, `status`, `ls`, `observe`, `control`, `--stop`) run non-interactively; `attach` forces passthrough under a pty — the thin client'
+            cand -h 'Print help'
+            cand --help 'Print help'
+        }
+        &'par-mux;plugin;update'= {
+            cand --machine 'Relay this invocation to a saved machine over SSH (the machine''s profile in `[machines.<label>]` names the ssh target; credentials stay with ssh itself). One-shot commands (`--cmd`, `status`, `ls`, `observe`, `control`, `--stop`) run non-interactively; `attach` forces passthrough under a pty — the thin client'
+            cand --trust 'trust'
+            cand -h 'Print help'
+            cand --help 'Print help'
+        }
+        &'par-mux;plugin;help'= {
+            cand install 'Resolve a plugin source (a directory or git URL) and PREVIEW it: the source, its identity, and every command an event would run. Installs only with `--trust`'
+            cand list 'One line per installed plugin: name, version, hook count, source'
+            cand remove 'Remove a plugin (its hooks stop after the daemon reloads)'
+            cand update 'Re-fetch a plugin from its recorded source (the preview and `--trust` apply again)'
+            cand help 'Print this message or the help of the given subcommand(s)'
+        }
+        &'par-mux;plugin;help;install'= {
+        }
+        &'par-mux;plugin;help;list'= {
+        }
+        &'par-mux;plugin;help;remove'= {
+        }
+        &'par-mux;plugin;help;update'= {
+        }
+        &'par-mux;plugin;help;help'= {
+        }
         &'par-mux;help'= {
             cand start 'Start the daemon (the default action): detached, auto-attaching this terminal unless --no-attach. Same as bare `par-mux [NAME]`'
             cand stop 'Stop the daemon serving the resolved socket cleanly. Same as `--stop`'
@@ -219,6 +269,7 @@ set edit:completion:arg-completer[par-mux] = {|@words|
             cand control 'Drive one pane (`control-pane`): stream its output to stdout like `observe`, forward stdin bytes to it until EOF (no raw mode — for pipes and scripts; interactive use is `attach -t %N`), and report this terminal''s size (polled) or `--size` as a viewer of the pane''s window'
             cand completion 'Print the shell-completion script for SHELL, herdr''s spelling of `--print-completions`. Never contacts a daemon'
             cand machine 'Manage saved machines (`[machines.<label>]` in the config): SSH thin-client profiles for `--machine`. Never contacts a daemon'
+            cand plugin 'Manage plugins: manifests under the state dir''s `plugins/` whose hooks run on daemon events. Install previews every command; nothing runs until `--trust`. Never contacts a daemon'
             cand help 'Print this message or the help of the given subcommand(s)'
         }
         &'par-mux;help;start'= {
@@ -260,6 +311,20 @@ set edit:completion:arg-completer[par-mux] = {|@words|
         &'par-mux;help;machine;enable'= {
         }
         &'par-mux;help;machine;disable'= {
+        }
+        &'par-mux;help;plugin'= {
+            cand install 'Resolve a plugin source (a directory or git URL) and PREVIEW it: the source, its identity, and every command an event would run. Installs only with `--trust`'
+            cand list 'One line per installed plugin: name, version, hook count, source'
+            cand remove 'Remove a plugin (its hooks stop after the daemon reloads)'
+            cand update 'Re-fetch a plugin from its recorded source (the preview and `--trust` apply again)'
+        }
+        &'par-mux;help;plugin;install'= {
+        }
+        &'par-mux;help;plugin;list'= {
+        }
+        &'par-mux;help;plugin;remove'= {
+        }
+        &'par-mux;help;plugin;update'= {
         }
         &'par-mux;help;help'= {
         }

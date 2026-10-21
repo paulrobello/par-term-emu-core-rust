@@ -1614,6 +1614,159 @@ fn machine_profiles_round_trip_through_the_config() {
     assert_eq!(run.code, Some(0), "an absent machine removes as a no-op");
 }
 
+/// The plugin lifecycle: install previews the source and every command
+/// and refuses without --trust; with it, the plugin lands under the state
+/// dir, lists with its hook count, updates from the recorded source, and
+/// removes cleanly. Never contacts a daemon.
+#[test]
+fn plugin_install_previews_then_installs_with_trust() {
+    let root = tempfile::tempdir().expect("temp dir");
+    let source = root.path().join("bell");
+    std::fs::create_dir_all(&source).unwrap();
+    std::fs::write(
+        source.join("par-mux-plugin.toml"),
+        "name = \"bell\"\nversion = \"1\"\ndescription = \"a test\"\n\n[[hook]]\nevent = \"pane-exited\"\ncommand = \"echo bye >> log\"\n\n[[hook]]\nevent = \"notification\"\ncommand = \"notify-send x\"\ntimeout-ms = 1500\n",
+    )
+    .unwrap();
+    let state = root.path().join("state");
+    let env = [(
+        "PAR_MUX_STATE_DIR_FOR_TEST",
+        state.to_str().expect("utf-8 path"),
+    )];
+    let _ = env;
+
+    // --state-dir rides as a plain flag before the verb.
+    let state_str = state.to_str().expect("utf-8 path").to_string();
+    let run = par_mux_with(
+        &[
+            "--state-dir",
+            &state_str,
+            "plugin",
+            "install",
+            source.to_str().unwrap(),
+        ],
+        &[],
+    );
+    assert_eq!(run.code, Some(0), "stderr: {}", run.stderr);
+    assert!(run.stdout.contains("plugin bell v1"), "{}", run.stdout);
+    assert!(run.stdout.contains("source:"), "{}", run.stdout);
+    assert!(
+        run.stdout
+            .contains("on pane-exited (3000 ms): echo bye >> log"),
+        "the preview names events, timeouts, and commands: {}",
+        run.stdout
+    );
+    assert!(run
+        .stdout
+        .contains("on notification (1500 ms): notify-send x"));
+    assert!(run.stdout.contains("preview only"), "{}", run.stdout);
+    assert!(
+        !state.join("par-mux").join("plugins").join("bell").exists(),
+        "nothing installed without --trust"
+    );
+
+    let run = par_mux_with(
+        &[
+            "--state-dir",
+            &state_str,
+            "plugin",
+            "install",
+            source.to_str().unwrap(),
+            "--trust",
+        ],
+        &[],
+    );
+    assert_eq!(run.code, Some(0), "stderr: {}", run.stderr);
+    assert!(run.stdout.contains("installed into"));
+    assert!(state.join("par-mux").join("plugins").join("bell").exists());
+
+    let run = par_mux_with(&["--state-dir", &state_str, "plugin", "list"], &[]);
+    assert_eq!(run.code, Some(0), "stderr: {}", run.stderr);
+    assert!(run.stdout.contains("bell  v1  2 hooks"), "{}", run.stdout);
+
+    // A second install of the same name refuses; update re-fetches.
+    let run = par_mux_with(
+        &[
+            "--state-dir",
+            &state_str,
+            "plugin",
+            "install",
+            source.to_str().unwrap(),
+            "--trust",
+        ],
+        &[],
+    );
+    assert_eq!(run.code, Some(2));
+    assert!(run.stderr.contains("already installed"));
+    let run = par_mux_with(
+        &[
+            "--state-dir",
+            &state_str,
+            "plugin",
+            "update",
+            "bell",
+            "--trust",
+        ],
+        &[],
+    );
+    assert_eq!(run.code, Some(0), "stderr: {}", run.stderr);
+
+    let run = par_mux_with(
+        &["--state-dir", &state_str, "plugin", "remove", "bell"],
+        &[],
+    );
+    assert_eq!(run.code, Some(0), "stderr: {}", run.stderr);
+    let run = par_mux_with(&["--state-dir", &state_str, "plugin", "list"], &[]);
+    assert!(!run.stdout.contains("bell  v1"), "{}", run.stdout);
+}
+
+/// A manifest naming an unknown event, or a source with no manifest,
+/// fails the install with the reason.
+#[test]
+fn plugin_install_refuses_invalid_manifests() {
+    let root = tempfile::tempdir().expect("temp dir");
+    let state_str = root
+        .path()
+        .join("state")
+        .to_str()
+        .expect("utf-8")
+        .to_string();
+    let bad = root.path().join("bad");
+    std::fs::create_dir_all(&bad).unwrap();
+    std::fs::write(
+        bad.join("par-mux-plugin.toml"),
+        "name = \"bad\"\nversion = \"1\"\n[[hook]]\nevent = \"output\"\ncommand = \"x\"\n",
+    )
+    .unwrap();
+    let run = par_mux_with(
+        &[
+            "--state-dir",
+            &state_str,
+            "plugin",
+            "install",
+            bad.to_str().unwrap(),
+        ],
+        &[],
+    );
+    assert_eq!(run.code, Some(2), "stderr: {}", run.stderr);
+    assert!(run.stderr.contains("unknown hook event"));
+
+    let empty = root.path().join("empty");
+    std::fs::create_dir_all(&empty).unwrap();
+    let run = par_mux_with(
+        &[
+            "--state-dir",
+            &state_str,
+            "plugin",
+            "install",
+            empty.to_str().unwrap(),
+        ],
+        &[],
+    );
+    assert_eq!(run.code, Some(2), "stderr: {}", run.stderr);
+    assert!(run.stderr.contains("carries no par-mux-plugin.toml"));
+}
+
 /// A user config with comments keeps every comment through machine edits.
 #[test]
 fn machine_edits_preserve_the_users_comments() {

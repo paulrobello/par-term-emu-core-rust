@@ -1023,7 +1023,7 @@ pub fn state_file_path(socket_path: &Path) -> PathBuf {
 /// The platform state dir, falling back to the data dir on platforms
 /// without a distinct one (D3.4: macOS has no XDG state dir, so state lives
 /// under `~/Library/Application Support` there).
-fn platform_state_dir() -> PathBuf {
+pub fn platform_state_dir() -> PathBuf {
     dirs::state_dir()
         .or_else(dirs::data_dir)
         .unwrap_or_else(std::env::temp_dir)

@@ -397,6 +397,9 @@ pub(super) fn cmd_reload_config(ctx: &Ctx<'_>) -> Outcome {
         Err(err) => return Outcome::err(ctx, &format!("reload-config: {err}")),
     };
     let report = reload_report(&mut applied.lock(), file.as_ref());
+    // Plugin installs and removals take effect with the reload, the same
+    // fresh-read the config gets (plugins.rs).
+    crate::mux::plugins::reload_engine();
     // Every attached client re-applies its `[client]` settings from the
     // file on this cue, so a settings-dialog change in one client reaches
     // the others. Errors above broadcast nothing: no file was re-read.

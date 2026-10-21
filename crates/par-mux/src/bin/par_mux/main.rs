@@ -426,6 +426,44 @@ enum Sub {
     /// Manage saved machines (`[machines.<label>]` in the config): SSH
     /// thin-client profiles for `--machine`. Never contacts a daemon.
     Machine(MachineArgs),
+    /// Manage plugins: manifests under the state dir's `plugins/` whose
+    /// hooks run on daemon events. Install previews every command; nothing
+    /// runs until `--trust`. Never contacts a daemon.
+    Plugin(PluginArgs),
+}
+
+/// `par-mux plugin <VERB>` — the plugin lifecycle.
+#[derive(clap::Subcommand, Debug)]
+enum PluginCommand {
+    /// Resolve a plugin source (a directory or git URL) and PREVIEW it:
+    /// the source, its identity, and every command an event would run.
+    /// Installs only with `--trust`.
+    Install {
+        /// A plugin directory or a git URL (depth-1 clone; the manifest at
+        /// the root or one level down).
+        source: String,
+        /// Trust the previewed commands and install.
+        #[arg(long)]
+        trust: bool,
+    },
+    /// One line per installed plugin: name, version, hook count, source.
+    List,
+    /// Remove a plugin (its hooks stop after the daemon reloads).
+    Remove { name: String },
+    /// Re-fetch a plugin from its recorded source (the preview and
+    /// `--trust` apply again).
+    Update {
+        name: String,
+        #[arg(long)]
+        trust: bool,
+    },
+}
+
+/// `par-mux plugin <VERB> [...]` — the verb's arguments.
+#[derive(clap::Args, Debug)]
+struct PluginArgs {
+    #[command(subcommand)]
+    command: PluginCommand,
 }
 
 /// `par-mux machine <VERB>` — the saved-machine manager.
@@ -1002,8 +1040,10 @@ fn run_agent_extension_action(install: bool) -> std::process::ExitCode {
 }
 
 mod machine;
+mod plugin;
 
 use machine::{run_machine_command, run_machine_relay};
+use plugin::run_plugin_command;
 
 fn main() -> std::process::ExitCode {
     let mut cli = Cli::parse();
@@ -1119,6 +1159,7 @@ fn main() -> std::process::ExitCode {
             #[cfg(feature = "attach")]
             Sub::Attach(args) => attach_cmd = Some(AttachCommand::Attach(args)),
             Sub::Machine(args) => return run_machine_command(args),
+            Sub::Plugin(args) => return run_plugin_command(args),
             Sub::Config(args) => {
                 cli.gen_config = true;
                 cli.force |= args.force;

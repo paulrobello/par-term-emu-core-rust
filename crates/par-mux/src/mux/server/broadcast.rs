@@ -126,6 +126,9 @@ pub(super) fn dispatch_contained(
 /// did not issue the mutating command still learns about the window it
 /// affected, which is what a push-driven sync layer consumes.
 pub(crate) fn broadcast_notification(clients: &Clients, notification: &TmuxNotification) {
+    // The plugin tier sees exactly what clients see, from the same
+    // emitter — no-op unless a daemon loaded plugins (plugins.rs).
+    crate::mux::plugins::dispatch_notification(notification);
     push_to_clients(clients, emit(notification));
 }
 

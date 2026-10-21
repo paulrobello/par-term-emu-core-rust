@@ -353,6 +353,12 @@ impl MuxServer {
             crate::mux::shutdown_inhibit::spawn_shutdown_inhibitor(saver);
         }
 
+        // The plugin tier loads from `plugins/` beside the state file;
+        // an empty or absent directory is an empty engine (plugins.rs).
+        if let Some(dir) = state_path.as_ref().and_then(|path| path.parent()) {
+            crate::mux::plugins::set_engine_from(dir.to_path_buf());
+        }
+
         // Card 01a0e3f1205371619309073eb5f803d6: the host-probe sweep
         // (disk + git per pane cwd) owns its own thread — its
         // deadline-bounded git invocations must never stall the accept
@@ -436,6 +442,7 @@ impl MuxServer {
                             });
                         }
                     }
+                    crate::mux::plugins::reap_expired_hooks();
                     if last_scrape.elapsed() >= SCRAPE_INTERVAL {
                         for notification in crate::mux::scrape::scrape_tick(&self.tree, &engine) {
                             broadcast_notification(&self.clients, &notification);

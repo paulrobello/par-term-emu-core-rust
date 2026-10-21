@@ -22,6 +22,7 @@ The daemon is feature-gated (Rust `mux` feature for the library, `mux-bin` for t
 - [Agent Hook Reports](#agent-hook-reports)
 - [Host Telemetry Probe](#host-telemetry-probe)
 - [Agent Scrape Tier](#agent-scrape-tier)
+- [Plugin System](#plugin-system)
 - [Saved Machines and the SSH Thin Client](#saved-machines-and-the-ssh-thin-client)
 - [Persistence and Restart](#persistence-and-restart)
 - [Pane Reaping](#pane-reaping)
@@ -1192,6 +1193,25 @@ An override that fails to parse or validate falls back to the bundled set with a
 Two mismatching ticks (not interrupted by a proven match) clear the whole claim and broadcast `%agent-released`, exactly as a release report would. The verdict is conservative in every ambiguous direction: a probe that goes blind (unreadable argv — the fresh-spawn window where macOS cannot read a mid-`exec` argv) keeps its recorded misses and never adds one, and Windows has no portable process-tree/argv access, so the sweep is inert there and hook release remains the only claim-clearing path.
 
 One constraint follows from the argv match: an agent launched through a STAND-IN program whose argv carries no agent-name component — pi's or omp's `-x <program>` runs the named program in the pane instead of the agent CLI — can never match, so its claim is released after the two mismatching ticks however healthy the stand-in is. Name the stand-in after its agent and the sweep holds the claim: `pi -x 'sh -c "exec -a pi <program>"'` sets argv[0] to `pi`, which the label match takes verbatim.
+
+## Plugin System
+
+A plugin is a directory with a `par-mux-plugin.toml` manifest whose hooks run shell commands when the daemon emits matching control notifications. Plugins live under `<state-dir>/par-mux/plugins/<name>/`; the daemon loads them at startup and `reload-config` re-reads the directory (an install or removal takes effect without a restart).
+
+```toml
+name = "bell"
+version = "1"
+description = "desktop notification on agent state changes"
+
+[[hook]]
+event = "agent-state-changed"
+command = "notify-send par-mux "$PAR_MUX_EVENT_LINE""
+timeout-ms = 3000
+```
+
+**The trust gate**: `par-mux plugin install <dir-or-git-url>` first resolves the source (a local directory as-is; a git URL through a depth-1 clone, manifest at the root or one level down) and prints the preview — the source, the plugin's identity, and EVERY command each event would run with its effective timeout. Without `--trust` that is all that happens; with it the directory is copied into `plugins/`, an entry lands in `plugins/installed.json` (name, version, source, install time), and the output names the directory. `plugin list` / `update <name>` (re-fetch from the recorded source, preview and `--trust` again) / `remove <name>` complete the lifecycle. None of it contacts a daemon.
+
+**Hook execution**: dispatch rides the notification broadcast itself — a plugin sees exactly the line a client sees, from the same emitter, so plugin events can never drift from the wire. The hookable events are the stable slice: `session-changed`, `session-renamed`, `sessions-changed`, `window-add`, `window-close`, `window-renamed`, `layout-change`, `pane-exited`, `pane-respawned`, `pane-title-changed`, `agent-state-changed`, `agent-released`, `notification`, `config-changed`. The command line runs through POSIX `sh -c` (`cmd /d /c` on Windows) with `PAR_MUX_EVENT` (the event name) and `PAR_MUX_EVENT_LINE` (the emitted line) in its environment — and `PAR_MUX_SOCKET` deliberately REMOVED, so a plugin cannot drive the daemon's panes from the hook environment. Hooks run detached (stdin/stdout/stderr null), are killed at their timeout (default 3 s, 1..=60000), and at most 8 run at once daemon-wide — a flooding or stuck plugin drops its own events with a warning while the daemon keeps serving. Manifests that fail validation (unknown event, empty command, out-of-range timeout, name not matching the directory) are skipped at load with a warning, never failing the daemon.
 
 ## Saved Machines and the SSH Thin Client
 
