@@ -7217,15 +7217,27 @@ fn render_mode_kill_of_the_shown_workspace_lands_on_the_surviving_one() {
     client
         .send(&format!("select-workspace -t {shown_ws}"))
         .expect("select-workspace");
-    // settle: the fresh panes' shells start before the client attaches
-    std::thread::sleep(Duration::from_millis(500));
-
-    let (mut a, a_err) = spawn_attach_render(&fixture, &["-t", &shown_pane]);
-    expect_output(
-        &a,
-        b"\x1b[?1002h",
+    echo_marker(&mut client, &shown_pane, "SHOWN-WORKSPACE");
+    common::wait_daemon(
+        fixture.socket(),
+        &format!("capture-pane -t {shown_pane}"),
+        |s| s.contains("SHOWN-WORKSPACE"),
         Duration::from_secs(10),
-        "render client enabled host mouse reporting",
+        "the shown pane printed its marker",
+    );
+
+    let (mut a, _a_err) = spawn_attach_render(&fixture, &["-t", &shown_pane]);
+    // Paint barrier: the kill must hit the workspace the client SHOWS.
+    // The mouse-mode enable is written before the seed even resolves
+    // the target, and a kill that beats the resolution is an unknown
+    // explicit target — an attach error by contract, not a landing.
+    let mut all = Vec::new();
+    let painted = screen_until(&a, &mut all, common::CEILING, |s| {
+        s.contains("SHOWN-WORKSPACE")
+    });
+    assert!(
+        painted.contains("SHOWN-WORKSPACE"),
+        "the client painted the shown workspace before the kill:\n{painted}"
     );
     // output settle: collect the trailing redraw burst before draining
     std::thread::sleep(Duration::from_millis(800));
@@ -7238,12 +7250,17 @@ fn render_mode_kill_of_the_shown_workspace_lands_on_the_surviving_one() {
 
     // negative check: nothing positive to wait on, so the window is fixed
     std::thread::sleep(Duration::from_secs(2));
-    assert_eq!(
-        child_exit(&mut a, Duration::from_millis(200)),
-        None,
-        "the client must land on the surviving workspace, not end. stderr: {}",
-        a_err.lock().unwrap()
-    );
+    if let Some(code) = child_exit(&mut a, Duration::from_millis(200)) {
+        // The client's own error line rides the pty stream, not stderr.
+        let mut tail = Vec::new();
+        while let Ok(bytes) = a.output_rx.recv_timeout(Duration::from_millis(300)) {
+            tail.extend_from_slice(&bytes);
+        }
+        panic!(
+            "the client must land on the surviving workspace, not end (exit {code}): {:?}",
+            String::from_utf8_lossy(&tail)
+        );
+    }
     echo_marker(&mut client, &survivor, "LANDED-WORKSPACE");
     let mut all = Vec::new();
     let shown = screen_until(&a, &mut all, Duration::from_secs(10), |s| {

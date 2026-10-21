@@ -5,7 +5,7 @@
 use super::{DragState, FlushSink, Glyphs, Modal, PaneRect, RenderOptions, WindowSession};
 use crate::mux::attach::status::{Segment, StatusRow};
 use crate::mux::attach::tabs::TabStrip;
-use crate::mux::attach::targets::{active_window_row, initial_attach_session};
+use crate::mux::attach::targets::{active_window_row, cascade_landing, initial_attach_session};
 use crate::mux::attach::{layout, status};
 use par_term_emu_core::cursor::CursorStyle;
 use par_term_emu_core::tmux_control::TmuxNotification;
@@ -32,16 +32,21 @@ pub(super) fn resolve_window_and_pane(
             Ok((window, pane))
         }
         Some(target) => {
-            // A pane: pane-info's second field names the window.
-            if let Ok(reply) = conn.send_checked(&format!("pane-info -t {target}")) {
-                if reply.ok {
-                    if let Some(row) = reply
-                        .body
-                        .first()
-                        .and_then(|l| crate::mux::ipc::PaneInfoRow::parse(l))
-                    {
-                        return Ok((row.window, row.pane));
-                    }
+            // A pane: pane-info's second field names the window. A
+            // transport failure (a reply past the bound) says nothing
+            // about the target's kind: falling through let the window
+            // probe below adopt a live `%N` as a window id, which no
+            // `%layout-change` can ever name.
+            let reply = conn
+                .send_checked(&format!("pane-info -t {target}"))
+                .map_err(|err| format!("pane-info failed: {err}"))?;
+            if reply.ok {
+                if let Some(row) = reply
+                    .body
+                    .first()
+                    .and_then(|l| crate::mux::ipc::PaneInfoRow::parse(l))
+                {
+                    return Ok((row.window, row.pane));
                 }
             }
             // A session: its active window. Probed BEFORE the window
@@ -65,6 +70,33 @@ pub(super) fn resolve_window_and_pane(
             Err(format!("no such target: {target}"))
         }
     }
+}
+
+/// How many times the seed re-runs the landing decision (a landing that
+/// vanished in turn, or a decision past the interactive bound) before it
+/// gives up.
+const SEED_LANDINGS: u32 = 8;
+
+/// The `*`-marked pane of `window`, else its first; `Ok(None)` when the
+/// daemon refuses the listing (the window is gone). A transport failure
+/// is an error: it proves nothing about the window.
+fn landing_pane(
+    conn: &mut crate::mux::attach::conn::AttachConn,
+    window: &str,
+) -> Result<Option<String>, String> {
+    let reply = conn
+        .send_checked(&format!("list-panes -t {window}"))
+        .map_err(|err| format!("list-panes failed: {err}"))?;
+    if !reply.ok {
+        return Ok(None);
+    }
+    Ok(reply
+        .body
+        .iter()
+        .find(|l| l.split_whitespace().nth(2) == Some("*"))
+        .or_else(|| reply.body.iter().find(|l| l.starts_with('%')))
+        .and_then(|l| l.split_whitespace().next())
+        .map(str::to_string))
 }
 
 /// The `*`-marked pane of a window (its active pane), else the first row.
@@ -451,27 +483,87 @@ impl WindowSession {
     /// active window), report the renderer size against one of its panes
     /// (the `%layout-change` reply carries the layout triple), parse the
     /// layout, then replay every pane's screen into its emulator.
+    ///
+    /// A target that resolved but is torn down before the seed completes
+    /// (a `kill-workspace` cascading through it) lands on a survivor the
+    /// way the pump's gone view does ([`cascade_landing`]): the daemon
+    /// already moved its pointers, so its lists decide. `Ok(false)` when
+    /// nothing is left to show (the caller ends cleanly). A target that
+    /// does not exist when first asked stays an error.
     pub(super) fn seed(
         &mut self,
         conn: &mut crate::mux::attach::conn::AttachConn,
         target: Option<&str>,
         sink: &mut dyn FlushSink,
-    ) -> Result<(), String> {
+    ) -> Result<bool, String> {
         // Registration replay (held panes, zoomed windows) is drained
         // ahead of the queries like passthrough does; the held panes'
         // `%pane-exited` lines seed the exit cue.
         let replay = conn.drain_pending_events();
         self.defer_seed_events(replay);
 
-        let (window, pane) = resolve_window_and_pane(conn, target)?;
+        let mut shown = Some(resolve_window_and_pane(conn, target)?);
+        let mut landings = 0;
+        loop {
+            if let Some((window, pane)) = shown.take() {
+                if self.seed_window(conn, window, &pane)? {
+                    break;
+                }
+            }
+            landings += 1;
+            if landings > SEED_LANDINGS {
+                return Err(format!(
+                    "every landing vanished before it could be shown ({SEED_LANDINGS} tries)"
+                ));
+            }
+            let session = self.status.session_id.clone();
+            let workspace = self.status.session_workspace.clone();
+            match cascade_landing(conn, session.as_deref(), workspace.as_deref()) {
+                Ok(Some(window)) => {
+                    shown = landing_pane(conn, &window)?.map(|pane| (window, pane));
+                }
+                Ok(None) => return Ok(false),
+                // Past the interactive bound: decide again.
+                Err(_) => {}
+            }
+        }
+
+        self.chrome.status_row.invalidate();
+        self.draw_status_row();
+        self.chrome.tab_strip.invalidate();
+        self.draw_tab_strip();
+        // First frame: clear + full paint. repaint_all hides the host
+        // cursor, so the frame's place_cursor must fire even if the
+        // mapped state matches the hidden default.
+        self.cursor.invalidate();
+        let stale = self.kitty.invalidate();
+        if !stale.is_empty() {
+            sink.write_raw(&stale);
+        }
+        sink.repaint_all();
+        self.frame(sink);
+        Ok(true)
+    }
+
+    /// One seed attempt on `window` through `pane`: the size report, its
+    /// layout, the pane replays, the status. `Ok(false)` when the window
+    /// is gone by the daemon's list (its report refused, its layout never
+    /// came, or no session owns it any more).
+    fn seed_window(
+        &mut self,
+        conn: &mut crate::mux::attach::conn::AttachConn,
+        window: String,
+        pane: &str,
+    ) -> Result<bool, String> {
         self.window = window;
 
         // Size report against the window: the daemon resizes the window
         // to the renderer's grid (the T4.C window-size policy) and the
         // queued `%layout-change` carries the current layout triple —
         // including the Z flag and visible layout when zoomed.
-        let report = self.size_report(conn, &pane);
-        conn.send_checked(&report)
+        let report = self.size_report(conn, pane);
+        let reply = conn
+            .send_checked(&report)
             .map_err(|err| format!("refresh-client failed: {err}"))?;
         let mut layout_event = None;
         let mut rest = Vec::new();
@@ -489,12 +581,22 @@ impl WindowSession {
             }
         }
         self.defer_seed_events(rest);
-        let layout_event = layout_event.ok_or_else(|| {
-            format!(
-                "no %layout-change for {window} — the daemon predates layout broadcast",
-                window = self.window
-            )
-        })?;
+        let layout_event = match layout_event {
+            Some(event) if reply.ok => event,
+            _ => {
+                if landing_pane(conn, &self.window)?.is_none() {
+                    return Ok(false);
+                }
+                return Err(if reply.ok {
+                    format!(
+                        "no %layout-change for {window} — the daemon predates layout broadcast",
+                        window = self.window
+                    )
+                } else {
+                    format!("refresh-client failed: {}", reply.body.join(" "))
+                });
+            }
+        };
         let layout = layout::parse_layout_triple(&layout_event.0, &layout_event.1, &layout_event.2)
             .map_err(|err| err.to_string())?;
         self.zoomed = layout_event.2.contains('Z');
@@ -539,7 +641,8 @@ impl WindowSession {
                 }
             }
             Err(status::StatusError::SessionGone) => {
-                return Err("the target's session is gone".to_string());
+                // The session died mid-seed: re-land on a survivor.
+                return Ok(false);
             }
             Err(_) => {}
         }
@@ -547,17 +650,7 @@ impl WindowSession {
         self.draw_status_row();
         self.chrome.tab_strip.invalidate();
         self.draw_tab_strip();
-        // First frame: clear + full paint. repaint_all hides the host
-        // cursor, so the frame's place_cursor must fire even if the
-        // mapped state matches the hidden default.
-        self.cursor.invalidate();
-        let stale = self.kitty.invalidate();
-        if !stale.is_empty() {
-            sink.write_raw(&stale);
-        }
-        sink.repaint_all();
-        self.frame(sink);
-        Ok(())
+        Ok(true)
     }
 
     /// Keep the events a seed drain consumed for the pump. A

@@ -1217,7 +1217,9 @@ impl WindowSession {
         target: Option<&str>,
         sink: &mut dyn FlushSink,
     ) -> Result<(), String> {
-        self.seed(conn, target, sink)?;
+        if !self.seed(conn, target, sink)? {
+            return Ok(());
+        }
         self.pump(conn, sink)
     }
 
