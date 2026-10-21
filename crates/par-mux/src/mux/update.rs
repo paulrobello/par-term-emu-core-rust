@@ -20,14 +20,24 @@ pub const RELEASE_REPO: &str = "paulrobello/par-term-emu-core-rust";
 /// targets the release workflow builds.
 #[cfg(all(target_os = "macos", target_arch = "aarch64"))]
 pub const TARGET_TRIPLE: &str = "aarch64-apple-darwin";
+/// This binary's target triple (the archive name embeds it) — the same six
+/// targets the release workflow builds.
 #[cfg(all(target_os = "macos", target_arch = "x86_64"))]
 pub const TARGET_TRIPLE: &str = "x86_64-apple-darwin";
+/// This binary's target triple (the archive name embeds it) — the same six
+/// targets the release workflow builds.
 #[cfg(all(target_os = "linux", target_arch = "aarch64"))]
 pub const TARGET_TRIPLE: &str = "aarch64-unknown-linux-gnu";
+/// This binary's target triple (the archive name embeds it) — the same six
+/// targets the release workflow builds.
 #[cfg(all(target_os = "linux", target_arch = "x86_64"))]
 pub const TARGET_TRIPLE: &str = "x86_64-unknown-linux-gnu";
+/// This binary's target triple (the archive name embeds it) — the same six
+/// targets the release workflow builds.
 #[cfg(all(target_os = "windows", target_arch = "x86_64"))]
 pub const TARGET_TRIPLE: &str = "x86_64-pc-windows-msvc";
+/// This binary's target triple (the archive name embeds it) — the same six
+/// targets the release workflow builds.
 #[cfg(all(target_os = "windows", target_arch = "aarch64"))]
 pub const TARGET_TRIPLE: &str = "aarch64-pc-windows-msvc";
 

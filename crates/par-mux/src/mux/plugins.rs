@@ -5,7 +5,7 @@
 //! command — the trust gate the CLI enforces before a file lands in the
 //! plugins directory the daemon loads.
 //!
-//! Dispatch rides [`crate::mux::server::broadcast`]: the notification a
+//! Dispatch rides `crate::mux::server::broadcast::broadcast_notification`: the notification a
 //! client sees is exactly the notification a plugin sees (same emitter,
 //! same line), so a plugin cannot drift from the wire. Hook processes run
 //! detached with a per-hook timeout and a daemon-wide concurrency cap; a
@@ -336,7 +336,7 @@ pub fn set_engine(engine: Arc<PluginEngine>) {
 }
 
 /// Swap in an engine and return the previous one (tests).
-#[cfg(test)]
+#[cfg(all(test, unix))]
 pub(crate) fn swap_engine(engine: Option<Arc<PluginEngine>>) -> Option<Arc<PluginEngine>> {
     std::mem::replace(
         &mut *engine_slot().write().expect("plugin engine write lock"),
