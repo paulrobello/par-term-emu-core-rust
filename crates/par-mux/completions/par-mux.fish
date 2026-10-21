@@ -170,11 +170,11 @@ complete -c par-mux -n "__fish_par_mux_using_subcommand plugin; and __fish_seen_
 complete -c par-mux -n "__fish_par_mux_using_subcommand plugin; and __fish_seen_subcommand_from help" -f -a "remove" -d 'Remove a plugin (its hooks stop after the daemon reloads)'
 complete -c par-mux -n "__fish_par_mux_using_subcommand plugin; and __fish_seen_subcommand_from help" -f -a "update" -d 'Re-fetch a plugin from its recorded source (the preview and `--trust` apply again)'
 complete -c par-mux -n "__fish_par_mux_using_subcommand plugin; and __fish_seen_subcommand_from help" -f -a "help" -d 'Print this message or the help of the given subcommand(s)'
-complete -c par-mux -n "__fish_par_mux_using_subcommand update" -l channel -d 'The release channel: `stable` (latest release, the default) or `preview` (newest prerelease)' -r -f -a "stable\t''
-preview\t''"
+complete -c par-mux -n "__fish_par_mux_using_subcommand update" -l channel -d 'The release channel: `stable` (latest release, the default) or `preview` (newest prerelease)' -r -f -a "stable\t'The latest non-prerelease release'
+preview\t'The newest prerelease, falling back to stable when none exists'"
 complete -c par-mux -n "__fish_par_mux_using_subcommand update" -l machine -d 'Relay this invocation to a saved machine over SSH (the machine\'s profile in `[machines.<label>]` names the ssh target; credentials stay with ssh itself). One-shot commands (`--cmd`, `status`, `ls`, `observe`, `control`, `--stop`) run non-interactively; `attach` forces passthrough under a pty — the thin client' -r
 complete -c par-mux -n "__fish_par_mux_using_subcommand update" -l check -d 'Report what would install, touch nothing'
-complete -c par-mux -n "__fish_par_mux_using_subcommand update" -s h -l help -d 'Print help'
+complete -c par-mux -n "__fish_par_mux_using_subcommand update" -s h -l help -d 'Print help (see more with \'--help\')'
 complete -c par-mux -n "__fish_par_mux_using_subcommand help; and not __fish_seen_subcommand_from start stop restart status ls attach config observe control completion machine plugin update help" -f -a "start" -d 'Start the daemon (the default action): detached, auto-attaching this terminal unless --no-attach. Same as bare `par-mux [NAME]`'
 complete -c par-mux -n "__fish_par_mux_using_subcommand help; and not __fish_seen_subcommand_from start stop restart status ls attach config observe control completion machine plugin update help" -f -a "stop" -d 'Stop the daemon serving the resolved socket cleanly. Same as `--stop`'
 complete -c par-mux -n "__fish_par_mux_using_subcommand help; and not __fish_seen_subcommand_from start stop restart status ls attach config observe control completion machine plugin update help" -f -a "restart" -d 'Stop, then start a fresh daemon that restores the saved tree. Same as `--restart`'

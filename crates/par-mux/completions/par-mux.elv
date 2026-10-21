@@ -262,8 +262,8 @@ set edit:completion:arg-completer[par-mux] = {|@words|
             cand --channel 'The release channel: `stable` (latest release, the default) or `preview` (newest prerelease)'
             cand --machine 'Relay this invocation to a saved machine over SSH (the machine''s profile in `[machines.<label>]` names the ssh target; credentials stay with ssh itself). One-shot commands (`--cmd`, `status`, `ls`, `observe`, `control`, `--stop`) run non-interactively; `attach` forces passthrough under a pty — the thin client'
             cand --check 'Report what would install, touch nothing'
-            cand -h 'Print help'
-            cand --help 'Print help'
+            cand -h 'Print help (see more with ''--help'')'
+            cand --help 'Print help (see more with ''--help'')'
         }
         &'par-mux;help'= {
             cand start 'Start the daemon (the default action): detached, auto-attaching this terminal unless --no-attach. Same as bare `par-mux [NAME]`'

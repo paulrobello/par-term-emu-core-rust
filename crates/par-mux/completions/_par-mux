@@ -365,11 +365,12 @@ esac
 ;;
 (update)
 _arguments "${_arguments_options[@]}" : \
-'--channel=[The release channel\: \`stable\` (latest release, the default) or \`preview\` (newest prerelease)]:CHANNEL:(stable preview)' \
+'--channel=[The release channel\: \`stable\` (latest release, the default) or \`preview\` (newest prerelease)]:CHANNEL:((stable\:"The latest non-prerelease release"
+preview\:"The newest prerelease, falling back to stable when none exists"))' \
 '--machine=[Relay this invocation to a saved machine over SSH (the machine'\''s profile in \`\[machines.<label>\]\` names the ssh target; credentials stay with ssh itself). One-shot commands (\`--cmd\`, \`status\`, \`ls\`, \`observe\`, \`control\`, \`--stop\`) run non-interactively; \`attach\` forces passthrough under a pty — the thin client]:LABEL:_default' \
 '--check[Report what would install, touch nothing]' \
-'-h[Print help]' \
-'--help[Print help]' \
+'-h[Print help (see more with '\''--help'\'')]' \
+'--help[Print help (see more with '\''--help'\'')]' \
 && ret=0
 ;;
 (help)

@@ -302,8 +302,8 @@ Register-ArgumentCompleter -Native -CommandName 'par-mux' -ScriptBlock {
             [CompletionResult]::new('--channel', '--channel', [CompletionResultType]::ParameterName, 'The release channel: `stable` (latest release, the default) or `preview` (newest prerelease)')
             [CompletionResult]::new('--machine', '--machine', [CompletionResultType]::ParameterName, 'Relay this invocation to a saved machine over SSH (the machine''s profile in `[machines.<label>]` names the ssh target; credentials stay with ssh itself). One-shot commands (`--cmd`, `status`, `ls`, `observe`, `control`, `--stop`) run non-interactively; `attach` forces passthrough under a pty — the thin client')
             [CompletionResult]::new('--check', '--check', [CompletionResultType]::ParameterName, 'Report what would install, touch nothing')
-            [CompletionResult]::new('-h', '-h', [CompletionResultType]::ParameterName, 'Print help')
-            [CompletionResult]::new('--help', '--help', [CompletionResultType]::ParameterName, 'Print help')
+            [CompletionResult]::new('-h', '-h', [CompletionResultType]::ParameterName, 'Print help (see more with ''--help'')')
+            [CompletionResult]::new('--help', '--help', [CompletionResultType]::ParameterName, 'Print help (see more with ''--help'')')
             break
         }
         'par-mux;help' {
