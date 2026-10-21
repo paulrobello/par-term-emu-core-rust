@@ -1,0 +1,36 @@
+# par-mux agent scrape patterns — gemini (pattern-only: herdr ships no
+# hook installer for this agent, so par-mux detects it by screen patterns
+# with no session hook to install).
+#
+# Pattern data ported from herdr (https://github.com/ogulcancelik/herdr,
+# Apache License 2.0), upstream manifest version 2026.06.10.1
+# (updated_at 2026-06-10), ported 2026-10-21.
+#
+
+id = "gemini"
+version = "2026.06.10.1"
+min_engine_version = 1
+updated_at = "2026-06-10T00:00:00Z"
+
+[[rules]]
+id = "apply_or_allow_change"
+state = "blocked"
+priority = 300
+# Upstream region: whole_recent (remapped to whole).
+region = "whole"
+visible_blocker = true
+any = [
+  { contains = ["│ Apply this change"] },
+  { contains = ["│ Allow execution"] },
+  { all = [{ contains = ["yes"] }, { any = [{ contains = ["waiting for user confirmation"] }, { contains = ["│ Do you want to proceed"] }, { contains = ["do you want to proceed?"] }] }] },
+  { line_regex = ['(?i)^\s*❯.*(yes|allow)'] },
+]
+
+[[rules]]
+id = "esc_cancel_working"
+state = "working"
+priority = 100
+# Upstream region: whole_recent (remapped to whole).
+region = "whole"
+visible_working = true
+contains = ["esc to cancel"]

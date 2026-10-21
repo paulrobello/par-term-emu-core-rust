@@ -47,6 +47,12 @@ const BUNDLED_PATTERNS: &[(&str, &str)] = &[
     ("droid", include_str!("patterns/droid.toml")),
     ("copilot", include_str!("patterns/copilot.toml")),
     ("cursor", include_str!("patterns/cursor.toml")),
+    ("kimi", include_str!("patterns/kimi.toml")),
+    ("qwen", include_str!("patterns/qwen.toml")),
+    ("qodercli", include_str!("patterns/qodercli.toml")),
+    ("devin", include_str!("patterns/devin.toml")),
+    ("gemini", include_str!("patterns/gemini.toml")),
+    ("amp", include_str!("patterns/amp.toml")),
 ];
 
 /// The states a rule may assert. `unknown` is not among them: it is the
