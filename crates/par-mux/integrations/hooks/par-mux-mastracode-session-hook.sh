@@ -1,9 +1,12 @@
 #!/bin/sh
-# installed by herdr
-# managed by herdr; reinstalling or updating the integration overwrites this file.
-# add custom hooks beside this file instead of editing it.
+# installed by par-mux
+# managed by par-mux; reinstalling or updating the integration overwrites
+# this file. add custom hooks beside this file instead of editing it.
+# Ported from herdr's mastracode integration (Apache License 2.0): herdr's
+# variant shelled out to the herdr CLI; this one speaks the control socket
+# directly like the other par-mux reporters.
 # PAR_MUX_INTEGRATION_ID=mastracode
-# PAR_MUX_INTEGRATION_VERSION=3
+# PAR_MUX_INTEGRATION_VERSION=1
 
 set -eu
 
@@ -22,7 +25,7 @@ esac
 [ -n "${PAR_MUX_PANE_ID:-}" ] || exit 0
 command -v python3 >/dev/null 2>&1 || exit 0
 
-HERDR_ACTION="$action" PAR_MUX_HOOK_INPUT_FILE="$hook_input_file" python3 - <<'PY'
+PAR_MUX_ACTION="$action" PAR_MUX_HOOK_INPUT_FILE="$hook_input_file" python3 - <<'PY'
 import json
 import os
 import random
@@ -30,7 +33,7 @@ import socket
 import time
 
 source = "par-mux:mastracode"
-action = os.environ.get("HERDR_ACTION", "")
+action = os.environ.get("PAR_MUX_ACTION", "")
 pane_id = os.environ.get("PAR_MUX_PANE_ID")
 socket_path = os.environ.get("PAR_MUX_SOCKET")
 hook_input_file = os.environ.get("PAR_MUX_HOOK_INPUT_FILE")

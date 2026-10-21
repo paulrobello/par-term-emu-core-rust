@@ -775,8 +775,8 @@ An **aggregate bound** sits above the per-client depth (ARC-008): once the clien
 ## Agent-State Integrations
 
 par-mux owns the integrations that report agent state into the daemon:
-the claude, codex, grok, muse, droid, copilot, cursor, qwen, and qodercli
-session hooks
+the claude, codex, grok, muse, droid, copilot, cursor, qwen, qodercli,
+kimi, devin, and mastracode session hooks
 (script assets written under the par-mux config directory and registered in
 each agent own config — a merge that preserves the user entries, comments,
 and formatting) and the pi/omp agent-state extensions (a file drop into each
@@ -791,7 +791,7 @@ They are embedded in the binary and driven by five one-shot flags, none of
 which starts or contacts a daemon:
 
 ```text
-par-mux --install-agent-hooks            Install the claude/codex/grok/muse/droid/copilot/cursor/qwen/qodercli session hooks
+par-mux --install-agent-hooks            Install the claude/codex/grok/muse/droid/copilot/cursor/qwen/qodercli/kimi/devin/mastracode session hooks
 par-mux --uninstall-agent-hooks          Remove them (config entries first, then the assets)
 par-mux --agent-hooks-status              One "<agent> installed|absent" line per agent, plus the asset's version currency when installed (v2, `v1 → v2 outdated`, `asset missing`)
 par-mux --integration-status              The same grammar for EVERY bundled asset: hook, extension, and skill lines
@@ -822,9 +822,10 @@ fanning one report to every discovered socket — including daemons that own
 no matching pane — is harmless. `muse resume` is workspace-scoped, which is
 what makes even a wrong-pane tier-3 pick safe to restore.
 
-The droid, copilot, and cursor arms are ports of herdr's integrations
-(Apache-2.0), each a single entry in the agent's own config file whose
-reporter sends `pane.report_agent_session` on session start:
+The droid, copilot, cursor, qwen, qodercli, kimi, devin, and mastracode
+arms are ports of herdr's integrations (Apache-2.0), each entries in the
+agent's own config file whose reporter sends `pane.report_agent_session`
+on session start:
 
 | Agent | Config file (override env) | Entry |
 | --- | --- | --- |
@@ -833,14 +834,23 @@ reporter sends `pane.report_agent_session` on session start:
 | cursor (`cursor-agent`) | `~/.cursor/hooks.json` (`CURSOR_CONFIG_DIR`) | bare `{command}` under camelCase `hooks.sessionStart`; a missing top-level `version` is added as `1` |
 | qwen (Qwen Code) | `~/.qwen/settings.json` (`QWEN_HOME`) | nested `hooks.SessionStart` group, claude schema |
 | qodercli (Qoder CLI) | `~/.qoder/settings.json` (`QODERCLI_CONFIG_DIR`) | nested `hooks.SessionStart` group, claude schema |
+| kimi (Kimi Code) | `~/.kimi-code/config.toml` (`KIMI_CODE_HOME`) | a marked block of 12 `[[hooks]]` TOML tables appended after the user's content (rebuilt whole on install, cut on uninstall; two events carry `^AskUserQuestion$` tool matchers); commands run the `session`/`working`/`blocked`/`idle` actions |
+| devin (Devin CLI) | `$XDG_CONFIG_HOME/devin/config.json` (else `~/.config/devin`; `%APPDATA%\devin` on Windows) | nested `hooks.<Event>` groups under six lifecycle events, every command the `session` action |
+| mastracode (MastraCode) | `~/.mastracode/hooks.json` (none) | `{type, command, timeout(ms), description}` entries under event keys at the DOCUMENT root, one action per lifecycle event (11 events) |
 
 Their hooks report identity (droid, copilot, and cursor plus herdr's resume
 invocation as `session_resume_argv`: `droid --resume <id>`,
-`copilot --resume=<id>`, `cursor-agent --resume <id>`); qwen and qodercli
-report identity with no resume argv (herdr's reports for them carry none,
-and both originally shelled out to the herdr CLI — the ports speak the
-control socket directly). State comes from the scrape tier's bundled
-patterns below. `--install-agent-hooks` prints `skipped (… not installed)`
+`copilot --resume=<id>`, `cursor-agent --resume <id>`); qwen, qodercli,
+kimi, devin, and mastracode report identity with no resume argv (herdr's
+reports for them carry none; qwen, qodercli, kimi, devin, and mastracode
+originally shelled out to the herdr CLI — the ports speak the control
+socket directly). kimi and mastracode hooks also report STATE: their
+lifecycle actions map to `pane.report_agent` (`working`, `blocked`,
+`idle`), so their panes are hook-authoritative and skip the scrape tier;
+devin's reporter resolves its session id from the hook payload, else from
+`devin list --format json` matched by working directory (never on the
+fresh-turn events, where a stale session would be claimed). The remaining
+agents get state from the scrape tier's bundled patterns below. `--install-agent-hooks` prints `skipped (… not installed)`
 for any of these whose config directory is absent instead of failing
 the run. par-term
 
@@ -1156,7 +1166,7 @@ A dedicated thread sweeps every 30 s (`crates/par-mux/src/mux/host_probe.rs`), w
 
 ## Agent Scrape Tier
 
-Panes whose agent reports no state hook (claude, codex, grok, muse, droid, copilot, cursor) get state read from rendered content — OSC title and screen text matched against per-agent pattern rules bundled from herdr (Apache-2.0, credited per file). The scrape runs on the accept loop's idle poll once per second; there is no dedicated thread.
+Panes whose agent reports no state hook (claude, codex, grok, muse, droid, copilot, cursor, qwen, qodercli, devin) get state read from rendered content — OSC title and screen text matched against per-agent pattern rules bundled from herdr (Apache-2.0, credited per file). The scrape runs on the accept loop's idle poll once per second; there is no dedicated thread.
 
 Structural rules (`crates/par-mux/src/mux/scrape.rs`):
 
@@ -1166,7 +1176,7 @@ Structural rules (`crates/par-mux/src/mux/scrape.rs`):
 - **`contains` matches case-insensitively** (herdr parity): needles lowercase at compile and the region text at match, so real-cased agent chrome ("Do you want to proceed?") hits rules authored in lowercase. `regex`/`line_regex` stay case-sensitive as written — make them `(?i)` explicitly when they must fold.
 - **Every pattern list is ALL-of** (herdr parity): a `contains`, `regex`, or `line_regex` list holds when every entry matches (`line_regex` per pattern needs at least one matching line, not one line matching all). A rule carrying two patterns where only one is present does not fire.
 
-Patterns ship bundled (`include_str!` from `crates/par-mux/src/mux/patterns/{claude,codex,grok,muse,droid,copilot,cursor}.toml`; copilot also answers to `github-copilot`/`ghcs`, cursor to `cursor-agent`). A local override file shadows the bundled set for its agent:
+Patterns ship bundled (`include_str!` from `crates/par-mux/src/mux/patterns/{claude,codex,grok,muse,droid,copilot,cursor,kimi,qwen,qodercli,devin,gemini,amp}.toml`; copilot also answers to `github-copilot`/`ghcs`, cursor to `cursor-agent`). gemini and amp are pattern-only ports (herdr ships no hook installer for them); mastracode has no upstream manifest. A local override file shadows the bundled set for its agent:
 
 ```text
 <state_dir>/par-mux/agent-patterns/<agent>.toml

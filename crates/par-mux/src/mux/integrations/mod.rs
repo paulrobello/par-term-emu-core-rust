@@ -764,6 +764,153 @@ pub(crate) fn unmerge_flat_entries(
     verify_update(updated, settings_path, &desired).map(Some)
 }
 
+// Root-level flat entry helpers (MastraCode's `hooks.json`): its event
+// arrays live at the document root, not under a `hooks` object, so the
+// same splice discipline applies one level up.
+
+/// Whether the root-level `<event>` holds an entry `is_ours` accepts.
+pub(crate) fn has_root_flat_entry(
+    content: &str,
+    settings_path: &Path,
+    event: &str,
+    is_ours: &dyn Fn(&JsonValue) -> bool,
+) -> io::Result<bool> {
+    let value = parse_serde(content, settings_path)?;
+    Ok(value
+        .get(event)
+        .and_then(JsonValue::as_array)
+        .is_some_and(|entries| entries.iter().any(is_ours)))
+}
+
+/// Merge one flat entry into the root-level `<event>` array under the same
+/// discipline as [`merge_flat_entry`]. `Ok(None)` = already present.
+pub(crate) fn merge_root_flat_entry(
+    content: &str,
+    settings_path: &Path,
+    event: &str,
+    entry: &JsonValue,
+    is_ours: &dyn Fn(&JsonValue) -> bool,
+) -> io::Result<Option<String>> {
+    let root = parse_root_object(content, settings_path)?;
+    reject_duplicate_keys(&root, settings_path)?;
+    if has_root_flat_entry(content, settings_path, event, is_ours)? {
+        return Ok(None);
+    }
+    let canonical = serde_json::to_string(entry).expect("hook entry is serializable");
+    let updated = match root.get_array(event) {
+        Some(event_array) => append_array_element(content, event_array, &canonical),
+        None => append_object_property(content, &root, event, &format!("[{canonical}]")),
+    };
+
+    let mut desired = parse_serde(content, settings_path)?;
+    match desired.get_mut(event).and_then(JsonValue::as_array_mut) {
+        Some(entries) => entries.push(entry.clone()),
+        None => {
+            let Some(root_object) = desired.as_object_mut() else {
+                return Err(io::Error::other(format!(
+                    "config at {} must be a JSON object",
+                    settings_path.display()
+                )));
+            };
+            root_object.insert(event.to_string(), json!([entry]));
+        }
+    }
+    verify_update(updated, settings_path, &desired).map(Some)
+}
+
+/// Remove every flat entry `is_ours` accepts from the root-level `<event>`,
+/// pruning the event key when our removals emptied it. `Ok(None)` = nothing
+/// to remove.
+pub(crate) fn unmerge_root_flat_entry(
+    content: &str,
+    settings_path: &Path,
+    event: &str,
+    is_ours: &dyn Fn(&JsonValue) -> bool,
+) -> io::Result<Option<String>> {
+    let root = parse_root_object(content, settings_path)?;
+    reject_duplicate_keys(&root, settings_path)?;
+    let original = parse_serde(content, settings_path)?;
+
+    let mut updated = content.to_string();
+    let mut changed = false;
+    while let Some(cut) = find_next_root_flat_cut(&updated, settings_path, event, is_ours)? {
+        let mut next = String::with_capacity(updated.len());
+        next.push_str(&updated[..cut.start]);
+        next.push_str(&updated[cut.end..]);
+        updated = next;
+        changed = true;
+    }
+    if !changed {
+        return Ok(None);
+    }
+    // Prune the emptied event key only; the document itself stays.
+    while let Some(cut) = find_next_empty_root_event_cut(&updated, settings_path, event)? {
+        let mut next = String::with_capacity(updated.len());
+        next.push_str(&updated[..cut.start]);
+        next.push_str(&updated[cut.end..]);
+        updated = next;
+    }
+
+    let mut desired = original;
+    if let Some(root_object) = desired.as_object_mut() {
+        if let Some(entries) = root_object.get_mut(event).and_then(JsonValue::as_array_mut) {
+            let had_entries = !entries.is_empty();
+            entries.retain(|entry| !is_ours(entry));
+            if had_entries && entries.is_empty() {
+                root_object.remove(event);
+            }
+        }
+    }
+    verify_update(updated, settings_path, &desired).map(Some)
+}
+
+/// The next flat entry of ours to cut from the root-level `<event>`.
+fn find_next_root_flat_cut(
+    content: &str,
+    settings_path: &Path,
+    event: &str,
+    is_ours: &dyn Fn(&JsonValue) -> bool,
+) -> io::Result<Option<Range>> {
+    let root = parse_root_object(content, settings_path)?;
+    let Some(event_array) = root.get_array(event) else {
+        return Ok(None);
+    };
+    for (index, element) in event_array.elements.iter().enumerate() {
+        let range = element.range();
+        let value = parse_serde(&content[range.start..range.end], settings_path)?;
+        if !is_ours(&value) {
+            continue;
+        }
+        return Ok(Some(member_cut(
+            index
+                .checked_sub(1)
+                .and_then(|prev| event_array.elements.get(prev))
+                .map(|prev| prev.range().end),
+            range.start,
+            range.end,
+            event_array
+                .elements
+                .get(index + 1)
+                .map(|next| next.range().start),
+        )));
+    }
+    Ok(None)
+}
+
+fn find_next_empty_root_event_cut(
+    content: &str,
+    settings_path: &Path,
+    event: &str,
+) -> io::Result<Option<Range>> {
+    let root = parse_root_object(content, settings_path)?;
+    if let Some(event_array) = root.get_array(event) {
+        if event_array.elements.is_empty() {
+            return Ok(Some(property_cut(&root.properties, event)));
+        }
+    }
+    Ok(None)
+}
+
 /// The next flat entry of ours to cut from `hooks.<event>`, each element
 /// judged by parsing its own text span.
 fn find_next_flat_cut(

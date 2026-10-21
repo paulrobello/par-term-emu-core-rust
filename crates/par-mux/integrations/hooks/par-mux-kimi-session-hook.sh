@@ -4,7 +4,7 @@
 # this file. add custom hooks beside this file instead of editing it.
 # Ported from herdr's kimi integration (Apache License 2.0).
 # PAR_MUX_INTEGRATION_ID=kimi
-# PAR_MUX_INTEGRATION_VERSION=8
+# PAR_MUX_INTEGRATION_VERSION=1
 
 action="${1:-}"
 case "$action" in

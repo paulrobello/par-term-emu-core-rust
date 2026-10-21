@@ -112,6 +112,7 @@ FOREIGN_FLAGS: dict[str, str] = {
     "no-optional-locks": "git --no-optional-locks status (worktree dirty check)",
     "enter": "send-keys --enter (wire command flag: append the Enter byte)",
     "base": "worktree-create --base (wire command flag: the start point, D7)",
+    "format": "devin list --format json (devin CLI, session-id fallback)",
 }
 
 

@@ -1,20 +1,29 @@
-//! droid, copilot, and cursor arms: session hooks whose registration is an
-//! entry inside one config file the agent reads, ported from herdr's
-//! integrations (Apache-2.0) onto par-mux's merge discipline. They differ
-//! only in data, so one table drives all three:
+//! droid, copilot, cursor, qwen, qodercli, devin, kimi, and mastracode
+//! arms: session hooks whose registration is an entry inside one config
+//! file the agent reads, ported from herdr's integrations (Apache-2.0) onto
+//! par-mux's merge discipline. They differ only in data, so one table
+//! drives all of them:
 //!
-//! - droid: `~/.factory/settings.json`, claude-shape nested groups under
-//!   `hooks.SessionStart` (`{hooks: [{type, command, timeout}]}`).
+//! - droid/qwen/qodercli: claude-shape nested groups under
+//!   `hooks.<Event>` (`{hooks: [{type, command, timeout}]}`).
 //! - copilot: `$COPILOT_HOME/settings.json` (else `~/.copilot`), flat
 //!   entries under `hooks.SessionStart` —
 //!   `{type: "command", bash|powershell: <cmd>, timeoutSec}`.
 //! - cursor: `$CURSOR_CONFIG_DIR/hooks.json` (else `~/.cursor`), bare
 //!   `{command}` entries under the camelCase `hooks.sessionStart`, in a file
 //!   that must carry a top-level `version` (herdr adds `1` when missing).
+//! - devin: `config.json`, the claude-shape nested group under six
+//!   lifecycle events, every command running the `session` action.
+//! - kimi: `config.toml`, a marked block of `[[hooks]]` TOML tables
+//!   appended after the user's content (herdr's block-marker discipline —
+//!   kimi's config is TOML, so there is no JSON splice; the block is
+//!   rebuilt whole on every install).
+//! - mastracode: `hooks.json`, `{type, command, timeout, description}`
+//!   entries under event keys at the DOCUMENT ROOT (no `hooks` wrapper).
 //!
-//! Every entry runs the same `<runner> '<asset>' session` command, and every
-//! asset lives under par-mux's own config directory, as claude, codex, and
-//! muse do.
+//! Every entry runs the same `<runner> '<asset>' <action>` command, and
+//! every asset lives under par-mux's own config directory, as claude,
+//! codex, and muse do.
 
 use std::fs;
 use std::io;
@@ -23,21 +32,55 @@ use std::path::{Path, PathBuf};
 use serde_json::{json, Value as JsonValue};
 
 use super::{
-    ensure_root_key, has_command, has_flat_entry, home_dir, hook_asset_path,
-    hook_command_with_action, merge_flat_entry, merge_hook_event, remove_marked_file,
-    save_settings, unmerge_flat_entries, unmerge_hook_entries, write_hook_asset, HOOK_TIMEOUT_SECS,
+    ensure_root_key, has_command, has_flat_entry, has_root_flat_entry, home_dir, hook_asset_path,
+    hook_command_with_action, merge_flat_entry, merge_hook_event, merge_root_flat_entry,
+    remove_marked_file, save_settings, unmerge_flat_entries, unmerge_hook_entries,
+    unmerge_root_flat_entry, write_hook_asset, HOOK_TIMEOUT_SECS,
 };
 
 /// How an arm's config file spells one hook entry.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum EntryShape {
-    /// `{hooks: [{type: "command", command, timeout}]}` (droid).
+    /// `{hooks: [{type: "command", command, timeout}]}` under
+    /// `hooks.<Event>` (droid, qwen, qodercli, devin).
     NestedGroup,
     /// `{type: "command", bash|powershell: <cmd>, timeoutSec}` (copilot).
     CopilotFlat,
     /// `{command}` (cursor).
     CursorFlat,
+    /// `{type, command, timeout(ms), description}` under an event key at
+    /// the document root (mastracode's hooks.json).
+    MastracodeFlat,
+    /// A marked block of `[[hooks]]` TOML tables in config.toml (kimi).
+    KimiToml,
 }
+
+/// One registration an arm writes: the config-file event key, the action
+/// argument its command runs, and (kimi's TOML tables only) the tool
+/// matcher restricting the event.
+#[derive(Debug)]
+struct HookEvent {
+    event: &'static str,
+    action: &'static str,
+    matcher: Option<&'static str>,
+}
+
+const fn session_start() -> HookEvent {
+    HookEvent {
+        event: "SessionStart",
+        action: "session",
+        matcher: None,
+    }
+}
+
+static SINGLE_SESSION_EVENT: [HookEvent; 1] = [session_start()];
+
+/// cursor's event key is camelCase.
+static CURSOR_EVENT: [HookEvent; 1] = [HookEvent {
+    event: "sessionStart",
+    action: "session",
+    matcher: None,
+}];
 
 /// One config-entry agent: where its config lives, how an entry looks,
 /// and the reporter assets it runs.
@@ -47,7 +90,8 @@ pub struct ConfigHookArm {
     pub agent: &'static str,
     config_dir: fn() -> io::Result<PathBuf>,
     config_file: &'static str,
-    event: &'static str,
+    /// Every event the arm registers, in install order.
+    events: &'static [HookEvent],
     shape: EntryShape,
     /// The config file's content when none exists yet.
     bootstrap: &'static str,
@@ -65,7 +109,7 @@ pub static DROID: ConfigHookArm = ConfigHookArm {
     agent: "droid",
     config_dir: droid_config_dir,
     config_file: "settings.json",
-    event: "SessionStart",
+    events: &SINGLE_SESSION_EVENT,
     shape: EntryShape::NestedGroup,
     bootstrap: "{}\n",
     required_root_key: None,
@@ -79,7 +123,7 @@ pub static COPILOT: ConfigHookArm = ConfigHookArm {
     agent: "copilot",
     config_dir: copilot_config_dir,
     config_file: "settings.json",
-    event: "SessionStart",
+    events: &SINGLE_SESSION_EVENT,
     shape: EntryShape::CopilotFlat,
     bootstrap: "{}\n",
     required_root_key: None,
@@ -93,7 +137,7 @@ pub static CURSOR: ConfigHookArm = ConfigHookArm {
     agent: "cursor",
     config_dir: cursor_config_dir,
     config_file: "hooks.json",
-    event: "sessionStart",
+    events: &CURSOR_EVENT,
     shape: EntryShape::CursorFlat,
     bootstrap: "{\"version\":1}\n",
     required_root_key: Some(("version", "1")),
@@ -108,7 +152,7 @@ pub static QWEN: ConfigHookArm = ConfigHookArm {
     agent: "qwen",
     config_dir: qwen_config_dir,
     config_file: "settings.json",
-    event: "SessionStart",
+    events: &SINGLE_SESSION_EVENT,
     shape: EntryShape::NestedGroup,
     bootstrap: "{}\n",
     required_root_key: None,
@@ -123,7 +167,7 @@ pub static QODERCLI: ConfigHookArm = ConfigHookArm {
     agent: "qodercli",
     config_dir: qodercli_config_dir,
     config_file: "settings.json",
-    event: "SessionStart",
+    events: &SINGLE_SESSION_EVENT,
     shape: EntryShape::NestedGroup,
     bootstrap: "{}\n",
     required_root_key: None,
@@ -132,13 +176,176 @@ pub static QODERCLI: ConfigHookArm = ConfigHookArm {
     asset_windows: include_str!("../../../integrations/hooks/par-mux-qodercli-session-hook.ps1"),
 };
 
+/// Devin CLI: `config.json` under `$XDG_CONFIG_HOME/devin` (else
+/// `~/.config/devin`; `%APPDATA%\devin` on Windows). herdr's devin
+/// integration registers the `session` action across six lifecycle events
+/// (its v3 shape; the state-action entries of herdr's v1/v2 were herdr's
+/// own legacy, which par-mux never installed, so there is nothing to
+/// sweep).
+static DEVIN_EVENTS: [HookEvent; 6] = [
+    session_event("SessionStart"),
+    session_event("UserPromptSubmit"),
+    session_event("PreToolUse"),
+    session_event("PostToolUse"),
+    session_event("PermissionRequest"),
+    session_event("Stop"),
+];
+
+pub static DEVIN: ConfigHookArm = ConfigHookArm {
+    agent: "devin",
+    config_dir: devin_config_dir,
+    config_file: "config.json",
+    events: &DEVIN_EVENTS,
+    shape: EntryShape::NestedGroup,
+    bootstrap: "{}\n",
+    required_root_key: None,
+    install_hint: "install devin cli first",
+    asset_posix: include_str!("../../../integrations/hooks/par-mux-devin-session-hook.sh"),
+    asset_windows: include_str!("../../../integrations/hooks/par-mux-devin-session-hook.ps1"),
+};
+
+/// Kimi Code: `$KIMI_CODE_HOME/config.toml`, else `~/.kimi-code`. The
+/// hook tables carry tool matchers herdr derived for kimi's
+/// AskUserQuestion flow (blocked on the question, working around it).
+static KIMI_EVENTS: [HookEvent; 12] = [
+    HookEvent {
+        event: "SessionStart",
+        action: "session",
+        matcher: None,
+    },
+    HookEvent {
+        event: "UserPromptSubmit",
+        action: "working",
+        matcher: None,
+    },
+    HookEvent {
+        event: "PreToolUse",
+        action: "working",
+        matcher: Some("^(?!AskUserQuestion$).*$"),
+    },
+    HookEvent {
+        event: "PreToolUse",
+        action: "blocked",
+        matcher: Some("^AskUserQuestion$"),
+    },
+    HookEvent {
+        event: "PostToolUse",
+        action: "working",
+        matcher: Some("^AskUserQuestion$"),
+    },
+    HookEvent {
+        event: "PostToolUseFailure",
+        action: "working",
+        matcher: Some("^AskUserQuestion$"),
+    },
+    HookEvent {
+        event: "SubagentStart",
+        action: "working",
+        matcher: None,
+    },
+    HookEvent {
+        event: "PreCompact",
+        action: "working",
+        matcher: None,
+    },
+    HookEvent {
+        event: "PermissionRequest",
+        action: "blocked",
+        matcher: None,
+    },
+    HookEvent {
+        event: "PermissionResult",
+        action: "working",
+        matcher: None,
+    },
+    HookEvent {
+        event: "Stop",
+        action: "idle",
+        matcher: None,
+    },
+    HookEvent {
+        event: "Interrupt",
+        action: "idle",
+        matcher: None,
+    },
+];
+
+pub static KIMI: ConfigHookArm = ConfigHookArm {
+    agent: "kimi",
+    config_dir: kimi_config_dir,
+    config_file: "config.toml",
+    events: &KIMI_EVENTS,
+    shape: EntryShape::KimiToml,
+    bootstrap: "",
+    required_root_key: None,
+    install_hint: "install kimi code first",
+    asset_posix: include_str!("../../../integrations/hooks/par-mux-kimi-session-hook.sh"),
+    asset_windows: include_str!("../../../integrations/hooks/par-mux-kimi-session-hook.ps1"),
+};
+
+/// MastraCode: `~/.mastracode/hooks.json` — flat command entries under
+/// event keys at the document root, timeouts in milliseconds, one action
+/// per lifecycle event (herdr's table).
+static MASTRACODE_EVENTS: [HookEvent; 11] = [
+    session_event("SessionStart"),
+    action_event("UserPromptSubmit", "working"),
+    action_event("AgentStart", "working"),
+    action_event("PreToolUse", "working"),
+    action_event("PermissionRequest", "blocked"),
+    action_event("PermissionResult", "working"),
+    action_event("SubagentStart", "working"),
+    action_event("SubagentEnd", "working"),
+    action_event("Interrupt", "idle"),
+    action_event("AgentEnd", "idle"),
+    action_event("Stop", "idle"),
+];
+
+pub static MASTRACODE: ConfigHookArm = ConfigHookArm {
+    agent: "mastracode",
+    config_dir: mastracode_config_dir,
+    config_file: "hooks.json",
+    events: &MASTRACODE_EVENTS,
+    shape: EntryShape::MastracodeFlat,
+    bootstrap: "{}\n",
+    required_root_key: None,
+    install_hint: "install mastracode first",
+    asset_posix: include_str!("../../../integrations/hooks/par-mux-mastracode-session-hook.sh"),
+    asset_windows: include_str!("../../../integrations/hooks/par-mux-mastracode-session-hook.ps1"),
+};
+
+/// MastraCode's hook timeout is milliseconds (herdr's
+/// `MASTRACODE_HOOK_TIMEOUT_MS`), unlike every JSON arm's seconds.
+const MASTRACODE_HOOK_TIMEOUT_MS: u64 = 10_000;
+
+const fn session_event(event: &'static str) -> HookEvent {
+    action_event(event, "session")
+}
+
+const fn action_event(event: &'static str, action: &'static str) -> HookEvent {
+    HookEvent {
+        event,
+        action,
+        matcher: None,
+    }
+}
+
 /// The arms, in the order the status surfaces list them.
-pub static CONFIG_HOOK_ARMS: [&ConfigHookArm; 5] = [&DROID, &COPILOT, &CURSOR, &QWEN, &QODERCLI];
+pub static CONFIG_HOOK_ARMS: [&ConfigHookArm; 8] = [
+    &DROID,
+    &COPILOT,
+    &CURSOR,
+    &QWEN,
+    &QODERCLI,
+    &DEVIN,
+    &KIMI,
+    &MASTRACODE,
+];
 
 const COPILOT_HOME_ENV_VAR: &str = "COPILOT_HOME";
 const CURSOR_CONFIG_DIR_ENV_VAR: &str = "CURSOR_CONFIG_DIR";
 const QWEN_HOME_ENV_VAR: &str = "QWEN_HOME";
 const QODERCLI_CONFIG_DIR_ENV_VAR: &str = "QODERCLI_CONFIG_DIR";
+const KIMI_CODE_HOME_ENV_VAR: &str = "KIMI_CODE_HOME";
 
 fn droid_config_dir() -> io::Result<PathBuf> {
     Ok(home_dir()?.join(".factory"))
@@ -173,6 +380,30 @@ fn cursor_config_dir() -> io::Result<PathBuf> {
         return Ok(PathBuf::from(dir));
     }
     Ok(home_dir()?.join(".cursor"))
+}
+
+fn kimi_config_dir() -> io::Result<PathBuf> {
+    if let Some(dir) = std::env::var_os(KIMI_CODE_HOME_ENV_VAR).filter(|value| !value.is_empty()) {
+        return Ok(PathBuf::from(dir));
+    }
+    Ok(home_dir()?.join(".kimi-code"))
+}
+
+/// herdr's devin_dir: `$XDG_CONFIG_HOME/devin` first, then the Windows
+/// `APPDATA` split, else `~/.config/devin`.
+fn devin_config_dir() -> io::Result<PathBuf> {
+    if let Some(dir) = std::env::var_os("XDG_CONFIG_HOME").filter(|value| !value.is_empty()) {
+        return Ok(PathBuf::from(dir).join("devin"));
+    }
+    #[cfg(windows)]
+    if let Some(dir) = std::env::var_os("APPDATA").filter(|value| !value.is_empty()) {
+        return Ok(PathBuf::from(dir).join("devin"));
+    }
+    Ok(home_dir()?.join(".config").join("devin"))
+}
+
+fn mastracode_config_dir() -> io::Result<PathBuf> {
+    Ok(home_dir()?.join(".mastracode"))
 }
 
 /// Outcome of a config-entry hook install.
@@ -243,12 +474,20 @@ impl ConfigHookArm {
     /// `windows` names (copilot keys the command by shell).
     fn entry(&self, command: &str, windows: bool) -> JsonValue {
         match self.shape {
-            EntryShape::NestedGroup => super::canonical_entry_value(None, command),
+            EntryShape::NestedGroup | EntryShape::KimiToml => {
+                super::canonical_entry_value(None, command)
+            }
             EntryShape::CopilotFlat => {
                 let field = if windows { "powershell" } else { "bash" };
                 json!({ "type": "command", field: command, "timeoutSec": HOOK_TIMEOUT_SECS })
             }
             EntryShape::CursorFlat => json!({ "command": command }),
+            EntryShape::MastracodeFlat => json!({
+                "type": "command",
+                "command": command,
+                "timeout": MASTRACODE_HOOK_TIMEOUT_MS,
+                "description": "Report MastraCode agent state to par-mux",
+            }),
         }
     }
 
@@ -257,23 +496,52 @@ impl ConfigHookArm {
     fn flat_entry_is_ours(&self, entry: &JsonValue, command: &str) -> bool {
         let text = |key: &str| entry.get(key).and_then(JsonValue::as_str) == Some(command);
         match self.shape {
-            EntryShape::NestedGroup => false,
+            EntryShape::NestedGroup | EntryShape::KimiToml => false,
             EntryShape::CopilotFlat => {
                 entry.get("type").and_then(JsonValue::as_str) == Some("command")
                     && (text("bash") || text("powershell") || text("command"))
             }
             EntryShape::CursorFlat => text("command"),
+            EntryShape::MastracodeFlat => {
+                entry.get("type").and_then(JsonValue::as_str) == Some("command") && text("command")
+            }
         }
     }
 
-    /// Whether `content` already registers `command`.
-    fn registered(&self, content: &str, config_path: &Path, command: &str) -> io::Result<bool> {
-        match self.shape {
-            EntryShape::NestedGroup => has_command(content, config_path, command, self.event),
-            _ => has_flat_entry(content, config_path, self.event, &|entry| {
-                self.flat_entry_is_ours(entry, command)
-            }),
+    /// Whether `content` already registers every event's command.
+    fn registered(&self, content: &str, config_path: &Path, hook_path: &Path) -> io::Result<bool> {
+        if self.shape == EntryShape::KimiToml {
+            // The block is rebuilt whole on install, so currency is the
+            // block markers plus every current command line.
+            return Ok(content.contains(KIMI_BLOCK_BEGIN)
+                && self
+                    .events
+                    .iter()
+                    .all(|event| content.contains(&kimi_command_line(hook_path, event))));
         }
+        for event in self.events {
+            let command = hook_command_with_action(hook_path, event.action);
+            let present = match self.shape {
+                EntryShape::NestedGroup => {
+                    has_command(content, config_path, &command, event.event)?
+                }
+                EntryShape::CopilotFlat | EntryShape::CursorFlat => {
+                    has_flat_entry(content, config_path, event.event, &|entry| {
+                        self.flat_entry_is_ours(entry, &command)
+                    })?
+                }
+                EntryShape::MastracodeFlat => {
+                    has_root_flat_entry(content, config_path, event.event, &|entry| {
+                        self.flat_entry_is_ours(entry, &command)
+                    })?
+                }
+                EntryShape::KimiToml => unreachable!("handled above"),
+            };
+            if !present {
+                return Ok(false);
+            }
+        }
+        Ok(true)
     }
 
     /// The install-time AND verify-time read of the asset's currency.
@@ -292,8 +560,7 @@ impl ConfigHookArm {
         let Ok(content) = fs::read_to_string(&config_path) else {
             return false;
         };
-        let command = hook_command_with_action(&hook_path, "session");
-        self.registered(&content, &config_path, &command)
+        self.registered(&content, &config_path, &hook_path)
             .unwrap_or(false)
     }
 
@@ -346,21 +613,45 @@ impl ConfigHookArm {
                 content = updated;
             }
         }
-        let command = hook_command_with_action(hook_path, "session");
-        let merged = match self.shape {
-            EntryShape::NestedGroup => {
-                merge_hook_event(&content, config_path, &command, None, self.event)?
+        match self.shape {
+            EntryShape::KimiToml => {
+                let rebuilt = build_kimi_config(&original, hook_path);
+                if rebuilt != original {
+                    content = rebuilt;
+                }
             }
-            _ => merge_flat_entry(
-                &content,
-                config_path,
-                self.event,
-                &self.entry(&command, windows),
-                &|entry| self.flat_entry_is_ours(entry, &command),
-            )?,
-        };
-        if let Some(updated) = merged {
-            content = updated;
+            _ => {
+                for event in self.events {
+                    let command = hook_command_with_action(hook_path, event.action);
+                    let merged = match self.shape {
+                        EntryShape::NestedGroup => merge_hook_event(
+                            &content,
+                            config_path,
+                            &command,
+                            event.matcher,
+                            event.event,
+                        )?,
+                        EntryShape::CopilotFlat | EntryShape::CursorFlat => merge_flat_entry(
+                            &content,
+                            config_path,
+                            event.event,
+                            &self.entry(&command, windows),
+                            &|entry| self.flat_entry_is_ours(entry, &command),
+                        )?,
+                        EntryShape::MastracodeFlat => merge_root_flat_entry(
+                            &content,
+                            config_path,
+                            event.event,
+                            &self.entry(&command, windows),
+                            &|entry| self.flat_entry_is_ours(entry, &command),
+                        )?,
+                        EntryShape::KimiToml => unreachable!("handled above"),
+                    };
+                    if let Some(updated) = merged {
+                        content = updated;
+                    }
+                }
+            }
         }
         // A bootstrapped file is written even when our entry was all it got.
         let config_changed = content != original || !config_path.exists();
@@ -391,19 +682,58 @@ impl ConfigHookArm {
     ) -> io::Result<ConfigHookUninstall> {
         let mut config_changed = false;
         if config_path.is_file() {
-            let content = fs::read_to_string(config_path)?;
-            let command = hook_command_with_action(hook_path, "session");
-            let removed = match self.shape {
-                EntryShape::NestedGroup => {
-                    unmerge_hook_entries(&content, config_path, &[(self.event, command.as_str())])?
+            let mut content = fs::read_to_string(config_path)?;
+            match self.shape {
+                EntryShape::KimiToml => {
+                    let removed = remove_kimi_hook_block(&content);
+                    if removed != content {
+                        content = removed;
+                        config_changed = true;
+                    }
                 }
-                _ => unmerge_flat_entries(&content, config_path, self.event, &|entry| {
-                    self.flat_entry_is_ours(entry, &command)
-                })?,
-            };
-            if let Some(updated) = removed {
-                save_settings(config_path, &updated)?;
-                config_changed = true;
+                EntryShape::NestedGroup => {
+                    let commands: Vec<String> = self
+                        .events
+                        .iter()
+                        .map(|event| hook_command_with_action(hook_path, event.action))
+                        .collect();
+                    let pairs: Vec<(&str, &str)> = self
+                        .events
+                        .iter()
+                        .zip(&commands)
+                        .map(|(event, command)| (event.event, command.as_str()))
+                        .collect();
+                    if let Some(updated) = unmerge_hook_entries(&content, config_path, &pairs)? {
+                        content = updated;
+                        config_changed = true;
+                    }
+                }
+                _ => {
+                    for event in self.events {
+                        let command = hook_command_with_action(hook_path, event.action);
+                        let removed = match self.shape {
+                            EntryShape::MastracodeFlat => unmerge_root_flat_entry(
+                                &content,
+                                config_path,
+                                event.event,
+                                &|entry| self.flat_entry_is_ours(entry, &command),
+                            )?,
+                            _ => unmerge_flat_entries(
+                                &content,
+                                config_path,
+                                event.event,
+                                &|entry| self.flat_entry_is_ours(entry, &command),
+                            )?,
+                        };
+                        if let Some(updated) = removed {
+                            content = updated;
+                            config_changed = true;
+                        }
+                    }
+                }
+            }
+            if config_changed {
+                save_settings(config_path, &content)?;
             }
         }
         let hook_removed = remove_marked_file(hook_path, &self.marker())?;
@@ -434,13 +764,122 @@ impl ConfigHookArm {
         let Ok(content) = fs::read_to_string(config_path) else {
             return Ok(());
         };
-        let command = hook_command_with_action(hook_path, "session");
-        if self.registered(&content, config_path, &command)? {
+        if self.registered(&content, config_path, hook_path)? {
             write_hook_asset(hook_path, self.asset())?;
             log::info!("mux hook heal: restored {}", hook_path.display());
         }
         Ok(())
     }
+}
+
+// kimi's config.toml is TOML, so there is no JSON splice: herdr's
+// block-marker discipline — the whole marked block is removed and re-appended
+// on every install, and uninstall cuts the block (ported from herdr's
+// config_edit.rs, Apache-2.0).
+
+const KIMI_BLOCK_BEGIN: &str = "# >>> par-mux kimi integration";
+const KIMI_BLOCK_END: &str = "# <<< par-mux kimi integration";
+const KIMI_HOOK_TIMEOUT_SECS: u64 = 10;
+
+/// The `command = "<cmd>"` line one kimi event registers — the block's
+/// currency check.
+fn kimi_command_line(hook_path: &Path, event: &HookEvent) -> String {
+    format!(
+        "command = {}",
+        toml_basic_string(&hook_command_with_action(hook_path, event.action))
+    )
+}
+
+/// The user's content with the current hook block appended after it.
+fn build_kimi_config(content: &str, hook_path: &Path) -> String {
+    let mut result = remove_kimi_hook_block(content)
+        .trim_end_matches('\n')
+        .to_string();
+    if !result.is_empty() {
+        result.push('\n');
+        result.push('\n');
+    }
+    result.push_str(KIMI_BLOCK_BEGIN);
+    result.push('\n');
+    for event in KIMI_EVENTS.iter() {
+        let command = hook_command_with_action(hook_path, event.action);
+        let matcher = event
+            .matcher
+            .map(|matcher| format!("matcher = {}\n", toml_basic_string(matcher)))
+            .unwrap_or_default();
+        result.push_str(&format!(
+            "[[hooks]]\nevent = {}\n{matcher}command = {}\ntimeout = {}\n\n",
+            toml_basic_string(event.event),
+            toml_basic_string(&command),
+            KIMI_HOOK_TIMEOUT_SECS,
+        ));
+    }
+    result.push_str(KIMI_BLOCK_END);
+    result.push('\n');
+    result
+}
+
+/// The content with our marked block cut; unchanged when no block exists.
+fn remove_kimi_hook_block(content: &str) -> String {
+    let trailing_newline = content.ends_with('\n');
+    let mut lines = Vec::new();
+    let mut in_block = false;
+    let mut removed_block = false;
+
+    for line in content.lines() {
+        if line.trim() == KIMI_BLOCK_BEGIN {
+            in_block = true;
+            removed_block = true;
+            continue;
+        }
+        if in_block {
+            if line.trim() == KIMI_BLOCK_END {
+                in_block = false;
+            }
+            continue;
+        }
+        lines.push(line.to_string());
+    }
+
+    if !removed_block {
+        return content.to_string();
+    }
+
+    let mut result = lines.join("\n");
+    if trailing_newline || result.is_empty() {
+        result.push('\n');
+    }
+    while result.ends_with("\n\n") {
+        result.pop();
+    }
+    if result == "\n" {
+        String::new()
+    } else {
+        result
+    }
+}
+
+/// A basic TOML string with herdr's escaping.
+fn toml_basic_string(value: &str) -> String {
+    let mut result = String::with_capacity(value.len() + 2);
+    result.push('"');
+    for ch in value.chars() {
+        match ch {
+            '"' => result.push_str("\\\""),
+            '\\' => result.push_str("\\\\"),
+            '\u{08}' => result.push_str("\\b"),
+            '\t' => result.push_str("\\t"),
+            '\n' => result.push_str("\\n"),
+            '\u{0c}' => result.push_str("\\f"),
+            '\r' => result.push_str("\\r"),
+            ch if ch <= '\u{1f}' || ch == '\u{7f}' => {
+                result.push_str(&format!("\\u{:04X}", ch as u32));
+            }
+            ch => result.push(ch),
+        }
+    }
+    result.push('"');
+    result
 }
 
 #[cfg(test)]
@@ -466,10 +905,10 @@ mod tests {
         (root, config, hook)
     }
 
-    /// Our registered entries under the arm's event, as parsed JSON.
-    fn event_entries(arm: &ConfigHookArm, config: &Path) -> Vec<JsonValue> {
+    /// Our registered entries under `event`, as parsed JSON.
+    fn event_entries(config: &Path, event: &str) -> Vec<JsonValue> {
         let parsed = parse_serde(&fs::read_to_string(config).unwrap(), config).unwrap();
-        parsed["hooks"][arm.event]
+        parsed["hooks"][event]
             .as_array()
             .cloned()
             .unwrap_or_default()
@@ -482,7 +921,7 @@ mod tests {
         let result = DROID.install_into(&config, &hook).unwrap();
 
         assert!(result.config_changed);
-        let entries = event_entries(&DROID, &config);
+        let entries = event_entries(&config, "SessionStart");
         assert_eq!(entries.len(), 1);
         assert!(entries[0].get("matcher").is_none(), "matcher-less");
         let entry = &entries[0]["hooks"][0];
@@ -506,7 +945,7 @@ mod tests {
 
         COPILOT.install_into(&config, &hook).unwrap();
 
-        let entries = event_entries(&COPILOT, &config);
+        let entries = event_entries(&config, "SessionStart");
         assert_eq!(entries.len(), 1);
         let entry = &entries[0];
         assert_eq!(entry["type"], "command");
@@ -541,7 +980,7 @@ mod tests {
         let parsed = parse_serde(&fs::read_to_string(&config).unwrap(), &config).unwrap();
         assert_eq!(parsed["version"], 1);
         assert!(parsed["hooks"].get("SessionStart").is_none());
-        let entries = event_entries(&CURSOR, &config);
+        let entries = event_entries(&config, "sessionStart");
         assert_eq!(entries.len(), 1);
         let entry = entries[0].as_object().unwrap();
         assert_eq!(
@@ -561,14 +1000,122 @@ mod tests {
 
         let parsed = parse_serde(&fs::read_to_string(&config).unwrap(), &config).unwrap();
         assert_eq!(parsed["version"], 1);
-        assert_eq!(event_entries(&CURSOR, &config).len(), 1);
+        assert_eq!(event_entries(&config, "sessionStart").len(), 1);
+    }
+
+    #[test]
+    fn devin_installs_the_session_action_across_six_lifecycle_events() {
+        let (_root, config, hook) = stage(&DEVIN);
+
+        DEVIN.install_into(&config, &hook).unwrap();
+
+        for event in [
+            "SessionStart",
+            "UserPromptSubmit",
+            "PreToolUse",
+            "PostToolUse",
+            "PermissionRequest",
+            "Stop",
+        ] {
+            let entries = event_entries(&config, event);
+            assert_eq!(entries.len(), 1, "{event}");
+            let command = entries[0]["hooks"][0]["command"]
+                .as_str()
+                .unwrap_or_else(|| panic!("{event}"));
+            assert!(
+                command.ends_with(" session"),
+                "{event}: every devin command runs the session action: {command}"
+            );
+        }
+    }
+
+    #[test]
+    fn kimi_install_appends_a_marked_toml_block_with_matchers() {
+        let (_root, config, hook) = stage(&KIMI);
+
+        let result = KIMI.install_into(&config, &hook).unwrap();
+
+        assert!(result.config_changed);
+        let content = fs::read_to_string(&config).unwrap();
+        assert!(
+            content.starts_with(KIMI_BLOCK_BEGIN),
+            "block first in a fresh file"
+        );
+        assert!(content.ends_with("# <<< par-mux kimi integration\n"));
+        assert_eq!(
+            content.matches("[[hooks]]").count(),
+            12,
+            "one table per event"
+        );
+        assert_eq!(content.matches("timeout = 10").count(), 12);
+        assert_eq!(
+            content.matches("matcher = \"^AskUserQuestion$\"").count(),
+            3,
+            "the question-matched trio"
+        );
+        assert_eq!(
+            content
+                .matches("matcher = \"^(?!AskUserQuestion$).*$\"")
+                .count(),
+            1
+        );
+        let session_command = hook_command_with_action(&hook, "session");
+        assert!(content.contains(&format!(
+            "command = {}",
+            toml_basic_string(&session_command)
+        )));
+        assert!(KIMI.installed_at(&config, &hook));
+    }
+
+    #[test]
+    fn kimi_install_replaces_a_stale_block_after_the_user_content() {
+        let (_root, config, hook) = stage(&KIMI);
+        fs::write(&config, "# user's kimi config\nmodel = \"k2\"\n").unwrap();
+
+        KIMI.install_into(&config, &hook).unwrap();
+
+        let content = fs::read_to_string(&config).unwrap();
+        assert!(content.starts_with("# user's kimi config\n"));
+        let user_end = content.find(KIMI_BLOCK_BEGIN).unwrap();
+        assert_eq!(&content[user_end - 2..user_end], "\n\n");
+    }
+
+    #[test]
+    fn mastracode_installs_root_level_entries_with_ms_timeouts() {
+        let (_root, config, hook) = stage(&MASTRACODE);
+
+        MASTRACODE.install_into(&config, &hook).unwrap();
+
+        let parsed = parse_serde(&fs::read_to_string(&config).unwrap(), &config).unwrap();
+        assert!(parsed.get("hooks").is_none(), "no hooks wrapper: {parsed}");
+        for event in ["SessionStart", "UserPromptSubmit", "Stop"] {
+            let entries = parsed[event]
+                .as_array()
+                .unwrap_or_else(|| panic!("{event}"));
+            assert_eq!(entries.len(), 1, "{event}");
+            let entry = &entries[0];
+            assert_eq!(entry["type"], "command");
+            assert_eq!(entry["timeout"], 10_000, "{event}: milliseconds");
+            assert_eq!(
+                entry["description"],
+                "Report MastraCode agent state to par-mux"
+            );
+        }
+        assert!(parsed["SessionStart"][0]["command"]
+            .as_str()
+            .unwrap()
+            .ends_with(" session"));
+        assert!(parsed["Stop"][0]["command"]
+            .as_str()
+            .unwrap()
+            .ends_with(" idle"));
     }
 
     /// The user's own file, with comments and their own entries, round
     /// trips byte-exact through install then uninstall for every arm.
     #[test]
     fn every_arm_restores_a_user_config_byte_for_byte() {
-        let user_files: [(&ConfigHookArm, &str); 3] = [
+        let user_files: [(&ConfigHookArm, &str); 6] = [
             (
                 &DROID,
                 concat!(
@@ -604,6 +1151,44 @@ mod tests {
                     "  \"hooks\": {\n",
                     "    \"stop\": [ { \"command\": \"user-hook\" } ]\n",
                     "  }\n",
+                    "}\n"
+                ),
+            ),
+            (
+                &DEVIN,
+                concat!(
+                    "{\n",
+                    "  // user's devin config\n",
+                    "  \"theme\": \"dark\",\n",
+                    "  \"hooks\": {\n",
+                    "    \"SessionStart\": [\n",
+                    "      { \"hooks\": [ { \"type\": \"command\", \"command\": \"user-hook\" } ] }\n",
+                    "    ]\n",
+                    "  }\n",
+                    "}\n"
+                ),
+            ),
+            // kimi's block editor appends after the user's lines and cuts
+            // the block back out on uninstall; a trailing blank line would
+            // not survive the append (herdr's trim discipline), so the
+            // fixture ends on content.
+            (
+                &KIMI,
+                concat!(
+                    "# user's kimi config\n",
+                    "model = \"user-hook\"\n",
+                    "[features]\n",
+                    "hooks = true\n"
+                ),
+            ),
+            (
+                &MASTRACODE,
+                concat!(
+                    "{\n",
+                    "  // user's hooks\n",
+                    "  \"SessionStart\": [\n",
+                    "    { \"type\": \"command\", \"command\": \"user-hook\" }\n",
+                    "  ]\n",
                     "}\n"
                 ),
             ),
@@ -670,12 +1255,28 @@ mod tests {
                 "{}",
                 arm.agent
             );
-            let parsed = parse_serde(&fs::read_to_string(&config).unwrap(), &config).unwrap();
-            assert!(
-                parsed.get("hooks").is_none(),
-                "{}: hooks pruned: {parsed}",
-                arm.agent
-            );
+            if arm.shape == EntryShape::KimiToml {
+                let content = fs::read_to_string(&config).unwrap();
+                assert!(
+                    !content.contains(KIMI_BLOCK_BEGIN) && !content.contains(KIMI_BLOCK_END),
+                    "{}: the block is cut: {content}",
+                    arm.agent
+                );
+            } else if arm.shape == EntryShape::MastracodeFlat {
+                let parsed = parse_serde(&fs::read_to_string(&config).unwrap(), &config).unwrap();
+                assert!(
+                    parsed.as_object().is_some_and(|root| root.is_empty()),
+                    "{}: every root-level event key pruned: {parsed}",
+                    arm.agent
+                );
+            } else {
+                let parsed = parse_serde(&fs::read_to_string(&config).unwrap(), &config).unwrap();
+                assert!(
+                    parsed.get("hooks").is_none(),
+                    "{}: hooks pruned: {parsed}",
+                    arm.agent
+                );
+            }
             assert!(!hook.exists());
             let again = arm.uninstall_into(&config, &hook).unwrap();
             assert!(
@@ -724,6 +1325,11 @@ mod tests {
     #[test]
     fn a_malformed_config_fails_with_nothing_written() {
         for arm in CONFIG_HOOK_ARMS {
+            if arm.shape == EntryShape::KimiToml {
+                // kimi's block editor never parses the file (herdr's
+                // discipline), so there is no malformed-file failure mode.
+                continue;
+            }
             let (_root, config, hook) = stage(arm);
             let broken = "{\"hooks\":{},} trailing";
             fs::write(&config, broken).unwrap();
@@ -792,15 +1398,19 @@ mod tests {
         /// [`ConfigHookArm::installed`] against explicit paths.
         fn installed_at(&self, config: &Path, hook: &Path) -> bool {
             let content = fs::read_to_string(config).unwrap();
-            let command = hook_command_with_action(hook, "session");
-            self.registered(&content, config, &command).unwrap()
+            self.registered(&content, config, hook).unwrap()
         }
     }
 
     /// One run of `arm`'s POSIX asset against a local listener with the pane
-    /// env set: the reported params, or `None` when the script refused.
+    /// env set: the reported (method, params), or `None` when the script
+    /// refused.
     #[cfg(unix)]
-    fn run_hook(arm: &ConfigHookArm, action: &str, payload: &str) -> Option<JsonValue> {
+    fn run_hook_request(
+        arm: &ConfigHookArm,
+        action: &str,
+        payload: &str,
+    ) -> Option<(String, JsonValue)> {
         use std::io::{BufRead as _, Write as _};
         use std::os::unix::net::UnixListener;
         use std::process::{Command, Stdio};
@@ -858,8 +1468,16 @@ mod tests {
         reader.read_line(&mut line).expect("reads the report line");
         let _ = child.wait();
         let request: JsonValue = serde_json::from_str(line.trim()).expect("parses the report");
-        assert_eq!(request["method"], "pane.report_agent_session");
-        Some(request["params"].clone())
+        let method = request["method"].as_str().unwrap_or_default().to_string();
+        Some((method, request["params"].clone()))
+    }
+
+    /// [`run_hook_request`] for the session-reporting assets.
+    #[cfg(unix)]
+    fn run_hook(arm: &ConfigHookArm, action: &str, payload: &str) -> Option<JsonValue> {
+        let (method, params) = run_hook_request(arm, action, payload)?;
+        assert_eq!(method, "pane.report_agent_session");
+        Some(params)
     }
 
     #[test]
@@ -938,6 +1556,89 @@ mod tests {
             &CURSOR,
             "session",
             r#"{"hook_event_name":"stop","session_id":"k-1"}"#
+        )
+        .is_none());
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn kimi_asset_reports_session_and_states() {
+        let (method, params) = run_hook_request(
+            &KIMI,
+            "session",
+            r#"{"hook_event_name":"SessionStart","session_id":"km-1"}"#,
+        )
+        .expect("a session start reports");
+        assert_eq!(method, "pane.report_agent_session");
+        assert_eq!(params["agent"], "kimi");
+        assert_eq!(params["agent_session_id"], "km-1");
+        assert_eq!(params["session_start_source"], "startup");
+        assert_eq!(params["source"], "par-mux:kimi");
+
+        let (method, params) = run_hook_request(
+            &KIMI,
+            "blocked",
+            r#"{"hook_event_name":"PermissionRequest","session_id":"km-1"}"#,
+        )
+        .expect("a state action reports");
+        assert_eq!(method, "pane.report_agent");
+        assert_eq!(params["state"], "blocked");
+        assert_eq!(params["agent_session_id"], "km-1");
+
+        // A session action without a session id refuses, as does an
+        // unknown action.
+        assert!(
+            run_hook_request(&KIMI, "session", r#"{"hook_event_name":"SessionStart"}"#).is_none()
+        );
+        assert!(run_hook(&KIMI, "done", r#"{"session_id":"km-1"}"#).is_none());
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn mastracode_asset_reports_session_and_states() {
+        let (method, params) = run_hook_request(
+            &MASTRACODE,
+            "session",
+            r#"{"hook_event_name":"SessionStart","session_id":"mc-1"}"#,
+        )
+        .expect("a session start reports");
+        assert_eq!(method, "pane.report_agent_session");
+        assert_eq!(params["agent"], "mastracode");
+        assert_eq!(params["agent_session_id"], "mc-1");
+        assert_eq!(params["session_start_source"], "startup");
+        assert_eq!(params["source"], "par-mux:mastracode");
+
+        let (method, params) = run_hook_request(
+            &MASTRACODE,
+            "working",
+            r#"{"hook_event_name":"UserPromptSubmit","session_id":"mc-1"}"#,
+        )
+        .expect("a state action reports");
+        assert_eq!(method, "pane.report_agent");
+        assert_eq!(params["state"], "working");
+
+        assert!(run_hook_request(&MASTRACODE, "session", r#"{}"#).is_none());
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn devin_asset_reports_a_payload_session_id() {
+        let params = run_hook(
+            &DEVIN,
+            "session",
+            r#"{"hook_event_name":"SessionStart","sessionId":"dv-1"}"#,
+        )
+        .expect("a session id in the payload reports");
+        assert_eq!(params["agent"], "devin");
+        assert_eq!(params["agent_session_id"], "dv-1");
+        assert_eq!(params["source"], "par-mux:devin");
+
+        // No session id and no resolvable fallback (a startup SessionStart
+        // never guesses): the script stays silent.
+        assert!(run_hook(
+            &DEVIN,
+            "session",
+            r#"{"hook_event_name":"SessionStart","source":"startup"}"#
         )
         .is_none());
     }

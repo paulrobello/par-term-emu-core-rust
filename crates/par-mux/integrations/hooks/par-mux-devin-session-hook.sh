@@ -1,9 +1,12 @@
 #!/bin/sh
-# installed by herdr
-# managed by herdr; reinstalling or updating the integration overwrites this file.
-# add custom hooks beside this file instead of editing it.
+# installed by par-mux
+# managed by par-mux; reinstalling or updating the integration overwrites
+# this file. add custom hooks beside this file instead of editing it.
+# Ported from herdr's devin integration (Apache License 2.0): herdr's variant
+# shelled out to the herdr CLI; this one speaks the control socket directly
+# like the other par-mux reporters.
 # PAR_MUX_INTEGRATION_ID=devin
-# PAR_MUX_INTEGRATION_VERSION=3
+# PAR_MUX_INTEGRATION_VERSION=1
 
 set -eu
 
@@ -51,7 +54,7 @@ def load_hook_input(path: str | None) -> dict:
 
 
 def load_session_list(project_dir: str | None):
-    injected = os.environ.get("HERDR_DEVIN_LIST_JSON")
+    injected = os.environ.get("PAR_MUX_DEVIN_LIST_JSON")
     if injected is not None:
         try:
             parsed = json.loads(injected)
