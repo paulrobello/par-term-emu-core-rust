@@ -27,6 +27,7 @@ The daemon is feature-gated (Rust `mux` feature for the library, `mux-bin` for t
 - [Shutdown Semantics](#shutdown-semantics)
 - [Streaming Panes to the Web](#streaming-panes-to-the-web)
 - [Embedding from Rust](#embedding-from-rust)
+- [macOS App Bundle (TCC Permissions and Autostart)](#macos-app-bundle-tcc-permissions-and-autostart)
 - [Testing](#testing)
 - [Module Map](#module-map)
 
@@ -1270,6 +1271,65 @@ for notification in client.notifications().try_recv() { /* … */ }
 - `MuxServer::bind` / `bind_with_tree` / `run` (no persistence) / `run_persisting` / `shutdown_handle`.
 - `MuxClient::connect` / `connect_or_spawn` / `connect_or_spawn_at` / `send` (one command, returns the reply body lines — a `%error` block's body too) / `send_checked` (the same, as a `Reply { body, ok }` that tells `%end` from `%error`) / `notifications` (pushed `TmuxNotification`s) / `kill_spawned_daemon` — deliberately not a `Drop` impl, so a disconnecting client never kills the server other clients use.
 - Pane creation goes through a `PaneFactory`, whose `create_pane` receives a `SpawnContext` (owning session, window, and session environment); a second method, `create_argv_pane`, takes structured argv — the seam the Windows resume path uses to spawn without a cmd.exe string re-parse (its default renders through the string path, exact on POSIX `sh`); the default `ShellPaneFactory` spawns plain commands, and `AgentPaneFactory` pre-tags agent panes for embedders and the resume path.
+
+## macOS App Bundle (TCC Permissions and Autostart)
+
+Panes under the par-mux daemon attribute their macOS permissions to the daemon's responsible process. A bare CLI daemon has no grantable identity, so TCC silently blocks screen capture, microphone, and local-network sockets — no prompt ever appears (the multiplexer-daemon variant of macOS Local Network privacy). The fix is an LSUIElement wrapper bundle whose launcher fires the TCC prompts and then execs the daemon in-process, so every pane child inherits the bundle's grants. Attribution was verified to survive par-mux's daemonize-to-background in the herdr wrapper this is ported from.
+
+**Build** (macOS only): `make app` compiles and adhoc-signs `build/Par-mux.app` from `crates/par-mux/app/` (`launcher.c`, `permissions.m`, `Info.plist`) and lints the plist. It deliberately does not install. Install once by hand:
+
+```bash
+cp -R build/Par-mux.app /Applications/
+```
+
+**Never modify or re-sign a granted bundle.** Every TCC grant binds to the bundle's adhoc signature — rebuilding over `/Applications/Par-mux.app` (or any content change plus re-sign) can void the grants. Change the wrapper by deleting the old bundle, installing the new one, and granting again. Source edits are always safe: `make app` only writes `build/`, never `/Applications`.
+
+**What the launcher fires** on every launch, each preflighted (silent once granted) and presented/owned by the system, so the prompts survive the immediate exec into the daemon:
+
+- Screen Recording — `CGRequestScreenCaptureAccess` (no Info.plist usage key exists; the API call is the trigger)
+- Accessibility — `AXIsProcessTrustedWithOptions` with the prompt option
+- Microphone — `AVCaptureDevice requestAccessForMediaType:` (plist `NSMicrophoneUsageDescription`)
+- Local Network — one short TCP connect to the default gateway (no preflight API exists; a bare UDP datagram does not trip the check — only a connect does; plist `NSLocalNetworkUsageDescription`)
+
+No prompt API exists for Full Disk Access, Developer Tools, or per-target Automation — grant those by hand in System Settings → Privacy & Security when a pane needs them.
+
+Bare launch runs `par-mux --foreground` (the launchd shape: the launcher process becomes the daemon — no daemonize fork — so launchd supervises it and `KeepAlive` restarts only a crash; a clean `par-mux stop` exits 0 and stays down; no terminal means no auto-attach). Arguments are forwarded verbatim, so the bundle binary is also a faithful par-mux client proxy; the prompt-trigger test that never disturbs a running daemon is:
+
+```bash
+/Applications/Par-mux.app/Contents/MacOS/Par-mux status
+```
+
+The launcher execs `$PAR_MUX_BIN` if set, else `~/.cargo/bin/par-mux` (the `make par-mux-install` location), else `/usr/local/bin/par-mux`. Its stdout/stderr append to `~/Library/Logs/par-mux/daemon.log`.
+
+**Autostart (launchd)**: `crates/par-mux/app/` ships two LaunchAgent templates (`__HOME__` placeholder to expand at install). Wiring the daemon through the bundle replaces any bare-daemon autostart:
+
+```bash
+mkdir -p ~/Library/Logs/par-mux
+sed "s|__HOME__|$HOME|g" crates/par-mux/app/par-mux-daemon.plist.template \
+  > ~/Library/LaunchAgents/com.paulrobello.par-mux.plist
+launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/com.paulrobello.par-mux.plist
+```
+
+If a daemon started outside the bundle is already running, stop it first (`par-mux stop` — it saves the tree, and the bundle-started daemon restores it), then `launchctl kickstart gui/$(id -u)/com.paulrobello.par-mux`.
+
+Grants bind to the bundle, not the process, so every daemon started through the bundle keeps them — launchd boot, `KeepAlive` crash restart, reboot. A plain `par-mux restart` (or bare `par-mux`) from a terminal spawns the fresh daemon from the *terminal's* process tree: the grants still exist, but pane children lose bundle attribution until the next bundle start. Restart through the bundle instead:
+
+```bash
+launchctl kickstart -k gui/$(id -u)/com.paulrobello.par-mux
+```
+
+That also replaces the usual `par-mux --restart` upgrade flow — the launcher execs `~/.cargo/bin/par-mux` at start, so rebuild (`make par-mux-install`) then kickstart.
+
+**Log capping**: launchd never rotates `StandardErrorPath` files and the daemon log only grows, so a second agent caps them hourly in place (50MB plus a single `.1.gz`). Truncate-in-place is safe because launchd and the launcher open their logs `O_APPEND`; rename-style rotation would strand writes in the moved inode:
+
+```bash
+install -m 755 crates/par-mux/app/logcap.sh ~/.local/bin/par-mux-logcap.sh
+sed "s|__HOME__|$HOME|g" crates/par-mux/app/par-mux-logcap.plist.template \
+  > ~/Library/LaunchAgents/com.paulrobello.par-mux-logcap.plist
+launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/com.paulrobello.par-mux-logcap.plist
+```
+
+**End-to-end check** (after granting the prompts): start the daemon through the bundle, spawn a pane, and from that pane hit a LAN host with a non-Apple-signed binary (Apple-signed tools like `curl` are exempt and prove nothing). A dead target host mimics the privacy block exactly — ping the target first.
 
 ## Testing
 

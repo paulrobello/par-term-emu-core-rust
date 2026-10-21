@@ -1,4 +1,4 @@
-.PHONY: help build build-release build-streaming dev-streaming test test-rust test-rust-streaming test-python test-pty coverage coverage-html coverage-python clean install install-force python-install python-uninstall par-mux-install par-mux-uninstall streamer-uninstall uninstall dev fmt lint check \
+.PHONY: help build build-release build-streaming dev-streaming app test test-rust test-rust-streaming test-python test-pty coverage coverage-html coverage-python clean install install-force python-install python-uninstall par-mux-install par-mux-uninstall streamer-uninstall uninstall dev fmt lint check \
         examples examples-basic examples-pty examples-streaming examples-all setup-venv watch \
         typecheck clippy fmt-python lint-python lint-check checkall checkall-ci test-mux-ci test-python-streaming-ci cross-target-check check-features bench pre-commit-install pre-commit-uninstall \
         caps-table caps-table-check gen-extensions extensions-check ffi-header ffi-header-check ffi-surface-check core-version-check doc-hidden-check api-surface-check mux-docs-check mux-schema mux-schema-check completions completions-check _completions-into env-docs-check pinned-tests-check stub-docs-check doc-links-check release-check derive-version-check audit-deps \
@@ -36,6 +36,7 @@ help:
 	@echo "  build-streaming  - Alias of build (streaming is in pyproject features)"
 	@echo "  dev-streaming    - Alias of dev (streaming is in pyproject features)"
 	@echo "  xcframework      - Build TerminalCore.xcframework (iOS device + simulator) from the C FFI (needs Xcode)"
+	@echo "  app              - macOS only: build+sign the Par-mux.app TCC wrapper into build/ (never installs; see docs/MUX.md)"
 	@echo "  watch            - Auto-rebuild on file changes (requires cargo-watch)"
 	@echo ""
 	@echo "Testing:"
@@ -245,6 +246,22 @@ build-streaming: build
 # what ParDeck embeds. Requires Xcode; not part of checkall.
 xcframework:
 	bash scripts/build-xcframework.sh
+
+# macOS only: the Par-mux.app TCC wrapper (crates/par-mux/app/) — a launcher
+# that fires the Screen Recording / Accessibility / Microphone / Local Network
+# prompts and execs the daemon in-process, so pane children inherit the
+# bundle's grants. Deliberately does NOT install: every TCC grant binds to the
+# bundle's adhoc signature, so copying over a granted /Applications/Par-mux.app
+# can void the grants (docs/MUX.md "macOS app bundle"). Not part of checkall.
+app:
+	mkdir -p build/Par-mux.app/Contents/MacOS build/Par-mux.app/Contents/Resources
+	cc -O2 -o build/Par-mux.app/Contents/MacOS/Par-mux \
+		crates/par-mux/app/launcher.c crates/par-mux/app/permissions.m \
+		-framework CoreGraphics -framework ApplicationServices -framework AVFoundation
+	cp crates/par-mux/app/Info.plist build/Par-mux.app/Contents/Info.plist
+	printf 'APPL????' > build/Par-mux.app/Contents/PkgInfo
+	codesign --force -s - build/Par-mux.app
+	plutil -lint build/Par-mux.app/Contents/Info.plist
 
 # ARC-105: alias of `dev` (streaming comes from pyproject features).
 dev-streaming: dev

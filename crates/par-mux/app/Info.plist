@@ -1,0 +1,30 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<key>CFBundleName</key>
+	<string>Par-mux</string>
+	<key>CFBundleDisplayName</key>
+	<string>Par-mux</string>
+	<key>CFBundleIdentifier</key>
+	<string>com.paulrobello.par-mux</string>
+	<key>CFBundleExecutable</key>
+	<string>Par-mux</string>
+	<key>CFBundlePackageType</key>
+	<string>APPL</string>
+	<key>CFBundleShortVersionString</key>
+	<string>1.0</string>
+	<key>CFBundleVersion</key>
+	<string>1</string>
+	<key>CFBundleInfoDictionaryVersion</key>
+	<string>6.0</string>
+	<key>LSMinimumSystemVersion</key>
+	<string>13.0</string>
+	<key>LSUIElement</key>
+	<true/>
+	<key>NSLocalNetworkUsageDescription</key>
+	<string>Par-mux panes connect to machines and services on your local network.</string>
+	<key>NSMicrophoneUsageDescription</key>
+	<string>Par-mux pane agents can record audio when a task calls for it.</string>
+</dict>
+</plist>
