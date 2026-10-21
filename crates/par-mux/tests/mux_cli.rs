@@ -1466,8 +1466,18 @@ fn agent_hooks_status_prints_one_line_per_agent_without_a_daemon() {
     assert_eq!(run.code, Some(0), "stderr: {}", run.stderr);
     let lines: Vec<&str> = run.stdout.lines().collect();
     let agents = [
-        "claude", "codex", "grok", "muse", "droid", "copilot", "cursor", "qwen",
-        "qodercli", "devin", "kimi", "mastracode",
+        "claude",
+        "codex",
+        "grok",
+        "muse",
+        "droid",
+        "copilot",
+        "cursor",
+        "qwen",
+        "qodercli",
+        "devin",
+        "kimi",
+        "mastracode",
     ];
     assert_eq!(lines.len(), agents.len(), "stdout: {:?}", run.stdout);
     for (agent, line) in agents.iter().zip(&lines) {
@@ -1559,8 +1569,18 @@ fn integration_status_covers_hooks_extensions_and_skill() {
     assert_eq!(
         names[..12],
         [
-            "claude", "codex", "grok", "muse", "droid", "copilot", "cursor",
-            "qwen", "qodercli", "devin", "kimi", "mastracode"
+            "claude",
+            "codex",
+            "grok",
+            "muse",
+            "droid",
+            "copilot",
+            "cursor",
+            "qwen",
+            "qodercli",
+            "devin",
+            "kimi",
+            "mastracode"
         ],
         "stdout: {:?}",
         run.stdout
