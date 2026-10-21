@@ -66,6 +66,32 @@ pub fn strip_pipe_prefix(path: &Path) -> std::path::PathBuf {
     path.to_path_buf()
 }
 
+/// The marker-file location for a Windows socket path: the path itself when
+/// it names a directory-resident file, else — a bare pipe name — a file
+/// under the per-user temp dir keyed by that name.
+///
+/// A bare `--socket name` must never drop its marker file into the
+/// daemon's working directory: the marker is a regular file named exactly
+/// like the socket, so a CWD-relative write collides with anything sharing
+/// the name. Measured on the Win11 VM 2026-10-21: `--socket vmbare2
+/// --state-dir <cwd>/vmbare2` wrote the marker over the state dir's path,
+/// and every later `create_dir_all` under it failed with os error 183 —
+/// all state saves and the registry registration lost until restart.
+#[cfg(windows)]
+fn windows_marker_path(path: &Path) -> std::path::PathBuf {
+    let has_parent = path
+        .parent()
+        .is_some_and(|parent| !parent.as_os_str().is_empty());
+    if has_parent {
+        return path.to_path_buf();
+    }
+    let name = path
+        .file_name()
+        .map(|name| name.to_string_lossy().into_owned())
+        .unwrap_or_default();
+    std::env::temp_dir().join(format!("par-mux-{name}.sock-marker"))
+}
+
 /// Bind a local listener at `path`, owned by the current user only.
 ///
 /// Unix: the socket file is created with mode `0600`. Windows: the pipe is
@@ -114,7 +140,11 @@ pub fn bind_local_listener(path: &Path) -> io::Result<LocalListener> {
                 .reclaim_name(false)
                 .security_descriptor(security_descriptor),
         )?;
-        std::fs::write(path, windows_socket_marker())?;
+        let marker = windows_marker_path(path);
+        if let Some(parent) = marker.parent() {
+            std::fs::create_dir_all(parent)?;
+        }
+        std::fs::write(&marker, windows_socket_marker())?;
         Ok(LocalListener(listener))
     }
 }
@@ -690,6 +720,8 @@ pub fn prepare_socket_path(path: &Path) -> io::Result<()> {
     // it outright. Without this, a stray regular file at the path surfaces as
     // an uncategorized ENOTSOCK connect error and bricks the path forever —
     // macOS observed 2026-09-21, and the error-kind lists cannot express it.
+    // (Windows joins this check below — for a bare name the marker lives in
+    // the temp dir, so its reclaim happens at the tail's marker path.)
     #[cfg(unix)]
     {
         use std::os::unix::fs::FileTypeExt;
@@ -746,6 +778,9 @@ pub fn prepare_socket_path(path: &Path) -> io::Result<()> {
         Err(err) => return Err(err),
     }
 
+    #[cfg(windows)]
+    return remove_remnant(&windows_marker_path(path));
+    #[cfg(not(windows))]
     remove_remnant(path)
 }
 
@@ -1332,6 +1367,55 @@ mod tests {
         }
         prepare_socket_path(socket.path()).expect("a stale path is reclaimable");
         let _listener = bind_local_listener(socket.path()).expect("rebind after reclaim");
+    }
+
+    /// A bare socket name must not drop its marker file into the CWD. The
+    /// regression (Win11 VM, 2026-10-21): the marker wrote over the
+    /// state-dir path a `--socket <name> --state-dir <cwd>/<name>` daemon
+    /// was about to create, and every save failed with os error 183.
+    #[test]
+    #[cfg(windows)]
+    fn a_bare_socket_name_writes_its_marker_in_temp_not_the_cwd() {
+        let name = format!("bare-marker-{}", std::process::id());
+        let marker = windows_marker_path(std::path::Path::new(&name));
+        let _ = std::fs::remove_file(&marker);
+        let listener =
+            bind_local_listener(std::path::Path::new(&name)).expect("bind the bare name");
+
+        assert!(
+            !std::path::Path::new(&name).exists(),
+            "a bare name must not drop a marker file into the CWD"
+        );
+        assert!(
+            marker.starts_with(std::env::temp_dir()),
+            "the marker lives under the per-user temp dir: {}",
+            marker.display()
+        );
+        assert!(marker.is_file());
+        // The collision shape the CWD marker caused: a same-named directory
+        // tree under the working directory must be creatable while the
+        // server holds the pipe.
+        std::fs::create_dir_all(std::path::Path::new(&name).join("par-mux"))
+            .expect("a same-named directory is creatable");
+        std::fs::remove_dir_all(&name).unwrap();
+        drop(listener);
+        let _ = std::fs::remove_file(&marker);
+    }
+
+    #[test]
+    #[cfg(windows)]
+    fn marker_paths_follow_the_socket_path_or_temp() {
+        use std::path::PathBuf;
+        assert_eq!(
+            windows_marker_path(std::path::Path::new(r"C:\state\par-mux\s.sock")),
+            PathBuf::from(r"C:\state\par-mux\s.sock")
+        );
+        let bare = windows_marker_path(std::path::Path::new("s2"));
+        assert!(bare.starts_with(std::env::temp_dir()));
+        assert_eq!(
+            bare.file_name().unwrap().to_string_lossy(),
+            "par-mux-s2.sock-marker"
+        );
     }
 
     #[test]

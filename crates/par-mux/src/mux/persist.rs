@@ -2991,6 +2991,31 @@ mod tests {
     /// structural save, then the reaper persisting a burst of pane deaths
     /// (empty), then the daemon's own final save (still empty). The load
     /// must resurrect the pre-exit layout, not the raced emptiness.
+    /// A shutdown save whose state dir was deleted mid-run respects the
+    /// deletion (D3: no resurrection) — the Windows VM measured the
+    /// user-visible half of this card: saves failing 183 left no dir, and
+    /// the shutdown save correctly skipped instead of recreating it.
+    #[test]
+    fn a_shutdown_save_respects_a_state_dir_deleted_mid_run() {
+        let (dir, target) = temp_target("deleted-dir");
+        let populated = populated_tree().to_persist_state();
+        write_job(SaveOrigin::Command, &populated, &target).unwrap();
+        assert!(target.is_file());
+
+        std::fs::remove_dir_all(dir.path()).unwrap();
+
+        write_job(SaveOrigin::Shutdown, &populated, &target)
+            .expect("the shutdown save skips, it does not fail");
+        assert!(
+            !dir.path().exists(),
+            "the deleted state dir must not be resurrected"
+        );
+        // A live-daemon save (Command origin) keeps creating the dir — the
+        // daemon owns its state until the exit.
+        write_job(SaveOrigin::Command, &populated, &target).unwrap();
+        assert!(target.is_file());
+    }
+
     #[test]
     fn reap_saves_cannot_degrade_the_last_good_snapshot() {
         let (_dir, target) = temp_target("race");
