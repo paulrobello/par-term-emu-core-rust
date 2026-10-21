@@ -775,7 +775,8 @@ An **aggregate bound** sits above the per-client depth (ARC-008): once the clien
 ## Agent-State Integrations
 
 par-mux owns the integrations that report agent state into the daemon:
-the claude, codex, grok, muse, droid, copilot, and cursor session hooks
+the claude, codex, grok, muse, droid, copilot, cursor, qwen, and qodercli
+session hooks
 (script assets written under the par-mux config directory and registered in
 each agent own config — a merge that preserves the user entries, comments,
 and formatting) and the pi/omp agent-state extensions (a file drop into each
@@ -790,7 +791,7 @@ They are embedded in the binary and driven by five one-shot flags, none of
 which starts or contacts a daemon:
 
 ```text
-par-mux --install-agent-hooks            Install the claude/codex/grok/muse/droid/copilot/cursor session hooks
+par-mux --install-agent-hooks            Install the claude/codex/grok/muse/droid/copilot/cursor/qwen/qodercli session hooks
 par-mux --uninstall-agent-hooks          Remove them (config entries first, then the assets)
 par-mux --agent-hooks-status              One "<agent> installed|absent" line per agent, plus the asset's version currency when installed (v2, `v1 → v2 outdated`, `asset missing`)
 par-mux --integration-status              The same grammar for EVERY bundled asset: hook, extension, and skill lines
@@ -830,12 +831,17 @@ reporter sends `pane.report_agent_session` on session start:
 | droid (Factory) | `~/.factory/settings.json` (none) | nested `hooks.SessionStart` group, `{type, command, timeout}` |
 | copilot (GitHub Copilot CLI) | `~/.copilot/settings.json` (`COPILOT_HOME`) | flat `hooks.SessionStart` entry, `{type, bash, timeoutSec}` (`powershell` on Windows) |
 | cursor (`cursor-agent`) | `~/.cursor/hooks.json` (`CURSOR_CONFIG_DIR`) | bare `{command}` under camelCase `hooks.sessionStart`; a missing top-level `version` is added as `1` |
+| qwen (Qwen Code) | `~/.qwen/settings.json` (`QWEN_HOME`) | nested `hooks.SessionStart` group, claude schema |
+| qodercli (Qoder CLI) | `~/.qoder/settings.json` (`QODERCLI_CONFIG_DIR`) | nested `hooks.SessionStart` group, claude schema |
 
-Their hooks report identity (plus herdr's resume invocation as
-`session_resume_argv`: `droid --resume <id>`, `copilot --resume=<id>`,
-`cursor-agent --resume <id>`); state comes from the scrape tier's bundled
+Their hooks report identity (droid, copilot, and cursor plus herdr's resume
+invocation as `session_resume_argv`: `droid --resume <id>`,
+`copilot --resume=<id>`, `cursor-agent --resume <id>`); qwen and qodercli
+report identity with no resume argv (herdr's reports for them carry none,
+and both originally shelled out to the herdr CLI — the ports speak the
+control socket directly). State comes from the scrape tier's bundled
 patterns below. `--install-agent-hooks` prints `skipped (… not installed)`
-for any of these three whose config directory is absent instead of failing
+for any of these whose config directory is absent instead of failing
 the run. par-term
 
 invokes these flags for its integrations dialog, CLI, Settings status rows,
@@ -1390,5 +1396,5 @@ Seed corpora live in `fuzz/corpus/<target>/`; add a corpus file for every new co
 | `crates/par-mux/src/mux/agent_resume.rs` | The per-agent resume invocation table |
 | `crates/par-mux/src/mux/win_resume.rs` | Windows resume transport: PE resolution and the cmd bridge batch |
 | `crates/par-mux/src/mux/client.rs` | `MuxClient`: connect/attach, `send`, notifications, spawn/kill daemon |
-| `crates/par-mux/src/mux/patterns/` | Bundled scrape patterns: `claude.toml`, `codex.toml`, `grok.toml`, `muse.toml`, `droid.toml`, `copilot.toml`, `cursor.toml` |
+| `crates/par-mux/src/mux/patterns/` | Bundled scrape patterns: `claude.toml`, `codex.toml`, `grok.toml`, `muse.toml`, `droid.toml`, `copilot.toml`, `cursor.toml`, `kimi.toml`, `qwen.toml`, `qodercli.toml`, `devin.toml`, `gemini.toml`, `amp.toml`. gemini and amp are PATTERN-ONLY (herdr ships no hook installer for them); mastracode has no upstream manifest; opencode is unported (herdr uses a JS plugin + TUI config edits, not the hook transport); qwen's `osc_tool_progress_working` rule is dropped pending a PaneSnapshot progress field |
 | `crates/par-mux/src/bin/par_mux/main.rs` | The daemon binary: CLI, state load/quarantine, signal handlers, `--restart` detach |

@@ -102,11 +102,43 @@ pub static CURSOR: ConfigHookArm = ConfigHookArm {
     asset_windows: include_str!("../../../integrations/hooks/par-mux-cursor-session-hook.ps1"),
 };
 
-/// The three arms, in the order the status surfaces list them.
-pub static CONFIG_HOOK_ARMS: [&ConfigHookArm; 3] = [&DROID, &COPILOT, &CURSOR];
+/// Qwen Code: `$QWEN_HOME/settings.json`, else `~/.qwen` — the
+/// claude-schema hooks table herdr registers into.
+pub static QWEN: ConfigHookArm = ConfigHookArm {
+    agent: "qwen",
+    config_dir: qwen_config_dir,
+    config_file: "settings.json",
+    event: "SessionStart",
+    shape: EntryShape::NestedGroup,
+    bootstrap: "{}\n",
+    required_root_key: None,
+    install_hint: "install qwen code first",
+    asset_posix: include_str!("../../../integrations/hooks/par-mux-qwen-session-hook.sh"),
+    asset_windows: include_str!("../../../integrations/hooks/par-mux-qwen-session-hook.ps1"),
+};
+
+/// Qoder CLI: `$QODERCLI_CONFIG_DIR/settings.json`, else `~/.qoder` —
+/// qoder's schema mirrors claude's settings.json hooks.
+pub static QODERCLI: ConfigHookArm = ConfigHookArm {
+    agent: "qodercli",
+    config_dir: qodercli_config_dir,
+    config_file: "settings.json",
+    event: "SessionStart",
+    shape: EntryShape::NestedGroup,
+    bootstrap: "{}\n",
+    required_root_key: None,
+    install_hint: "install qoder cli first",
+    asset_posix: include_str!("../../../integrations/hooks/par-mux-qodercli-session-hook.sh"),
+    asset_windows: include_str!("../../../integrations/hooks/par-mux-qodercli-session-hook.ps1"),
+};
+
+/// The arms, in the order the status surfaces list them.
+pub static CONFIG_HOOK_ARMS: [&ConfigHookArm; 5] = [&DROID, &COPILOT, &CURSOR, &QWEN, &QODERCLI];
 
 const COPILOT_HOME_ENV_VAR: &str = "COPILOT_HOME";
 const CURSOR_CONFIG_DIR_ENV_VAR: &str = "CURSOR_CONFIG_DIR";
+const QWEN_HOME_ENV_VAR: &str = "QWEN_HOME";
+const QODERCLI_CONFIG_DIR_ENV_VAR: &str = "QODERCLI_CONFIG_DIR";
 
 fn droid_config_dir() -> io::Result<PathBuf> {
     Ok(home_dir()?.join(".factory"))
@@ -117,6 +149,22 @@ fn copilot_config_dir() -> io::Result<PathBuf> {
         return Ok(PathBuf::from(dir));
     }
     Ok(home_dir()?.join(".copilot"))
+}
+
+fn qwen_config_dir() -> io::Result<PathBuf> {
+    if let Some(dir) = std::env::var_os(QWEN_HOME_ENV_VAR).filter(|value| !value.is_empty()) {
+        return Ok(PathBuf::from(dir));
+    }
+    Ok(home_dir()?.join(".qwen"))
+}
+
+fn qodercli_config_dir() -> io::Result<PathBuf> {
+    if let Some(dir) =
+        std::env::var_os(QODERCLI_CONFIG_DIR_ENV_VAR).filter(|value| !value.is_empty())
+    {
+        return Ok(PathBuf::from(dir));
+    }
+    Ok(home_dir()?.join(".qoder"))
 }
 
 fn cursor_config_dir() -> io::Result<PathBuf> {
@@ -724,7 +772,14 @@ mod tests {
                 assert!(asset.contains(&format!("par-mux:{}", arm.agent)), "{name}");
                 assert!(!asset.contains("HERDR"), "{name}: fully env-renamed");
                 assert!(asset.contains("PAR_MUX_PANE_ID"), "{name}");
-                assert!(asset.contains("session_resume_argv"), "{name}: resume argv");
+                // Resume argv is per-agent: herdr's qwen/qodercli reports
+                // carry none, so their ports do not invent one.
+                let resumes = matches!(arm.agent, "droid" | "copilot" | "cursor");
+                assert_eq!(
+                    asset.contains("session_resume_argv"),
+                    resumes,
+                    "{name}: resume argv presence"
+                );
             }
         }
         assert!(
