@@ -2133,7 +2133,7 @@ fn help_panel_pointer_scrolls_and_swallows_presses() {
 /// wanders onto the tab-strip row still ends on release.
 #[test]
 fn drag_owns_the_pointer_until_release_even_on_the_strip_row() {
-    let (rx, mut conn, mut session) = two_pane_session("m-drag", FakeScript::default());
+    let (rx, mut conn, mut session) = two_pane_session("m-selcp", FakeScript::default());
     session.route_mouse(&mut conn, sgr(0, 40, 6, false));
     settle(&mut session, &mut conn);
     assert!(matches!(session.drag, Some(DragState::Pending { .. })));
@@ -2905,4 +2905,141 @@ fn exit_cue_and_respawn_chord_follow_the_held_pane() {
     );
     chord(&mut session, &mut conn, b'&');
     assert_eq!(drained(&rx), vec!["respawn-pane -t %1".to_string()]);
+}
+
+/// A left-button drag over a pane that is NOT capturing the mouse
+/// selects its text: the press arms a pending selection (a click so far
+/// — nothing highlights, nothing forwards), the first motion promotes
+/// it and sweeps, and release copies the swept text as an OSC 52 write
+/// and clears. The pane receives no mouse bytes — it never asked for
+/// any.
+#[test]
+fn drag_selects_and_copies_over_a_non_tracking_pane() {
+    let (rx, mut conn, mut session) = two_pane_session("m-drag", FakeScript::default());
+    session.renderer.focus(1); // already focused: no select-pane noise
+    drained(&rx);
+    for i in 0..6 {
+        session
+            .renderer
+            .feed_output(1, format!("pane one line {i}\r\n").as_bytes());
+    }
+    // Press at content (2,1) — host (3,3), the `n` of "one" on line 1.
+    session.route_mouse(&mut conn, sgr(0, 3, 3, false));
+    settle(&mut session, &mut conn);
+    assert!(
+        session.renderer.selection.is_none(),
+        "a press that has not moved selects nothing"
+    );
+    assert!(
+        drained(&rx).is_empty(),
+        "a non-tracking pane receives no mouse bytes"
+    );
+    // Motion to (2,3): the sweep runs line 1 col 2 through line 3
+    // col 2.
+    session.route_mouse(&mut conn, sgr(32, 3, 5, false));
+    settle(&mut session, &mut conn);
+    assert_eq!(
+        session.renderer.selection,
+        Some(Selection::Chars {
+            pane: 1,
+            anchor: (1, 2),
+            head: (3, 2),
+        })
+    );
+    // Release copies the swept text and clears.
+    session.route_mouse(&mut conn, sgr(0, 3, 5, true));
+    use base64::Engine as _;
+    let outbox = session.notify.outbox.clone();
+    let start = outbox
+        .windows(7)
+        .position(|w| w == b"\x1b]52;c;")
+        .expect("the copy rides an OSC 52 write");
+    let body = &outbox[start + 7..];
+    let end = body
+        .windows(2)
+        .position(|w| w == b"\x1b\\")
+        .expect("the OSC 52 is ST-terminated");
+    let decoded = base64::engine::general_purpose::STANDARD
+        .decode(&body[..end])
+        .expect("base64 payload");
+    assert_eq!(
+        String::from_utf8_lossy(&decoded),
+        "ne one line 1\npane one line 2\npan\n",
+        "the copy is exactly the swept text"
+    );
+    assert!(session.renderer.selection.is_none(), "release clears");
+    assert!(session.text_drag.is_none(), "the drag is over");
+}
+
+/// A pane that negotiated mouse tracking keeps every report: press,
+/// drag, and release forward, and no selection arms. Shift bypasses the
+/// pane — tmux's own escape hatch — so a shift-drag selects instead.
+#[test]
+fn tracking_pane_keeps_reports_and_shift_drag_selects() {
+    let (rx, mut conn, mut session) = two_pane_session("m-selsh", FakeScript::default());
+    session.renderer.focus(1);
+    session.renderer.feed_output(1, b"\x1b[?1002h\x1b[?1006h");
+    drained(&rx);
+    // Plain press/motion/release forward pane-relative; nothing selects.
+    session.route_mouse(&mut conn, sgr(0, 3, 3, false));
+    settle(&mut session, &mut conn);
+    assert_eq!(drained(&rx).len(), 1, "the press forwards");
+    assert!(session.renderer.selection.is_none());
+    session.route_mouse(&mut conn, sgr(32, 3, 5, false));
+    settle(&mut session, &mut conn);
+    assert_eq!(drained(&rx).len(), 1, "the drag forwards");
+    session.route_mouse(&mut conn, sgr(0, 3, 5, true));
+    settle(&mut session, &mut conn);
+    assert_eq!(drained(&rx).len(), 1, "the release forwards");
+    assert!(
+        session.text_drag.is_none(),
+        "no selection arms on a tracking pane"
+    );
+    // Shift-drag (cb 4 press, cb 36 motion): the pane is bypassed and
+    // the same sweep selects.
+    session.route_mouse(&mut conn, sgr(4, 3, 3, false));
+    settle(&mut session, &mut conn);
+    assert!(drained(&rx).is_empty(), "the shift press bypasses the pane");
+    session.route_mouse(&mut conn, sgr(36, 3, 5, false));
+    settle(&mut session, &mut conn);
+    assert_eq!(
+        session.renderer.selection,
+        Some(Selection::Chars {
+            pane: 1,
+            anchor: (1, 2),
+            head: (3, 2),
+        })
+    );
+}
+
+/// The swept cells paint REVERSED — the visible highlight — and only
+/// them: middle rows whole, the first row from its anchor column, the
+/// last row through its head.
+#[test]
+fn drag_selection_paints_the_swept_cells_reversed() {
+    let (_rx, _conn, mut session) = two_pane_session("m-selp", FakeScript::default());
+    for i in 0..6 {
+        session
+            .renderer
+            .feed_output(1, format!("pane one line {i}\r\n").as_bytes());
+    }
+    session.renderer.set_selection(Some(Selection::Chars {
+        pane: 1,
+        anchor: (1, 2),
+        head: (3, 4),
+    }));
+    session.renderer.render_frame();
+    let reversed = |x: u16, y: u16| {
+        session.renderer.buffer[(x, y)]
+            .modifier
+            .contains(ratatui::style::Modifier::REVERSED)
+    };
+    // First row from col 2, middle rows whole, last row through col 4.
+    assert!(!reversed(1, 1), "before the anchor is untouched");
+    assert!(reversed(2, 1) && reversed(5, 1), "row 1 from the anchor on");
+    assert!(reversed(0, 2) && reversed(10, 2), "row 2 is covered whole");
+    assert!(reversed(4, 3), "row 3 through the head");
+    assert!(!reversed(5, 3), "past the head is untouched");
+    assert!(!reversed(2, 4), "below the span is untouched");
+    assert!(!reversed(2, 0), "above the span is untouched");
 }

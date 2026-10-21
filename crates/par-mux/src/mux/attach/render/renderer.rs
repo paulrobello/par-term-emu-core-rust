@@ -847,6 +847,12 @@ impl PaneRenderer {
             .find(|r| x >= r.x && x < r.x + r.width && y >= r.y && y < r.y + r.height)
     }
 
+    /// The pane's own layout rect, by pane id — the selection drag's
+    /// lookup for the pane its press anchored on.
+    pub(crate) fn pane_rect(&self, pane: u32) -> Option<PaneRect> {
+        self.layout.iter().find(|r| r.pane == pane).copied()
+    }
+
     /// The frame's row count (the pane renderer's grid height — the
     /// sidebar composes against it).
     pub(crate) fn frame_height(&self) -> u16 {
@@ -906,8 +912,8 @@ impl PaneRenderer {
             .is_some_and(|e| e.scroll_offset() > 0 || e.hold_scroll)
     }
 
-    /// Set (or clear) the line selection. Repaints on change.
-    pub(crate) fn set_selection(&mut self, sel: Option<(u32, usize, usize)>) {
+    /// Set (or clear) the selection. Repaints on change.
+    pub(crate) fn set_selection(&mut self, sel: Option<super::Selection>) {
         if self.selection != sel {
             self.selection = sel;
             self.dirty = true;
@@ -922,24 +928,75 @@ impl PaneRenderer {
         Some(len.saturating_sub(emulator.scroll_offset()))
     }
 
-    /// The selected lines' text — one trimmed line per row, newline
-    /// joined (the OSC 52 copy payload).
+    /// Map content coordinates onto the cell the pointer is over: the
+    /// ABSOLUTE line (scrollback lines first, then live rows — the
+    /// selection's coordinate) and its column. The press path's mapping
+    /// of a mouse cell; clamped into the pane's view like
+    /// [`Self::content_view`] paints it.
+    pub(crate) fn pane_view_cell(
+        &self,
+        rect: &PaneRect,
+        x: u16,
+        cy: u16,
+    ) -> Option<(usize, usize)> {
+        let emulator = self.emulators.get(&rect.pane)?;
+        let (inset_x, inset_y, view_w, view_h) = self.content_view(rect);
+        let col = usize::from(
+            x.saturating_sub(rect.x + inset_x)
+                .min(view_w.saturating_sub(1)),
+        );
+        let row = usize::from(
+            cy.saturating_sub(rect.y + inset_y)
+                .min(view_h.saturating_sub(1)),
+        );
+        let scroll = emulator.scroll_offset();
+        let len = emulator.terminal().active_grid().scrollback_len();
+        // View row r: the live grid's row r - S when r >= S, else the
+        // scrollback line len - S + r — the paint path's mapping.
+        let line = if row < scroll {
+            len - scroll + row
+        } else {
+            len + row - scroll
+        };
+        Some((line, col))
+    }
+
+    /// The selected text — one trimmed line per row, newline joined
+    /// (the OSC 52 copy payload). A character selection slices the
+    /// first and last rows at its cells; the rows between ride whole.
     pub(crate) fn selection_text(&self) -> Option<String> {
-        let (pane, a, b) = self.selection?;
+        use super::Selection;
+        let (pane, first_line, last_line, first_col, last_col) = match self.selection? {
+            Selection::Lines { pane, a, b } => (pane, a, b, 0, usize::MAX),
+            Selection::Chars { pane, anchor, head } => {
+                let ((a_line, a_col), (h_line, h_col)) = super::normalize_span(anchor, head);
+                (pane, a_line, h_line, a_col, h_col)
+            }
+        };
         let emulator = self.emulators.get(&pane)?;
         let grid = emulator.terminal().active_grid();
         let len = grid.scrollback_len();
         let mut text = String::new();
-        for line in a..=b {
-            let line_text = if line < len {
-                grid.scrollback_line(line).map(|cells| {
-                    let row: String = cells.iter().map(|cell| cell.c()).collect();
-                    row.trim_end().to_string()
-                })
+        for line in first_line..=last_line {
+            let row: Vec<char> = if line < len {
+                grid.scrollback_line(line)
+                    .map(|cells| cells.iter().map(|cell| cell.c()).collect())
+                    .unwrap_or_default()
             } else {
-                Some(grid.row_text(line - len).trim_end().to_string())
+                grid.row_text(line - len).chars().collect()
             };
-            text.push_str(&line_text.unwrap_or_default());
+            let from = if line == first_line { first_col } else { 0 };
+            let to = if line == last_line && last_col != usize::MAX {
+                (last_col + 1).min(row.len())
+            } else {
+                row.len()
+            };
+            let slice: String = if from < to {
+                row[from..to].iter().collect()
+            } else {
+                String::new()
+            };
+            text.push_str(slice.trim_end());
             text.push('\n');
         }
         Some(text)

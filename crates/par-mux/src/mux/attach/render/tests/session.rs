@@ -163,6 +163,53 @@ fn strip_click_switches_windows_without_forwarding() {
     );
 }
 
+/// `pane_view_cell` maps the pointer onto the selection's absolute
+/// line: with the view scrolled up S lines, view rows below S hit the
+/// LIVE grid at len + r - S — one subtraction of S, not two (the
+/// paint path's old live-row line double-subtracted it).
+#[test]
+fn pane_view_cell_maps_live_rows_under_scroll() {
+    let (rx, _conn, mut session) = two_pane_session("m-view", FakeScript::default());
+    drained(&rx);
+    for i in 0..60 {
+        session
+            .renderer
+            .feed_output(1, format!("pane one line {i:03}\r\n").as_bytes());
+    }
+    session.renderer.scroll_viewport(1, 3);
+    let rect = session.renderer.pane_rect(1).expect("pane 1 rect");
+    // 37 scrollback lines (60 fed lines, 24 live rows, the trailing
+    // newline's scroll), view scrolled 3: row 0 shows scrollback line
+    // 34; view row 3 is live row 0 = line 37; view row 5 = line 39.
+    assert_eq!(session.renderer.pane_view_cell(&rect, 0, 0), Some((34, 0)));
+    assert_eq!(session.renderer.pane_view_cell(&rect, 5, 3), Some((37, 5)));
+    assert_eq!(session.renderer.pane_view_cell(&rect, 2, 5), Some((39, 2)));
+}
+
+/// A character selection extracts exactly the swept text — reading
+/// order between anchor and head whichever way the drag ran, the first
+/// and last rows sliced at its cells, one trailing newline like the
+/// line selection's payload.
+#[test]
+fn char_selection_text_slices_rows_in_reading_order() {
+    let (_rx, _conn, mut session) = two_pane_session("m-selt", FakeScript::default());
+    for i in 0..6 {
+        session
+            .renderer
+            .feed_output(1, format!("pane one line {i}\r\n").as_bytes());
+    }
+    // Dragged UP-RIGHT: anchor below head — the span reads the same.
+    session.renderer.set_selection(Some(Selection::Chars {
+        pane: 1,
+        anchor: (3, 2),
+        head: (1, 8),
+    }));
+    assert_eq!(
+        session.renderer.selection_text().as_deref(),
+        Some(" line 1\npane one line 2\npan\n")
+    );
+}
+
 /// The copy-mode extension (the TUI audit's R1): `v` anchors the line
 /// selection at the viewport top, scrolling extends it, `y` copies the
 /// selected lines as an OSC 52 write in the frame's outbox, and `/`
@@ -183,11 +230,15 @@ fn copy_mode_selects_copies_and_searches() {
     drained(&rx);
     // `v` anchors at the viewport top; scrolling extends the head.
     session.toggle_line_selection(1);
-    let (pane, a, b) = session.renderer.selection.expect("selection up");
+    let Selection::Lines { pane, a, b } = session.renderer.selection.expect("selection up") else {
+        panic!("copy mode selects whole lines");
+    };
     assert_eq!((pane, a, b), (1, a, a), "the anchor starts the span");
     session.renderer.scroll_viewport(1, 6);
     session.update_selection_head(1);
-    let (_, a, b) = session.renderer.selection.expect("still up");
+    let Selection::Lines { a, b, .. } = session.renderer.selection.expect("still up") else {
+        panic!("still a line selection");
+    };
     assert!(b > a, "the head moved past the anchor: {a}..{b}");
     // `y` copies: an OSC 52 write rides the frame's outbox.
     session.copy_selection();

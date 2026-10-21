@@ -120,6 +120,19 @@ impl SgrMouse {
         !self.release && !self.is_motion() && self.cb & !0x3 & 0x40 == 0 && self.cb & 0x3 == 2
     }
 
+    /// A left-button PRESS (not release/motion/wheel): the text
+    /// selection's trigger, the same button every terminal selects with.
+    pub fn is_left_press(&self) -> bool {
+        !self.release && !self.is_motion() && self.cb & !0x3 & 0x40 == 0 && self.cb & 0x3 == 0
+    }
+
+    /// The shift modifier rode the report (cb bit 2): the terminal's
+    /// "bypass the application" escape hatch, the one tmux's own mouse
+    /// selection is gated behind.
+    pub fn shift(&self) -> bool {
+        self.cb & 0x4 != 0
+    }
+
     /// Re-encode as a pane-relative report in the dialect the pane
     /// negotiated: coordinates rebased to the pane's own 0-based origin,
     /// then emitted SGR (1006) or classic `ESC[M`/urxvt per the pane

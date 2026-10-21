@@ -2,7 +2,10 @@
 //! modal owners, and mouse reports through the overlay hit-testers.
 
 use super::renderer::{pane_in_direction, PaneDir};
-use super::{DividerHit, DragState, MenuTarget, Modal, PickerState, PromptTarget, WindowSession};
+use super::{
+    DividerHit, DragState, MenuTarget, Modal, PickerState, PromptTarget, Selection, TextDrag,
+    WindowSession,
+};
 use crate::mux::attach::input::SgrMouse;
 use crate::mux::attach::layout::PaneRect;
 use crate::mux::attach::text_input::{fold_fullwidth_ascii, Utf8Assembler, Utf8Step};
@@ -50,6 +53,8 @@ pub(super) enum Hit {
     SidebarPane { pane: u32 },
     /// Motion or release while a divider drag is in flight.
     Drag { x: u16, y: u16, release: bool },
+    /// Motion or release while a text-selection drag is in flight.
+    TextDrag { x: u16, y: u16, release: bool },
     /// A picker wheel: move the selection by the delta.
     PickerMove(isize),
     /// A press on the picker's filter line: open the filter box.
@@ -672,6 +677,7 @@ impl WindowSession {
             Hit::DragStart { divider, x, y } => {
                 self.drag = Some(DragState::Pending { divider, x, y });
             }
+            Hit::TextDrag { x, y, release } => self.text_drag_event(x, y, release),
             Hit::PanePress(rect) => {
                 // A re-click on the focused pane must not re-select it:
                 // `select-pane` always broadcasts `%layout-change`, and
@@ -686,6 +692,27 @@ impl WindowSession {
                 self.renderer.focus(rect.pane);
                 if changed {
                     let _ = conn.send_forget(&format!("select-pane -t %{}", rect.pane));
+                }
+                // The mouse-owning pane keeps its report; anything else
+                // (or shift, the bypass modifier) arms a text selection
+                // instead — the drag sweeps the pane's cells and release
+                // copies, tmux's own mouse-copy gating.
+                if mouse.is_left_press()
+                    && (mouse.shift() || !self.pane_accepts_mouse(rect.pane, &mouse))
+                {
+                    let (x, cy) = self.geometry.host_to_content_clamped(
+                        mouse.col.saturating_sub(1),
+                        mouse.row.saturating_sub(1),
+                    );
+                    if let Some(anchor) = self.renderer.pane_view_cell(&rect, x, cy) {
+                        self.text_drag = Some(TextDrag::Pending {
+                            pane: rect.pane,
+                            anchor,
+                        });
+                        // A fresh press clears whatever was selected.
+                        self.renderer.set_selection(None);
+                        return;
+                    }
                 }
                 if self.pane_accepts_mouse(rect.pane, &mouse) {
                     self.forward_mouse(conn, &rect, &mouse);
@@ -852,6 +879,19 @@ impl WindowSession {
                 release: mouse.release,
             };
         }
+        // A text-selection drag in flight follows the pointer the same
+        // way — but a modal that owns the pointer (menu, settings,
+        // prompt…) takes precedence over a stale armed drag.
+        if self.text_drag.is_some()
+            && matches!(self.modal, Modal::None | Modal::Scroll)
+            && (mouse.release || mouse.is_motion())
+        {
+            return Hit::TextDrag {
+                x,
+                y: content_y,
+                release: mouse.release,
+            };
+        }
         match &self.modal {
             // The rename prompt is modal for the pointer too: every event
             // is consumed while it is up.
@@ -1013,6 +1053,9 @@ impl WindowSession {
             if self.drag.is_some() {
                 return Hit::Consumed; // the held button owns the pointer; wheels wait
             }
+            if self.text_drag.is_some() {
+                return Hit::Consumed; // ditto a selection drag mid-sweep
+            }
             return match self.renderer.pane_at(x, cy) {
                 Some(rect) => Hit::Wheel {
                     rect: *rect,
@@ -1026,6 +1069,13 @@ impl WindowSession {
         if mouse.release || mouse.is_motion() {
             if self.drag.is_some() {
                 return Hit::Drag {
+                    x,
+                    y: cy,
+                    release: mouse.release,
+                };
+            }
+            if self.text_drag.is_some() && matches!(self.modal, Modal::None | Modal::Scroll) {
+                return Hit::TextDrag {
                     x,
                     y: cy,
                     release: mouse.release,
@@ -1046,6 +1096,55 @@ impl WindowSession {
         match self.renderer.pane_at(x, cy) {
             Some(rect) => Hit::PanePress(*rect),
             None => Hit::Consumed,
+        }
+    }
+
+    /// One motion or release while a text-selection drag is in flight.
+    /// The first motion promotes the pending press to an active
+    /// selection (anchor set, head following the pointer); release ends
+    /// it — an ACTIVE drag copies the swept text as an OSC 52 write and
+    /// clears, a release that never moved is just the click the press
+    /// already handled (focus only, nothing selected, nothing copied).
+    /// A pointer outside the drag's own pane clamps to that pane's view,
+    /// the same saturation the paint path gives it.
+    fn text_drag_event(&mut self, x: u16, y: u16, release: bool) {
+        let state = match self.text_drag.take() {
+            Some(state) => state,
+            // A release with no drag armed (the modal-precedence case):
+            // the click already cleared any selection on its press.
+            None => {
+                return;
+            }
+        };
+        let pane = match &state {
+            TextDrag::Pending { pane, .. } | TextDrag::Active { pane } => *pane,
+        };
+        let Some(rect) = self.renderer.pane_rect(pane) else {
+            self.renderer.set_selection(None);
+            return;
+        };
+        let head = self.renderer.pane_view_cell(&rect, x, y);
+        match (state, release, head) {
+            (TextDrag::Pending { anchor, .. }, false, Some(head)) => {
+                self.renderer
+                    .set_selection(Some(Selection::Chars { pane, anchor, head }));
+                self.text_drag = Some(TextDrag::Active { pane });
+            }
+            // Motion without a cell (pane vanished mid-drag): drop it.
+            (TextDrag::Pending { .. }, false, None) => {}
+            // A click, not a drag: focus already followed the press.
+            (TextDrag::Pending { .. }, true, _) => {}
+            (TextDrag::Active { .. }, false, Some(head)) => {
+                if let Some(Selection::Chars { anchor, .. }) = self.renderer.selection {
+                    self.renderer
+                        .set_selection(Some(Selection::Chars { pane, anchor, head }));
+                }
+                self.text_drag = Some(TextDrag::Active { pane });
+            }
+            (TextDrag::Active { .. }, false, None) => {
+                self.text_drag = Some(TextDrag::Active { pane })
+            }
+            (TextDrag::Active { .. }, true, _) => self.copy_selection(),
         }
     }
 

@@ -373,10 +373,10 @@ pub struct PaneRenderer {
     /// The popup command window painted over the panes (above the
     /// side panel, under the toast and modal overlays).
     pub(super) popup: Option<popup::PopupView>,
-    /// The scroll-mode line selection: the pane and its INCLUSIVE
-    /// absolute line span — scrollback lines first (0 = the oldest),
-    /// then the live grid rows. `None` when nothing is selected.
-    pub(crate) selection: Option<(u32, usize, usize)>,
+    /// The on-screen selection — scroll mode's whole lines or the mouse
+    /// drag's characters; see [`Selection`]. `None` when nothing is
+    /// selected.
+    pub(crate) selection: Option<Selection>,
     /// Per-pane border boxes instead of shared dividers (config
     /// `pane-borders`); `show_label_in_border` embeds the pane's title in
     /// the top edge. Both default off.
@@ -742,6 +742,77 @@ enum DragState {
     },
 }
 
+/// A text-selection drag in flight — the mouse's sweep over a pane that
+/// is not capturing the pointer. `Pending` is a press that has not moved
+/// yet (a plain click: it must neither highlight nor copy); the first
+/// motion promotes it to `Active` with the anchor the press stored, and
+/// release copies the swept text. The pane id and anchor live in the
+/// renderer's [`Selection::Chars`] once promoted.
+enum TextDrag {
+    Pending { pane: u32, anchor: (usize, usize) },
+    Active { pane: u32 },
+}
+
+/// What the client has selected on screen. Lines are the pane's ABSOLUTE
+/// line coordinate — scrollback lines first (oldest at 0), then the live
+/// grid's rows — the coordinate both painting and text extraction share.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum Selection {
+    /// Scroll mode's whole-line selection: absolute lines `a..=b`, set
+    /// by `v` and extended by the scrolling viewport.
+    Lines { pane: u32, a: usize, b: usize },
+    /// The mouse drag's character selection: anchor and head are
+    /// `(absolute line, column)`. Reading order between the two cells
+    /// defines the selection, whichever way the drag ran.
+    Chars {
+        pane: u32,
+        anchor: (usize, usize),
+        head: (usize, usize),
+    },
+}
+
+impl Selection {
+    /// Whether the selection covers cell `(line, col)` of `pane` — the
+    /// paint path's highlight test.
+    pub(crate) fn covers(&self, pane: u32, line: usize, col: usize) -> bool {
+        match *self {
+            Selection::Lines { pane: p, a, b } => p == pane && line >= a && line <= b,
+            Selection::Chars {
+                pane: p,
+                anchor,
+                head,
+            } => {
+                if p != pane {
+                    return false;
+                }
+                let ((first_line, first_col), (last_line, last_col)) = normalize_span(anchor, head);
+                if line < first_line || line > last_line {
+                    return false;
+                }
+                match (line == first_line, line == last_line) {
+                    (true, true) => col >= first_col && col <= last_col,
+                    (true, false) => col >= first_col,
+                    (false, true) => col <= last_col,
+                    // A middle line is covered whole.
+                    (false, false) => true,
+                }
+            }
+        }
+    }
+}
+
+/// The span's cells in reading order: the earlier cell first.
+pub(crate) fn normalize_span(
+    anchor: (usize, usize),
+    head: (usize, usize),
+) -> ((usize, usize), (usize, usize)) {
+    if (anchor.0, anchor.1) <= (head.0, head.1) {
+        (anchor, head)
+    } else {
+        (head, anchor)
+    }
+}
+
 /// One render-mode session's live state: the window being mirrored, its
 /// renderer, the status row, and any layout change waiting to be applied
 /// (applying one needs the connection for the re-seeding replays, so the
@@ -824,6 +895,9 @@ struct WindowSession {
     project_poll: std::time::Instant,
     /// The divider drag in flight, if any.
     drag: Option<DragState>,
+    /// A text-selection drag in flight (the mouse's sweep over a pane
+    /// that is not capturing the pointer); see [`TextDrag`].
+    text_drag: Option<TextDrag>,
     /// The session's configured display options (background probe,
     /// glyphs, pane chrome, side-panel width, border colors), kept
     /// OUTSIDE the renderer as the configured record; the in-place refit
@@ -1184,6 +1258,7 @@ impl WindowSession {
             socket: None,
             applied_client: crate::mux::config::ClientSection::default(),
             drag: None,
+            text_drag: None,
             render_opts: RenderOptions::default(),
             sidebar: SidebarState::default(),
             sidebar_drag: None,

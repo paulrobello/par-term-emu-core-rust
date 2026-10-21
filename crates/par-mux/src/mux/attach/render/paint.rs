@@ -104,7 +104,7 @@ impl PaneRenderer {
             let abs_line = if in_history {
                 scrollback_row.max(0) as usize
             } else {
-                scrollback_len.max(0) as usize - scroll + (row as usize - scroll)
+                scrollback_len.max(0) as usize + (row as usize - scroll)
             };
             for col in 0..max_cols {
                 let core_cell: &par_term_emu_core::cell::Cell = if in_history {
@@ -157,9 +157,10 @@ impl PaneRenderer {
                     cell.set_bg(map_color(core_cell.bg()));
                 }
                 cell.set_style(map_flags(core_cell.flags()));
-                // The scroll-mode selection reverses its lines.
-                if let Some((spane, a, b)) = self.selection {
-                    if spane == rect.pane && abs_line >= a && abs_line <= b {
+                // The selection reverses its cells — whole lines in
+                // scroll mode, the drag's span for a mouse selection.
+                if let Some(selection) = self.selection {
+                    if selection.covers(rect.pane, abs_line, usize::from(col)) {
                         let style = cell.style().add_modifier(RtModifier::REVERSED);
                         cell.set_style(style);
                     }

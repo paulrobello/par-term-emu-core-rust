@@ -196,7 +196,11 @@ impl WindowSession {
             return;
         };
         self.copy_anchor = Some(top);
-        self.renderer.set_selection(Some((pane, top, top)));
+        self.renderer.set_selection(Some(super::Selection::Lines {
+            pane,
+            a: top,
+            b: top,
+        }));
         self.chrome
             .flash("selecting lines — scroll, then y copies".to_string());
         self.draw_status_row();
@@ -205,7 +209,12 @@ impl WindowSession {
     /// While a selection is up, the viewport's top line is its moving
     /// head.
     pub(super) fn update_selection_head(&mut self, pane: u32) {
-        let Some((p, anchor, _)) = self.renderer.selection else {
+        let Some(super::Selection::Lines {
+            pane: p,
+            a: anchor,
+            b: _,
+        }) = self.renderer.selection
+        else {
             return;
         };
         if p != pane {
@@ -214,8 +223,11 @@ impl WindowSession {
         let Some(top) = self.renderer.viewport_top_line(pane) else {
             return;
         };
-        self.renderer
-            .set_selection(Some((p, anchor.min(top), anchor.max(top))));
+        self.renderer.set_selection(Some(super::Selection::Lines {
+            pane: p,
+            a: anchor.min(top),
+            b: anchor.max(top),
+        }));
     }
 
     /// y: copy the selected lines' text as an OSC 52 clipboard write —
