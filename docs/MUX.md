@@ -22,6 +22,7 @@ The daemon is feature-gated (Rust `mux` feature for the library, `mux-bin` for t
 - [Agent Hook Reports](#agent-hook-reports)
 - [Host Telemetry Probe](#host-telemetry-probe)
 - [Agent Scrape Tier](#agent-scrape-tier)
+- [Self-Update and Installers](#self-update-and-installers)
 - [Plugin System](#plugin-system)
 - [Saved Machines and the SSH Thin Client](#saved-machines-and-the-ssh-thin-client)
 - [Persistence and Restart](#persistence-and-restart)
@@ -1193,6 +1194,12 @@ An override that fails to parse or validate falls back to the bundled set with a
 Two mismatching ticks (not interrupted by a proven match) clear the whole claim and broadcast `%agent-released`, exactly as a release report would. The verdict is conservative in every ambiguous direction: a probe that goes blind (unreadable argv — the fresh-spawn window where macOS cannot read a mid-`exec` argv) keeps its recorded misses and never adds one, and Windows has no portable process-tree/argv access, so the sweep is inert there and hook release remains the only claim-clearing path.
 
 One constraint follows from the argv match: an agent launched through a STAND-IN program whose argv carries no agent-name component — pi's or omp's `-x <program>` runs the named program in the pane instead of the agent CLI — can never match, so its claim is released after the two mismatching ticks however healthy the stand-in is. Name the stand-in after its agent and the sweep holds the claim: `pi -x 'sh -c "exec -a pi <program>"'` sets argv[0] to `pi`, which the label match takes verbatim.
+
+## Self-Update and Installers
+
+`par-mux update [--channel stable|preview] [--check]` self-updates from this repository's GitHub releases: it resolves the channel (`stable` = latest release, `preview` = newest prerelease, falling back to stable when none exists), downloads the release archive for this platform (`par-mux-v<version>-<target>.tar.gz`; zip on Windows — the release workflow's own naming), extracts it, VERIFIES the new binary reports the expected version before anything is replaced, swaps it in (the old image is kept beside it as `par-mux.previous` — a failed restart can swap back), and then restarts the daemon through `--restart`: the sessions ride the stop-and-restore handoff (D3.5 — every pane respawns with its screen, scrollback, cwd, and agent identity; D10 records why live handoff is not the contract). `--check` reports the plan and touches nothing. A release carrying no archive for the running platform, or a downloaded binary whose `--version` disagrees, refuses without touching the installation. The network rides `curl` (as the plugin installer rides `git`) — par-mux carries no HTTP client dependency; prerelease versions sort below their release (`0.64.0-rc1` < `0.64.0`), so a preview update settles onto the stable release once it ships. `--machine` refuses `update` — it manages the machine it runs on.
+
+The installer paths: `curl -fsSL https://raw.githubusercontent.com/paulrobello/par-term-emu-core-rust/main/scripts/install-par-mux.sh | sh` installs the latest release into `~/.local/bin` (override `PAR_MUX_INSTALL_DIR`), verifying the archive against the release's `SHA256SUMS` when `sha256sum` exists. The Homebrew tap flow (`brew tap paulrobello/par-mux && brew install par-mux`) is published from the formula template and steps in [`packaging/homebrew/README.md`](../packaging/homebrew/README.md) — filling its placeholders and pushing the tap is a release-cut action.
 
 ## Plugin System
 

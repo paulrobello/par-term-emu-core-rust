@@ -182,6 +182,9 @@ fn machine_relay(label: &str) -> Result<std::process::Child, String> {
     // with the reason instead of a confusing remote error.
     let raw: Vec<String> = std::env::args().skip(1).collect();
     for arg in &raw {
+        if arg == "update" {
+            return Err("update manages the machine it runs on; ssh in and run it there".into());
+        }
         if matches!(
             arg.as_str(),
             "--gen-config"

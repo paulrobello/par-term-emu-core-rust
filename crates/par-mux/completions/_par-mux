@@ -363,6 +363,15 @@ esac
     ;;
 esac
 ;;
+(update)
+_arguments "${_arguments_options[@]}" : \
+'--channel=[The release channel\: \`stable\` (latest release, the default) or \`preview\` (newest prerelease)]:CHANNEL:(stable preview)' \
+'--machine=[Relay this invocation to a saved machine over SSH (the machine'\''s profile in \`\[machines.<label>\]\` names the ssh target; credentials stay with ssh itself). One-shot commands (\`--cmd\`, \`status\`, \`ls\`, \`observe\`, \`control\`, \`--stop\`) run non-interactively; \`attach\` forces passthrough under a pty — the thin client]:LABEL:_default' \
+'--check[Report what would install, touch nothing]' \
+'-h[Print help]' \
+'--help[Print help]' \
+&& ret=0
+;;
 (help)
 _arguments "${_arguments_options[@]}" : \
 ":: :_par-mux__subcmd__help_commands" \
@@ -487,6 +496,10 @@ _arguments "${_arguments_options[@]}" : \
     ;;
 esac
 ;;
+(update)
+_arguments "${_arguments_options[@]}" : \
+&& ret=0
+;;
 (help)
 _arguments "${_arguments_options[@]}" : \
 && ret=0
@@ -515,6 +528,7 @@ _par-mux_commands() {
 'completion:Print the shell-completion script for SHELL, herdr'\''s spelling of \`--print-completions\`. Never contacts a daemon' \
 'machine:Manage saved machines (\`\[machines.<label>\]\` in the config)\: SSH thin-client profiles for \`--machine\`. Never contacts a daemon' \
 'plugin:Manage plugins\: manifests under the state dir'\''s \`plugins/\` whose hooks run on daemon events. Install previews every command; nothing runs until \`--trust\`. Never contacts a daemon' \
+'update:Check for a newer release and install it (self-update)\: resolve the channel, download the platform archive, verify the binary, replace this one, restart the daemon (its sessions ride the stop-and-restore handoff)' \
 'help:Print this message or the help of the given subcommand(s)' \
     )
     _describe -t commands 'par-mux commands' commands "$@"
@@ -554,6 +568,7 @@ _par-mux__subcmd__help_commands() {
 'completion:Print the shell-completion script for SHELL, herdr'\''s spelling of \`--print-completions\`. Never contacts a daemon' \
 'machine:Manage saved machines (\`\[machines.<label>\]\` in the config)\: SSH thin-client profiles for \`--machine\`. Never contacts a daemon' \
 'plugin:Manage plugins\: manifests under the state dir'\''s \`plugins/\` whose hooks run on daemon events. Install previews every command; nothing runs until \`--trust\`. Never contacts a daemon' \
+'update:Check for a newer release and install it (self-update)\: resolve the channel, download the platform archive, verify the binary, replace this one, restart the daemon (its sessions ride the stop-and-restore handoff)' \
 'help:Print this message or the help of the given subcommand(s)' \
     )
     _describe -t commands 'par-mux help commands' commands "$@"
@@ -684,6 +699,11 @@ _par-mux__subcmd__help__subcmd__status_commands() {
 _par-mux__subcmd__help__subcmd__stop_commands() {
     local commands; commands=()
     _describe -t commands 'par-mux help stop commands' commands "$@"
+}
+(( $+functions[_par-mux__subcmd__help__subcmd__update_commands] )) ||
+_par-mux__subcmd__help__subcmd__update_commands() {
+    local commands; commands=()
+    _describe -t commands 'par-mux help update commands' commands "$@"
 }
 (( $+functions[_par-mux__subcmd__ls_commands] )) ||
 _par-mux__subcmd__ls_commands() {
@@ -872,6 +892,11 @@ _par-mux__subcmd__status_commands() {
 _par-mux__subcmd__stop_commands() {
     local commands; commands=()
     _describe -t commands 'par-mux stop commands' commands "$@"
+}
+(( $+functions[_par-mux__subcmd__update_commands] )) ||
+_par-mux__subcmd__update_commands() {
+    local commands; commands=()
+    _describe -t commands 'par-mux update commands' commands "$@"
 }
 
 if [ "$funcstack[1]" = "_par-mux" ]; then

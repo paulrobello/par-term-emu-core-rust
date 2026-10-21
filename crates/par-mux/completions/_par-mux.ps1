@@ -62,6 +62,7 @@ Register-ArgumentCompleter -Native -CommandName 'par-mux' -ScriptBlock {
             [CompletionResult]::new('completion', 'completion', [CompletionResultType]::ParameterValue, 'Print the shell-completion script for SHELL, herdr''s spelling of `--print-completions`. Never contacts a daemon')
             [CompletionResult]::new('machine', 'machine', [CompletionResultType]::ParameterValue, 'Manage saved machines (`[machines.<label>]` in the config): SSH thin-client profiles for `--machine`. Never contacts a daemon')
             [CompletionResult]::new('plugin', 'plugin', [CompletionResultType]::ParameterValue, 'Manage plugins: manifests under the state dir''s `plugins/` whose hooks run on daemon events. Install previews every command; nothing runs until `--trust`. Never contacts a daemon')
+            [CompletionResult]::new('update', 'update', [CompletionResultType]::ParameterValue, 'Check for a newer release and install it (self-update): resolve the channel, download the platform archive, verify the binary, replace this one, restart the daemon (its sessions ride the stop-and-restore handoff)')
             [CompletionResult]::new('help', 'help', [CompletionResultType]::ParameterValue, 'Print this message or the help of the given subcommand(s)')
             break
         }
@@ -297,6 +298,14 @@ Register-ArgumentCompleter -Native -CommandName 'par-mux' -ScriptBlock {
         'par-mux;plugin;help;help' {
             break
         }
+        'par-mux;update' {
+            [CompletionResult]::new('--channel', '--channel', [CompletionResultType]::ParameterName, 'The release channel: `stable` (latest release, the default) or `preview` (newest prerelease)')
+            [CompletionResult]::new('--machine', '--machine', [CompletionResultType]::ParameterName, 'Relay this invocation to a saved machine over SSH (the machine''s profile in `[machines.<label>]` names the ssh target; credentials stay with ssh itself). One-shot commands (`--cmd`, `status`, `ls`, `observe`, `control`, `--stop`) run non-interactively; `attach` forces passthrough under a pty — the thin client')
+            [CompletionResult]::new('--check', '--check', [CompletionResultType]::ParameterName, 'Report what would install, touch nothing')
+            [CompletionResult]::new('-h', '-h', [CompletionResultType]::ParameterName, 'Print help')
+            [CompletionResult]::new('--help', '--help', [CompletionResultType]::ParameterName, 'Print help')
+            break
+        }
         'par-mux;help' {
             [CompletionResult]::new('start', 'start', [CompletionResultType]::ParameterValue, 'Start the daemon (the default action): detached, auto-attaching this terminal unless --no-attach. Same as bare `par-mux [NAME]`')
             [CompletionResult]::new('stop', 'stop', [CompletionResultType]::ParameterValue, 'Stop the daemon serving the resolved socket cleanly. Same as `--stop`')
@@ -310,6 +319,7 @@ Register-ArgumentCompleter -Native -CommandName 'par-mux' -ScriptBlock {
             [CompletionResult]::new('completion', 'completion', [CompletionResultType]::ParameterValue, 'Print the shell-completion script for SHELL, herdr''s spelling of `--print-completions`. Never contacts a daemon')
             [CompletionResult]::new('machine', 'machine', [CompletionResultType]::ParameterValue, 'Manage saved machines (`[machines.<label>]` in the config): SSH thin-client profiles for `--machine`. Never contacts a daemon')
             [CompletionResult]::new('plugin', 'plugin', [CompletionResultType]::ParameterValue, 'Manage plugins: manifests under the state dir''s `plugins/` whose hooks run on daemon events. Install previews every command; nothing runs until `--trust`. Never contacts a daemon')
+            [CompletionResult]::new('update', 'update', [CompletionResultType]::ParameterValue, 'Check for a newer release and install it (self-update): resolve the channel, download the platform archive, verify the binary, replace this one, restart the daemon (its sessions ride the stop-and-restore handoff)')
             [CompletionResult]::new('help', 'help', [CompletionResultType]::ParameterValue, 'Print this message or the help of the given subcommand(s)')
             break
         }
@@ -387,6 +397,9 @@ Register-ArgumentCompleter -Native -CommandName 'par-mux' -ScriptBlock {
             break
         }
         'par-mux;help;plugin;update' {
+            break
+        }
+        'par-mux;help;update' {
             break
         }
         'par-mux;help;help' {

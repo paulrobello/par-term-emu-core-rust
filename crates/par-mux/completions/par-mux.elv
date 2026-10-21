@@ -59,6 +59,7 @@ set edit:completion:arg-completer[par-mux] = {|@words|
             cand completion 'Print the shell-completion script for SHELL, herdr''s spelling of `--print-completions`. Never contacts a daemon'
             cand machine 'Manage saved machines (`[machines.<label>]` in the config): SSH thin-client profiles for `--machine`. Never contacts a daemon'
             cand plugin 'Manage plugins: manifests under the state dir''s `plugins/` whose hooks run on daemon events. Install previews every command; nothing runs until `--trust`. Never contacts a daemon'
+            cand update 'Check for a newer release and install it (self-update): resolve the channel, download the platform archive, verify the binary, replace this one, restart the daemon (its sessions ride the stop-and-restore handoff)'
             cand help 'Print this message or the help of the given subcommand(s)'
         }
         &'par-mux;start'= {
@@ -257,6 +258,13 @@ set edit:completion:arg-completer[par-mux] = {|@words|
         }
         &'par-mux;plugin;help;help'= {
         }
+        &'par-mux;update'= {
+            cand --channel 'The release channel: `stable` (latest release, the default) or `preview` (newest prerelease)'
+            cand --machine 'Relay this invocation to a saved machine over SSH (the machine''s profile in `[machines.<label>]` names the ssh target; credentials stay with ssh itself). One-shot commands (`--cmd`, `status`, `ls`, `observe`, `control`, `--stop`) run non-interactively; `attach` forces passthrough under a pty — the thin client'
+            cand --check 'Report what would install, touch nothing'
+            cand -h 'Print help'
+            cand --help 'Print help'
+        }
         &'par-mux;help'= {
             cand start 'Start the daemon (the default action): detached, auto-attaching this terminal unless --no-attach. Same as bare `par-mux [NAME]`'
             cand stop 'Stop the daemon serving the resolved socket cleanly. Same as `--stop`'
@@ -270,6 +278,7 @@ set edit:completion:arg-completer[par-mux] = {|@words|
             cand completion 'Print the shell-completion script for SHELL, herdr''s spelling of `--print-completions`. Never contacts a daemon'
             cand machine 'Manage saved machines (`[machines.<label>]` in the config): SSH thin-client profiles for `--machine`. Never contacts a daemon'
             cand plugin 'Manage plugins: manifests under the state dir''s `plugins/` whose hooks run on daemon events. Install previews every command; nothing runs until `--trust`. Never contacts a daemon'
+            cand update 'Check for a newer release and install it (self-update): resolve the channel, download the platform archive, verify the binary, replace this one, restart the daemon (its sessions ride the stop-and-restore handoff)'
             cand help 'Print this message or the help of the given subcommand(s)'
         }
         &'par-mux;help;start'= {
@@ -325,6 +334,8 @@ set edit:completion:arg-completer[par-mux] = {|@words|
         &'par-mux;help;plugin;remove'= {
         }
         &'par-mux;help;plugin;update'= {
+        }
+        &'par-mux;help;update'= {
         }
         &'par-mux;help;help'= {
         }

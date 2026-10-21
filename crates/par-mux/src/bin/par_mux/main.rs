@@ -430,6 +430,23 @@ enum Sub {
     /// hooks run on daemon events. Install previews every command; nothing
     /// runs until `--trust`. Never contacts a daemon.
     Plugin(PluginArgs),
+    /// Check for a newer release and install it (self-update): resolve the
+    /// channel, download the platform archive, verify the binary, replace
+    /// this one, restart the daemon (its sessions ride the stop-and-restore
+    /// handoff).
+    Update(UpdateArgs),
+}
+
+/// `par-mux update` — the self-update arguments.
+#[derive(clap::Args, Debug)]
+struct UpdateArgs {
+    /// The release channel: `stable` (latest release, the default) or
+    /// `preview` (newest prerelease).
+    #[arg(long)]
+    channel: Option<par_mux::mux::update::Channel>,
+    /// Report what would install, touch nothing.
+    #[arg(long)]
+    check: bool,
 }
 
 /// `par-mux plugin <VERB>` — the plugin lifecycle.
@@ -1041,9 +1058,11 @@ fn run_agent_extension_action(install: bool) -> std::process::ExitCode {
 
 mod machine;
 mod plugin;
+mod update_cli;
 
 use machine::{run_machine_command, run_machine_relay};
 use plugin::run_plugin_command;
+use update_cli::run_update_command;
 
 fn main() -> std::process::ExitCode {
     let mut cli = Cli::parse();
@@ -1160,6 +1179,10 @@ fn main() -> std::process::ExitCode {
             Sub::Attach(args) => attach_cmd = Some(AttachCommand::Attach(args)),
             Sub::Machine(args) => return run_machine_command(args),
             Sub::Plugin(args) => return run_plugin_command(args),
+            Sub::Update(args) => {
+                let socket = resolve_cli_socket(&cli);
+                return run_update_command(args, socket);
+            }
             Sub::Config(args) => {
                 cli.gen_config = true;
                 cli.force |= args.force;

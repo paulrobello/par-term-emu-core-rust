@@ -45,6 +45,9 @@ pub mod skill_installer;
 pub(crate) mod test_wait;
 pub mod theme;
 pub mod tree;
+/// The self-update tier (mux-bin: clap's Channel rides it).
+#[cfg(feature = "mux-bin")]
+pub mod update;
 pub mod win_resume;
 pub(crate) mod worktree;
 
