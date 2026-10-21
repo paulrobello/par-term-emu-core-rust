@@ -460,13 +460,8 @@ impl WindowSession {
         // Registration replay (held panes, zoomed windows) is drained
         // ahead of the queries like passthrough does; the held panes'
         // `%pane-exited` lines seed the exit cue.
-        for event in conn.drain_pending_events() {
-            if let TmuxNotification::PaneExited { pane_id, exit_code } = event {
-                if let Some(pane) = pane_id.strip_prefix('%').and_then(|p| p.parse().ok()) {
-                    self.held.insert(pane, exit_code);
-                }
-            }
-        }
+        let replay = conn.drain_pending_events();
+        self.defer_seed_events(replay);
 
         let (window, pane) = resolve_window_and_pane(conn, target)?;
         self.window = window;
@@ -478,26 +473,28 @@ impl WindowSession {
         let report = self.size_report(conn, &pane);
         conn.send_checked(&report)
             .map_err(|err| format!("refresh-client failed: {err}"))?;
-        let layout_event = conn
-            .drain_pending_events()
-            .into_iter()
-            .find_map(|event| match event {
+        let mut layout_event = None;
+        let mut rest = Vec::new();
+        for event in conn.drain_pending_events() {
+            match event {
                 TmuxNotification::LayoutChange {
                     window_id,
                     window_layout,
                     window_visible_layout,
                     window_raw_flags,
-                } if window_id == self.window => {
-                    Some((window_layout, window_visible_layout, window_raw_flags))
+                } if layout_event.is_none() && window_id == self.window => {
+                    layout_event = Some((window_layout, window_visible_layout, window_raw_flags));
                 }
-                _ => None,
-            })
-            .ok_or_else(|| {
-                format!(
-                    "no %layout-change for {window} — the daemon predates layout broadcast",
-                    window = self.window
-                )
-            })?;
+                other => rest.push(other),
+            }
+        }
+        self.defer_seed_events(rest);
+        let layout_event = layout_event.ok_or_else(|| {
+            format!(
+                "no %layout-change for {window} — the daemon predates layout broadcast",
+                window = self.window
+            )
+        })?;
         let layout = layout::parse_layout_triple(&layout_event.0, &layout_event.1, &layout_event.2)
             .map_err(|err| err.to_string())?;
         self.zoomed = layout_event.2.contains('Z');
@@ -514,10 +511,37 @@ impl WindowSession {
         self.replay_all_panes(conn);
         // The status bar seeds with the view.
         let focused = self.renderer.focused().unwrap_or(0);
-        if let Err(status::StatusError::SessionGone) =
-            self.status.refresh(conn, &self.window, focused)
-        {
-            return Err("the target's session is gone".to_string());
+        match self.status.refresh(conn, &self.window, focused) {
+            Ok(_) => {
+                // Everything queued by now waits for the pump, output
+                // included (the replay above already covers what came
+                // before it). A pane with a queued state push is left out
+                // of the baseline: the snapshot may already show the
+                // state that push announces.
+                let queued = conn.drain_pending_events();
+                self.deferred.extend(queued);
+                self.seed_transitions();
+                let pending: Vec<u32> = self
+                    .deferred
+                    .iter()
+                    .filter_map(|event| match event {
+                        TmuxNotification::AgentStateChanged { pane_id, .. }
+                        | TmuxNotification::AgentReleased { pane_id, .. } => {
+                            pane_id.strip_prefix('%').and_then(|p| p.parse().ok())
+                        }
+                        _ => None,
+                    })
+                    .collect();
+                if let Some(baseline) = self.notify.transitions.as_mut() {
+                    for pane in pending {
+                        baseline.remove(&pane);
+                    }
+                }
+            }
+            Err(status::StatusError::SessionGone) => {
+                return Err("the target's session is gone".to_string());
+            }
+            Err(_) => {}
         }
         self.chrome.status_row.invalidate();
         self.draw_status_row();
@@ -534,6 +558,27 @@ impl WindowSession {
         sink.repaint_all();
         self.frame(sink);
         Ok(())
+    }
+
+    /// Keep the events a seed drain consumed for the pump. A
+    /// `%pane-exited` only seeds the exit cue (the registration replay
+    /// re-announces held panes, which must not flash), pane output is
+    /// covered by the seed's replay, and a `%layout-change` drained ahead
+    /// of the size report predates it — those three are not deferred.
+    fn defer_seed_events(&mut self, events: Vec<TmuxNotification>) {
+        for event in events {
+            match event {
+                TmuxNotification::Output { .. }
+                | TmuxNotification::ExtendedOutput { .. }
+                | TmuxNotification::LayoutChange { .. } => {}
+                TmuxNotification::PaneExited { pane_id, exit_code } => {
+                    if let Some(pane) = pane_id.strip_prefix('%').and_then(|p| p.parse().ok()) {
+                        self.held.insert(pane, exit_code);
+                    }
+                }
+                other => self.deferred.push_back(other),
+            }
+        }
     }
 
     pub(super) fn feed_pane(&mut self, pane_id: &str, data: &[u8]) {

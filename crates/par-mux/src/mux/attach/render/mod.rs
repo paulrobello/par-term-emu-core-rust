@@ -905,6 +905,11 @@ struct WindowSession {
     /// a refit's layout change consumed ([`Self::drain_around_layout`]);
     /// the pump ends the view on it right after the refit returns.
     pending_end: bool,
+    /// Pushes the seed drained before the view existed, in arrival
+    /// order: the pump handles them ahead of the channel on its first
+    /// drain, so an event that landed mid-seed (an agent's state change)
+    /// is not discarded with the replay-covered output around it.
+    deferred: std::collections::VecDeque<TmuxNotification>,
     /// The frame's chrome layout over the host grid (strip, status bar,
     /// side panel, content) — the one owner of the host ↔ frame ↔
     /// content mapping. Recomputed by [`Self::refresh_geometry`] at the
@@ -1198,6 +1203,7 @@ impl WindowSession {
             group_close: None,
             frame_hold_since: None,
             pending_end: false,
+            deferred: std::collections::VecDeque::new(),
             geometry,
             parser: InputParser::default(),
         }
@@ -1342,6 +1348,12 @@ impl WindowSession {
         conn: &mut crate::mux::attach::conn::AttachConn,
         handled: &mut bool,
     ) -> std::ops::ControlFlow<()> {
+        while let Some(event) = self.deferred.pop_front() {
+            *handled = true;
+            if self.handle_event(event) == EventOutcome::End {
+                return std::ops::ControlFlow::Break(());
+            }
+        }
         loop {
             match conn.try_recv() {
                 Ok(event) => {

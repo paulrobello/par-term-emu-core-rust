@@ -1652,7 +1652,7 @@ fn fake_daemon(
             };
             number += 1;
             tx.send((name, trimmed.to_owned())).ok();
-            if let Some(note) = notify.get(trimmed) {
+            if let Some(note) = notify.get(trimmed).or_else(|| notify.get(&wildcard)) {
                 writer.write_all(format!("{note}\n").as_bytes()).ok();
             }
             if let Some(delay) = delays.get(trimmed) {

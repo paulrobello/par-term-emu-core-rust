@@ -3,8 +3,11 @@
 //! (`[client] notify-states`) is announced through the chosen delivery
 //! (`[client] notify-delivery`) — the host terminal's notification escape
 //! (OSC 9, kitty's OSC 99) or the OS notifier. Only a pushed TRANSITION
-//! notifies: the status refresh replaces the roster wholesale and never
-//! notifies, so neither the first load nor a reconnect floods the user.
+//! notifies, judged against the push stream's own per-pane baseline
+//! (seeded once from the first roster): the status refresh replaces the
+//! roster wholesale and never notifies, so neither the first load nor a
+//! reconnect floods the user — and a refresh that commits a state before
+//! its push is drained cannot swallow that push.
 //! Like herdr's, notifications are for the background: an agent in the
 //! window the client shows never notifies.
 
@@ -316,6 +319,14 @@ pub(super) struct NotifyState {
     pub last_target: Option<u32>,
     /// The agent state-change sounds (config `sound*`).
     pub sound: crate::mux::config::SoundSettings,
+    /// Each agent pane's state as the PUSH stream last announced it — the
+    /// baseline a pushed transition is judged against. Not the roster: a
+    /// status refresh can commit a state whose push is still queued (the
+    /// daemon applies a report before it broadcasts it, and the reply and
+    /// the push ride separate client channels), and judging the push
+    /// against that roster read it as a repeat, losing the toast and its
+    /// bell. `None` until the first committed roster seeds it.
+    pub transitions: Option<std::collections::BTreeMap<u32, String>>,
 }
 
 impl Default for NotifyState {
@@ -327,6 +338,44 @@ impl Default for NotifyState {
             toast_until: None,
             last_target: None,
             sound: crate::mux::config::SoundSettings::default(),
+            transitions: None,
+        }
+    }
+}
+
+impl WindowSession {
+    /// Seed the transition baseline from the roster, once: the first
+    /// committed roster is what this client already knows, so neither the
+    /// first load nor a later refresh notifies.
+    pub(super) fn seed_transitions(&mut self) {
+        if self.notify.transitions.is_none() {
+            self.notify.transitions = Some(
+                self.status
+                    .agents()
+                    .iter()
+                    .map(|entry| (entry.pane, entry.state.clone()))
+                    .collect(),
+            );
+        }
+    }
+
+    /// Record a push's state for `pane` (`None` for a release) and return
+    /// the state the push stream held before it. Unseeded (no roster
+    /// committed yet), the still-unpatched roster stands in and no
+    /// baseline is created: seeding from a partial roster would leave every
+    /// agent it lacks looking new to a later unchanged rebroadcast.
+    pub(super) fn record_pushed_state(&mut self, pane: u32, state: Option<&str>) -> Option<String> {
+        match &mut self.notify.transitions {
+            Some(baseline) => match state {
+                Some(state) => baseline.insert(pane, state.to_string()),
+                None => baseline.remove(&pane),
+            },
+            None => self
+                .status
+                .agents()
+                .iter()
+                .find(|entry| entry.pane == pane)
+                .map(|entry| entry.state.clone()),
         }
     }
 }

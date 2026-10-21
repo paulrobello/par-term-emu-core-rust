@@ -3801,6 +3801,183 @@ fn toast_renders_the_blocked_reason_line() {
     );
 }
 
+/// The lost-toast race (card 01a15b6f): the daemon applies a state
+/// report, then broadcasts it, so a status refresh that runs between the
+/// two (any `%sessions-changed`, a timed-out refresh's retry, the project
+/// poll) answers with the NEW state while the push still waits in the
+/// notification queue. The refresh must not consume the transition: the
+/// push drained after it still toasts and rings the bell. The fake daemon
+/// writes the push ahead of the snapshot reply — the wire order — and the
+/// pump's own steps run in their own order (6 refresh, 9 drain).
+#[test]
+fn a_refresh_that_already_saw_the_new_state_still_lets_its_push_toast() {
+    use super::super::notify::NotifyDelivery;
+    let mut script = snapshot_script();
+    let snapshot = script
+        .replies
+        .get("client-snapshot -t @0")
+        .expect("snapshot reply")
+        .replace(
+            "agent %1 claude working hook",
+            "agent %1 claude blocked hook ws=+0",
+        );
+    script
+        .replies
+        .insert("client-snapshot -t @0".to_string(), snapshot);
+    script.notify.insert(
+        "client-snapshot -t @0".to_string(),
+        "%agent-state-changed %1 claude blocked source=hook ws=+0".to_string(),
+    );
+    let mut session = snapshot_session();
+    session.notify.delivery = NotifyDelivery::Inside;
+    session.notify.states = vec!["blocked".to_string()];
+    // The roster before the report (claude working), committed by an
+    // earlier refresh the way the session seed commits it.
+    let (seed_rx, mut seed_conn) = fake_daemon("snaprace-seed", snapshot_script());
+    session.refresh_status_facts(&mut seed_conn).expect("seed");
+    drained(&seed_rx);
+    let (rx, mut conn) = fake_daemon("snaprace", script);
+    session
+        .renderer
+        .apply_layout(parse_layout("0000,90x24,0,0,9").expect("parses"));
+    drained(&rx);
+
+    session.status_dirty = true;
+    assert_eq!(session.refresh_status(&mut conn), EventOutcome::Continue);
+    assert_eq!(
+        session.status.agents()[0].state,
+        "blocked",
+        "the refresh saw the new state first"
+    );
+    assert!(session.renderer.toast.is_none(), "a refresh never toasts");
+    assert!(session.drain_pushes(&mut conn).is_continue());
+
+    let toast = session
+        .renderer
+        .toast
+        .clone()
+        .expect("the push still toasts");
+    assert_eq!(toast.title, "claude blocked");
+    assert_eq!(toast.pane, Some(1));
+    assert_eq!(session.notify.outbox, vec![0x07], "and rings the bell");
+}
+
+/// The seed script for the mid-seed toast tests: `@0` holds pane `%9`
+/// alone, the agent's pane `%1` is in the background, and the snapshot
+/// already shows the agent `blocked` (its report landed during the
+/// seed). `push_on` is the command whose reply the agent's push rides
+/// ahead of.
+fn mid_seed_script(push_on: &str) -> FakeScript {
+    let mut script = snapshot_script();
+    let snapshot = script
+        .replies
+        .get("client-snapshot -t @0")
+        .expect("snapshot reply")
+        .replace(
+            "agent %1 claude working hook",
+            "agent %1 claude blocked hook ws=+0",
+        );
+    script
+        .replies
+        .insert("client-snapshot -t @0".to_string(), snapshot);
+    script
+        .replies
+        .insert("pane-info -t %9".to_string(), "%9 @0 90x24".to_string());
+    script.notify.insert(
+        "refresh-client *".to_string(),
+        "%layout-change @0 0000,90x24,0,0,9 0000,90x24,0,0,9 *".to_string(),
+    );
+    let push = "%agent-state-changed %1 claude blocked source=hook ws=+0";
+    let note = match script.notify.get(push_on) {
+        Some(existing) => format!("{existing}\n{push}"),
+        None => push.to_string(),
+    };
+    script.notify.insert(push_on.to_string(), note);
+    script
+}
+
+/// Seed `script`'s `@0` view with inside delivery on, run the pump's
+/// first drain, and return the session.
+fn seed_then_drain(tag: &str, script: FakeScript) -> WindowSession {
+    use super::super::notify::NotifyDelivery;
+    let (_rx, mut conn) = fake_daemon(tag, script);
+    let mut session = WindowSession::new(90, 26);
+    session.notify.delivery = NotifyDelivery::Inside;
+    session.notify.states = vec!["blocked".to_string()];
+    let mut sink = super::RecordingSink::default();
+    session
+        .seed(&mut conn, Some("%9"), &mut sink)
+        .expect("the seed lands");
+    assert!(session.drain_pushes(&mut conn).is_continue());
+    session
+}
+
+/// An agent's report that lands while the client is still seeding (the
+/// test barrier `?1002h` is written before the seed runs, so a loaded
+/// seed overlaps the report): its push queued during the size report's
+/// drain must reach the pump, not be discarded with the replay-covered
+/// output around it.
+#[test]
+fn a_push_drained_by_the_seed_still_toasts() {
+    let session = seed_then_drain("seedtoast-drain", mid_seed_script("refresh-client *"));
+    let toast = session.renderer.toast.clone().expect("the push toasts");
+    assert_eq!(toast.title, "claude blocked");
+    assert_eq!(session.notify.outbox, vec![0x07], "and rings the bell");
+}
+
+/// The same report whose push is still in flight when the seed's own
+/// status refresh answers: the snapshot already shows `blocked`, so the
+/// transition baseline must not adopt it for that pane, or the push
+/// reads as a repeat.
+#[test]
+fn a_push_queued_across_the_seed_refresh_still_toasts() {
+    let session = seed_then_drain(
+        "seedtoast-refresh",
+        mid_seed_script("client-snapshot -t @0"),
+    );
+    let toast = session.renderer.toast.clone().expect("the push toasts");
+    assert_eq!(toast.title, "claude blocked");
+    assert_eq!(session.notify.outbox, vec![0x07], "and rings the bell");
+}
+
+/// A push that lands before any roster commit (the seed's refresh timed
+/// out) must not seed the transition baseline from that partial view:
+/// the first committed roster does, so a pre-existing blocked agent's
+/// unchanged rebroadcast (`pane.report_agent_session` re-sends the held
+/// state) stays silent.
+#[test]
+fn a_push_before_the_first_roster_does_not_seed_a_partial_baseline() {
+    use super::super::notify::NotifyDelivery;
+    let mut session = snapshot_session();
+    session.notify.delivery = NotifyDelivery::Inside;
+    session.notify.states = vec!["blocked".to_string()];
+    session
+        .renderer
+        .apply_layout(parse_layout("0000,90x24,0,0,9").expect("parses"));
+    let push = |state: &str, pane: &str, agent: &str| TmuxNotification::AgentStateChanged {
+        pane_id: pane.to_string(),
+        agent: agent.to_string(),
+        state: state.to_string(),
+        source: "hook".to_string(),
+        ws: "+0".to_string(),
+        msg: String::new(),
+    };
+    session.handle_event(push("working", "%1", "claude"));
+    // The first roster commit: kimi on %3 was already blocked.
+    let (rx, mut conn) = fake_daemon("snapunseeded", snapshot_script());
+    session.refresh_status_facts(&mut conn).expect("seed");
+    drained(&rx);
+    session.handle_event(push("blocked", "%3", "kimi"));
+    assert!(
+        session.renderer.toast.is_none(),
+        "an unchanged rebroadcast is not a transition"
+    );
+    assert!(session.notify.outbox.is_empty(), "and rings nothing");
+    // A real transition after it still toasts.
+    session.handle_event(push("blocked", "%1", "claude"));
+    assert!(session.renderer.toast.is_some());
+}
+
 /// A shown pane's death announces the respawn affordance even under the
 /// default auto-remove, where the held exit cue never gets to show (the
 /// TUI audit's F4).

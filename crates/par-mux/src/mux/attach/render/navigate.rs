@@ -392,6 +392,7 @@ impl WindowSession {
     ) -> Result<(), status::StatusError> {
         let focused = self.renderer.focused().unwrap_or(0);
         let rows = self.status.refresh(conn, &self.window, focused)?;
+        self.seed_transitions();
         if self.sidebar.is_on() {
             if let Some(roster) = rows.workspaces {
                 self.install_panel_sections(&roster);
@@ -907,14 +908,13 @@ impl WindowSession {
         // the view through the pump's normal path on the next mark.
         let focused = self.renderer.focused().unwrap_or(0);
         self.status_dirty = true;
-        if matches!(
-            self.status.refresh(conn, window, focused),
-            Err(status::StatusError::SessionGone)
-        ) {
+        match self.status.refresh(conn, window, focused) {
+            Ok(_) => self.seed_transitions(),
             // The window vanished between the select and the query: leave
             // the view rendering its last frame; the next %sessions-changed
             // (or this switch's own burst) re-evaluates.
-            return;
+            Err(status::StatusError::SessionGone) => return,
+            Err(_) => {}
         }
         self.chrome.status_row.invalidate();
         self.draw_status_row();

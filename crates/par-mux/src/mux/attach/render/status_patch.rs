@@ -44,20 +44,16 @@ impl WindowSession {
         ws: &str,
         msg: &str,
     ) {
-        // The notification compares against the state BEFORE the patch.
-        if let (Some(state), Some(pane)) = (
-            state,
-            pane_id
-                .strip_prefix('%')
-                .and_then(|p| p.parse::<u32>().ok()),
-        ) {
-            let previous = self
-                .status
-                .agents()
-                .iter()
-                .find(|entry| entry.pane == pane)
-                .map(|entry| entry.state.clone());
-            self.notify_agent_state(pane, agent, previous.as_deref(), state, ws, msg);
+        // The notification compares against the push stream's previous
+        // state, not the roster a refresh may already have moved.
+        if let Some(pane) = pane_id
+            .strip_prefix('%')
+            .and_then(|p| p.parse::<u32>().ok())
+        {
+            let previous = self.record_pushed_state(pane, state);
+            if let Some(state) = state {
+                self.notify_agent_state(pane, agent, previous.as_deref(), state, ws, msg);
+            }
         }
         let patched = self.status.patch_agent(pane_id, agent, state, ws, msg);
         if state.is_some() && patched {
