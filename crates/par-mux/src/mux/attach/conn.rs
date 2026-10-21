@@ -124,11 +124,10 @@ impl AttachConn {
             .send_checked(&format!("set-client-colors -f {fg} -b {bg}"))
             .ok();
 
-        // 4. Renderer size + cell pixels. Sent without -t: the daemon-side
-        //    parser requires -t today, so current daemons answer %error to
-        //    exactly this shape; the size report is still sent (the contract
-        //    form) and a failure is tolerated — the pane grid stays at the
-        //    daemon's default until the daemon learns the -t-less form.
+        // 4. Renderer size + cell pixels. Sent without -t: the daemon
+        //    accepts the target-less form and registers this connection as
+        //    a viewer (the pane-info handshake report names the target when
+        //    there is one), sizing the shown pane to the renderer's grid.
         let (cols, rows) = terminal_grid();
         let (cw, ch) = cell_pixels();
         let _ = self

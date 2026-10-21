@@ -133,7 +133,13 @@ pub(crate) fn plan(
         "" => default_player(),
         spec => spec,
     };
-    let mut argv: Vec<OsString> = player.split_whitespace().map(OsString::from).collect();
+    // The same bounded quoting grammar the daemon's command line uses, so
+    // a player path with spaces can be configured (quoted) while a plain
+    // player plus flags keeps splitting on whitespace.
+    let mut argv: Vec<OsString> = crate::mux::command::shell_split(player)
+        .into_iter()
+        .map(OsString::from)
+        .collect();
     match file {
         Some(file) if !argv.is_empty() => {
             argv.push(file.into_os_string());

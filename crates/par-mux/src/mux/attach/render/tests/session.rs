@@ -1953,6 +1953,7 @@ fn anchored_overlay_stays_inside_the_frame() {
                 text: format!("row {i} xxxxxxxxxx"),
                 accent: false,
                 footer: false,
+                render_only: false,
             })
             .collect()
     };
@@ -2548,11 +2549,13 @@ fn help_overlay_paints_a_scrollbar_thumb_when_it_overflows() {
                 text: format!("row {i}"),
                 accent: false,
                 footer: false,
+                render_only: false,
             })
             .chain(std::iter::once(crate::mux::attach::HelpRow {
                 text: "footer".to_string(),
                 accent: false,
                 footer: true,
+                render_only: false,
             }))
             .collect();
         renderer.set_overlay(Some((" t ", short, Some((0, 6, 4)))));

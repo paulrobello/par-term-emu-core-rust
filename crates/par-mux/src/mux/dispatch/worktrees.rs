@@ -265,7 +265,24 @@ fn cmd_worktree_remove(ctx: &Ctx<'_>, workspace: Target<WorkspaceId>, force: boo
         Ok(found) => found,
         Err(err) => return Outcome::err(ctx, &format!("worktree-remove: {err}")),
     };
-    if !force && worktree::is_dirty(&link.checkout).unwrap_or(false) {
+    // Fail-closed: a dirty check that ERRORED must refuse like a dirty
+    // tree would — treating an error as clean hands a removal git itself
+    // would have refused (its own non-force status check is the backstop,
+    // not the authority).
+    let dirty = match worktree::is_dirty(&link.checkout) {
+        Ok(dirty) => dirty,
+        Err(err) => {
+            return Outcome::err(
+                ctx,
+                &format!(
+                    "worktree-remove: could not check {} for modified files ({err}); \
+                     use -f to remove anyway",
+                    link.checkout.display()
+                ),
+            );
+        }
+    };
+    if !force && dirty {
         return Outcome::err(
             ctx,
             &format!(

@@ -58,6 +58,7 @@ Register-ArgumentCompleter -Native -CommandName 'par-mux' -ScriptBlock {
             [CompletionResult]::new('config', 'config', [CompletionResultType]::ParameterValue, 'Write the config file with the current effective settings. Same as `--gen-config` (add `--force` to overwrite)')
             [CompletionResult]::new('observe', 'observe', [CompletionResultType]::ParameterValue, 'Stream one pane''s raw output to stdout, read-only (`observe-pane`): the screen seed, then live PTY bytes until the pane closes. Any number of observers may watch the same pane')
             [CompletionResult]::new('control', 'control', [CompletionResultType]::ParameterValue, 'Drive one pane (`control-pane`): stream its output to stdout like `observe`, forward stdin bytes to it until EOF (no raw mode — for pipes and scripts; interactive use is `attach -t %N`), and report this terminal''s size (polled) or `--size` as a viewer of the pane''s window')
+            [CompletionResult]::new('completion', 'completion', [CompletionResultType]::ParameterValue, 'Print the shell-completion script for SHELL, herdr''s spelling of `--print-completions`. Never contacts a daemon')
             [CompletionResult]::new('help', 'help', [CompletionResultType]::ParameterValue, 'Print this message or the help of the given subcommand(s)')
             break
         }
@@ -135,6 +136,11 @@ Register-ArgumentCompleter -Native -CommandName 'par-mux' -ScriptBlock {
             [CompletionResult]::new('--help', '--help', [CompletionResultType]::ParameterName, 'Print help')
             break
         }
+        'par-mux;completion' {
+            [CompletionResult]::new('-h', '-h', [CompletionResultType]::ParameterName, 'Print help')
+            [CompletionResult]::new('--help', '--help', [CompletionResultType]::ParameterName, 'Print help')
+            break
+        }
         'par-mux;help' {
             [CompletionResult]::new('start', 'start', [CompletionResultType]::ParameterValue, 'Start the daemon (the default action): detached, auto-attaching this terminal unless --no-attach. Same as bare `par-mux [NAME]`')
             [CompletionResult]::new('stop', 'stop', [CompletionResultType]::ParameterValue, 'Stop the daemon serving the resolved socket cleanly. Same as `--stop`')
@@ -145,6 +151,7 @@ Register-ArgumentCompleter -Native -CommandName 'par-mux' -ScriptBlock {
             [CompletionResult]::new('config', 'config', [CompletionResultType]::ParameterValue, 'Write the config file with the current effective settings. Same as `--gen-config` (add `--force` to overwrite)')
             [CompletionResult]::new('observe', 'observe', [CompletionResultType]::ParameterValue, 'Stream one pane''s raw output to stdout, read-only (`observe-pane`): the screen seed, then live PTY bytes until the pane closes. Any number of observers may watch the same pane')
             [CompletionResult]::new('control', 'control', [CompletionResultType]::ParameterValue, 'Drive one pane (`control-pane`): stream its output to stdout like `observe`, forward stdin bytes to it until EOF (no raw mode — for pipes and scripts; interactive use is `attach -t %N`), and report this terminal''s size (polled) or `--size` as a viewer of the pane''s window')
+            [CompletionResult]::new('completion', 'completion', [CompletionResultType]::ParameterValue, 'Print the shell-completion script for SHELL, herdr''s spelling of `--print-completions`. Never contacts a daemon')
             [CompletionResult]::new('help', 'help', [CompletionResultType]::ParameterValue, 'Print this message or the help of the given subcommand(s)')
             break
         }
@@ -173,6 +180,9 @@ Register-ArgumentCompleter -Native -CommandName 'par-mux' -ScriptBlock {
             break
         }
         'par-mux;help;control' {
+            break
+        }
+        'par-mux;help;completion' {
             break
         }
         'par-mux;help;help' {

@@ -114,16 +114,9 @@ fn popup_key_opens_a_scratch_window_and_mirrors_its_stream() {
     chord(&mut session, &mut conn, b't');
     assert!(session.popup_active(), "the popup owns the input");
     let new_window = wait_recorded(&rx, "new-window");
-    let launcher = new_window
-        .strip_prefix("new-window -t @0 -n popup -- /bin/sh '")
-        .and_then(|rest| rest.strip_suffix('\''))
-        .unwrap_or_else(|| panic!("the window runs the quoted launcher: {new_window}"));
-    let script = std::fs::read_to_string(launcher).expect("launcher exists");
-    assert!(
-        script.ends_with("\nlazygit\n"),
-        "the launcher runs the command: {script}"
-    );
-    let _ = std::fs::remove_file(launcher);
+    // The command runs inline now (the start-command cut stops the flag
+    // scan at the `--`), so the line carries it verbatim.
+    assert_eq!(new_window, "new-window -t @0 -n popup -- lazygit");
     settle(&mut session, &mut conn);
     assert_eq!(wait_recorded(&rx, "list-panes"), "list-panes -t @7");
     settle(&mut session, &mut conn);

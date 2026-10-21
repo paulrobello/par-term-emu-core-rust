@@ -479,6 +479,10 @@ enum FieldVal {
     Bool(bool),
     Num(u32),
     Text(String),
+    /// A configured value plus the hint the row displays beside it — the
+    /// theme's `auto` naming the preset it resolved to. Cycling and the
+    /// edit seed read the raw value; only the paint adds the hint.
+    TextWithHint(String, String),
 }
 
 impl SettingsValues {
@@ -496,7 +500,14 @@ impl SettingsValues {
             "pane-gaps" => FieldVal::Num(self.pane_gaps as u32),
             "border-active-color" => FieldVal::Text(self.border_active_color.clone()),
             "border-color" => FieldVal::Text(self.border_color.clone()),
-            "theme" => FieldVal::Text(theme_spelling(&self.theme.theme)),
+            "theme" => {
+                let configured = theme_spelling(&self.theme.theme);
+                if configured == "auto" {
+                    FieldVal::TextWithHint(configured, format!("({})", self.theme.effective()))
+                } else {
+                    FieldVal::Text(configured)
+                }
+            }
             "theme-dark" => FieldVal::Text(theme_spelling(&self.theme.dark)),
             "theme-light" => FieldVal::Text(theme_spelling(&self.theme.light)),
             "mode" => FieldVal::Text(file_mode.to_string()),
@@ -599,6 +610,7 @@ fn row(text: String, accent: bool, footer: bool) -> HelpRow {
         text: format!("{text}{}", " ".repeat(pad)),
         accent,
         footer,
+        render_only: false,
     }
 }
 
@@ -610,6 +622,7 @@ fn field_display(key: &str, field: &FieldVal) -> String {
     let text = match field {
         FieldVal::Bool(on) => if *on { "on" } else { "off" }.to_string(),
         FieldVal::Num(n) => n.to_string(),
+        FieldVal::TextWithHint(text, hint) => format!("{text} {hint}"),
         FieldVal::Text(text) if text.is_empty() => match key {
             "sound-mute" => "none",
             "sound-player" => "os default",
@@ -971,8 +984,10 @@ impl WindowSession {
                         self.settings_write_and_reload(conn, spec.key, SettingValue::Bool(!on));
                     }
                     SettingKind::Choice(choices) => {
-                        let FieldVal::Text(current) = values.field(spec.key, &file_mode) else {
-                            return;
+                        let current = match values.field(spec.key, &file_mode) {
+                            FieldVal::Text(text) => text,
+                            FieldVal::TextWithHint(text, _) => text,
+                            _ => return,
                         };
                         let len = choices.len() as isize;
                         let next = match choices.iter().position(|choice| *choice == current) {
@@ -997,6 +1012,7 @@ impl WindowSession {
                     | SettingKind::Popup(_)) => {
                         let seed = match values.field(spec.key, &file_mode) {
                             FieldVal::Text(text) => text,
+                            FieldVal::TextWithHint(text, _) => text,
                             FieldVal::Num(n) => n.to_string(),
                             FieldVal::Bool(on) => on.to_string(),
                         };

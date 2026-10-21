@@ -4,7 +4,7 @@
 
 use super::super::scrollback_edit::resolve_editor;
 #[cfg(unix)]
-use super::super::scrollback_edit::write_scrollback_files;
+use super::super::scrollback_edit::{editor_script, write_scrollback_text};
 use super::*;
 
 fn no_editor() -> (Option<String>, Option<String>) {
@@ -28,41 +28,43 @@ fn resolve_editor_prefers_visual_and_skips_blank_values() {
     assert_eq!(resolve_editor(None, None), None);
 }
 
-/// The text file holds exactly what it was given, both files are
-/// owner-only, and the launcher runs the editor on the text then removes
-/// both — the files of two edits never collide.
+/// The text file holds exactly what it was given and is owner-only, the
+/// inline start-command script runs the editor on it and removes it, and
+/// two edits never collide.
 #[cfg(unix)]
 #[test]
-fn scrollback_files_are_private_and_the_launcher_cleans_up() {
+fn scrollback_files_are_private_and_the_script_cleans_up() {
     use std::os::unix::fs::PermissionsExt as _;
     let dir = tempfile::tempdir().expect("tempdir");
-    let files = write_scrollback_files(dir.path(), "alpha\nbeta's\n", "nvim -R").expect("write");
+    let files = write_scrollback_text(dir.path(), "alpha\nbeta's\n").expect("write");
     assert_eq!(
         std::fs::read_to_string(&files.text).expect("text"),
         "alpha\nbeta's\n"
     );
-    for path in [&files.text, &files.launcher] {
-        let mode = std::fs::metadata(path).expect("meta").permissions().mode();
-        assert_eq!(mode & 0o777, 0o600, "{} is owner-only", path.display());
-    }
-    let script = std::fs::read_to_string(&files.launcher).expect("launcher");
+    let mode = std::fs::metadata(&files.text)
+        .expect("meta")
+        .permissions()
+        .mode();
+    assert_eq!(mode & 0o777, 0o600, "the text file is owner-only");
+    let script = editor_script("nvim -R", &files.text);
     assert!(
         script.starts_with(&format!("nvim -R '{}'", files.text.display())),
         "the editor runs on the quoted text path: {script}"
     );
-    assert!(script.contains("rm -f"), "the launcher cleans up: {script}");
-    let again = write_scrollback_files(dir.path(), "x", "vi").expect("second");
+    assert!(script.contains("rm -f"), "the script cleans up: {script}");
+    let again = write_scrollback_text(dir.path(), "x").expect("second");
     assert_ne!(again.text, files.text, "a second edit gets fresh names");
 
-    // Run the launcher with a no-op editor: the editor's status is the
-    // script's, and both files are gone afterwards.
-    let ran = write_scrollback_files(dir.path(), "x", "true").expect("third");
+    // Run the script under sh with a no-op editor: the editor's status is
+    // the script's, and the text file is gone afterwards.
+    let ran = write_scrollback_text(dir.path(), "x").expect("third");
     let status = std::process::Command::new("/bin/sh")
-        .arg(&ran.launcher)
+        .arg("-c")
+        .arg(editor_script("true", &ran.text))
         .status()
         .expect("sh");
     assert!(status.success());
-    assert!(!ran.text.exists() && !ran.launcher.exists(), "both removed");
+    assert!(!ran.text.exists(), "the text file is removed");
 }
 
 /// Without `$VISUAL`/`$EDITOR` the key is refused on the flash: copy
@@ -170,15 +172,17 @@ fn edit_scrollback_opens_a_zoomed_editor_pane_on_the_export() {
     session.route_plain(b"e", &mut conn);
     assert!(!session.is_scroll(), "the key leaves copy mode");
     let split = wait_recorded(&rx, "split-window");
-    let launcher = split
-        .strip_prefix("split-window -t %1 -- /bin/sh '")
+    let script = split
+        .strip_prefix("split-window -t %1 -- /bin/sh -c '")
         .and_then(|rest| rest.strip_suffix('\''))
-        .unwrap_or_else(|| panic!("the split runs the quoted launcher: {split}"));
-    let script = std::fs::read_to_string(launcher).expect("launcher exists");
+        .unwrap_or_else(|| panic!("the split runs the quoted inline script: {split}"))
+        // The wire line single-quotes the script, so its own quotes ride
+        // the '\'' escape.
+        .replace("'\\''", "'");
     let text_path = script
         .strip_prefix("true '")
         .and_then(|rest| rest.split('\'').next())
-        .unwrap_or_else(|| panic!("the launcher runs the editor: {script}"));
+        .unwrap_or_else(|| panic!("the script runs the editor: {script}"));
     assert_eq!(
         std::fs::read_to_string(text_path).expect("text exists"),
         export,
@@ -193,9 +197,8 @@ fn edit_scrollback_opens_a_zoomed_editor_pane_on_the_export() {
     assert_eq!(zoom, "resize-pane -t %9 -Z", "the editor pane zooms");
     settle(&mut session, &mut conn);
     assert!(session.zoomed);
-    // The launcher never ran here (no daemon pane): clean up its files.
+    // The script never ran here (no daemon pane): clean up its file.
     let _ = std::fs::remove_file(text_path);
-    let _ = std::fs::remove_file(launcher);
 }
 
 /// A refused split removes the temp files and flashes the failure.
@@ -222,12 +225,11 @@ fn edit_scrollback_failed_split_removes_the_files() {
     drained(&rx);
     session.route_plain(b"e", &mut conn);
     let split = wait_recorded(&rx, "split-window");
-    let launcher = split
-        .strip_prefix("split-window -t %1 -- /bin/sh '")
+    let script = split
+        .strip_prefix("split-window -t %1 -- /bin/sh -c '")
         .and_then(|rest| rest.strip_suffix('\''))
-        .expect("quoted launcher")
-        .to_string();
-    let script = std::fs::read_to_string(&launcher).expect("launcher written before the reply");
+        .expect("the quoted inline script")
+        .replace("'\\''", "'");
     let text_path = script
         .strip_prefix("true '")
         .and_then(|rest| rest.split('\'').next())
@@ -235,8 +237,8 @@ fn edit_scrollback_failed_split_removes_the_files() {
         .to_string();
     settle(&mut session, &mut conn);
     assert!(
-        !std::path::Path::new(&launcher).exists() && !std::path::Path::new(&text_path).exists(),
-        "the refused split removed both files"
+        !std::path::Path::new(&text_path).exists(),
+        "the refused split removed the text file"
     );
     assert!(
         session

@@ -560,24 +560,12 @@ impl WindowSession {
     }
 }
 
-/// The start command `new-window` runs. On unix the command rides a
-/// private launcher script (`/bin/sh <path>`, which removes itself
-/// first): `new-window`'s flag scan reads `-c`/`-t`/`-n` anywhere on the
-/// line, so an inline `lazygit -c x` would be misread. Elsewhere the
-/// command runs as written through the pane shell.
+/// The start command `new-window` runs, as written: since the parser's
+/// start-command cut (f567569f) stops the flag scan at the `--`, an
+/// inline `lazygit -c x` is no longer misread and no launcher script is
+/// needed.
 fn popup_start_command(command: &str) -> std::io::Result<String> {
-    #[cfg(unix)]
-    {
-        let path = super::scrollback_edit::write_popup_launcher(&std::env::temp_dir(), command)?;
-        Ok(format!(
-            "/bin/sh {}",
-            super::scrollback_edit::sh_quote(&path.to_string_lossy())
-        ))
-    }
-    #[cfg(not(unix))]
-    {
-        Ok(command.to_string())
-    }
+    Ok(command.to_string())
 }
 
 /// The settings dialog's popup row label, and the add row's.

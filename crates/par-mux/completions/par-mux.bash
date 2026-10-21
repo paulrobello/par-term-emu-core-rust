@@ -19,6 +19,9 @@ _par__mux() {
             par__mux,attach)
                 cmd="par__mux__subcmd__attach"
                 ;;
+            par__mux,completion)
+                cmd="par__mux__subcmd__completion"
+                ;;
             par__mux,config)
                 cmd="par__mux__subcmd__config"
                 ;;
@@ -48,6 +51,9 @@ _par__mux() {
                 ;;
             par__mux__subcmd__help,attach)
                 cmd="par__mux__subcmd__help__subcmd__attach"
+                ;;
+            par__mux__subcmd__help,completion)
+                cmd="par__mux__subcmd__help__subcmd__completion"
                 ;;
             par__mux__subcmd__help,config)
                 cmd="par__mux__subcmd__help__subcmd__config"
@@ -83,7 +89,7 @@ _par__mux() {
 
     case "${cmd}" in
         par__mux)
-            opts="-c -h -V --socket --state-dir --stop --restart --foreground --no-attach --cmd --list-servers --pane-endpoints --expose-control-socket --gen-config --force --install-skill --skills-dir --install-agent-hooks --uninstall-agent-hooks --agent-hooks-status --integration-status --install-agent-extensions --uninstall-agent-extensions --heal-agent-hooks --print-schema --print-completions --help --version start stop restart status ls attach config observe control help"
+            opts="-c -h -V --socket --state-dir --stop --restart --foreground --no-attach --cmd --list-servers --pane-endpoints --expose-control-socket --gen-config --force --install-skill --skills-dir --install-agent-hooks --uninstall-agent-hooks --agent-hooks-status --integration-status --install-agent-extensions --uninstall-agent-extensions --heal-agent-hooks --print-schema --print-completions --help --version start stop restart status ls attach config observe control completion help"
             if [[ ${cur} == -* || ${COMP_CWORD} -eq 1 ]] ; then
                 COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
                 return 0
@@ -150,6 +156,20 @@ _par__mux() {
             COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
             return 0
             ;;
+        par__subcmd__mux__subcmd__completion)
+            opts="-h --help bash elvish fish powershell zsh"
+            if [[ ${cur} == -* || ${COMP_CWORD} -eq 2 ]] ; then
+                COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+                return 0
+            fi
+            case "${prev}" in
+                *)
+                    COMPREPLY=()
+                    ;;
+            esac
+            COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+            return 0
+            ;;
         par__subcmd__mux__subcmd__config)
             opts="-h --force --help"
             if [[ ${cur} == -* || ${COMP_CWORD} -eq 2 ]] ; then
@@ -195,7 +215,7 @@ _par__mux() {
             return 0
             ;;
         par__subcmd__mux__subcmd__help)
-            opts="start stop restart status ls attach config observe control help"
+            opts="start stop restart status ls attach config observe control completion help"
             if [[ ${cur} == -* || ${COMP_CWORD} -eq 2 ]] ; then
                 COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
                 return 0
@@ -209,6 +229,20 @@ _par__mux() {
             return 0
             ;;
         par__subcmd__mux__subcmd__help__subcmd__attach)
+            opts=""
+            if [[ ${cur} == -* || ${COMP_CWORD} -eq 3 ]] ; then
+                COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+                return 0
+            fi
+            case "${prev}" in
+                *)
+                    COMPREPLY=()
+                    ;;
+            esac
+            COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+            return 0
+            ;;
+        par__subcmd__mux__subcmd__help__subcmd__completion)
             opts=""
             if [[ ${cur} == -* || ${COMP_CWORD} -eq 3 ]] ; then
                 COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )

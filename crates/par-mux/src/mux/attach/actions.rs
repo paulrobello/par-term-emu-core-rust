@@ -103,12 +103,18 @@ impl Session {
     /// from the cursor's current row put the first header on the prompt
     /// line (manual pass).
     pub(super) fn show_help(&mut self) {
-        let rows = help_rows(
+        let rows: Vec<HelpRow> = help_rows(
             self.prefix,
             self.reload_key,
             self.management,
             self.resize_step,
-        );
+        )
+        .into_iter()
+        // The dump shares the render panel's rows; the render-only
+        // bindings (the scroll viewport and its editor) have no
+        // passthrough form, so they must not print here.
+        .filter(|row| !row.render_only)
+        .collect();
         let mut stdout = std::io::stdout().lock();
         let _ = write_all_blocking(&mut stdout, help_dump_text(&rows).as_bytes());
         let _ = stdout.flush();

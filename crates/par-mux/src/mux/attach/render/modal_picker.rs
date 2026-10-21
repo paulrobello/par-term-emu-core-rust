@@ -129,6 +129,7 @@ impl WindowSession {
                 text: format!(" {label} "),
                 accent: false,
                 footer: false,
+                render_only: false,
             })
             .collect();
         let refs: Vec<PickerRef> = commands
@@ -372,6 +373,7 @@ impl WindowSession {
                 text: format!(" {marker}{id}  {name}{star}"),
                 accent: false,
                 footer: false,
+                render_only: false,
             });
             refs.push(PickerRef::Workspace(i));
         }

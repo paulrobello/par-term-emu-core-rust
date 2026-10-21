@@ -55,6 +55,7 @@ set edit:completion:arg-completer[par-mux] = {|@words|
             cand config 'Write the config file with the current effective settings. Same as `--gen-config` (add `--force` to overwrite)'
             cand observe 'Stream one pane''s raw output to stdout, read-only (`observe-pane`): the screen seed, then live PTY bytes until the pane closes. Any number of observers may watch the same pane'
             cand control 'Drive one pane (`control-pane`): stream its output to stdout like `observe`, forward stdin bytes to it until EOF (no raw mode — for pipes and scripts; interactive use is `attach -t %N`), and report this terminal''s size (polled) or `--size` as a viewer of the pane''s window'
+            cand completion 'Print the shell-completion script for SHELL, herdr''s spelling of `--print-completions`. Never contacts a daemon'
             cand help 'Print this message or the help of the given subcommand(s)'
         }
         &'par-mux;start'= {
@@ -122,6 +123,10 @@ set edit:completion:arg-completer[par-mux] = {|@words|
             cand -h 'Print help'
             cand --help 'Print help'
         }
+        &'par-mux;completion'= {
+            cand -h 'Print help'
+            cand --help 'Print help'
+        }
         &'par-mux;help'= {
             cand start 'Start the daemon (the default action): detached, auto-attaching this terminal unless --no-attach. Same as bare `par-mux [NAME]`'
             cand stop 'Stop the daemon serving the resolved socket cleanly. Same as `--stop`'
@@ -132,6 +137,7 @@ set edit:completion:arg-completer[par-mux] = {|@words|
             cand config 'Write the config file with the current effective settings. Same as `--gen-config` (add `--force` to overwrite)'
             cand observe 'Stream one pane''s raw output to stdout, read-only (`observe-pane`): the screen seed, then live PTY bytes until the pane closes. Any number of observers may watch the same pane'
             cand control 'Drive one pane (`control-pane`): stream its output to stdout like `observe`, forward stdin bytes to it until EOF (no raw mode — for pipes and scripts; interactive use is `attach -t %N`), and report this terminal''s size (polled) or `--size` as a viewer of the pane''s window'
+            cand completion 'Print the shell-completion script for SHELL, herdr''s spelling of `--print-completions`. Never contacts a daemon'
             cand help 'Print this message or the help of the given subcommand(s)'
         }
         &'par-mux;help;start'= {
@@ -151,6 +157,8 @@ set edit:completion:arg-completer[par-mux] = {|@words|
         &'par-mux;help;observe'= {
         }
         &'par-mux;help;control'= {
+        }
+        &'par-mux;help;completion'= {
         }
         &'par-mux;help;help'= {
         }

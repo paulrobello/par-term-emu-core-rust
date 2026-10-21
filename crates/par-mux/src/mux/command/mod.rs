@@ -1399,7 +1399,7 @@ fn split_leading_flags<'a>(
 /// This is the bounded grammar par-term's senders actually emit (the `'\''`
 /// idiom for embedded quotes); it is not a full shell parser and does not
 /// interpolate anything.
-fn shell_split(raw: &str) -> Vec<String> {
+pub(crate) fn shell_split(raw: &str) -> Vec<String> {
     let mut tokens = Vec::new();
     let mut current = String::new();
     let mut have_token = false;
@@ -1584,8 +1584,10 @@ pub const COMMAND_SCHEMA_JSON: &str = include_str!("../../../schema/par-mux-comm
 
 /// Parse one command line from a client.
 ///
-/// Deliberately minimal: whitespace-split with a flag scan. tmux's real
-/// argument grammar (`--`, per-command option tables, command sequences) is
+/// Deliberately minimal: whitespace-split with a per-command flag scan —
+/// each verb declares the flags that take a value, and everything after a
+/// bare `--` (or the first non-flag word) is that command's own tail.
+/// tmux's real argument grammar (full option tables, command sequences) is
 /// not a goal here, and pretending to implement it would hide that.
 ///
 /// Quoting is honored in a fixed set of places, all of them values that may

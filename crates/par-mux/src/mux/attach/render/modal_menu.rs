@@ -65,6 +65,7 @@ pub(super) fn compose_menu_panel(
             text: format!(" {name} "),
             accent: true,
             footer: false,
+            render_only: false,
         });
         mapping.push(None);
     }
@@ -73,6 +74,7 @@ pub(super) fn compose_menu_panel(
             text: format!(" {label} "),
             accent: false,
             footer: false,
+            render_only: false,
         });
         mapping.push(Some(*action));
     }
@@ -80,6 +82,7 @@ pub(super) fn compose_menu_panel(
         text: MENU_FOOTER.to_string(),
         accent: false,
         footer: true,
+        render_only: false,
     });
     mapping.push(None);
     (rows, mapping)

@@ -412,6 +412,16 @@ enum Sub {
     /// this terminal's size (polled) or `--size` as a viewer of the
     /// pane's window.
     Control(StreamArgs),
+    /// Print the shell-completion script for SHELL, herdr's spelling of
+    /// `--print-completions`. Never contacts a daemon.
+    Completion(CompletionArgs),
+}
+
+/// `par-mux completion <SHELL>` — the completion verb.
+#[derive(clap::Args, Debug)]
+struct CompletionArgs {
+    /// The shell to print for (bash, zsh, fish, powershell, elvish).
+    shell: clap_complete::Shell,
 }
 
 /// `par-mux observe|control -t PANE` — the raw pane stream verbs.
@@ -1053,6 +1063,10 @@ fn main() -> std::process::ExitCode {
             }
             Sub::Observe(args) => return run_pane_stream(&mut cli, args, false),
             Sub::Control(args) => return run_pane_stream(&mut cli, args, true),
+            Sub::Completion(args) => {
+                print!("{}", completion_script(args.shell));
+                return std::process::ExitCode::SUCCESS;
+            }
         }
     }
     // `par-mux start server` and friends: the verb's own NAME argument
@@ -2087,6 +2101,59 @@ mod completion_tests {
                 assert!(script.contains(word), "{shell} script lacks {word}");
             }
         }
+    }
+
+    #[test]
+    fn the_completion_subcommand_spelling_matches_the_flag() {
+        // The verb form parses to the same shells the flag takes —
+        // herdr's spelling of --print-completions.
+        use clap::Parser as _;
+        for shell in ["bash", "zsh", "fish", "powershell", "elvish"] {
+            let cli = super::Cli::try_parse_from(["par-mux", "completion", shell])
+                .unwrap_or_else(|_| panic!("completion {shell} parses"));
+            match cli.sub {
+                Some(super::Sub::Completion(args)) => {
+                    assert_eq!(args.shell.to_string(), shell);
+                }
+                other => panic!("expected the completion verb, got {other:?}"),
+            }
+        }
+    }
+
+    #[test]
+    fn fish_completion_script_passes_fish_n() {
+        // `fish -n` is the syntax gate the bash/zsh shells get from their
+        // own -n runs in the Makefile-adjacent flows; here it guards the
+        // generated fish script directly.
+        let script = completion_script(Shell::Fish);
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join("par-mux.fish");
+        std::fs::write(&path, &script).expect("write");
+        let have_fish = std::process::Command::new("fish")
+            .arg("-n")
+            .arg(&path)
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .status()
+            .map(|s| s.success());
+        match have_fish {
+            Ok(true) => {}
+            // No fish on the host: the script is still clap_complete's
+            // own output (covered by the surface test); skip rather than
+            // fail on a host without the shell.
+            Ok(false) if which_fish_missing() => {}
+            Ok(false) => panic!("fish -n rejected the completion script"),
+            Err(_) => {}
+        }
+    }
+
+    fn which_fish_missing() -> bool {
+        std::process::Command::new("which")
+            .arg("fish")
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .status()
+            .is_ok_and(|s| !s.success())
     }
 
     #[test]

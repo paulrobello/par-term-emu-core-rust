@@ -30,13 +30,12 @@ pub(super) fn env_editor_lookup() -> (Option<String>, Option<String>) {
     (std::env::var("VISUAL").ok(), std::env::var("EDITOR").ok())
 }
 
-/// The pair of private files one edit uses: the text and the launcher
-/// script the zoomed pane runs (it removes both when the editor exits).
+/// The one private file an edit uses: the text the editor opens (the
+/// start command's inline script removes it when the editor exits).
 #[cfg(unix)]
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(super) struct ScrollbackFiles {
     pub(super) text: std::path::PathBuf,
-    pub(super) launcher: std::path::PathBuf,
 }
 
 /// Single-quote `value` for `/bin/sh`.
@@ -45,15 +44,16 @@ pub(super) fn sh_quote(value: &str) -> String {
     format!("'{}'", value.replace('\'', r"'\''"))
 }
 
-/// The launcher: run the editor on the text file, then remove both files
-/// and exit with the editor's status. `editor` is a shell word list the
-/// user wrote (`code -w`, `nvim -R`), so it is spliced unquoted — herdr's
-/// `eval "${EDITOR}" file` semantics.
+/// The start command's inline script: run the editor on the text file,
+/// then remove it and exit with the editor's status. `editor` is a shell
+/// word list the user wrote (`code -w`, `nvim -R`), so it is spliced
+/// unquoted — herdr's `eval "${EDITOR}" file` semantics. Since the
+/// parser's start-command cut (f567569f) stops new-window's flags at the
+/// `--`, the script rides inline and no launcher file exists to clean up.
 #[cfg(unix)]
-fn launcher_script(editor: &str, files: &ScrollbackFiles) -> String {
-    let text = sh_quote(&files.text.to_string_lossy());
-    let launcher = sh_quote(&files.launcher.to_string_lossy());
-    format!("{editor} {text}\nstatus=$?\nrm -f {text} {launcher}\nexit $status\n")
+pub(super) fn editor_script(editor: &str, text: &std::path::Path) -> String {
+    let text = sh_quote(&text.to_string_lossy());
+    format!("{editor} {text}; status=$?; rm -f {text}; exit $status")
 }
 
 /// Create `path` exclusively (never following or reusing an existing
@@ -70,14 +70,12 @@ fn write_private(path: &std::path::Path, content: &str) -> std::io::Result<()> {
     file.write_all(content.as_bytes())
 }
 
-/// Write the text and launcher into `dir` under fresh names. A name
-/// collision retries with the next counter; any other failure removes
-/// whatever was written.
+/// Write the text into `dir` under a fresh name. A name collision
+/// retries with the next counter.
 #[cfg(unix)]
-pub(super) fn write_scrollback_files(
+pub(super) fn write_scrollback_text(
     dir: &std::path::Path,
     text: &str,
-    editor: &str,
 ) -> std::io::Result<ScrollbackFiles> {
     use std::sync::atomic::{AtomicU64, Ordering};
     static NEXT: AtomicU64 = AtomicU64::new(0);
@@ -87,57 +85,21 @@ pub(super) fn write_scrollback_files(
         let stem = format!("par-mux-scrollback-{}-{n}", std::process::id());
         let files = ScrollbackFiles {
             text: dir.join(format!("{stem}.txt")),
-            launcher: dir.join(format!("{stem}.sh")),
         };
         match write_private(&files.text, text) {
-            Ok(()) => {}
+            Ok(()) => return Ok(files),
             Err(err) if err.kind() == std::io::ErrorKind::AlreadyExists => {
                 last = Some(err);
-                continue;
             }
-            Err(err) => return Err(err),
-        }
-        if let Err(err) = write_private(&files.launcher, &launcher_script(editor, &files)) {
-            let _ = std::fs::remove_file(&files.text);
-            if err.kind() == std::io::ErrorKind::AlreadyExists {
-                last = Some(err);
-                continue;
-            }
-            return Err(err);
-        }
-        return Ok(files);
-    }
-    Err(last.unwrap_or_else(|| std::io::Error::other("no free scrollback file name")))
-}
-
-/// A popup's private launcher in `dir`: it removes itself, then runs
-/// `command` as shell text (herdr runs popup commands through the
-/// shell). Same exclusive, owner-only creation as the scrollback files.
-#[cfg(unix)]
-pub(super) fn write_popup_launcher(
-    dir: &std::path::Path,
-    command: &str,
-) -> std::io::Result<std::path::PathBuf> {
-    use std::sync::atomic::{AtomicU64, Ordering};
-    static NEXT: AtomicU64 = AtomicU64::new(0);
-    let mut last = None;
-    for _ in 0..16 {
-        let n = NEXT.fetch_add(1, Ordering::Relaxed);
-        let path = dir.join(format!("par-mux-popup-{}-{n}.sh", std::process::id()));
-        let script = format!("rm -f {}\n{command}\n", sh_quote(&path.to_string_lossy()));
-        match write_private(&path, &script) {
-            Ok(()) => return Ok(path),
-            Err(err) if err.kind() == std::io::ErrorKind::AlreadyExists => last = Some(err),
             Err(err) => return Err(err),
         }
     }
-    Err(last.unwrap_or_else(|| std::io::Error::other("no free popup launcher name")))
+    Err(last.unwrap_or_else(|| std::io::Error::other("no free scrollback file name")))
 }
 
 #[cfg(unix)]
 fn remove_files(files: &ScrollbackFiles) {
     let _ = std::fs::remove_file(&files.text);
-    let _ = std::fs::remove_file(&files.launcher);
 }
 
 impl WindowSession {
@@ -176,7 +138,7 @@ impl WindowSession {
         else {
             return;
         };
-        let files = match write_scrollback_files(&std::env::temp_dir(), &text, editor) {
+        let files = match write_scrollback_text(&std::env::temp_dir(), &text) {
             Ok(files) => files,
             Err(err) => {
                 self.chrome.flash(format!("edit scrollback: {err}"));
@@ -185,15 +147,15 @@ impl WindowSession {
             }
         };
         self.leave_scroll_mode();
-        // The launcher runs under /bin/sh whatever the pane shell is (fish
-        // would reject a POSIX script). The start command names only the
-        // quoted script path: split-window's flag scan reads `-c`/`-h`/`-p`
-        // anywhere on the line, so an inline `sh -c '…'` would be misread.
-        let launcher = sh_quote(&files.launcher.to_string_lossy());
+        // The script runs under /bin/sh whatever the pane shell is (fish
+        // would reject a POSIX script). Since the parser's start-command
+        // cut stops split-window's flags at the `--`, the script rides
+        // inline — no launcher file to strand.
+        let script = sh_quote(&editor_script(editor, &files.text));
         let expected = self.window.clone();
         self.send_then(
             conn,
-            &format!("split-window -t %{pane} -- /bin/sh {launcher}"),
+            &format!("split-window -t %{pane} -- /bin/sh -c {script}"),
             move |s, c, reply| {
                 if !reply.ok {
                     remove_files(&files);

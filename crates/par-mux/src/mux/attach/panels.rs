@@ -23,6 +23,10 @@ pub(crate) struct HelpRow {
     /// The modal's controls band: painted on a dark-grey strip across the
     /// panel's inner width (the help/picker/prompt footers).
     pub footer: bool,
+    /// Render-mode-only binding: the passthrough help dump filters these
+    /// out (the pane's own output owns the screen there — the scroll
+    /// viewport and its editor never exist).
+    pub render_only: bool,
 }
 
 /// The passthrough help dump's byte payload: a leading blank line so the
@@ -58,6 +62,7 @@ pub(crate) fn help_rows(
             text: format!(" {title} "),
             accent: true,
             footer: false,
+            render_only: false,
         });
         let width = entries
             .iter()
@@ -69,6 +74,7 @@ pub(crate) fn help_rows(
                 text: format!(" {:width$}  {}", key, desc, width = width),
                 accent: false,
                 footer: false,
+                render_only: false,
             });
         }
     };
@@ -254,6 +260,16 @@ pub(crate) fn help_rows(
             ),
         ],
     );
+    // The scroll viewport and its editor are render-mode-only bindings:
+    // the passthrough dump filters them out (marking here keeps the two
+    // spellings beside their entries above).
+    for row in &mut rows {
+        let key = row.text.trim();
+        if key == format!("{p} [") || key == format!("{p} [ then e") {
+            row.render_only = true;
+        }
+    }
+
     rows
 }
 
@@ -351,16 +367,19 @@ pub(crate) fn compose_prompt_panel(text: &str, footer: &str) -> Vec<HelpRow> {
             text: format!(" > {text}▌"),
             accent: true,
             footer: false,
+            render_only: false,
         },
         HelpRow {
             text: String::new(),
             accent: false,
             footer: false,
+            render_only: false,
         },
         HelpRow {
             text: footer.to_string(),
             accent: false,
             footer: true,
+            render_only: false,
         },
     ]
 }
@@ -418,6 +437,7 @@ pub(crate) fn compose_help_panel(
             text: format!(" /{filter}▌"),
             accent: false,
             footer: false,
+            render_only: false,
         });
     }
     panel.extend(window);
@@ -425,6 +445,7 @@ pub(crate) fn compose_help_panel(
         text: HELP_FOOTER.to_string(),
         accent: false,
         footer: true,
+        render_only: false,
     });
     panel
 }
@@ -508,6 +529,7 @@ pub(crate) fn picker_rows(
             ),
             accent: true,
             footer: false,
+            render_only: false,
         });
         refs.push(PickerRef::Session(i));
         for (w, (window_id, name)) in entry.windows.iter().enumerate() {
@@ -522,6 +544,7 @@ pub(crate) fn picker_rows(
                 text: format!(" {marker}  {window_id}: {}{star}", super::chrome_safe(name)),
                 accent: false,
                 footer: false,
+                render_only: false,
             });
             refs.push(PickerRef::Window(i, w));
         }
@@ -607,6 +630,7 @@ pub(crate) fn compose_picker_panel(
             text: format!(" /{filter}▌"),
             accent: false,
             footer: false,
+            render_only: false,
         });
     }
     panel.extend(window);
@@ -614,6 +638,7 @@ pub(crate) fn compose_picker_panel(
         text: PICKER_FOOTER.to_string(),
         accent: false,
         footer: true,
+        render_only: false,
     });
     (panel, content_refs, start)
 }
