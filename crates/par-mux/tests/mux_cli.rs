@@ -1466,7 +1466,8 @@ fn agent_hooks_status_prints_one_line_per_agent_without_a_daemon() {
     assert_eq!(run.code, Some(0), "stderr: {}", run.stderr);
     let lines: Vec<&str> = run.stdout.lines().collect();
     let agents = [
-        "claude", "codex", "grok", "muse", "droid", "copilot", "cursor",
+        "claude", "codex", "grok", "muse", "droid", "copilot", "cursor", "qwen",
+        "qodercli", "devin", "kimi", "mastracode",
     ];
     assert_eq!(lines.len(), agents.len(), "stdout: {:?}", run.stdout);
     for (agent, line) in agents.iter().zip(&lines) {
@@ -1485,10 +1486,12 @@ fn agent_hooks_status_prints_one_line_per_agent_without_a_daemon() {
     }
 }
 
-/// `--install-agent-hooks` on a machine without droid, copilot, or cursor:
+/// `--install-agent-hooks` on a machine without the registry agents:
 /// those arms print a `skipped` line and do not fail the run, and none of
-/// their config directories is created. (claude/codex/grok/muse keep their
-/// missing-directory failure, so this asserts only the new arms' lines.)
+/// their config directories is created. Every env override the arms read is
+/// cleared so each resolves under the temp HOME. (claude/codex/grok/muse
+/// keep their missing-directory failure, so this asserts only the registry
+/// arms' lines.)
 #[cfg(unix)]
 #[test]
 fn install_agent_hooks_skips_absent_droid_copilot_and_cursor() {
@@ -1506,6 +1509,10 @@ fn install_agent_hooks_skips_absent_droid_copilot_and_cursor() {
             ("PAR_MUX_CONFIG", config_str),
             ("COPILOT_HOME", ""),
             ("CURSOR_CONFIG_DIR", ""),
+            ("QWEN_HOME", ""),
+            ("QODERCLI_CONFIG_DIR", ""),
+            ("KIMI_CODE_HOME", ""),
+            ("XDG_CONFIG_HOME", ""),
         ],
     );
 
@@ -1531,7 +1538,8 @@ fn install_agent_hooks_skips_absent_droid_copilot_and_cursor() {
 }
 
 /// `--integration-status` covers every bundled asset in one grammar: the
-/// seven hook lines, the two extension lines, and the skill line, each
+/// hook lines (4 own-config agents + the 8 registry arms), the two
+/// extension lines, and the skill line, each
 /// `<kind> <name> installed|absent [currency]`.
 #[test]
 fn integration_status_covers_hooks_extensions_and_skill() {
@@ -1539,7 +1547,7 @@ fn integration_status_covers_hooks_extensions_and_skill() {
 
     assert_eq!(run.code, Some(0), "stderr: {}", run.stderr);
     let lines: Vec<&str> = run.stdout.lines().collect();
-    assert_eq!(lines.len(), 10, "one line per asset: {:?}", run.stdout);
+    assert_eq!(lines.len(), 15, "one line per asset: {:?}", run.stdout);
     let kinds: Vec<&str> = lines
         .iter()
         .map(|line| line.split(' ').next().unwrap_or(""))
@@ -1549,14 +1557,22 @@ fn integration_status_covers_hooks_extensions_and_skill() {
         .map(|line| line.split(' ').nth(1).unwrap_or(""))
         .collect();
     assert_eq!(
-        names[..7],
-        ["claude", "codex", "grok", "muse", "droid", "copilot", "cursor"],
+        names[..12],
+        [
+            "claude", "codex", "grok", "muse", "droid", "copilot", "cursor",
+            "qwen", "qodercli", "devin", "kimi", "mastracode"
+        ],
         "stdout: {:?}",
         run.stdout
     );
     assert_eq!(
         kinds,
         [
+            "hook",
+            "hook",
+            "hook",
+            "hook",
+            "hook",
             "hook",
             "hook",
             "hook",
