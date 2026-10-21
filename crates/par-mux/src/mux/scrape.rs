@@ -1900,8 +1900,16 @@ contains = ["Override Idle"]
             (Some("idle".into()), Some(IDLE_FALLBACK_RULE.into()))
         );
 
-        // A matching rule outranks the fallback.
-        feed(&tree, pane_id, "⠋ Thinking… (esc to stop)\r\n".as_bytes());
+        // A matching rule outranks the fallback. The leading newline puts
+        // the spinner glyph at column 0 of its own row: the pane is a live
+        // spawned shell, whose prompt lands asynchronously and would
+        // otherwise share the row (and break the rule's `^\s*[⠀-⣿]`
+        // anchor) on hosts whose shell prints before this feed runs.
+        feed(
+            &tree,
+            pane_id,
+            b"\r\n\xE2\xA0\x8B Thinking\xE2\x80\xA6 (esc to stop)\r\n",
+        );
         assert_eq!(
             tick_state(&tree, pane_id, Some(&alive)),
             (Some("working".into()), Some("spinner_stop_working".into()))
