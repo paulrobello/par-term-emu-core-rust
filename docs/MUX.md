@@ -1166,6 +1166,8 @@ An override that fails to parse or validate falls back to the bundled set with a
 
 Two mismatching ticks (not interrupted by a proven match) clear the whole claim and broadcast `%agent-released`, exactly as a release report would. The verdict is conservative in every ambiguous direction: a probe that goes blind (unreadable argv — the fresh-spawn window where macOS cannot read a mid-`exec` argv) keeps its recorded misses and never adds one, and Windows has no portable process-tree/argv access, so the sweep is inert there and hook release remains the only claim-clearing path.
 
+One constraint follows from the argv match: an agent launched through a STAND-IN program whose argv carries no agent-name component — pi's or omp's `-x <program>` runs the named program in the pane instead of the agent CLI — can never match, so its claim is released after the two mismatching ticks however healthy the stand-in is. Name the stand-in after its agent and the sweep holds the claim: `pi -x 'sh -c "exec -a pi <program>"'` sets argv[0] to `pi`, which the label match takes verbatim.
+
 ## Persistence and Restart
 
 State saving is crash-safe by construction (`crates/par-mux/src/mux/persist.rs`): serialize to `<file>.tmp`, fsync, rename over the target. The file is created `0600` on Unix (set at open, so there is no readable window between create and chmod) — the same owner-only posture as the socket. On Windows it inherits the ACL of the per-user state directory.
