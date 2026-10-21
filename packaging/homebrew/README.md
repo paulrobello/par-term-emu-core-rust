@@ -35,6 +35,8 @@ class ParMux < Formula
     end
   end
 
+  # Homebrew chdirs into the archive's single top-level directory on
+  # extract, so the binary installs by its own name despite the wrapper.
   def install
     bin.install "par-mux"
   end
