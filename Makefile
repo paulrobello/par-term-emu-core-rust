@@ -37,6 +37,7 @@ help:
 	@echo "  dev-streaming    - Alias of dev (streaming is in pyproject features)"
 	@echo "  xcframework      - Build TerminalCore.xcframework (iOS device + simulator) from the C FFI (needs Xcode)"
 	@echo "  app              - macOS only: build+sign the Par-mux.app TCC wrapper into build/ (never installs; see docs/MUX.md)"
+	@echo "  app-restart      - macOS only: restart the daemon under the app bundle's launchd label (keeps TCC grants)"
 	@echo "  watch            - Auto-rebuild on file changes (requires cargo-watch)"
 	@echo ""
 	@echo "Testing:"
@@ -262,6 +263,16 @@ app:
 	printf 'APPL????' > build/Par-mux.app/Contents/PkgInfo
 	codesign --force -s - build/Par-mux.app
 	plutil -lint build/Par-mux.app/Contents/Info.plist
+
+# macOS only: restart the daemon under the installed Par-mux.app bundle's
+# launchd label (com.paulrobello.par-mux) so the relaunch keeps the bundle's
+# TCC grants — the one restart shape pane children inherit permissions from.
+# The launcher execs ~/.cargo/bin/par-mux, so the restart lands on whatever
+# `make par-mux-install` last installed. kickstart -k blocks until the old
+# instance exits (its final state save) — a scrollback-heavy tree takes a
+# few seconds; sessions restore on the way back up.
+app-restart:
+	launchctl kickstart -k gui/$(shell id -u)/com.paulrobello.par-mux
 
 # ARC-105: alias of `dev` (streaming comes from pyproject features).
 dev-streaming: dev
