@@ -45,7 +45,8 @@ mod grok;
 mod muse;
 
 pub use config_hooks::{
-    ConfigHookArm, ConfigHookInstall, ConfigHookUninstall, CONFIG_HOOK_ARMS, COPILOT, CURSOR, DROID,
+    ConfigHookArm, ConfigHookInstall, ConfigHookUninstall, CONFIG_HOOK_ARMS, COPILOT, CURSOR,
+    DEVIN, DROID, KIMI, MASTRACODE, QODERCLI, QWEN,
 };
 
 pub use claude::{

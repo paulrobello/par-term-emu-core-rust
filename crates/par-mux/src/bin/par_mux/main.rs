@@ -823,13 +823,12 @@ enum AgentHookAction {
     Uninstall,
 }
 
-/// Install or uninstall every agent session hook, one stdout line per
-/// arm, exiting non-zero when any arm failed. Each arm runs even when an
-/// earlier one fails — a partial install is visible in full, not hidden
-/// by the first error.
-fn run_agent_hook_action(action: AgentHookAction) -> std::process::ExitCode {
+/// The bulk flag's arm table: the four bespoke installers, then every
+/// [`par_mux::mux::integrations::CONFIG_HOOK_ARMS`] entry. `Install`
+/// arms carry the stdout detail, `Uninstall` arms the one-word outcome.
+fn agent_hook_arms(action: &AgentHookAction) -> [(&'static str, Arm); 12] {
     use par_mux::mux::integrations as integ;
-    let arms: [(&str, Arm); 7] = match action {
+    match action {
         AgentHookAction::Install => [
             ("claude", || {
                 let r = integ::install_claude_hook()?;
@@ -874,6 +873,11 @@ fn run_agent_hook_action(action: AgentHookAction) -> std::process::ExitCode {
             ("droid", || config_hook_install(&integ::DROID)),
             ("copilot", || config_hook_install(&integ::COPILOT)),
             ("cursor", || config_hook_install(&integ::CURSOR)),
+            ("qwen", || config_hook_install(&integ::QWEN)),
+            ("qodercli", || config_hook_install(&integ::QODERCLI)),
+            ("devin", || config_hook_install(&integ::DEVIN)),
+            ("kimi", || config_hook_install(&integ::KIMI)),
+            ("mastracode", || config_hook_install(&integ::MASTRACODE)),
         ],
         AgentHookAction::Uninstall => [
             ("claude", || {
@@ -895,9 +899,21 @@ fn run_agent_hook_action(action: AgentHookAction) -> std::process::ExitCode {
             ("droid", || config_hook_uninstall(&integ::DROID)),
             ("copilot", || config_hook_uninstall(&integ::COPILOT)),
             ("cursor", || config_hook_uninstall(&integ::CURSOR)),
+            ("qwen", || config_hook_uninstall(&integ::QWEN)),
+            ("qodercli", || config_hook_uninstall(&integ::QODERCLI)),
+            ("devin", || config_hook_uninstall(&integ::DEVIN)),
+            ("kimi", || config_hook_uninstall(&integ::KIMI)),
+            ("mastracode", || config_hook_uninstall(&integ::MASTRACODE)),
         ],
-    };
-    run_arms(&arms)
+    }
+}
+
+/// Install or uninstall every agent session hook, one stdout line per
+/// arm, exiting non-zero when any arm failed. Each arm runs even when an
+/// earlier one fails — a partial install is visible in full, not hidden
+/// by the first error.
+fn run_agent_hook_action(action: AgentHookAction) -> std::process::ExitCode {
+    run_arms(&agent_hook_arms(&action))
 }
 
 /// The install line detail for a droid/copilot/cursor arm. An agent whose
@@ -1970,6 +1986,32 @@ static STDERR_LOG: StderrLog = StderrLog;
 mod mode_group_tests {
     use super::*;
     use clap::{CommandFactory, Parser};
+
+    /// The bulk --install-agent-hooks/--uninstall-agent-hooks flag covers
+    /// every library CONFIG_HOOK_ARMS entry: the docs promise the full
+    /// set, so a new config-hook arm shipping without its bulk line is a
+    /// gap (observed 2026-10-21: five arms were bulk-skipped).
+    #[test]
+    fn bulk_arm_covers_config_hook_arms() {
+        for action in [AgentHookAction::Install, AgentHookAction::Uninstall] {
+            let names: Vec<_> = agent_hook_arms(&action)
+                .iter()
+                .map(|(name, _)| *name)
+                .collect();
+            let expected: Vec<_> = ["claude", "codex", "grok", "muse"]
+                .into_iter()
+                .chain(
+                    par_mux::mux::integrations::CONFIG_HOOK_ARMS
+                        .iter()
+                        .map(|arm| arm.agent),
+                )
+                .collect();
+            assert_eq!(
+                names, expected,
+                "the bulk arms must cover every library arm"
+            );
+        }
+    }
 
     #[test]
     fn cli_debug_asserts() {

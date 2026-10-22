@@ -191,6 +191,9 @@ static DEVIN_EVENTS: [HookEvent; 6] = [
     session_event("Stop"),
 ];
 
+/// Devin CLI: `$XDG_CONFIG_HOME/devin/config.json` (else `~/.config/devin`,
+/// `%APPDATA%\devin` on Windows) — nested `hooks.<Event>` groups under six
+/// lifecycle events, every command the `session` action.
 pub static DEVIN: ConfigHookArm = ConfigHookArm {
     agent: "devin",
     config_dir: devin_config_dir,
@@ -270,6 +273,9 @@ static KIMI_EVENTS: [HookEvent; 12] = [
     },
 ];
 
+/// Kimi Code: `~/.kimi-code/config.toml` (`KIMI_CODE_HOME`) — a marked
+/// block of 12 `[[hooks]]` TOML tables appended after the user's content,
+/// rebuilt whole on install and cut on uninstall.
 pub static KIMI: ConfigHookArm = ConfigHookArm {
     agent: "kimi",
     config_dir: kimi_config_dir,
@@ -300,6 +306,9 @@ static MASTRACODE_EVENTS: [HookEvent; 11] = [
     action_event("Stop", "idle"),
 ];
 
+/// Mastra Code: `~/.mastracode/hooks.json` — `{type, command, timeout,
+/// description}` entries under event keys at the document root, one
+/// action per lifecycle event (11 events).
 pub static MASTRACODE: ConfigHookArm = ConfigHookArm {
     agent: "mastracode",
     config_dir: mastracode_config_dir,
