@@ -875,8 +875,12 @@ struct WindowSession {
     /// The config's `git-status` (the sidebar badge's render gate and
     /// its idle refresh poll's gate). Live on reload.
     git_status: bool,
-    /// When the git badge's snapshot re-query last ran
-    /// ([`GIT_POLL_INTERVAL`]'s clock, sidebar.rs).
+    /// The git badge's snapshot re-query interval
+    /// (`[client] git-poll-secs`, live on reload; the clock
+    /// `git_poll` runs on).
+    git_poll_secs: u64,
+    /// When the git badge's snapshot re-query last ran (the
+    /// `git_poll_secs` clock).
     git_poll: std::time::Instant,
     /// The config file the settings dialog writes; set only by a real
     /// attach, so a unit-test session never writes.
@@ -1257,6 +1261,7 @@ impl WindowSession {
             sidebar_on_launch: chords.sidebar_on_launch,
             session_picker: chords.session_picker,
             git_status: chords.git_status,
+            git_poll_secs: chords.git_poll_secs,
             git_poll: std::time::Instant::now(),
             settings_path: None,
             editor_lookup: scrollback_edit::env_editor_lookup,

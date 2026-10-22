@@ -179,9 +179,10 @@ impl PaneRenderer {
                     RtStyle::default().bg(band).add_modifier(RtModifier::BOLD)
                 }
                 (_, SidebarLineKind::Badge) => {
-                    // The git badge: blue in its own right, band-aware so
+                    // The git badge: bright blue (ANSI bright-blue, so it
+                    // reads on dark and light hosts alike), band-aware so
                     // the displayed workspace's badge stays legible.
-                    let base = RtStyle::default().fg(RtColor::Indexed(4));
+                    let base = RtStyle::default().fg(RtColor::Indexed(12));
                     if line.active {
                         base.bg(band)
                     } else {
@@ -385,40 +386,35 @@ pub(super) fn group_worktree_rows(
     section.rows = out;
 }
 
-/// The displayed session's workspace's git badge: ` main ↑2` as that
-/// workspace row's continuation line, when the snapshot's `git` row
-/// names the DISPLAYED session's workspace (`session_workspace`) — one
-/// badge for what's on screen. Pure — the unit-test surface.
-pub(super) fn apply_git_badge(
+/// The workspaces' git badges: each snapshot `git` row stamps ` branch
+/// ↑n ↓n` as its workspace row's continuation line; rows naming unknown
+/// workspaces, and workspaces without a row (non-repo, detached HEAD,
+/// the key off), leave their rows bare. Pure — the unit-test surface.
+pub(super) fn apply_git_badges(
     sections: &mut [SidebarSection],
-    git: Option<&crate::mux::ipc::GitStatusRow>,
-    displayed_workspace: Option<&str>,
+    git_rows: &[crate::mux::ipc::GitStatusRow],
 ) {
-    let (Some(row), Some(ws)) = (git, displayed_workspace) else {
-        return;
-    };
-    if row.id != ws {
-        return;
-    }
     let Some(section) = sections.iter_mut().find(|s| s.title == "workspaces") else {
         return;
     };
-    let Some(target) = section
-        .rows
-        .iter_mut()
-        .find(|r| matches!(&r.id, SidebarRowId::Workspace(id) if id == ws))
-    else {
-        return;
-    };
-    let mut badge = format!(" {}", row.branch);
-    if row.ahead > 0 {
-        badge.push_str(&format!(" \u{2191}{}", row.ahead));
+    for row in git_rows {
+        let Some(target) = section
+            .rows
+            .iter_mut()
+            .find(|r| matches!(&r.id, SidebarRowId::Workspace(id) if id == &row.id))
+        else {
+            continue;
+        };
+        let mut badge = format!(" {}", row.branch);
+        if row.ahead > 0 {
+            badge.push_str(&format!(" \u{2191}{}", row.ahead));
+        }
+        if row.behind > 0 {
+            badge.push_str(&format!(" \u{2193}{}", row.behind));
+        }
+        target.continuation = vec![badge];
+        target.badge = true;
     }
-    if row.behind > 0 {
-        badge.push_str(&format!(" \u{2193}{}", row.behind));
-    }
-    target.continuation = vec![badge];
-    target.badge = true;
 }
 
 /// A sidebar drag in flight: the width handle on the strip's right
@@ -443,11 +439,6 @@ pub(super) enum SidebarDrag {
 /// How often the roster re-queries while a panel agent's project is
 /// unknown — a third of the host probe's 30 s sweep.
 pub(super) const PROJECT_POLL_INTERVAL: std::time::Duration = std::time::Duration::from_secs(10);
-
-/// How often the git badge's snapshot re-query runs while the panel is
-/// up: the badge's idle staleness bound (the daemon serves from its 3 s
-/// cache, so a poll lands fresh rows within this cadence).
-pub(super) const GIT_POLL_INTERVAL: std::time::Duration = std::time::Duration::from_secs(10);
 
 /// The panel width bounds: the footer chips need 12 columns; 60 keeps
 /// the panes usable on every host this targets.
@@ -541,14 +532,16 @@ impl WindowSession {
     }
 
     /// Whether the git badge's snapshot re-query is due: the key is on,
-    /// the panel is up, and the last poll is [`GIT_POLL_INTERVAL`] old.
-    /// The status stream is event-driven, so without this poll a repo
-    /// that changed while idle would keep a stale badge until the next
-    /// event; the poll restarts the clock.
+    /// the panel is up, and the last poll is the configured
+    /// `[client] git-poll-secs` (default 10) old. The status stream is
+    /// event-driven, so without this poll a repo that changed while
+    /// idle would keep a stale badge until the next event; the poll
+    /// restarts the clock.
     pub(super) fn git_poll_due(&mut self, now: std::time::Instant) -> bool {
+        let interval = std::time::Duration::from_secs(self.git_poll_secs.max(1));
         let due = self.git_status
             && self.sidebar.is_on()
-            && now.duration_since(self.git_poll) >= GIT_POLL_INTERVAL;
+            && now.duration_since(self.git_poll) >= interval;
         if due {
             self.git_poll = now;
         }
@@ -706,11 +699,7 @@ impl WindowSession {
         );
         if let Some(sections) = sections.as_mut() {
             group_worktree_rows(sections, self.status.worktrees());
-            apply_git_badge(
-                sections,
-                self.status.git(),
-                self.status.session_workspace.as_deref(),
-            );
+            apply_git_badges(sections, self.status.git_rows());
         }
         self.renderer.set_sidebar_sections(sections);
     }
@@ -885,13 +874,13 @@ mod tests {
         assert_eq!(sections[0].rows[0].status, AgentStatus::Question);
     }
 
-    /// The badge rides the displayed session's workspace row, with the
-    /// herdr arrows; a row naming another workspace, or no row at all,
-    /// leaves the sections alone.
+    /// Badges ride every named workspace's row, with the herdr arrows;
+    /// a row naming an unknown workspace, and workspaces without a row,
+    /// leave their rows bare.
     #[test]
-    fn git_badge_lands_on_the_displayed_workspace() {
-        let badge = |ahead: u32, behind: u32| crate::mux::ipc::GitStatusRow {
-            id: "+0".to_string(),
+    fn git_badges_land_on_their_workspace_rows() {
+        let badge = |id: &str, ahead: u32, behind: u32| crate::mux::ipc::GitStatusRow {
+            id: id.to_string(),
             branch: "main".to_string(),
             ahead,
             behind,
@@ -900,30 +889,24 @@ mod tests {
             title: "workspaces",
             rows: vec![ws_row("+0"), ws_row("+1")],
         }];
-        apply_git_badge(&mut sections, Some(&badge(2, 0)), Some("+0"));
+        apply_git_badges(&mut sections, &[badge("+0", 2, 0), badge("+1", 0, 3)]);
         assert_eq!(sections[0].rows[0].continuation, vec![" main \u{2191}2"]);
-        assert!(sections[0].rows[1].continuation.is_empty(), "untouched");
-        apply_git_badge(&mut sections, Some(&badge(0, 3)), Some("+0"));
-        assert_eq!(sections[0].rows[0].continuation, vec![" main \u{2193}3"]);
-        apply_git_badge(&mut sections, Some(&badge(1, 1)), Some("+0"));
+        assert_eq!(sections[0].rows[1].continuation, vec![" main \u{2193}3"]);
+        assert!(sections[0].rows[0].badge && sections[0].rows[1].badge);
+        // A row naming an unknown workspace is skipped (the builder
+        // rebuilds the sections fresh each refresh, so no stale badge can
+        // persist across renders).
+        apply_git_badges(&mut sections, &[badge("+9", 1, 1)]);
         assert_eq!(
             sections[0].rows[0].continuation,
-            vec![" main \u{2191}1 \u{2193}1"]
-        );
-        // A row naming another workspace leaves the sections alone (the
-        // builder rebuilds them fresh each refresh, so no stale badge
-        // can persist across renders).
-        apply_git_badge(&mut sections, Some(&badge(0, 0)), Some("+1"));
-        assert_eq!(
-            sections[0].rows[0].continuation,
-            vec![" main \u{2191}1 \u{2193}1"],
+            vec![" main \u{2191}2"],
             "a foreign workspace's row never lands"
         );
-        apply_git_badge(&mut sections, None, Some("+0"));
+        apply_git_badges(&mut sections, &[]);
         assert_eq!(
             sections[0].rows[0].continuation,
-            vec![" main \u{2191}1 \u{2193}1"],
-            "a no-row refresh leaves the rebuilt sections untouched"
+            vec![" main \u{2191}2"],
+            "the stamper never clears — the rebuild drops stale badges"
         );
     }
 }

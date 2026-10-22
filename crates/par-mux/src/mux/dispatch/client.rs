@@ -405,7 +405,34 @@ pub(super) fn cmd_client_snapshot(ctx: &Ctx<'_>, window: Target<WindowId>) -> Ou
     let active_workspace = guard.active_workspace();
     let mut workspaces = guard.workspaces();
     workspaces.sort();
-    let mut owner_workspace = None;
+    // Per-workspace git sources, resolved under the lock: each
+    // workspace's active session's active pane's live cwd, else its
+    // worktree checkout. The bounded reads run outside the lock below.
+    let git_sources: Vec<(
+        WorkspaceId,
+        Option<std::path::PathBuf>,
+        Option<std::path::PathBuf>,
+    )> = {
+        let mut pairs = Vec::new();
+        for id in &workspaces {
+            let Some(ws) = guard.workspace(*id) else {
+                continue;
+            };
+            let cwd = ws
+                .sessions
+                .get(ws.active)
+                .or_else(|| ws.sessions.first())
+                .and_then(|sid| guard.session(*sid))
+                .and_then(|s| s.windows.get(s.active).copied())
+                .and_then(|w| guard.window(w))
+                .map(|w| w.active)
+                .and_then(|p| guard.pane(p))
+                .and_then(|pane| pane.persistence_cwd());
+            let launch = ws.worktree.as_ref().map(|link| link.checkout.clone());
+            pairs.push((*id, cwd, launch));
+        }
+        pairs
+    };
     for ws in workspaces.iter().filter_map(|id| guard.workspace(*id)) {
         let marker = if Some(ws.id) == active_workspace {
             '*'
@@ -413,9 +440,6 @@ pub(super) fn cmd_client_snapshot(ctx: &Ctx<'_>, window: Target<WindowId>) -> Ou
             '-'
         };
         lines.push(format!("workspace {} {marker} {}", ws.id, ws.name));
-        if ws.sessions.contains(&owner) {
-            owner_workspace = Some(ws.id);
-        }
     }
     for ws in workspaces.iter().filter_map(|id| guard.workspace(*id)) {
         for session in ws.sessions.iter().filter_map(|id| guard.session(*id)) {
@@ -455,33 +479,19 @@ pub(super) fn cmd_client_snapshot(ctx: &Ctx<'_>, window: Target<WindowId>) -> Ou
             .map(|row| format!("worktree {row}")),
     );
     drop(guard);
-    // The git badge resolves OUTSIDE the tree lock: the bounded `git
-    // status` behind it (3 s cache) must never stretch the daemon's
-    // dispatch. The chain is the card's: the displayed session's active
-    // pane's live cwd, else the workspace's launch folder.
+    // The git badges resolve OUTSIDE the tree lock: the bounded `git
+    // status` behind them (3 s cache) must never stretch the daemon's
+    // dispatch. The chain is per workspace: the workspace's active
+    // pane's live cwd, else the workspace's launch folder (its worktree
+    // checkout) — one row per workspace, id order.
     let git_enabled = ctx
         .config
         .map(|config| config.lock().git_status)
         .unwrap_or(true);
     if git_enabled {
-        if let Some(ws) = owner_workspace {
-            let (pane_cwd, launch) = {
-                let guard = ctx.tree.lock();
-                let cwd = guard
-                    .session(owner)
-                    .and_then(|s| s.windows.get(s.active).copied())
-                    .and_then(|w| guard.window(w))
-                    .map(|w| w.active)
-                    .and_then(|p| guard.pane(p))
-                    .and_then(|pane| pane.persistence_cwd());
-                let launch = guard
-                    .workspace(ws)
-                    .and_then(|ws| ws.worktree.as_ref())
-                    .map(|link| link.checkout.clone());
-                (cwd, launch)
-            };
+        for (ws, cwd, launch) in &git_sources {
             if let Some(badge) = crate::mux::git_status::cached_badge(
-                crate::mux::git_status::badge_dir(pane_cwd.as_deref(), launch.as_deref()),
+                crate::mux::git_status::badge_dir(cwd.as_deref(), launch.as_deref()),
             ) {
                 lines.push(format!(
                     "git {}",

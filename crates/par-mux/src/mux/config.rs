@@ -411,6 +411,14 @@ pub struct ClientSection {
         skip_serializing_if = "Option::is_none"
     )]
     pub git_status: Option<bool>,
+    /// The git badge's snapshot re-query interval in seconds
+    /// (`[client] git-poll-secs`); clamped 1-600, default 10. File-only.
+    #[serde(
+        default,
+        rename = "git-poll-secs",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub git_poll_secs: Option<u64>,
     /// The focused pane's border/divider highlight, `#rrggbb` hex. Empty
     /// = the built-in accent (bright cyan). Config-file only, like the
     /// other `[client]` display options.
@@ -560,6 +568,10 @@ pub struct EffectiveConfig {
     /// attach flag sets it. The daemon-side gate for the snapshot's
     /// `git` row.
     pub git_status: bool,
+    /// The git badge's snapshot re-query interval in seconds
+    /// (`[client] git-poll-secs`); clamped 1-600, default 10. Live on
+    /// reload.
+    pub git_poll_secs: u64,
     /// What a `split-window` pane starts in when no `-c` is given
     /// (`[daemon] split-start-dir`): `home-dir` | `previous-pane-dir` |
     /// `workspace-dir`; any other spelling keeps the home default. The
@@ -583,6 +595,7 @@ impl Default for EffectiveConfig {
             border_active_color: String::new(),
             border_color: String::new(),
             git_status: true,
+            git_poll_secs: 10,
             split_start_dir: "home-dir".to_string(),
         }
     }
@@ -670,6 +683,9 @@ pub fn resolve(file: &ConfigFile, o: &Overrides) -> EffectiveConfig {
     if file.client.git_status == Some(false) {
         eff.git_status = false;
     }
+    if let Some(v) = file.client.git_poll_secs {
+        eff.git_poll_secs = v.clamp(1, 600);
+    }
     eff
 }
 
@@ -755,6 +771,7 @@ pub fn render(eff: &EffectiveConfig) -> String {
             prefix: Some(eff.prefix.clone()),
             mode: Some(eff.mode.clone()),
             reload: Some(eff.reload.clone()),
+            git_poll_secs: Some(eff.git_poll_secs),
             split_right: None,
             split_down: None,
             kill_pane: None,
@@ -903,6 +920,9 @@ pub struct Chords {
     /// daemon reads it to emit the snapshot's `git` row; the client to
     /// render the badge and run its refresh poll.
     pub git_status: bool,
+    /// The badge's snapshot re-query interval in seconds (config
+    /// `git-poll-secs`); clamped 1-600, default 10. Live on reload.
+    pub git_poll_secs: u64,
     /// The divider/border glyph set (config `border-lines`): `herdr`,
     /// `unicode`, `double`, `heavy`, or `ascii`. Default `herdr`.
     pub border_lines: String,
@@ -1028,6 +1048,7 @@ impl Chords {
             kitty_graphics: true,
             session_picker: false,
             git_status: true,
+            git_poll_secs: 10,
             border_lines: "herdr".to_string(),
             sidebar_width: 20,
             sidebar_on_launch: true,
@@ -1311,6 +1332,13 @@ pub fn reload_client_chords(file: &ConfigFile, current: &Chords) -> Result<Chord
     let kitty_graphics = file.client.kitty_graphics.unwrap_or(current.kitty_graphics);
     let session_picker = file.client.session_picker.unwrap_or(current.session_picker);
     let git_status = file.client.git_status.unwrap_or(current.git_status);
+    // The poll interval clamps instead of erroring: a bad number is the
+    // file philosophy's warn-and-default, and 0 would spin the poll.
+    let git_poll_secs = file
+        .client
+        .git_poll_secs
+        .map(|v| v.clamp(1, 600))
+        .unwrap_or(current.git_poll_secs);
     // The border line style rides as its spelling; an unknown value is
     // the renderer's warn-and-default (the file philosophy), not a
     // reload error.
@@ -1348,6 +1376,7 @@ pub fn reload_client_chords(file: &ConfigFile, current: &Chords) -> Result<Chord
         kitty_graphics,
         session_picker,
         git_status,
+        git_poll_secs,
         border_lines,
         sidebar_width,
         sidebar_on_launch,
@@ -1656,6 +1685,7 @@ remain-on-exit = true
             border_active_color: "#00ff00".into(),
             border_color: "#202020".into(),
             git_status: true,
+            git_poll_secs: 30,
             split_start_dir: "previous-pane-dir".into(),
         };
         let file: ConfigFile = toml::from_str(&render(&eff)).expect("round-trip parse");
@@ -1820,6 +1850,43 @@ remain-on-exit = true
         assert!(!resolve(&off_file, &Overrides::default()).git_status);
         let text = render(&EffectiveConfig::default());
         assert!(text.contains("git-status = true"), "{text}");
+    }
+
+    /// `git-poll-secs`: default 10, clamped 1-600 on resolve and reload,
+    /// and gen-config emits the default.
+    #[test]
+    fn git_poll_secs_defaults_clamps_and_emits() {
+        let defaults = Chords::with_defaults();
+        assert_eq!(defaults.git_poll_secs, 10);
+        let absent: ConfigFile = toml::from_str("[client]\n").unwrap();
+        assert_eq!(
+            reload_client_chords(&absent, &defaults)
+                .unwrap()
+                .git_poll_secs,
+            10
+        );
+        let zero: ConfigFile = toml::from_str("[client]\ngit-poll-secs = 0\n").unwrap();
+        assert_eq!(
+            reload_client_chords(&zero, &defaults)
+                .unwrap()
+                .git_poll_secs,
+            1,
+            "below the floor clamps to 1"
+        );
+        let huge: ConfigFile = toml::from_str("[client]\ngit-poll-secs = 99999\n").unwrap();
+        assert_eq!(
+            reload_client_chords(&huge, &defaults)
+                .unwrap()
+                .git_poll_secs,
+            600,
+            "above the ceiling clamps to 600"
+        );
+        let eff = resolve(&ConfigFile::default(), &Overrides::default());
+        assert_eq!(eff.git_poll_secs, 10);
+        let file: ConfigFile = toml::from_str("[client]\ngit-poll-secs = 45\n").unwrap();
+        assert_eq!(resolve(&file, &Overrides::default()).git_poll_secs, 45);
+        let text = render(&EffectiveConfig::default());
+        assert!(text.contains("git-poll-secs = 10"), "{text}");
     }
 
     #[test]

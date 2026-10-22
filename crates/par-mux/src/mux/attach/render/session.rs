@@ -294,6 +294,7 @@ impl WindowSession {
         self.sidebar_on_launch = chords.sidebar_on_launch;
         self.session_picker = chords.session_picker;
         self.git_status = chords.git_status;
+        self.git_poll_secs = chords.git_poll_secs;
         self.popups = chords.popups.clone();
         // The border style first, the explicit `pane-borders` flag after
         // it — the style implies a paint mode (herdr = per-pane boxes),

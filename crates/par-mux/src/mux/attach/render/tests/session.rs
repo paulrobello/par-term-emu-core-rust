@@ -2115,9 +2115,10 @@ fn settings_rows_write_and_apply_live() {
     let written = std::fs::read_to_string(&path).unwrap();
     assert!(written.contains("pane-borders = false"), "{written}");
     assert!(!session.render_opts.pane_borders);
-    // The sidebar tab (one back-Tab), `agent lines` (row 2): cycles
-    // default → compact and writes the nested token arrays.
-    session.route_stdin_bytes(&mut conn, b"hjj\r");
+    // The sidebar tab (one back-Tab), `agent lines` (row 3, under the
+    // git poll row): cycles default → compact and writes the nested
+    // token arrays.
+    session.route_stdin_bytes(&mut conn, b"hjjj\r");
     settle(&mut session, &mut conn);
     let written = std::fs::read_to_string(&path).unwrap();
     assert!(

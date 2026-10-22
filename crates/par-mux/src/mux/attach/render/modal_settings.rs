@@ -118,6 +118,11 @@ impl SettingsSection {
                     kind: SettingKind::Number { min: 6, max: 60 },
                 },
                 SettingSpec {
+                    key: "git-poll-secs",
+                    label: "git poll secs",
+                    kind: SettingKind::Number { min: 1, max: 600 },
+                },
+                SettingSpec {
                     key: "agent-rows",
                     label: "agent lines",
                     kind: SettingKind::Choice(&["default", "compact", "detailed", "verbose"]),
@@ -463,6 +468,8 @@ pub(super) struct SettingsValues {
     pub kitty_graphics: bool,
     pub session_picker: bool,
     pub git_status: bool,
+    /// The git badge poll interval in seconds (`[client] git-poll-secs`).
+    pub git_poll_secs: u64,
     pub resize_step: u32,
     pub notify_delivery: String,
     pub notify_states: Vec<String>,
@@ -499,6 +506,7 @@ impl SettingsValues {
         match key {
             "sidebar-on-launch" => FieldVal::Bool(self.sidebar_on_launch),
             "sidebar-width" => FieldVal::Num(self.sidebar_width as u32),
+            "git-poll-secs" => FieldVal::Num(u32::try_from(self.git_poll_secs).unwrap_or(600)),
             "agent-rows" => FieldVal::Text(self.agent_rows_preset()),
             "border-lines" => FieldVal::Text(self.border_lines.clone()),
             "pane-borders" => FieldVal::Bool(self.pane_borders),
@@ -834,6 +842,7 @@ impl WindowSession {
             kitty_graphics: self.kitty.enabled,
             session_picker: self.session_picker,
             git_status: self.git_status,
+            git_poll_secs: self.git_poll_secs,
             resize_step: self.resize_step,
             notify_delivery: self.notify.delivery.name().to_string(),
             notify_states: self.notify.states.clone(),
@@ -1274,6 +1283,7 @@ mod tests {
             kitty_graphics: true,
             session_picker: false,
             git_status: true,
+            git_poll_secs: 10,
             resize_step: 1,
             notify_delivery: "terminal".to_string(),
             notify_states: vec!["blocked".to_string(), "idle".to_string()],
