@@ -367,6 +367,7 @@ impl MuxServer {
         let probe_worker = crate::mux::host_probe::spawn_host_probe_worker(
             Arc::clone(&self.tree),
             Arc::clone(&self.shutdown),
+            Arc::clone(&self.clients),
         );
 
         // The scrape tier rides this loop as its heartbeat: pattern

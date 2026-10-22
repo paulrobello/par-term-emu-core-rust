@@ -2,6 +2,7 @@
 
 use super::protocol::AgentEntry;
 use base64::{engine::general_purpose::STANDARD, Engine as _};
+use std::collections::BTreeMap;
 
 /// Parses `list-agents` output into roster entries sorted by pane id.
 ///
@@ -93,6 +94,7 @@ fn parse_line(line: &str) -> Option<AgentEntry> {
     }
     let mut reason = String::new();
     let mut workspace = "";
+    let mut project = String::new();
     for token in tokens {
         if let Some((key, value)) = token.split_once('=') {
             match key {
@@ -104,6 +106,9 @@ fn parse_line(line: &str) -> Option<AgentEntry> {
                         .unwrap_or_default();
                 }
                 "ws" => workspace = value,
+                "host_telemetry" => {
+                    project = project_from_host_telemetry(value);
+                }
                 _ => {}
             }
         }
@@ -115,8 +120,43 @@ fn parse_line(line: &str) -> Option<AgentEntry> {
         source: source.to_owned(),
         reason,
         workspace: workspace.to_owned(),
+        project,
         ..Default::default()
     })
+}
+
+/// The probe-attributed project a row's `host_telemetry=` token carries:
+/// padded base64 JSON, `{"project":{"sampled_at_unix_ms":N,"value":...}}`.
+/// Any malformed or project-less payload leaves the field empty — absent
+/// beats guessed.
+fn project_from_host_telemetry(raw: &str) -> String {
+    STANDARD
+        .decode(raw)
+        .ok()
+        .and_then(|bytes| serde_json::from_slice::<serde_json::Value>(&bytes).ok())
+        .and_then(|value| {
+            value
+                .get("project")
+                .and_then(|project| project.get("value"))
+                .and_then(|value| value.as_str())
+                .map(str::to_owned)
+        })
+        .unwrap_or_default()
+}
+
+/// Parses `list-panes -F '#{pane_id} #{pane_title}'` output into a
+/// pane-id → title map. Rows whose first token is not a well-formed pane
+/// id are skipped; a later duplicate row wins.
+pub fn parse_titles_output(raw: &str) -> BTreeMap<u32, String> {
+    raw.lines()
+        .filter_map(|line| {
+            let (id, title) = line.split_once(' ')?;
+            Some((
+                id.trim_start_matches('%').parse::<u32>().ok()?,
+                title.to_owned(),
+            ))
+        })
+        .collect()
 }
 
 #[cfg(test)]
@@ -189,6 +229,36 @@ mod tests {
         let raw = "12 claude working hook host_telemetry=e30= telemetry=e30=\n";
         let got = parse_agents_output(raw);
         assert_eq!(got.len(), 1);
+    }
+
+    #[test]
+    fn host_telemetry_token_attributes_the_project() {
+        // {"project":{"sampled_at_unix_ms":1,"value":"pardeck"}} in padded
+        // base64.
+        let got = parse_agents_output(
+            "3 zed idle hook host_telemetry=eyJwcm9qZWN0Ijp7InNhbXBsZWRfYXRfdW5peF9tcyI6MSwidmFsdWUiOiJwYXJkZWNrIn19\n",
+        );
+        assert_eq!(got[0].project, "pardeck");
+        // A payload without a project key stays empty — absent beats
+        // guessed.
+        let got = parse_agents_output("3 zed idle hook host_telemetry=e30=\n");
+        assert_eq!(got[0].project, "");
+        // A malformed payload never fails the row.
+        let got = parse_agents_output("3 zed idle hook host_telemetry=!!!\n");
+        assert_eq!(got.len(), 1);
+        assert_eq!(got[0].project, "");
+    }
+
+    #[test]
+    fn parse_titles_output_maps_pane_ids_to_titles() {
+        let titles =
+            parse_titles_output("%15 build: par-term\n%3 zed — the idle pane\n\nnot-a-pane\n");
+        assert_eq!(titles.get(&15).map(String::as_str), Some("build: par-term"));
+        assert_eq!(
+            titles.get(&3).map(String::as_str),
+            Some("zed — the idle pane")
+        );
+        assert_eq!(titles.len(), 2);
     }
 
     #[test]

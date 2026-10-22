@@ -75,7 +75,8 @@ pub(super) fn cmd_list_panes(
     //
     // `-F <format>` replaces the row shape: one expansion per pane
     // (`#{session_id}`, `#{session_name}`, `#{window_id}`,
-    // `#{window_name}`, `#{pane_id}`, `#{pane_active}`).
+    // `#{window_name}`, `#{pane_id}`, `#{pane_active}`, `#{pane_leaf}`,
+    // `#{pane_title}`).
     let guard = ctx.tree.lock();
     let Some(target) = target else {
         let mut lines: Vec<String> = Vec::new();
@@ -89,6 +90,10 @@ pub(super) fn cmd_list_panes(
             {
                 let active = w.active;
                 for (leaf, pane) in w.panes().into_iter().enumerate() {
+                    let pane_title = guard
+                        .pane(pane)
+                        .map(|p| p.effective_title().replace(['\r', '\n'], " "))
+                        .unwrap_or_default();
                     match &format {
                         Some(format) => lines.push(super::format_expansion(
                             format,
@@ -100,6 +105,7 @@ pub(super) fn cmd_list_panes(
                                 ("pane_id", pane.to_string().as_str()),
                                 ("pane_active", if pane == active { "1" } else { "0" }),
                                 ("pane_leaf", leaf.to_string().as_str()),
+                                ("pane_title", pane_title.as_str()),
                             ],
                         )),
                         None => lines.push(format!("{pane}")),
@@ -137,6 +143,10 @@ pub(super) fn cmd_list_panes(
                     let window_id = window.id.to_string();
                     let pane_id = pane.to_string();
                     let pane_leaf = leaf.to_string();
+                    let pane_title = guard
+                        .pane(pane)
+                        .map(|p| p.effective_title().replace(['\r', '\n'], " "))
+                        .unwrap_or_default();
                     let mut vars: Vec<(&str, &str)> = Vec::new();
                     if let Some((sid, sname)) = &session_vars {
                         vars.push(("session_id", sid.as_str()));
@@ -147,6 +157,7 @@ pub(super) fn cmd_list_panes(
                     vars.push(("pane_id", pane_id.as_str()));
                     vars.push(("pane_active", if pane == window.active { "1" } else { "0" }));
                     vars.push(("pane_leaf", pane_leaf.as_str()));
+                    vars.push(("pane_title", pane_title.as_str()));
                     super::format_expansion(format, &vars)
                 }
                 None => format!("{pane} {leaf} {marker}"),

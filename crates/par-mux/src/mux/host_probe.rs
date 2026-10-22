@@ -25,7 +25,9 @@
 //! executes. A pane whose child cwd cannot be read is simply not probed.
 
 use crate::mux::ids::PaneId;
+use crate::mux::server::{broadcast_notification, Clients};
 use crate::mux::tree::MuxTree;
+use par_term_emu_core::tmux_control::TmuxNotification;
 use parking_lot::Mutex;
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
@@ -577,6 +579,7 @@ pub(crate) fn host_probe_sweep(
     tree: &Arc<Mutex<MuxTree>>,
     shutdown: &Arc<AtomicBool>,
     state: &mut ProbeState,
+    clients: &Clients,
 ) {
     let targets: Vec<(PaneId, crate::mux::pane::PaneSnapshotParts)> = {
         let guard = tree.lock();
@@ -656,11 +659,41 @@ pub(crate) fn host_probe_sweep(
         }
     }
 
+    let mut changed: Vec<(PaneId, String)> = Vec::new();
     let mut guard = tree.lock();
     for (pane_id, telemetry) in results {
-        if let Some(pane) = guard.pane_mut(pane_id) {
-            pane.host_telemetry = Some(telemetry);
+        let Some(pane) = guard.pane_mut(pane_id) else {
+            continue;
+        };
+        // The served project is roster data: teaching clients to
+        // re-query on change keeps a long-lived watcher's project field
+        // fresh without any polling timer (the push is identity-only —
+        // clients re-fetch list-agents).
+        let project_changed = match (&pane.host_telemetry, &telemetry) {
+            (None, new) => new.project.is_some(),
+            (Some(prev), new) => {
+                prev.project.as_ref().map(|s| s.value.clone())
+                    != new.project.as_ref().map(|s| s.value.clone())
+            }
+        };
+        if project_changed {
+            let agent = pane.metadata().get("agent").cloned().unwrap_or_default();
+            changed.push((pane_id, agent));
         }
+        pane.host_telemetry = Some(telemetry);
+    }
+    drop(guard);
+    for (pane_id, agent) in changed {
+        if agent.is_empty() {
+            continue;
+        }
+        broadcast_notification(
+            clients,
+            &TmuxNotification::AgentTelemetryChanged {
+                pane_id: format!("%{pane_id}"),
+                agent,
+            },
+        );
     }
 }
 
@@ -696,6 +729,7 @@ fn unix_now_ms() -> u64 {
 pub(crate) fn spawn_host_probe_worker(
     tree: Arc<Mutex<MuxTree>>,
     shutdown: Arc<AtomicBool>,
+    clients: Clients,
 ) -> std::thread::JoinHandle<()> {
     std::thread::spawn(move || {
         let mut state = ProbeState::default();
@@ -706,7 +740,7 @@ pub(crate) fn spawn_host_probe_worker(
                 break;
             }
             if last_probe.elapsed() >= HOST_PROBE_INTERVAL {
-                host_probe_sweep(&tree, &shutdown, &mut state);
+                host_probe_sweep(&tree, &shutdown, &mut state, &clients);
                 last_probe = Instant::now();
             }
         }
@@ -760,7 +794,13 @@ mod tests {
             tree,
             &Arc::new(AtomicBool::new(false)),
             &mut ProbeState::default(),
+            &test_clients(),
         );
+    }
+
+    /// An empty client roster: the sweep's broadcasts go nowhere.
+    fn test_clients() -> Clients {
+        Arc::new(Mutex::new(Vec::new()))
     }
 
     /// One fixture git run in `dir`.
@@ -1005,7 +1045,7 @@ mod tests {
 
         let mut state = ProbeState::default();
         state.timed_out.insert(pane_id, cwd.clone());
-        host_probe_sweep(&tree, &shutdown, &mut state);
+        host_probe_sweep(&tree, &shutdown, &mut state, &test_clients());
         assert!(
             tree.lock().pane(pane_id).unwrap().host_telemetry.is_none(),
             "the wedged (pane, cwd) pair is not probed"
@@ -1015,7 +1055,7 @@ mod tests {
         state
             .timed_out
             .insert(pane_id, PathBuf::from("/a-cwd-the-pane-left"));
-        host_probe_sweep(&tree, &shutdown, &mut state);
+        host_probe_sweep(&tree, &shutdown, &mut state, &test_clients());
         assert!(
             tree.lock().pane(pane_id).unwrap().host_telemetry.is_some(),
             "a changed cwd is probed again"
@@ -1023,7 +1063,7 @@ mod tests {
         assert!(state.timed_out.is_empty(), "success clears the record");
 
         state.timed_out.insert(crate::mux::ids::PaneId(9_999), cwd);
-        host_probe_sweep(&tree, &shutdown, &mut state);
+        host_probe_sweep(&tree, &shutdown, &mut state, &test_clients());
         assert!(
             state.timed_out.is_empty(),
             "a pane gone from the roster is forgotten"
@@ -1045,6 +1085,7 @@ mod tests {
             &tree,
             &Arc::new(AtomicBool::new(true)),
             &mut ProbeState::default(),
+            &test_clients(),
         );
         assert!(tree.lock().pane(pane_id).unwrap().host_telemetry.is_none());
     }
@@ -1321,6 +1362,87 @@ mod tests {
         assert!(
             pane.host_telemetry.is_none(),
             "the unrostered pane is never probed"
+        );
+    }
+
+    /// A sweep that first attributes (or changes) a pane's project
+    /// teaches clients with one identity-only `%agent-telemetry-changed`
+    /// push after the tree lock drops — the daemon's re-query contract,
+    /// so a long-lived roster watcher's project field stays fresh with
+    /// no polling timer. An unchanged project stays silent.
+    #[cfg(unix)]
+    #[test]
+    fn sweep_broadcasts_telemetry_changed_when_the_project_changes() {
+        if !Command::new("git")
+            .arg("--version")
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .status()
+            .map(|status| status.success())
+            .unwrap_or(false)
+        {
+            return; // the probe serves absent anyway without git
+        }
+        let repo = git_repo();
+        let mut tree = MuxTree::new(Box::new(ShellPaneFactory {
+            cwd: Some(repo.path().to_path_buf()),
+            ..ShellPaneFactory::default()
+        }));
+        let session = tree
+            .new_session("probe", 80, 24)
+            .expect("test session spawns");
+        let pane_id = tree
+            .session(session)
+            .expect("session exists")
+            .windows
+            .iter()
+            .filter_map(|window| tree.window(*window))
+            .flat_map(|window| window.panes())
+            .next()
+            .expect("a new session has a pane");
+        let tree = Arc::new(Mutex::new(tree));
+        {
+            let mut guard = tree.lock();
+            let pane = guard.pane_mut(pane_id).unwrap();
+            pane.set_metadata("agent", "kimi");
+            pane.set_metadata("agent_state", "working");
+        }
+        let (tx, rx) = std::sync::mpsc::sync_channel::<String>(16);
+        let clients: Clients = Arc::new(Mutex::new(vec![(
+            1,
+            tx,
+            Arc::new(AtomicUsize::new(0)),
+            Arc::new(AtomicBool::new(false)),
+            crate::mux::ipc::ConnectionAbort::none(),
+        )]));
+
+        // First sweep: project None→Some is a change, so exactly one
+        // identity-only push rides to the client.
+        host_probe_sweep(
+            &tree,
+            &Arc::new(AtomicBool::new(false)),
+            &mut ProbeState::default(),
+            &clients,
+        );
+        let first = rx
+            .recv_timeout(crate::mux::test_wait::CEILING)
+            .expect("the first sweep teaches clients");
+        assert!(
+            first.starts_with("%agent-telemetry-changed") && first.contains("kimi"),
+            "the push names the pane and agent: {first:?}"
+        );
+
+        // A second sweep over an unchanged sample is silent.
+        host_probe_sweep(
+            &tree,
+            &Arc::new(AtomicBool::new(false)),
+            &mut ProbeState::default(),
+            &clients,
+        );
+        assert!(
+            rx.try_recv().is_err(),
+            "an unchanged project never re-pushes"
         );
     }
 }

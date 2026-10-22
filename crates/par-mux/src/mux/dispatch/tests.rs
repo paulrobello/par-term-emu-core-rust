@@ -2079,6 +2079,31 @@ fn list_format_flags_expand_variables() {
     assert_eq!(panes, vec!["%0 ".to_string()], "{panes:?}");
 }
 
+/// `#{pane_title}` rides the -F expansion on both the bare global form
+/// and the targeted form: the effective title (the user title when set,
+/// else the OSC title). Control characters are already stripped by the
+/// title sources, and the row builder flattens any CR/LF to spaces for
+/// the line-framed reply — the shape the streamer roster binds.
+#[test]
+fn list_panes_format_carries_the_effective_pane_title() {
+    let h = Harness::new();
+    assert_ok(&h.run("new-session -s work"));
+    assert_ok(&h.run("split-window -t %0"));
+    assert_ok(&h.run("select-pane -t %1 -T 'user title'"));
+    let titles = assert_ok(&h.run("list-panes -F '#{pane_id} #{pane_title}'"));
+    assert_eq!(titles.len(), 2, "{titles:?}");
+    assert_eq!(titles[0], "%0 ");
+    assert_eq!(titles[1], "%1 user title");
+    // A pane target lists its owning window (R7): both panes, the
+    // targeted pane's title among them.
+    let targeted = assert_ok(&h.run("list-panes -t %1 -F '#{pane_title}'"));
+    assert_eq!(
+        targeted,
+        vec!["".to_string(), "user title".to_string()],
+        "{targeted:?}"
+    );
+}
+
 fn report_state(
     h: &Harness,
     pane: PaneId,

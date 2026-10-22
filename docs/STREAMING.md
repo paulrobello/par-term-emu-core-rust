@@ -836,7 +836,7 @@ The protocol is defined in `proto/terminal.proto`. Messages use Protocol Buffers
 | `agent_state_changed` | `agent?: AgentEntry`, `released: bool` | Roster delta: upsert `agent`, or remove it when `released` is `true` |
 | `pointer_shape_changed` | `shape?: string` | Pointer shape changed (OSC 22); absent = the client's own pointer applies |
 
-`AgentEntry` fields: `pane_id` (par-mux pane `%N`), `agent`, `state`, `source` (`hook` or `scrape`), `reason` (decoded blocked reason, empty when none), `workspace` (par-mux workspace id from the roster row's `ws=` token, empty when unknown), `project` (host-attributed project, empty — no streamer source attributes one yet), and `pane_label` (pane title, empty — the daemon offers no global title query a streamer can bind yet). Both roster messages are always sent — event subscriptions do not filter them.
+`AgentEntry` fields: `pane_id` (par-mux pane `%N`), `agent`, `state`, `source` (`hook` or `scrape`), `reason` (decoded blocked reason, empty when none), `workspace` (par-mux workspace id from the roster row's `ws=` token, empty when unknown), `project` (host-probe-attributed project from the roster row's `host_telemetry` token, empty when unattributed), and `pane_label` (the pane's effective title from the watcher's one bounded `list-panes -F '#{pane_id} #{pane_title}'` query, refreshed by `%pane-title-changed` pushes, empty when none is set). State-change deltas keep the last known project and label for their pane. Both roster messages are always sent — event subscriptions do not filter them.
 
 ### Client Messages (ClientMessage oneof)
 
