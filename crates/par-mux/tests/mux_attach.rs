@@ -1404,10 +1404,17 @@ fn render_mode_zoom_rename_border_chords() {
         Duration::from_millis(400),
     ));
     let (_, ever) = reconstructed_screen(&got, 24, 80);
+    // Scan EVERY snapshot, not just the last: the flash paints only the
+    // changed cells (raw bytes may never spell `labels on`), and a late
+    // backlog repaint of the status row can overwrite the flash before
+    // the window ends. Reconstruction joins the unchanged prefix, so a
+    // snapshot that ever held the flash still reads `labels on`.
+    let saw_on_raw = got.windows("labels on".len()).any(|w| w == b"labels on");
     assert!(
-        ever.last()
-            .is_some_and(|snaps| snaps.iter().any(|r| r.contains("labels on"))),
-        "prefix l again must flash labels on. stderr: {} bytes: {:?}",
+        ever.iter()
+            .flatten()
+            .any(|r| r.contains("labels on")),
+        "prefix l again must flash labels on (raw needle seen: {saw_on_raw}). stderr: {} bytes: {:?}",
         stderr.lock().unwrap(),
         String::from_utf8_lossy(&got)
     );
