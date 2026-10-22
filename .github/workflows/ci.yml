@@ -227,7 +227,12 @@ jobs:
       # compiles nowhere in CI (the horizontal-divider regression shipped
       # through every green gate that way). ARC-007 O2 Phase 2: the mux
       # tree and its suites live in the par-mux member.
-      run: cargo nextest run --profile ci --locked -p par-mux --features attach
+      # --test-threads 4: the profile's 8 is sized for the 16-CPU dev
+      # machine; six consecutive macos-latest scoped runs each lost a
+      # DIFFERENT load-sensitive PTY test to the 8-on-3-vCPU
+      # oversubscription (runs 39700463900..39710987499), so CI caps at
+      # the ubuntu/windows vCPU count.
+      run: cargo nextest run --profile ci --locked -p par-mux --features attach --test-threads 4
 
     - name: Run root tests with the mux re-export on
       # mux_feature_isolation + the root lib compiled against par-mux.

@@ -220,17 +220,24 @@ fn pane_endpoint_of(stage: &mut Stage, pane: &str) -> std::path::PathBuf {
             .control
             .command(&format!("refresh-client -t {pane}"))
             .join("");
-        for line in screen.lines() {
-            if let Some(idx) = line.find("PS=") {
-                let rest = &line[idx + "PS=".len()..];
-                let value: String = rest
-                    .chars()
-                    .take_while(|c| c.is_alphanumeric() || matches!(c, '.' | '-' | '_' | '%'))
-                    .collect();
-                if value.contains(".pane-") {
-                    found = Some(value);
-                    break;
-                }
+        // EVERY PS= occurrence per line, not just the first: the styled
+        // grid's row ends ride as escaped \r\n, so the echoed command row
+        // and the output row can share one protocol line, and the echo's
+        // PS=${PAR_MUX_SOCKET##*/} comes first (measured on the macos
+        // runner, run 39710987499 — the assert's own screen held the
+        // value the first-occurrence search never reached).
+        let mut from = 0;
+        while let Some(offset) = screen[from..].find("PS=") {
+            let idx = from + offset;
+            from = idx + "PS=".len();
+            let rest = &screen[idx + "PS=".len()..];
+            let value: String = rest
+                .chars()
+                .take_while(|c| c.is_alphanumeric() || matches!(c, '.' | '-' | '_' | '%'))
+                .collect();
+            if value.contains(".pane-") {
+                found = Some(value);
+                break;
             }
         }
         if found.is_some() {
