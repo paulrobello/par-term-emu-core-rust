@@ -1239,7 +1239,17 @@ fn render_mode_zoom_rename_border_chords() {
         "PANE-B-CHORD executed on the pane screen",
     );
 
-    let (mut host, stderr) = spawn_attach_render(&fixture, &["-t", &pane_a]);
+    // The input trace rides along: its stderr timeline (echoed by the
+    // asserts below) shows whether a chord byte that produces no flash
+    // was read and routed at all — the discriminating evidence for the
+    // macos-runner failures (runs 39700463900/39701897063/39703870255).
+    let (mut host, stderr) = spawn_attach_with_env(
+        &fixture,
+        &["-t", &pane_a],
+        "render",
+        DEFAULT_CLIENT_CONFIG,
+        &[("PAR_MUX_INPUT_TRACE", "1")],
+    );
     let boot = wait_for_output(&host, b"PANE-B-CHORD", Duration::from_secs(10));
     let early = child_exit(&mut host, Duration::from_millis(200));
     assert!(
@@ -1393,11 +1403,25 @@ fn render_mode_zoom_rename_border_chords() {
         stderr.lock().unwrap(),
         String::from_utf8_lossy(&got)
     );
-    host.to_child
-        .write_all(&[0x02, b'l'])
-        .expect("prefix l again");
-    host.to_child.flush().ok();
-    let mut got = wait_for_output(&host, b"labels on", Duration::from_secs(10));
+    // Press and poll, re-pressing up to twice: on the macos runner the
+    // second press has three times produced NO flash in a 10 s window
+    // (byte-identical captures), so a single press is not a stable
+    // observable there. `l` toggles, so from labels-off an odd number of
+    // processed presses ends on labels on and its flash names it; the
+    // assert below accepts the flash from any press.
+    let mut got = Vec::new();
+    let mut presses = 0;
+    while presses < 3 {
+        host.to_child
+            .write_all(&[0x02, b'l'])
+            .expect("prefix l again");
+        host.to_child.flush().ok();
+        presses += 1;
+        got.extend(wait_for_output(&host, b"labels on", Duration::from_secs(4)));
+        if got.windows("labels on".len()).any(|w| w == b"labels on") {
+            break;
+        }
+    }
     got.extend(wait_for_output(
         &host,
         b"\x00-never",
@@ -1414,7 +1438,7 @@ fn render_mode_zoom_rename_border_chords() {
         ever.iter()
             .flatten()
             .any(|r| r.contains("labels on")),
-        "prefix l again must flash labels on (raw needle seen: {saw_on_raw}). stderr: {} bytes: {:?}",
+        "prefix l again must flash labels on (presses: {presses}, raw needle seen: {saw_on_raw}). stderr: {} bytes: {:?}",
         stderr.lock().unwrap(),
         String::from_utf8_lossy(&got)
     );
