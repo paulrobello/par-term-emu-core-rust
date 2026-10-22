@@ -904,14 +904,20 @@ pub(crate) fn compose_sidebar(
     let entries = |lines: &mut Vec<SidebarLine>, rows: &[SidebarRow], top: u16, end: u16| {
         let mut y = top;
         for row in rows {
-            let marker = if matches!(row.id, SidebarRowId::Workspace(_)) {
-                row.status.glyph()
-            } else if row.active {
-                "▸"
-            } else {
-                " "
+            let marker = if row.active { "▸" } else { " " };
+            // A workspace's status glyph rides NEXT TO THE NAME on the
+            // first line, as the STATE_ICON placeholder the renderer
+            // paints in the status's color — not in the marker column,
+            // which stays the active pointer (and never on the
+            // continuation lines). A workspace with no agent state
+            // carries no icon at all.
+            let status_dot = match (&row.id, row.status) {
+                (SidebarRowId::Workspace(_), status) if status != AgentStatus::None => {
+                    format!(" {STATE_ICON}")
+                }
+                _ => String::new(),
             };
-            let first = format!(" {marker} {}", super::chrome_safe(&row.label));
+            let first = format!(" {marker} {}{status_dot}", super::chrome_safe(&row.label));
             let rest = row
                 .continuation
                 .iter()

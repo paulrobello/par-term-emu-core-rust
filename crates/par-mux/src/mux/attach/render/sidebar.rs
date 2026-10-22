@@ -209,18 +209,12 @@ impl PaneRenderer {
                     glyph
                 }
             });
-            let ws_line = matches!(line.id, Some(SidebarRowId::Workspace(_)));
-            let agent_line = matches!(line.id, Some(SidebarRowId::Pane(_)));
             for (j, ch) in line.text.chars().enumerate() {
                 let x = line.x + j as u16;
                 if x >= content_w {
                     break;
                 }
-                let is_glyph = if rail {
-                    j == 1
-                } else {
-                    (ws_line && j == 1) || (agent_line && ch == STATE_ICON)
-                };
+                let is_glyph = if rail { j == 1 } else { ch == STATE_ICON };
                 let cell = &mut self.buffer[(x, line.y)];
                 cell.set_symbol(&ch.to_string());
                 // The glyph cell carries the status's own shape, so the

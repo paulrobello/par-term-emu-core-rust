@@ -1737,7 +1737,7 @@ fn compose_sidebar_drops_spoofing_chars() {
         )],
     }];
     let lines = super::compose_sidebar(&sections, 20, 10, super::SIDEBAR_SPLIT_DEFAULT);
-    assert_eq!(lines[0].text, " · evil");
+    assert_eq!(lines[0].text, "   evil");
 }
 
 /// herdr's panel shape at the default split: the workspace area takes
@@ -1751,10 +1751,10 @@ fn compose_sidebar_splits_half_and_ends_the_workspace_area_with_the_chips() {
     use super::{SidebarLineKind, SidebarRowId};
     let lines = super::compose_sidebar(&two_area_sections(), 20, 20, super::SIDEBAR_SPLIT_DEFAULT);
     let at = |y: u16| -> Vec<&super::SidebarLine> { lines.iter().filter(|l| l.y == y).collect() };
-    assert_eq!(at(0)[0].text, " · main");
+    assert_eq!(at(0)[0].text, " ▸ main");
     assert!(at(0)[0].active, "the active row is flagged");
-    assert_eq!(at(1)[0].text, " · dev");
-    assert_eq!(at(2)[0].text, " · ops");
+    assert_eq!(at(1)[0].text, "   dev");
+    assert_eq!(at(2)[0].text, "   ops");
     // The chips sit on the workspace area's last row (10 of 20 -> row 9).
     let new_chip = line_with(&lines, &SidebarRowId::New);
     assert_eq!((new_chip.y, new_chip.x, new_chip.x_end), (9, 0, 5));
@@ -1785,7 +1785,7 @@ fn compose_sidebar_splits_half_and_ends_the_workspace_area_with_the_chips() {
         )],
     }];
     let clipped = super::compose_sidebar(&long, 20, 20, super::SIDEBAR_SPLIT_DEFAULT);
-    assert_eq!(clipped[0].text, " · a very long work");
+    assert_eq!(clipped[0].text, "   a very long work");
     // With no agents section the agents area still opens with its rule
     // and header (the panel shape holds).
     assert!(clipped
@@ -1815,12 +1815,12 @@ fn compose_sidebar_split_ratio_moves_the_rule_and_clamps() {
     // spend a row on).
     let tight = super::compose_sidebar(&sections, 20, 20, 0.2);
     assert_eq!(rule_y(&tight), Some(4));
-    assert!(tight.iter().any(|l| l.text == " · ops"));
+    assert!(tight.iter().any(|l| l.text == "   ops"));
     // The clamp floor: a 3-row area holds two rows and the chips — ops
     // clips past the footer row.
     let floor = super::compose_sidebar(&sections, 20, 20, 0.15);
     assert_eq!(rule_y(&floor), Some(3));
-    assert!(floor.iter().any(|l| l.text == " · dev"));
+    assert!(floor.iter().any(|l| l.text == "   dev"));
     assert!(
         !floor.iter().any(|l| l.text == "   ops"),
         "rows past the footer clip: {floor:?}"
@@ -2042,6 +2042,33 @@ fn compose_sidebar_marks_the_git_badge_line() {
         .find(|l| l.text == "   a second line")
         .expect("the plain continuation composes");
     assert_eq!(plain.kind, SidebarLineKind::Continuation);
+}
+
+/// A workspace's status glyph rides next to the NAME on the first line
+/// (the STATE_ICON placeholder the renderer paints in the status's
+/// color); the marker column stays the active pointer, and the
+/// continuation lines — the git badge among them — carry no icon.
+#[test]
+fn compose_sidebar_puts_the_workspace_status_next_to_the_name() {
+    let mut sections = two_area_sections();
+    sections[0].rows[0].status = super::AgentStatus::Working;
+    sections[0].rows[0].badge = true;
+    sections[0].rows[0].continuation = vec![" main \u{2191}2".to_string()];
+    let lines = super::compose_sidebar(&sections, 20, 20, super::SIDEBAR_SPLIT_DEFAULT);
+    assert_eq!(
+        lines[0].text,
+        format!(" ▸ main {}", super::STATE_ICON),
+        "the icon sits next to the name, the marker stays the active pointer"
+    );
+    let badge = lines
+        .iter()
+        .find(|l| l.kind == SidebarLineKind::Badge)
+        .expect("the badge line composes");
+    assert!(
+        !badge.text.contains(super::STATE_ICON),
+        "continuation lines carry no status icon: {:#?}",
+        badge.text
+    );
 }
 
 /// The new-workspace prompt's default bumps past conflicts: one past
