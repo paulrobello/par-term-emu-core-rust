@@ -41,6 +41,8 @@ fn agent(pane_id: u32) -> AppAgentEntry {
         state: "working".into(),
         source: "hook".into(),
         reason: "tool".into(),
+        workspace: "+0".into(),
+        ..Default::default()
     }
 }
 

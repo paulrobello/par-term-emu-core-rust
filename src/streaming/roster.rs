@@ -56,12 +56,19 @@ fn parse_state_changed(rest: &str) -> Option<AgentEntry> {
     let agent = tokens.next()?;
     let state = tokens.next()?;
     let mut source = "";
+    let mut workspace = "";
     for token in tokens {
-        if let Some(("source", value)) = token.split_once('=') {
-            if value != "hook" && value != "scrape" {
-                return None;
+        if let Some((key, value)) = token.split_once('=') {
+            match key {
+                "source" => {
+                    if value != "hook" && value != "scrape" {
+                        return None;
+                    }
+                    source = value;
+                }
+                "ws" => workspace = value,
+                _ => {}
             }
-            source = value;
         }
     }
     Some(AgentEntry {
@@ -70,6 +77,8 @@ fn parse_state_changed(rest: &str) -> Option<AgentEntry> {
         state: state.to_owned(),
         source: source.to_owned(),
         reason: String::new(),
+        workspace: workspace.to_owned(),
+        ..Default::default()
     })
 }
 
@@ -83,13 +92,20 @@ fn parse_line(line: &str) -> Option<AgentEntry> {
         return None;
     }
     let mut reason = String::new();
+    let mut workspace = "";
     for token in tokens {
-        if let Some(("reason", value)) = token.split_once('=') {
-            reason = STANDARD
-                .decode(value)
-                .ok()
-                .and_then(|bytes| String::from_utf8(bytes).ok())
-                .unwrap_or_default();
+        if let Some((key, value)) = token.split_once('=') {
+            match key {
+                "reason" => {
+                    reason = STANDARD
+                        .decode(value)
+                        .ok()
+                        .and_then(|bytes| String::from_utf8(bytes).ok())
+                        .unwrap_or_default();
+                }
+                "ws" => workspace = value,
+                _ => {}
+            }
         }
     }
     Some(AgentEntry {
@@ -98,6 +114,8 @@ fn parse_line(line: &str) -> Option<AgentEntry> {
         state: state.to_owned(),
         source: source.to_owned(),
         reason,
+        workspace: workspace.to_owned(),
+        ..Default::default()
     })
 }
 
@@ -120,6 +138,29 @@ mod tests {
         assert_eq!(got[1].reason, "");
         assert_eq!(got[2].pane_id, 15);
         assert_eq!(got[2].reason, "Hello"); // base64-decoded
+    }
+
+    #[test]
+    fn ws_tokens_fill_the_workspace_field() {
+        // list-agents row: the ws= extra rides beside the reason token.
+        let got = parse_agents_output(
+            "12 claude working hook ws=+0\n\
+             15 kimi blocked scrape reason=SGVsbG8= ws=+2\n",
+        );
+        assert_eq!(got[0].workspace, "+0");
+        assert_eq!(got[1].workspace, "+2");
+        assert_eq!(got[1].reason, "Hello", "the reason token still decodes");
+        // Notification path: %agent-state-changed carries source= and ws=.
+        let delta =
+            translate_notification("%agent-state-changed %7 claude blocked source=hook ws=+1")
+                .expect("a roster delta");
+        match delta {
+            RosterDelta::Upsert(entry) => assert_eq!(entry.workspace, "+1"),
+            RosterDelta::Release { .. } => panic!("expected an upsert"),
+        }
+        // Absent ws stays empty, never guessed.
+        let got = parse_agents_output("12 claude working hook\n");
+        assert_eq!(got[0].workspace, "");
     }
 
     #[test]

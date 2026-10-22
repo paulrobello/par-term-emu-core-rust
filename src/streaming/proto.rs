@@ -773,6 +773,7 @@ mod tests {
             state: "blocked".into(),
             source: "hook".into(),
             reason: "needs input".into(),
+            ..Default::default()
         };
         let roster = AppServerMessage::AgentRoster {
             agents: vec![entry.clone()],
@@ -822,6 +823,8 @@ mod tests {
                 state: "idle".into(),
                 source: "hook".into(),
                 reason: String::new(),
+                workspace: "+2".into(),
+                ..Default::default()
             },
             released: true,
         };

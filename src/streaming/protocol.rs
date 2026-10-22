@@ -1064,6 +1064,16 @@ pub struct AgentEntry {
     pub source: String,
     /// Decoded blocked reason, empty when none
     pub reason: String,
+    /// par-mux workspace id (`+N`) from the roster row's `ws=` token,
+    /// empty when the daemon pre-dates it or the pane is unassigned
+    pub workspace: String,
+    /// Host-attributed project, empty when unknown — no streamer source
+    /// attributes one today; consumers render absent as unknown
+    pub project: String,
+    /// Pane title/label, empty when unknown — the daemon knows titles but
+    /// offers no global query a streamer can bind; consumers render
+    /// absent as unknown
+    pub pane_label: String,
 }
 
 /// Messages sent from client to server

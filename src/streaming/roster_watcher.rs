@@ -273,7 +273,7 @@ mod tests {
             dir.path(),
             vec![Conn {
                 list_agents_body:
-                    "15 claude-code blocked scrape reason=SGVsbG8=\n3 zed idle hook\n",
+                    "15 claude-code blocked scrape reason=SGVsbG8= ws=+4\n3 zed idle hook\n",
                 then_send: &[],
                 hold: true,
             }],
@@ -287,6 +287,14 @@ mod tests {
         assert_eq!(agents.len(), 2);
         assert_eq!(agents[0].pane_id, 3);
         assert_eq!(agents[1].reason, "Hello");
+        assert_eq!(
+            agents[1].workspace, "+4",
+            "the roster row's ws= token rides to the wire snapshot"
+        );
+        assert_eq!(
+            agents[0].workspace, "",
+            "a row without ws= stays absent, never guessed"
+        );
         let ServerMessage::AgentRoster { agents: cached } = watcher.snapshot() else {
             panic!("snapshot is a roster");
         };

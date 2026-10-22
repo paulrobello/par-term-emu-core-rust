@@ -82,10 +82,10 @@ S a202050a0374677a
   = Ok(UploadRequested { format: "tgz" })
 S aa02020801
   = Ok(ScreenCleared { include_scrollback: true })
-S b202400a1d1206636c617564651a07776f726b696e672204686f6f6b2a04746f6f6c0a1f08071206636c617564651a07776f726b696e672204686f6f6b2a04746f6f6c
-  = Ok(AgentRoster { agents: [AgentEntry { pane_id: 0, agent: "claude", state: "working", source: "hook", reason: "tool" }, AgentEntry { pane_id: 7, agent: "claude", state: "working", source: "hook", reason: "tool" }] })
-S ba02210a1d1206636c617564651a07776f726b696e672204686f6f6b2a04746f6f6c1001
-  = Ok(AgentStateChanged { agent: AgentEntry { pane_id: 0, agent: "claude", state: "working", source: "hook", reason: "tool" }, released: true })
+S b202480a211206636c617564651a07776f726b696e672204686f6f6b2a04746f6f6c32022b300a2308071206636c617564651a07776f726b696e672204686f6f6b2a04746f6f6c32022b30
+  = Ok(AgentRoster { agents: [AgentEntry { pane_id: 0, agent: "claude", state: "working", source: "hook", reason: "tool", workspace: "+0", project: "", pane_label: "" }, AgentEntry { pane_id: 7, agent: "claude", state: "working", source: "hook", reason: "tool", workspace: "+0", project: "", pane_label: "" }] })
+S ba02250a211206636c617564651a07776f726b696e672204686f6f6b2a04746f6f6c32022b301001
+  = Ok(AgentStateChanged { agent: AgentEntry { pane_id: 0, agent: "claude", state: "working", source: "hook", reason: "tool", workspace: "+0", project: "", pane_label: "" }, released: true })
 S c2020b0a0965772d726573697a65
   = Ok(PointerShapeChanged { shape: Some("ew-resize") })
 S c20200
@@ -139,7 +139,7 @@ LS selection truncates u16
 LS agent state missing agent
   = Err(InvalidMessage("AgentStateChanged is missing its agent field"))
 LS agent state pane zero default entry
-  = Ok(AgentStateChanged { agent: AgentEntry { pane_id: 0, agent: "", state: "", source: "", reason: "" }, released: false })
+  = Ok(AgentStateChanged { agent: AgentEntry { pane_id: 0, agent: "", state: "", source: "", reason: "", workspace: "", project: "", pane_label: "" }, released: false })
 LC empty client oneof
   = Err(InvalidMessage("Empty client message"))
 LC input invalid utf8
