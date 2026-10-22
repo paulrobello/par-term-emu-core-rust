@@ -799,6 +799,8 @@ mod tests {
     }
 
     /// An empty client roster: the sweep's broadcasts go nowhere.
+    /// Unix-only, like every sweep test that calls it.
+    #[cfg(unix)]
     fn test_clients() -> Clients {
         Arc::new(Mutex::new(Vec::new()))
     }
