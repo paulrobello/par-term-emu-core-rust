@@ -142,7 +142,7 @@ let index = manager.take_snapshot(&terminal);
 
 ### Input Recording
 
-Input bytes are recorded automatically between snapshots (Rust API):
+Input bytes are recorded between snapshots via the manager's `record_input()` (Rust API) — the embedder calls it after each `Terminal::process()`; nothing records automatically:
 ```rust
 // After terminal.process(bytes) call:
 manager.record_input(bytes);
@@ -298,13 +298,15 @@ Memory usage depends on:
 - Number of entries in the buffer
 - Input bytes recorded between snapshots
 
-Example memory estimates (80x24 terminal, 1000-line scrollback):
-- Single snapshot: ~400 KiB
-- 10 snapshots + input bytes: ~4-8 MiB (depending on input volume)
-- 20 snapshots + input bytes: ~8-16 MiB
+Cells cost ~32 bytes each (`size_of::<Cell>()`), and each snapshot carries both grids' visible cells plus scrollback, so the footprint scales with scrollback depth. Example single-snapshot sizes (80x24 terminal):
+- Empty scrollback: ~120 KiB
+- ~110 filled scrollback lines: ~400 KiB
+- Full 1000-line scrollback: ~2.5 MiB
+
+Total memory adds one snapshot footprint per entry, plus the input bytes recorded between snapshots (depending on input volume).
 
 Recommendations:
-- **Default (4 MiB)**: Good for 5-10 snapshots with moderate input
+- **Default (4 MiB)**: Good for 5-10 snapshots with partially filled scrollback; a terminal with a full 1000-line scrollback fits only 1-2
 - **8 MiB**: Better for longer sessions or high-volume output
 - **16 MiB**: Recommended for long-running TUI applications
 

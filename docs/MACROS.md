@@ -137,16 +137,17 @@ MacroEvent::Screenshot {
 
 ### Playback State Machine
 
+Timing starts when `MacroPlayback` is constructed — there is no separate `start` call. A loop constructs a new player (see [Looping](#looping)), and `MacroEngine` clears a finished playback on its next tick.
+
 ```mermaid
 stateDiagram-v2
-    [*] --> Created: new(macro)
-    Created --> Playing: start
+    [*] --> Playing: new(macro) starts timing
     Playing --> Playing: next_event()
     Playing --> Paused: pause()
     Paused --> Playing: resume()
     Playing --> Finished: all events done
-    Finished --> Playing: reset()
-    Finished --> [*]
+    Finished --> Playing: new(macro) restarts for a loop
+    Finished --> [*]: playback cleared
 
     note right of Playing
         - Check timing
@@ -188,9 +189,9 @@ if session:
     print(f"Terminal size: {session.initial_size}")
     print(f"Title: {session.title}")
 
-    # Note: RecordingSession captures raw terminal events.
-    # To create a playable macro, use the Macro class directly
-    # or convert recording events to macro format manually.
+    # RecordingSession captures raw terminal events. Convert a session
+    # to a playable macro with recording_to_macro (see below) or build
+    # a Macro manually.
 ```
 
 **Recording with PTY:**
@@ -462,7 +463,7 @@ The macro system uses human-readable key names instead of raw bytes or escape se
 
 **Timestamp Format:**
 - All timestamps are in milliseconds
-- Relative to macro start (first event at t=0)
+- Relative to macro start (a converted recording may begin with a leading delay)
 - `duration` field indicates total macro length
 
 **Delay Events:**
@@ -564,8 +565,8 @@ playback.set_speed(5.0);  // Fast to 5x
 ```
 
 **Speed Limits:**
-- Minimum: 0.1x (10% speed)
-- Maximum: 10.0x (1000% speed)
+- `set_speed()` clamps the speed between 0.1x and 10.0x
+- `with_speed()` applies the given speed as-is (no clamping)
 - Default: 1.0x (normal speed)
 
 **Speed Examples:**

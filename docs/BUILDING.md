@@ -54,7 +54,7 @@ You need Rust 1.99 or later (as specified in `Cargo.toml` with `rust-version = "
 curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
 ```
 
-> **Note:** The streaming feature requires Protocol Buffers code generation via `build.rs` and `prost-build`. This is handled automatically during the build process when the `streaming` feature is enabled.
+> **Note:** The streaming feature uses pre-generated Protocol Buffers code (`src/streaming/terminal.pb.rs`), which `build.rs` checksum-verifies on every build — normal builds do not need `protoc`. See [Protocol Buffers](#protocol-buffers) for the regeneration workflow.
 
 ### Python
 
@@ -87,7 +87,7 @@ The library supports several optional features that can be enabled during the bu
 - **`screenshot`** - Terminal-to-image renderer (`screenshot::render_terminal` / `save_terminal`, embedded fonts via `swash`). Enabled by `python`; opt-in for `sim` (`features = ["sim", "screenshot"]`)
 - **`pty_session`** - Real PTY backend (`PtySession`/`PtyTerminal`): pulls in `portable-pty` and the Unix signal deps. Auto-enabled by `python` (so the `PyPtyTerminal` binding compiles) and by `streaming-bin` (the server binary spawns real shells). Omit it for a PTY-free build.
 - **`streaming`** - WebSocket streaming server library with all related dependencies (tokio, axum, Protocol Buffers, TLS, HTTP auth, etc.)
-- **`streaming-bin`** - Standalone `par-term-streamer` binary: CLI/logging/web-frontend-download deps layered on `streaming` (clap, anyhow, tracing, reqwest, tar); also enables `macro-yaml` for `--macro-file`
+- **`streaming-bin`** - Standalone `par-term-streamer` binary: CLI/logging/web-frontend-download deps layered on `streaming` (clap, anyhow, tracing, reqwest, tar, sha2); also enables `pty_session` and `macro-yaml` for `--macro-file`
 - **`mux`** - The par-mux multiplexer library, re-exported as `par_term_emu_core_rust::mux` from the `par-mux` workspace member (Rust only; not in the default build or the Python wheel). Enables `pty_session` and `serde`; does not pull `clap`
 - **`mux-bin`** - The `par-mux` daemon binary: `mux` plus its `clap` CLI parser. The binary lives in the `par-mux` workspace member (`crates/par-mux`): build it with `cargo build -p par-mux --bin par-mux --features mux-bin`; this root feature forwards to the member
 - **`attach`** - The `par-mux attach` client (`crate::mux::attach`); implies `mux-bin` and forwards to the member's `attach` feature
@@ -99,7 +99,7 @@ The library supports several optional features that can be enabled during the bu
 - **`sim`** - Headless simulation profile: grid + terminal only (no screenshot, PTY, Python, or streaming — screenshot is opt-in since 0.54.0, ENH-024; render-capable embedders use `features = ["sim", "screenshot"]`). Excludes the real-PTY backend, Python bindings, and streaming server, so a pure-Rust embedder can vendor the crate as a server-side screen model without pulling in `portable-pty` or the PyO3/streaming dep trees. Build with `cargo build --no-default-features --features sim`. (`graphics`/`sixel` remain compiled because the `Terminal` depends on them intrinsically.)
 - **`full`** - Enable all features (`python` + `streaming` + `streaming-bin`)
 
-> **Note:** When building the Python package with maturin, the `python` feature is automatically enabled via `pyproject.toml`. For standalone Rust binaries (like `par-term-streamer`), you need to explicitly specify features.
+> **Note:** When building the Python package with maturin, the default features (including `python`) apply, and `pyproject.toml` adds `pyo3/extension-module` and `streaming`. For standalone Rust binaries (like `par-term-streamer`), you need to explicitly specify features.
 
 ## Building from Source
 
@@ -220,7 +220,8 @@ The `par-mux` daemon (tmux-control-mode terminal multiplexer) is a separate bina
 # Build the daemon binary
 cargo build -p par-mux --bin par-mux --features mux-bin
 
-# Run it (prints its socket path and serves until killed)
+# Run it (daemonizes, then attaches this terminal; add --no-attach for a
+# detached start without attaching)
 cargo run -p par-mux --bin par-mux --features mux-bin
 ```
 
@@ -293,7 +294,7 @@ Run all code quality checks (format, lint, type check, tests):
 # All quality checks (non-mutating; run 'make lint lint-python' to auto-fix)
 make checkall
 
-# CI-parity gate: checkall + the CI mux-test job's suites (heavy; run before pushing)
+# CI-parity gate: checkall + Windows MSVC cross-target checks + the CI mux-test job's suites (heavy; run before pushing)
 make checkall-ci
 
 # Individual checks
@@ -304,7 +305,7 @@ make lint-python      # Lint and type-check Python code (ruff format + ruff chec
 make lint-check       # Non-mutating lint gate checkall runs (fmt --check, clippy, ruff --check, pyright)
 ```
 
-> **Note:** The `make checkall` target runs: the FFI header and surface checks, the derive/core version-sync checks, the mux-docs, stub-docstring, and mux-package checks, the rustdoc check (par-mux, par-term-emu-core, and the root crate under `-D warnings`), the doc-links check, the Rust tests (`test-rust`, `test-rust-streaming`), the non-mutating lint gate (`lint-check`), the Python stub check, the Python tests (`test-python` - rebuilds the package with `make dev` first), the web frontend tests (`test-web`), and the caps-table check. It is non-mutating: `make lint lint-python` auto-fixes findings.
+> **Note:** The `make checkall` target runs: the extension-asset, FFI header and surface, doc-hidden, api-surface, derive/core version-sync, mux-docs, mux-schema, completions, env-docs, pinned-tests, stub-docstring, and mux-package checks, the rustdoc check (par-mux, par-term-emu-core, and the root crate under `-D warnings`), the doc-links check, the Rust tests (`test-rust`, `test-rust-streaming`), the non-mutating lint gate (`lint-check`), the Python stub check, the Python tests (`test-python` - rebuilds the package with `make dev` first), the web frontend tests (`test-web`), and the caps-table check. It is non-mutating: `make lint lint-python` auto-fixes findings.
 
 ### Pre-commit Hooks
 
@@ -327,7 +328,7 @@ make pre-commit-uninstall
 **Pre-commit hooks include:**
 - **Secrets**: `gitleaks`
 - **File checks**: Trailing whitespace, end-of-file fixer, YAML/TOML validation, large files (max 1MB), merge conflicts, mixed line endings
-- **Rust**: `cargo fmt`, `cargo clippy` (the project's clippy feature sets, including the `par-term-emu-core` and `par-mux` members), `cargo test --lib --no-default-features --features pyo3/auto-initialize,ffi`
+- **Rust**: `cargo fmt`, `cargo clippy` (the project's clippy feature sets, including the `par-term-emu-core` and `par-mux` members), `cargo test --lib --no-default-features --features pyo3/auto-initialize,ffi`, and the `par-term-emu-core` member's unit tests (`cargo test -p par-term-emu-core --lib --features ffi`)
 - **Python**: `ruff format`, `ruff check --fix`, `pyright`
 
 Python tests are NOT run in pre-commit: the `maturin develop` rebuild made every Rust-touching commit slow and flaked the streaming suite's latency-sensitive timeouts. `make checkall` is the authoritative test gate — run it before pushing.
@@ -376,11 +377,11 @@ The streaming feature uses Protocol Buffers for efficient binary message encodin
 
 ### Rust (checked in, checksum-verified)
 
-The Rust protobuf code is **not** generated at build time: `src/streaming/terminal.pb.rs` is checked in and is the build-time source of truth (included by `src/streaming/proto.rs` via a `#[path]` attribute). When the `streaming` feature is enabled, `build.rs` compares an FNV-1a checksum of `proto/terminal.proto` against the `// proto-fnv1a:` stamp on the generated file's first line and fails the build on mismatch — so a stale generated file cannot ship silently:
+The Rust protobuf code is **not** generated at build time: `src/streaming/terminal.pb.rs` is checked in and is the build-time source of truth (included by `src/streaming/proto.rs` via a `#[path]` attribute). On every build, `build.rs` compares an FNV-1a checksum of `proto/terminal.proto` against the `// proto-fnv1a:` stamp on the generated file's first line and emits a build warning on mismatch — so a stale generated file cannot ship silently:
 
 ```text
-error: proto/terminal.proto changed but src/streaming/terminal.pb.rs was not
-regenerated (checksum mismatch). Run `make proto-rust` ...
+warning: ARC-020: proto/terminal.proto changed without regenerating
+src/streaming/terminal.pb.rs (checksum mismatch). Run `make proto-rust` ...
 ```
 
 To regenerate after editing the proto (requires `protoc` installed):

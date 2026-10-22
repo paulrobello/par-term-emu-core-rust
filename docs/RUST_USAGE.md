@@ -466,9 +466,10 @@ The server side (`MuxServer`), the full command table, hook-report JSON contract
 | `pty_session` | Real PTY backend (`PtySession`): portable-pty. Auto-enabled by `python`, `streaming-bin`, and `mux` | `portable-pty` |
 | `streaming` | WebSocket streaming server with binary protocol (library) | `tokio`, `tokio-tungstenite`, `axum`, `tower-http`, `futures-util`, `prost`, `rustls`, `tokio-rustls`, `axum-server`, `bcrypt`, `md-5`, `sha1`, `headers`, `sysinfo`, `subtle`, `zeroize` |
 | `streaming-bin` | CLI/logging/download deps for the standalone `par-term-streamer` binary (depends on `streaming` and `pty_session`) | `streaming`, `clap`, `anyhow`, `tracing`, `tracing-subscriber`, `reqwest`, `tar`, `sha2`, `pty_session`, `macro-yaml` |
-| `mux` | `par-mux` multiplexer library: PTYs, session tree, control-mode socket, on-disk persistence (Rust only; not part of the default build) | `pty_session`, `interprocess`, `serde`, `dirs`, `toml`, `jsonc-parser`, `nix` (Unix only), `widestring` and `windows-sys` (Windows only) |
-| `mux-bin` | The `par-mux` daemon binary (the CLI parser on top of `mux`, mirroring `streaming`/`streaming-bin`) | `mux`, `clap` |
-| `attach` | The `par-mux attach` client TUI (`mux::attach`); rides the daemon binary's clap surface | `mux-bin`, `crossterm`, `ratatui` |
+| `mux` | `par-mux` multiplexer library: PTYs, session tree, control-mode socket, on-disk persistence (Rust only; not part of the default build) | `pty_session`, `interprocess`, `serde`, `dirs`, `toml`, `nix` (Unix only), `widestring` and `windows-sys` (Windows only) |
+| `mux-bin` | The `par-mux` daemon binary: the CLI parser on top of `mux` plus the agent-integration / skill installers its one-shot flags run (mirroring `streaming`/`streaming-bin`) | `mux`, `clap`, `clap_complete`, `jsonc-parser`, `toml_edit`, `tempfile` |
+| `attach` | The `par-mux attach` client TUI (`mux::attach`); rides the daemon binary's clap surface | `mux-bin`, `crossterm`, `ratatui`, `toml_edit` |
+| `shutdown-inhibit` | Linux-only host-shutdown safety for the `par-mux` daemon: holds a logind delay lock and saves the session tree when the host announces shutdown (par-mux.md D9). A `par-mux` member feature, not forwarded by this crate — enable it with `cargo build -p par-mux --features shutdown-inhibit` | `zbus` |
 | `macro-yaml` | `Macro` YAML save/load (`save_yaml`, `load_yaml`, `to_yaml`, `from_yaml`). Enabled by `python`, `python-test`, and `streaming-bin` | `serde_yaml_ng` |
 | `serde` | Serde derives on the replay-snapshot types (`TerminalSnapshot`/`GridSnapshot` and their leaves) — the on-disk format for par-mux persistence | `smallvec/serde`, `bitflags/serde` |
 | `rust-only` | Pure Rust, no Python (empty convenience feature) | (none) |

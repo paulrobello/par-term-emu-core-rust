@@ -109,7 +109,7 @@ See [BUILDING.md Running Tests](BUILDING.md#running-tests).
 **Fix:** read the session's `dropped_messages` counter from `curl http://localhost:8099/sessions` (the HTTP endpoints, `/sessions` included, are served only when the server runs with `--enable-http`) before and after typing with a client connected.
 
 - **Counter does not move during macro playback:** expected. `--macro-file` serves every viewer read-only.
-- **Counter rises with no PTY writer:** a Rust embedder must call `StreamingServer::set_pty_writer` before clients can type, and a closed session never regains its writer. Reconnect to a live session.
+- **Counter rises with no PTY writer:** a Rust embedder must call `StreamingServer::set_pty_writer` before clients can type, and closing a session detaches its writer. Reconnect to a live session.
 - **Counter rises while you type:** the rate limit or the input queue is dropping input. Raise `--input-rate-limit`, or check that the child process reads stdin.
 
 Every drop cause is listed in [STREAMING.md Input Drops](STREAMING.md#input-drops). Rendering, performance, and graphics issues are covered in [STREAMING.md Troubleshooting](STREAMING.md#troubleshooting).
@@ -227,10 +227,9 @@ belief-consistent, but a host terminal that lost the cursor state outside
 those writers (a race the soaks could never pin) stayed lost: the guards
 only re-emit on a state change, and an idle app never changes one.
 
-**Fix:** the next release after 0.60.0 adds a heartbeat (on `main` until
-then): `WindowSession::frame()` re-asserts the placement at least once per
-second while a pane cursor is shown, so any desync self-heals without
-output. If a cursor vanishes on a build carrying the heartbeat, run the
+**Fix:** 0.61.0 added a heartbeat: `WindowSession::frame()` re-asserts the
+placement at least once per second while a pane cursor is shown, so any
+desync self-heals without output. If a cursor vanishes on a build carrying the heartbeat, run the
 attach client with `PAR_MUX_CURSOR_TRACE=1` and stderr redirected, since
 in render mode stderr is normally the same tty as the frame and trace
 lines would paint into it:
@@ -246,9 +245,9 @@ DECTCEM hide, or a tracked cell outside the content view.
 
 ### Terminal stays in the alternate screen after a crash
 
-**Symptom:** after a render-mode client exits abnormally (a panic, or a config error after the screen was set up), the host terminal stays in the alternate screen with mouse reporting on, so the scrollback is hidden and clicks print escape codes.
+**Symptom:** after a render-mode client is killed outright (SIGKILL, or another exit that skips unwinding), the host terminal stays in the alternate screen with mouse reporting on, so the scrollback is hidden and clicks print escape codes.
 
-**Cause:** render mode restores the alternate screen and mouse capture after its session ends normally. An abnormal exit skips that restore.
+**Cause:** render mode restores the alternate screen and mouse capture through RAII guards that run on every exit path, errors and unwinds included; only an exit that skips unwinding entirely skips the restore.
 
 **Fix:** run `reset` in the host terminal.
 

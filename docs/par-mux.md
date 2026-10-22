@@ -22,6 +22,6 @@ shutdown — lives in [`docs/MUX.md`](MUX.md).
 
 `docs/par-mux.md` exists so the `par-mux.md` citations in the mux crate's
 `src/` and `Cargo.toml` and in the root streaming layer, plus the bare
-decision numbers (`D3`, `D3.3`, `D3.5`) the `crates/par-mux/tests/` suites
+decision numbers (`D3.3`, `D3.5`) the `crates/par-mux/tests/` suites
 cite, resolve to something that explains where the authoritative design
 record is.

@@ -924,10 +924,13 @@ connected client can execute arbitrary commands as the user running the server.
 ### Authentication
 
 - **API Key** (`--api-key` / `PAR_TERM_API_KEY`): WebSocket connections must
-  include the key via `Authorization: Bearer <key>` header or `?api_key=` URL
-  param (the latter is disabled by default — `--allow-api-key-in-query` logs
-  the key in proxy/browser history, and the server warns at startup when it
-  is enabled).
+  include the key via the `Authorization: Bearer <key>` or `X-API-Key`
+  header, or the `?api_key=` URL param (the latter is disabled by default —
+  `--allow-api-key-in-query` logs the key in proxy/browser history, and the
+  server warns at startup when it is enabled). The key and password
+  arguments declare `hide_env_values`, so values supplied through
+  `PAR_TERM_API_KEY`, `PAR_TERM_HTTP_PASSWORD`, and
+  `PAR_TERM_HTTP_PASSWORD_HASH` are never echoed by `--help`.
 - **HTTP Basic Auth** (`--http-user` / `--http-password[-hash|-file]`):
   htpasswd-format hashes verified via maintained RustCrypto crates (bcrypt,
   `$apr1$`, `$1$` MD5-crypt, `{SHA}`). See `src/streaming/auth_hash.rs`.
@@ -945,7 +948,8 @@ connected client can execute arbitrary commands as the user running the server.
   `rustls-pki-types` for PEM loading (replacing the unmaintained
   `rustls-pemfile` crate, RUSTSEC-2025-0134). Certificate verification is
   never disabled.
-- Private key files are checked for `0o600` permissions on Unix.
+- Private key files are rejected on Unix when group or other can read them
+  (owner-only `0600`/`0400` required, SEC-006).
 
 ### WebSocket Origin Validation (CSRF Defense, SEC-005)
 
@@ -1050,7 +1054,9 @@ The `DEBUG_LEVEL` file sink behaves as described under
 
 - [STREAMING.md](STREAMING.md#security-considerations) — detailed security
   considerations for the streaming protocol.
-- `cargo audit` — 0 vulnerabilities (all Security items resolved).
+- Dependency advisories are gated by `make audit-deps` (cargo deny,
+  `bun audit`, `pip-audit`); accepted advisories and the reasons they are
+  tolerated are listed in `deny.toml`.
 
 ## Multiplexer Daemon Security (par-mux, Local Attack Surface)
 

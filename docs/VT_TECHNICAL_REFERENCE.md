@@ -52,7 +52,7 @@ The terminal implementation uses a modular structure:
 **Sequence handlers** (in `crates/par-term-emu-core/src/terminal/sequences/`):
 - `crates/par-term-emu-core/src/terminal/sequences/csi/mod.rs` - CSI sequence handler (`csi_dispatch_impl()`) with submodules for color_stack, cursor, edit, erase, keyboard, mode, report, scroll, style, window
 - `esc.rs` - ESC sequence handler (`esc_dispatch_impl()`)
-- `crates/par-term-emu-core/src/terminal/sequences/osc/mod.rs` - OSC sequence handler (`osc_dispatch_impl()`) with submodules for clipboard, color, image, iterm, notify, shell, title
+- `crates/par-term-emu-core/src/terminal/sequences/osc/mod.rs` - OSC sequence handler (`osc_dispatch_impl()`) with submodules for clipboard, color, image, iterm, notify, pointer, shell, title
 - `crates/par-term-emu-core/src/terminal/sequences/dcs/mod.rs` - DCS sequence handler (`dcs_hook()`, `dcs_put()`, `dcs_unhook()`) with submodules for query and sixel
 
 **Core components:**
@@ -450,8 +450,8 @@ See also: [ESC Sequences](#esc-sequences) for ESC V/W details
 `CSI > c` - Request terminal version
 
 **Response:** `CSI > 82 ; 10000 ; 0 c`
-- `82` - Terminal type (arbitrary)
-- `10000` - Version
+- `82` - par-term version marker
+- `10000` - Scrollback capacity
 - `0` - ROM cartridge
 
 **Implementation:** `csi_dispatch_impl()` in `crates/par-term-emu-core/src/terminal/sequences/csi/mod.rs`
@@ -528,10 +528,10 @@ All other mode numbers return state `0` (not recognized).
 `CSI = flags ; mode u`
 
 **Modes:**
-- `0` or omitted - Disable all flags
-- `1` - Set flags (bitwise OR)
-- `2` - Lock flags (cannot be changed)
-- `3` - Report current flags
+- `1` or omitted - Set: replace the current flags with `flags`
+- `2` - Add: bitwise OR `flags` into the current flags
+- `3` - Report: reply `CSI ? flags u`
+- Any other value is treated as Set
 
 **Implementation:** `csi_dispatch_impl()` in `crates/par-term-emu-core/src/terminal/sequences/csi/mod.rs`
 
@@ -690,14 +690,13 @@ ESC (Escape) sequences follow the pattern: `ESC final`
 
 **DECSC (ESC 7) saves:**
 - Cursor position (column, row)
-- Graphic rendition (SGR attributes)
-- Character set (G0/G1)
-- Origin mode state (DECOM)
-- Wrap flag state
+- Graphic rendition (SGR attributes: foreground, background, underline color, cell flags)
 
 **DECRC (ESC 8) restores:**
-- All saved cursor state
-- If no save state exists, moves cursor to home position
+- The saved cursor state (position and SGR attributes)
+- If nothing was saved, DECRC is a no-op
+
+Character set, origin mode, and wrap flag are not part of the saved snapshot in this implementation.
 
 ### Reverse Index (RI) Behavior
 
@@ -942,7 +941,7 @@ Implementation: `crates/par-term-emu-core/src/terminal/sequences/csi/color_stack
 
 `OSC 133 ; marker ; ... ST`
 
-**Implementation:** `osc_dispatch_impl()` in `crates/par-term-emu-core/src/terminal/sequences/osc/mod.rs`
+**Implementation:** `handle_osc_shell()` in `crates/par-term-emu-core/src/terminal/sequences/osc/shell.rs` (dispatched from `osc_dispatch_impl()` in `osc/mod.rs`)
 
 **Markers:**
 - `A` - Prompt start
@@ -1026,7 +1025,7 @@ is distinguishable from a sequence never sent.
 
 `OSC 1337 ; SetUserVar=<name>=<base64_value> ST`
 
-**Implementation:** `handle_set_user_var()` in `crates/par-term-emu-core/src/terminal/sequences/osc/iterm.rs` (storage in `BadgeState::set_user_var()`, `crates/par-term-emu-core/src/terminal/mod.rs`)
+**Implementation:** `handle_set_user_var()` in `crates/par-term-emu-core/src/terminal/sequences/osc/iterm.rs` (storage in `BadgeState::set_user_var()`, `crates/par-term-emu-core/src/terminal/state.rs`)
 
 Shell integration scripts use this sequence to report session metadata such as hostname, username, and current directory. The value is base64-encoded UTF-8 text.
 

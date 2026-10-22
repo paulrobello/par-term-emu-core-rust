@@ -7,7 +7,7 @@ Comprehensive guide to advanced terminal emulation features in par-term-emu-core
 - [Overview](#overview)
 - [True Color Support](#true-color-support)
   - [Bold Brightening](#bold-brightening)
-  - [Faint/Dim Text Alpha (SGR 2)](#faintdim-text-alpha-sgr-2)
+- [Faint/Dim Text Alpha (SGR 2)](#faintdim-text-alpha-sgr-2)
 - [Minimum Contrast Adjustment (iTerm2-Compatible)](#minimum-contrast-adjustment-iterm2-compatible)
 - [Alternate Screen Buffer](#alternate-screen-buffer)
 - [Mouse Reporting](#mouse-reporting)
@@ -96,6 +96,7 @@ graph TB
     VT --> Links
     VT --> Notify
     VT --> Sixel
+    Parser --> Kitty
     VT --> Sync
 
     style VT fill:#e65100,stroke:#ff9800,stroke-width:3px,color:#ffffff
@@ -132,8 +133,8 @@ term.process_str("\x1b[38;2;255;255;0;48;2;0;0;128mYellow on blue\x1b[0m\n")
 
 ### Supported Color Modes
 
-- **16 basic colors**: `\x1b[30-37m` (foreground), `\x1b[40-47m` (background)
-- **16 bright colors**: `\x1b[90-97m` (foreground), `\x1b[100-107m` (background)
+- **8 basic colors**: SGR 30–37 (foreground), 40–47 (background)
+- **8 bright colors**: SGR 90–97 (foreground), 100–107 (background)
 - **256-color palette**: `\x1b[38;5;<n>m` (foreground), `\x1b[48;5;<n>m` (background)
 - **24-bit RGB**: `\x1b[38;2;<r>;<g>;<b>m` (foreground), `\x1b[48;2;<r>;<g>;<b>m` (background)
 
@@ -498,15 +499,18 @@ term.process_str("\x1b]52;c;SGVsbG8gV29ybGQh\x07")  # base64 encoded "Hello Worl
 clipboard_text = term.clipboard()
 print(f"Clipboard: {clipboard_text}")
 
-# Query clipboard (sends request to application)
+# Query the stored clipboard; the reply is queued for the application
 term.process_str("\x1b]52;c;?\x07")
+reply = term.drain_responses()
 ```
 
 ### Security Considerations
 
 - Clipboard read is **disabled by default** to prevent security issues
 - Use `set_allow_clipboard_read(True)` to enable reading
-- Only enable when necessary for your use case
+- Clipboard writes are enabled by default. Disable them with `set_allow_clipboard_write(False)` for untrusted output
+- The core stores clipboard text and queues protocol replies. Frontends integrate with the operating system clipboard
+- Only enable reads when necessary for your use case
 
 ### Use Cases
 
@@ -516,11 +520,11 @@ term.process_str("\x1b]52;c;?\x07")
 - IDE/editor integration
 - Automated testing scenarios
 
-> **🔒 Security:** Always validate clipboard content before processing sensitive data
+> **Security:** Always validate clipboard content before processing sensitive data
 
 ## General-Purpose File Transfer (OSC 1337)
 
-Full support for iTerm2-compatible file transfers via `OSC 1337 File=` sequences. This enables both host-to-terminal downloads and terminal-to-host uploads.
+The core handles iTerm2-compatible downloads via `OSC 1337 File=` sequences and upload requests via `RequestUpload`. Frontends choose where to save downloads and supply upload data.
 
 ### Downloads (Host → Terminal)
 
@@ -529,23 +533,25 @@ When a remote host sends a file (e.g., via `imgcat` or shell integration), the t
 **Sequence:** `\x1b]1337;File=name=...;inline=0:...\x07`
 
 ```python
-# 1. Register observer to handle transfer events
-def on_transfer(event):
-    if event["type"] == "file_transfer_completed":
-        # Retrieve the completed transfer
-        transfer = term.take_completed_transfer(event["id"])
-        if transfer:
-            filename = transfer.get("filename", "download.dat")
-            data = transfer["data"]  # Raw bytes
-            with open(filename, "wb") as f:
-                f.write(data)
-            print(f"Downloaded {filename} ({len(data)} bytes)")
+# Queue observer events rather than calling terminal methods inside a callback.
+pending_transfers = []
+term.add_observer(pending_transfers.append, kinds=["file_transfer_completed"])
 
-
-term.add_observer(on_transfer, kinds=["file_transfer_completed"])
-
-# 2. Host sends file sequence (simulated here)
+# Host sends a file sequence (simulated here).
 term.process_str("\x1b]1337;File=name=aGVsbG8udHh0;inline=0:SGVsbG8gV29ybGQ=\x07")
+
+# Handle events after process_str() returns.
+for event in pending_transfers:
+    transfer = term.take_completed_transfer(event["id"])
+    if transfer:
+        filename = (
+            "download.dat"  # Choose a trusted local path, not the remote filename
+        )
+        data = transfer["data"]
+        with open(filename, "wb") as f:
+            f.write(data)
+        print(f"Downloaded {filename} ({len(data)} bytes)")
+pending_transfers.clear()
 ```
 
 ### Uploads (Terminal → Host)
@@ -555,19 +561,21 @@ The host can request a file upload via `RequestUpload`.
 **Sequence:** `\x1b]1337;RequestUpload=format=tgz\x07`
 
 ```python
-def on_upload_request(event):
-    if event["type"] == "upload_requested":
-        # Prompt user or automatically send file
-        # In a real app, you might show a file picker here
-        try:
-            with open("archive.tgz", "rb") as f:
-                data = f.read()
-            term.send_upload_data(data)
-        except FileNotFoundError:
-            term.cancel_upload()
+pending_uploads = []
+term.add_observer(pending_uploads.append, kinds=["upload_requested"])
+term.process_str("\x1b]1337;RequestUpload=format=tgz\x07")
 
+# Handle requests outside the observer callback, after processing returns.
+for event in pending_uploads:
+    try:
+        with open("archive.tgz", "rb") as f:
+            data = f.read()
+        term.send_upload_data(data)
+    except FileNotFoundError:
+        term.cancel_upload()
+pending_uploads.clear()
 
-term.add_observer(on_upload_request, kinds=["upload_requested"])
+# Forward term.drain_responses() to the host application's input channel.
 ```
 
 ### Configuration
@@ -580,7 +588,7 @@ term.set_max_transfer_size(100 * 1024 * 1024)  # 100 MB limit
 
 ## OSC 8 Hyperlinks
 
-OSC 8 provides clickable hyperlinks in terminal output with full support including TUI rendering.
+OSC 8 associates URLs with terminal cells. Frontends render and activate the links.
 
 ### Usage
 
@@ -615,7 +623,7 @@ if url:
 - Error messages with help links
 - Git commit output with PR/issue links
 
-> **✅ Tip:** Works in iTerm2, WezTerm, and modern terminal emulators with TUI support
+> **Tip:** Works in iTerm2, WezTerm, and modern terminal emulators with TUI support
 
 ## Notifications (OSC 9/777)
 
@@ -658,7 +666,7 @@ if term.has_notifications():
 - System monitoring alerts
 - Test completion notices
 
-> **📝 Note:** Works with iTerm2, ConEmu, and other terminal emulators supporting notification protocols
+> **Note:** Works with iTerm2, ConEmu, and other terminal emulators supporting notification protocols
 
 ## Progress Bars (OSC 9;4)
 
@@ -809,7 +817,7 @@ term.clear_progress()
 - **Windows Terminal**: Taskbar integration
 - **Custom terminals**: Can query via `progress_bar()` API and render in UI
 
-> **📝 Note:** Progress values are automatically clamped to 0-100 range
+> **Note:** Progress values are automatically clamped to 0-100 range
 
 ## Shell Integration
 
@@ -956,7 +964,7 @@ term.process_trigger_scans()  # Manual scan for non-PTY usage
 
 # Poll results (for frontend integration)
 results = term.poll_action_results()
-# results = [{"action": "notify", "title": "Build Error", "message": "Error detected: Syntax error in main.rs", ...}]
+# results = [{"type": "notify", "title": "Build Error", "message": "Error detected: Syntax error in main.rs", ...}]
 ```
 
 ### Trigger Actions
@@ -970,7 +978,7 @@ results = term.poll_action_results()
 | `run_command` | `command`, `args` | Emit a command execution event |
 | `play_sound` | `sound_id`, `volume` | Emit a sound playback event |
 | `send_text` | `text`, `delay_ms` | Emit a text input event |
-| `split_pane` | `direction`, `command`, `focus_new_pane`, `target` | Split the pane and run a command in the new pane |
+| `split_pane` | `direction`, `command`, `focus_new_pane`, `target` | Emit a pane-split request for the frontend to handle |
 | `stop` | (none) | Stop processing subsequent triggers for this match |
 
 ### Highlighting
@@ -1061,7 +1069,7 @@ Variables are automatically updated by Shell Integration (OSC 133, OSC 7, OSC 13
 
 ## Sixel Graphics
 
-Sixel graphics protocol support for displaying images in the terminal with DCS format and half-block rendering.
+The core decodes Sixel DCS sequences into RGBA graphics. Frontends choose how to render the decoded images.
 
 ### Usage
 
@@ -1109,7 +1117,7 @@ pathological memory usage:
 - Logo/banner display
 - Terminal-based image viewers
 
-> **📝 Note:** Uses half-block rendering for compatibility with character-based displays
+> **Note:** The core exposes pixel data and placement metadata. Character-based frontends can use half-block rendering, while graphical frontends can draw the image directly.
 
 ## Kitty Graphics Protocol
 
@@ -1198,7 +1206,7 @@ term.process_str("\x1b_Ga=a,i=100,s=1\x1b\\")  # Stop
 | Stop | `s=1` | Stop animation and reset loop counter |
 | Loading Mode | `s=2` | Pause and wait for more frames |
 | Enable Looping | `s=3` | Start/resume normal looping playback |
-| Loop Count | `v=N` | `v=0`: ignored, `v=1`: infinite, `v=N`: loop (N-1) times |
+| Loop Count | `v=N` | `v=0`: ignored, `v=1`: infinite, `v=N` (N > 1): N total plays |
 
 ### Virtual Placements and Unicode Placeholders
 
@@ -1219,7 +1227,7 @@ term.process_str(f"\x1b_Ga=T,U=1,i=50,p=1,c=3,r=2,f=100;{encoded}\x1b\\")
 # Each placeholder cell encodes:
 # - Foreground color: image_id (lower 24 bits as RGB)
 # - Underline color: placement_id (as RGB)
-# - Diacritics: row/column position within placement (for future use)
+# - Diacritics: row/column position within placement
 ```
 
 **Implementation details:**
@@ -1230,20 +1238,16 @@ term.process_str(f"\x1b_Ga=T,U=1,i=50,p=1,c=3,r=2,f=100;{encoded}\x1b\\")
 - Grid insertion: One placeholder per cell in the `cols × rows` area
 
 **Frontend integration:**
-```python
-# Detect placeholder during rendering
-if cell.c == '\u{10EEEE}':
-    # Extract IDs from colors
-    image_id = (cell.fg.r << 16) | (cell.fg.g << 8) | cell.fg.b
-    placement_id = (cell.underline_color.r << 16) | (cell.underline_color.g << 8) | cell.underline_color.b
-
-    # Look up virtual placement
-    virtual_placement = graphics_store.get_placeholder_graphic(PlaceholderInfo {
-        image_id, placement_id, ...
-    })
-
-    # Render appropriate portion of virtual placement at this cell
+```text
+For each cell containing U+10EEEE:
+    Decode the image ID from the foreground color and optional third diacritic.
+    Decode the placement ID from the underline color.
+    Decode the row and column from the first two diacritics.
+    Resolve PlaceholderInfo with GraphicsStore::get_placeholder_graphic.
+    Render the corresponding portion of the virtual placement.
 ```
+
+This is renderer pseudocode using the Rust graphics store, not a Python API.
 
 ### File Transmission
 
@@ -1274,7 +1278,7 @@ term.process_str("\x1b_Ga=d,d=a\x1b\\")
 term.process_str("\x1b_Ga=d,d=i,i=42\x1b\\")
 
 # Delete all placements of an image
-term.process_str("\x1b_Ga=d,i=42\x1b\\")
+term.process_str("\x1b_Ga=d,d=p,i=42\x1b\\")
 ```
 
 ### Key Parameters
@@ -1315,7 +1319,7 @@ term.process_str("\x1b_Ga=d,i=42\x1b\\")
 - Preview images in terminal-based file managers
 - Display charts and visualizations with animations
 
-> **✅ Tip:** Kitty protocol is more efficient than Sixel for repeated image display due to image reuse capability
+> **Tip:** Kitty protocol is more efficient than Sixel for repeated image display due to image reuse capability
 
 ## Synchronized Updates
 
@@ -1359,7 +1363,7 @@ term.process_str("\x1b[?2026l")
 
 ## Kitty Keyboard Protocol
 
-Progressive enhancement for keyboard handling with flags for disambiguation and event reporting. **Automatically resets when exiting alternate screen buffer** (v0.8.0+) to prevent TUI applications from leaving the keyboard in a bad state.
+Progressive enhancement for keyboard handling with flags for disambiguation and event reporting. Flags reset when exiting the alternate screen buffer to prevent TUI applications from leaving the keyboard in a bad state.
 
 ### Usage
 
@@ -1369,7 +1373,7 @@ term = Terminal(80, 24)
 # Set keyboard protocol flags
 # Flags: 1=disambiguate, 2=report events, 4=alternate keys, 8=report all, 16=associated text
 flags = 1 | 2  # Disambiguate + report events
-term.set_keyboard_flags(flags, mode=1)  # mode: 0=disable, 1=set, 2=lock
+term.set_keyboard_flags(flags, mode=1)  # mode: 1=replace flags, 2=add flags
 
 # Query current flags
 term.query_keyboard_flags()
@@ -1387,7 +1391,7 @@ term.push_keyboard_flags(flags)
 term.pop_keyboard_flags(count=1)
 ```
 
-> **📝 Note:** Keyboard protocol flags are automatically reset when exiting alternate screen buffer. This ensures TUI applications that fail to properly disable the protocol don't leave the terminal in a bad state.
+> **Note:** Keyboard protocol flags are automatically reset when exiting alternate screen buffer. This ensures TUI applications that fail to properly disable the protocol don't leave the terminal in a bad state.
 
 ### Flag Meanings
 
@@ -1407,7 +1411,7 @@ term.pop_keyboard_flags(count=1)
 - Full keyboard event handling in TUI apps
 - Game controls in terminal
 
-> **📝 Note:** Flags are maintained separately for main and alternate screen buffers with independent stacks. Flags automatically reset when exiting alternate screen to prevent TUI apps from leaving keyboard in bad state.
+> **Note:** Flags are maintained separately for main and alternate screen buffers with independent stacks. Flags automatically reset when exiting alternate screen to prevent TUI apps from leaving keyboard in bad state.
 
 ## Underline Styles
 
@@ -1449,7 +1453,7 @@ term.process_str("\x1b[4:1;58:2:255:0:0mRed underline\x1b[0m\n")
 - Emphasis variations (double underline)
 - Syntax highlighting in editors
 
-> **✅ Tip:** Combine with underline color (SGR 58) for rich text decoration
+> **Tip:** Combine with underline color (SGR 58) for rich text decoration
 
 ## VT420 Rectangle Operations
 
@@ -1581,7 +1585,7 @@ term.process_str("\x1b[5;10;15;60;1$t")
 ```
 
 **Reversible Attributes:**
-- `0`: All attributes
+- `0`: Toggle bold, underline, blink, and reverse video
 - `1`: Bold
 - `4`: Underline
 - `5`: Blink
@@ -1667,9 +1671,8 @@ print(f"Result: {value}")
 
 term.process_str(code)
 
-# Highlight function definition (rows 2-4, bold yellow)
-term.process_str("\x1b[38;2;255;255;0m")  # Yellow foreground
-term.process_str("\x1b[2;1;4;25;1$r")  # Apply bold to function
+# Highlight function definition (rows 2-4, bold)
+term.process_str("\x1b[2;1;4;25;1$r")  # DECCARA changes attributes, not colors
 
 # Highlight variable name (row 6, reverse video)
 term.process_str("\x1b[6;1;6;25;7$r")  # Reverse video
@@ -1833,8 +1836,8 @@ print(str_width_cjk("αβγ"))  # 6
 
 | Setting | Description |
 |---------|-------------|
-| `UnicodeVersion.Auto` | Use latest Unicode version (default) |
-| `UnicodeVersion.Unicode9` - `Unicode16` | Specific Unicode version width tables |
+| `UnicodeVersion.Auto` | Default version preference; widths use the `unicode-width` dependency |
+| `UnicodeVersion.Unicode9` - `Unicode16` | Stored version preference; currently does not select different width tables |
 | `AmbiguousWidth.Narrow` | Ambiguous characters = 1 cell (Western default) |
 | `AmbiguousWidth.Wide` | Ambiguous characters = 2 cells (CJK environments) |
 
@@ -1847,7 +1850,7 @@ These characters have uncertain width depending on context:
 - Box-drawing characters (─, │, ┌, ┐)
 - Various punctuation and symbols
 
-Use `AmbiguousWidth.Wide` for CJK-centric applications where these should occupy 2 cells.
+Use `AmbiguousWidth.Wide` for CJK-centric applications where these should occupy 2 cells. Width calculation uses the `unicode-width` dependency regardless of the stored Unicode version preference. The standalone `str_width()` sums individual character widths rather than shaping grapheme clusters.
 
 ## Buffer Export
 
@@ -2070,15 +2073,16 @@ Scrollback is stored as one boxed row per line, oldest first. Each line keeps th
 
 **Width Decrease (e.g., 120 to 80 columns):**
 - The visible screen is reflowed; stored scrollback lines keep their wider original width
-- History content survives untouched — no lines are dropped or re-wrapped
+- Existing history rows are not re-wrapped
+- If visible-screen reflow produces excess rows, they enter scrollback and can evict the oldest history at `max_scrollback`
 
 **Height-Only Changes:**
 - Scrollback content remains unchanged
 
-### Preserved Always
+### Preserved for Retained History
 
-- All text content, colors, attributes, and hyperlink associations of stored lines
-- Wrap flags of stored lines
+- All text content, colors, attributes, and hyperlink associations of retained lines
+- Wrap flags of retained lines
 - Oldest-first line ordering and `max_scrollback` eviction semantics (each eviction drops one small allocation)
 
 ### Example
@@ -2142,7 +2146,7 @@ config.bell_visual = True  # Enable visual alerts
 
 # Configure activity detection
 config.activity_enabled = True
-config.activity_threshold = 10  # Seconds of inactivity before trigger
+config.activity_threshold = 10  # Minimum seconds between activity notifications
 
 # Configure silence detection
 config.silence_enabled = True
@@ -2198,29 +2202,25 @@ term.clear_notification_events()
 ### Activity and Silence Detection
 
 ```python
-import time
-
 # Update activity timestamp (call when terminal receives input/output)
 term.update_activity()
 
-# Periodic checks (in event loop or separate thread)
-while True:
-    # Process terminal I/O
-    term.process(data)
-    term.update_activity()
 
-    # Check for silence/activity conditions
+# Call this on each event-loop tick, including ticks with no terminal output.
+def notification_tick(data: bytes = b"") -> None:
+    if data:
+        term.process(data)
+        term.update_activity()
+
     term.check_silence()  # Triggers notification if threshold exceeded
-    term.check_activity()  # Triggers notification if activity after inactivity
-
-    time.sleep(0.1)
+    term.check_activity()  # Rate-limited notification for activity since the last event
 ```
 
 ### Notification Types
 
 **Trigger Types:**
 - `Bell`: Terminal bell event (BEL character or visual bell)
-- `Activity`: Terminal activity after period of inactivity
+- `Activity`: Activity since the previous activity event, rate-limited by `activity_threshold`
 - `Silence`: Silence after period of activity
 - `Custom(id)`: Custom notification with numeric ID
 
@@ -2403,11 +2403,9 @@ term.record_marker("Important moment")  # Named marker
 
 ### Performance Considerations
 
-- Recording adds minimal overhead (<1% CPU for typical sessions)
-- Memory usage scales with event count
-- Large sessions (>10K events) export efficiently
-- Export operations are fast (millions of events/second)
-- Use markers sparingly for best performance
+- Memory usage scales with event count and payload size
+- Export serializes the recorded events into a new string
+- Stop or export recordings periodically when capturing long sessions
 
 ## Instant Replay
 
@@ -2555,7 +2553,7 @@ par-term-streamer --macro-file demo.yaml --macro-speed 1.5 --macro-loop
 4. **Presentations**: Professional live coding without typos
 5. **Documentation**: Generate terminal session recordings
 
-> **📝 Note:** For complete macro documentation including playback control, speed adjustment, and advanced features, see [MACROS.md](MACROS.md)
+> **Note:** For complete macro documentation including playback control, speed adjustment, and advanced features, see [MACROS.md](MACROS.md)
 
 ## Terminal Streaming
 
@@ -2569,7 +2567,6 @@ The streaming system enables terminal sessions to be viewed and controlled throu
 - **Backend**: Streaming server captures terminal output and forwards via WebSocket
 - **Frontend**: Next.js application with xterm.js for browser rendering
 - **Protocol**: Binary Protocol Buffers with optional zlib compression
-- **Latency**: Sub-100ms for local connections
 - **Security**: Optional TLS/SSL encryption and API key authentication
 
 ### Quick Start
@@ -2592,8 +2589,8 @@ server.start()
 
 **Rust Standalone Server:**
 ```bash
-# Build with streaming support
-cargo build --release --bin par-term-streamer --features streaming-bin
+# Build the standalone server without Python extension-module linkage
+cargo build --release --no-default-features --bin par-term-streamer --features streaming-bin
 
 # Run server
 par-term-streamer --host 127.0.0.1 --port 8099 --theme dracula
@@ -2631,13 +2628,9 @@ npm run dev  # Development server on http://localhost:3000
 ### Protocol
 
 **Wire Format:**
-The protocol uses binary Protocol Buffers over WebSocket:
+The protocol uses binary Protocol Buffers over WebSocket.
 
-```text
-[N bytes: protobuf ServerMessage/ClientMessage]
-```
-
-For bandwidth optimization, payloads larger than 256 bytes are automatically zlib-compressed. Every message is prefixed with a 1-byte flag:
+Every message is prefixed with a 1-byte flag. For payloads larger than 256 bytes, the encoder tries zlib compression and uses it only when it reduces the payload size:
 
 ```text
 [1 byte: flag][N bytes: protobuf payload]
@@ -2675,6 +2668,7 @@ Where `flag` is `0x01` for zlib-compressed payloads or `0x00` for uncompressed p
 - `ScreenCleared`: Screen cleared (ED 2J / ED 3J)
 - `AgentRoster`: Agent roster updated (par-mux agent integrations)
 - `AgentStateChanged`: Agent state changed (par-mux agent integrations)
+- `PointerShapeChanged`: Pointer shape requested by OSC 22
 - `EnvironmentChanged`: Environment variable changed
 - `RemoteHostTransition`: Remote host transition detected
 - `SubShellDetected`: Sub-shell detected
@@ -2701,7 +2695,7 @@ Where `flag` is `0x01` for zlib-compressed payloads or `0x00` for uncompressed p
 - `ClipboardRequest`: Clipboard request (set/get)
 - `SnapshotRequest`: Request semantic snapshot
 
-> **📝 Note:** The protocol definition is in `proto/terminal.proto`. See [STREAMING.md](STREAMING.md) for complete protocol specification and examples.
+> **Note:** The protocol definition is in `proto/terminal.proto`. See [STREAMING.md](STREAMING.md) for complete protocol specification and examples.
 
 ### Configuration
 
@@ -2777,7 +2771,7 @@ openssl req -x509 -newkey rsa:4096 -keyout key.pem -out cert.pem -days 365 -node
 
 ### Security Considerations
 
-> **🔒 Security:** Streaming exposes shell access over the network
+> **Security:** Streaming exposes shell access over the network
 
 **Best Practices:**
 - **Always use TLS/SSL** for production deployments over public networks
@@ -2826,11 +2820,11 @@ par-term-streamer \
 
 **Protocol:**
 - Definition: `proto/terminal.proto` (Protocol Buffers schema)
-- Wire format: Binary protobuf (uncompressed for low latency) or with zlib compression header for large payloads (>256 bytes)
-- Compression: Optional zlib for large payloads (>256 bytes)
+- Wire format: One-byte compression flag followed by binary protobuf payload
+- Compression: Zlib is attempted for payloads >256 bytes and used only when smaller
 - Generation: `prost-build` (Rust), `@bufbuild/buf` (TypeScript)
 
-> **📝 Note:** For complete streaming documentation including protocol specification, frontend setup, performance tuning, and troubleshooting, see [STREAMING.md](STREAMING.md)
+> **Note:** For complete streaming documentation including protocol specification, frontend setup, performance tuning, and troubleshooting, see [STREAMING.md](STREAMING.md)
 
 ## Complete Example
 
@@ -2962,7 +2956,7 @@ The example demonstrates:
 10. **Underline Styles**: Different underline types for menu items
 11. **Unicode Support**: Emoji and box-drawing characters
 
-> **📝 Note:** See [examples/](../examples/) directory for more focused demonstrations of individual features including Kitty graphics animations
+> **Note:** See [examples/](../examples/) directory for more focused demonstrations of individual features including Kitty graphics animations
 
 ## Related Documentation
 

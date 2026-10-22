@@ -2,7 +2,7 @@
 
 Comprehensive internal architecture documentation for par-term-emu-core-rust, a high-performance terminal emulator library written in Rust with Python bindings.
 
-> **Last verified against v0.60.0 (commit `c9cb0fe`).** Struct layouts, module lists, and file counts drift quickly; where a section could go stale, prefer the runnable commands given over hard-coded numbers.
+> **Last verified against v0.63.0 (commit `6358f60f`).** Struct layouts, module lists, and file counts drift quickly; where a section could go stale, prefer the runnable commands given over hard-coded numbers.
 
 ## Table of Contents
 
@@ -297,13 +297,13 @@ The main terminal emulator that ties everything together, organized into submodu
 - A tmux-control-mode multiplexer: owns PTY-backed panes in a workspace/session/window/pane tree (workspaces are the first-class level above sessions; a workspace dies with its last session) and serves the control protocol over a local socket, with an agent layer (state hook reports, scrape tier, session resume) on top
 - Control plane:
   - `server/` - the socket server: `mod.rs` (accept loop, one writer thread per client), `protocol.rs` (bounded line reads, eviction-aware writes, reply classification), `client.rs` (per-client registration and the read-dispatch-reply loop), `broadcast.rs` (client fan-out, pane output wiring, layout/exit replays), `reap.rs` (dead-pane reaping), `endpoint.rs` (hook-only per-pane endpoints, ENH-039)
-  - `command/` - control-command parsing (`parse_command` → `MuxCommand`), one file per verb group: `sessions.rs`, `windows.rs`, `panes.rs`, `keys.rs`, `buffers.rs`; the `mutates()` persistence rule lives in `mod.rs`
-  - `dispatch/` - private per-command handlers, one file per group (`sessions.rs`, `windows.rs`, `panes.rs`, `buffers.rs`, `client.rs`) plus the shared post-dispatch tail in `mod.rs`; reached only through `server`
+  - `command/` - control-command parsing (`parse_command` → `MuxCommand`), one file per verb group: `sessions.rs`, `windows.rs`, `panes.rs`, `keys.rs`, `buffers.rs`, `agents.rs`, `streams.rs`, `worktrees.rs`; the `mutates()` persistence rule lives in `mod.rs`
+  - `dispatch/` - private per-command handlers, one file per group (`sessions.rs`, `windows.rs`, `panes.rs`, `buffers.rs`, `agents.rs`, `worktrees.rs`, `client.rs`) plus the shared post-dispatch tail in `mod.rs`; reached only through `server`
   - `emit.rs` (wire lines and `%`-notifications), `ids.rs` (`$N`/`@N`/`%N` ids and allocation), `ipc.rs` (Unix socket / Windows named pipe transport) plus `ipc/rows.rs` (typed reply rows for the fixed-shape listings, shared by the daemon's emitters and the clients that parse them, ARC-130), `client.rs` (`MuxClient`), `discovery.rs` (registry of running daemons plus a stale-entry probe), `config.rs` (`<config dir>/par-mux/config.toml`)
 - State:
-  - `tree/` - the session/window/pane tree, the server's single source of truth: `mod.rs` (types and lookups), `lifecycle.rs` (creation, respawn, renames, session environment, kill cascades), `layout_ops.rs` (splits, selection, zoom, moves, resizes, and the `mutate_layout` choke point, ARC-090)
+  - `tree/` - the session/window/pane tree, the server's single source of truth: `mod.rs` (types and lookups), `lifecycle.rs` (creation, respawn, renames, session environment, kill cascades), `layout_ops.rs` (splits, selection, zoom, moves, resizes, and the `mutate_layout` choke point, ARC-090), `worktrees.rs` (git-worktree workspace grouping, derived from each link's repo key)
   - `layout.rs` (a window's binary split tree and its geometry), `pane.rs` (PTY panes + env contract), `persist.rs` (save format, quarantine, restore)
-- Agent layer: `hooks/` (hook-report grammar: `mod.rs` dispatch, `report.rs`, `telemetry.rs`, `release.rs`), `scrape.rs` (fallback state tier, patterns in `patterns/*.toml`), `agent_resume.rs`, `foreground.rs` (process-table snapshot for `pane-info cmd=` and hook-claim liveness), `host_probe.rs` (30 s disk and git host-telemetry sweep, hardened git), `win_resume.rs` (Windows resume transport), `integrations/` (the agent-state integrations: claude/codex/grok session hooks merged into config-entry agents' settings files without disturbing user bytes, plus the pi/omp extension files — installed by the `--install-agent-*`/`--heal-agent-hooks` one-shot flags; compiled only with `mux-bin`), `skill_installer.rs` (`--install-skill` writes the SKILL.md embedded from `crates/par-mux/skills/par-mux/`; compiled only with `mux-bin`)
+- Agent layer: `hooks/` (hook-report grammar: `mod.rs` dispatch, `report.rs`, `telemetry.rs`, `seen.rs` (derived `done` state), `release.rs`), `scrape.rs` (fallback state tier, patterns in `patterns/*.toml`), `agent_resume.rs`, `foreground.rs` (process-table snapshot for `pane-info cmd=` and hook-claim liveness), `host_probe.rs` (30 s disk and git host-telemetry sweep, hardened git), `win_resume.rs` (Windows resume transport), `integrations/` (the agent-state integrations: claude/codex/grok session hooks merged into config-entry agents' settings files without disturbing user bytes, plus the pi/omp extension files — installed by the `--install-agent-*`/`--heal-agent-hooks` one-shot flags; compiled only with `mux-bin`), `skill_installer.rs` (`--install-skill` writes the SKILL.md embedded from `crates/par-mux/skills/par-mux/`; compiled only with `mux-bin`)
 - `attach/` - the `par-mux attach` client (feature `attach`). Shared by both phases: `mod.rs`, `conn.rs` (`AttachConn`, the connection layer), `panels.rs` (overlay and sidebar composition, help rows, prompts, pickers), `prefs.rs` (the persisted side-panel state, `client-state.json`), `targets.rs` (prefix/chord parsing and `-t` target resolution). Phase A (passthrough) keeps the host terminal as the emulator: `pump.rs`, `actions.rs`, `navigate.rs`, `status_row.rs`. Phase B (render mode) runs a core `Terminal` per pane and paints a ratatui buffer: `input.rs` (stdin parse and re-encode), `layout.rs` (client-side layout parser), `status.rs`, `tabs.rs`, and `render/`:
   - `render/mod.rs` - the pane renderer type and its frame-cadence damage diffing
   - `render/geometry.rs` - the frame chrome layout: the one owner of how the host grid divides into tab strip, status bar, side panel, and pane content area (host/frame/content coordinate spaces)
@@ -452,6 +452,7 @@ pub struct Terminal {
     // One field per feature sub-struct (ARC-001)
     saved_state: SavedCursorState,       // DECSC/DECRC saved cursor + SGR colors/flags
     title_state: TitleState,             // Title, title stack, answerback string
+    pointer_state: PointerShapeState,    // OSC 22 pointer-shape request
     sync_state: SyncState,               // Synchronized updates (DEC 2026)
     shell_state: ShellState,             // Shell integration, host/user, depth
     margins: MarginState,                // DECSTBM/DECSLRM scroll + margins
@@ -682,7 +683,7 @@ All public methods are wrapped with `#[pymethods]` and provide:
 
 1. Add handler in the appropriate sequence module:
    - CSI sequences: `crates/par-term-emu-core/src/terminal/sequences/csi/` (directory: `mod.rs` plus per-topic files `color_stack.rs`, `cursor.rs`, `edit.rs`, `erase.rs`, `keyboard.rs`, `mode.rs`, `report.rs`, `scroll.rs`, `style.rs`, `window.rs`)
-   - OSC sequences: `crates/par-term-emu-core/src/terminal/sequences/osc/` (directory: `mod.rs` plus per-topic files `clipboard.rs`, `color.rs`, `image.rs`, `iterm.rs`, `notify.rs`, `shell.rs`, `title.rs`)
+   - OSC sequences: `crates/par-term-emu-core/src/terminal/sequences/osc/` (directory: `mod.rs` plus per-topic files `clipboard.rs`, `color.rs`, `image.rs`, `iterm.rs`, `notify.rs`, `pointer.rs`, `shell.rs`, `title.rs`)
    - ESC sequences: `crates/par-term-emu-core/src/terminal/sequences/esc.rs`
    - DCS sequences: `crates/par-term-emu-core/src/terminal/sequences/dcs/` (directory: `mod.rs` plus `query.rs`, `sixel.rs`)
 2. Prefer a capability-scoped free function that takes only the sub-structs it touches (see [Terminal](#5-terminal)); update grid/cursor state as needed
@@ -755,6 +756,7 @@ The terminal emulator includes comprehensive VT100/VT220/VT320/VT420 compatibili
 4. **Kitty Keyboard Protocol** - Enhanced keyboard reporting with flag management
 5. **Shell Integration** - OSC 133 for prompt/command/output markers
 6. **Clipboard** - OSC 52 read/write with security controls
+7. **Pointer Shape** - OSC 22 pointer-shape request and reset (capped name length)
 
 ### VT Compatibility
 

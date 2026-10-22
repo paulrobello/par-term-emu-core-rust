@@ -174,6 +174,11 @@ VT100/ECMA-48 text styling sequences.
 - `CSI 39 m` - Default foreground color
 - `CSI 49 m` - Default background color
 
+### modifyOtherKeys (xterm)
+
+- `CSI > 4 ; n m` - Set modifyOtherKeys mode (n: 0=off, 1=partial, 2=full; values above 2 clamp to 2)
+- `CSI ? 4 m` - Query modifyOtherKeys - Response: `CSI > 4 ; n m`
+
 ### Color Palette Stack (xterm extension)
 
 XTPUSHCOLORS/XTPOPCOLORS save and restore the dynamic colors (OSC 10/11/12) plus the ANSI palette (OSC 4) on a 10-deep stack.
@@ -459,7 +464,7 @@ Full VT340 Sixel graphics support for inline images with configurable limits.
 - Sixel data characters: `?` through `~` (ASCII 63-126)
 - Up to 4096 colors, configurable size limits
 
-**Security:** Can be disabled via `disable_insecure_sequences`. Default limits: 16384x16384 pixels.
+**Security:** Can be disabled via `disable_insecure_sequences`. Default limits: 1024x1024 pixels (configurable via `set_sixel_limits`, hard-capped at 4096x4096; raster declarations larger than 16384x16384 are rejected).
 
 > See [VT_TECHNICAL_REFERENCE.md#sixel-graphics-dcs-q](VT_TECHNICAL_REFERENCE.md#sixel-graphics-dcs-q) for detailed command syntax and [Sixel Graphics Specification](https://vt100.net/docs/vt3xx-gp/chapter14.html).
 

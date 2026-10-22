@@ -66,7 +66,7 @@ Per terminal, in passthrough then render mode, check:
   in the side panel's agents section (next bullet).
 - **Zoom** (render): prefix `z` zooms the focused pane to the full window —
   the pane's prompt re-lays-out at the full width (the child resized), the
-  status row carries a bold ` Z ` cue; prefix `z` again restores the split,
+  status row carries a bold ` Z |` cue; prefix `z` again restores the split,
   and selecting another pane (prefix `o`, or prefix+arrow) unzooms. The
   daemon-side `resize-pane -t %N -Z` from another terminal does the same.
 - **Rename** (render): prefix `,` opens the window-rename prompt seeded with
@@ -98,10 +98,13 @@ Per terminal, in passthrough then render mode, check:
   (`[client] sidebar-on-launch = false` starts it hidden), so the first
   prefix `s` closes it. Prefix `s` toggles a left strip — one flat
   workspace row each (ONLY the active one a full-width inverted block),
-  then the agents section: one `{workspace} · {agent} ({state})` row per
-  rostered agent, grouped by workspace (id order), the focused pane's row
-  inverted; clicking a workspace row lands on it, clicking an agent row
-  focuses that pane (a same-window click just moves focus). Panes
+  then the agents section: one entry per rostered agent — by default two
+  lines, `● {workspace} · {project}` over the agent name (the entry's
+  lines come from the `[client] agent-rows` template; the ● status
+  glyph's color carries the state), grouped by workspace (id order), the
+  focused pane's row inverted; clicking a workspace row lands on it,
+  clicking an agent row focuses that pane (a same-window click just
+  moves focus). Panes
   re-divide narrower around the strip with the vacated region fully
   erased (toggling off restores). While up, the top row shows the active
   workspace's label + the tabs. Rename a window, switch workspaces, or

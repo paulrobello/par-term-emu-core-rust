@@ -168,7 +168,7 @@ See [`Cargo.toml`](../Cargo.toml): `[package]`, `[lib]` (`crate-type = ["cdylib"
 
 **Status**: **Compliant**
 - Uses official `PyO3/maturin-action`, SHA-pinned to v1.51.0 in every wheel-building workflow
-- Pins the Rust toolchain (`rust-toolchain: 1.99.0`) on each maturin build step
+- Pins the Rust toolchain (`rust-toolchain: 1.99.0`) on each maturin build step in the deployment workflow (the TestPyPI workflow omits the pin)
 - Passes `--locked` so a stale `Cargo.lock` fails the build instead of resolving silently
 - Enables sccache for faster builds
 - Proper target specification
@@ -237,8 +237,8 @@ windows:
     matrix:
       python-version: ["3.12", "3.13", "3.14"]
   steps:
-    - uses: actions/checkout@v7
-    - uses: actions/setup-python@v7
+    - uses: actions/checkout@v7  # SHA-pinned (v7.0.1) in the workflow
+    - uses: actions/setup-python@v7  # SHA-pinned (v7.0.0) in the workflow
       with:
         python-version: ${{ matrix.python-version }}
     - name: Install uv
@@ -275,9 +275,9 @@ windows:
 **Status**: **OPTIMALLY CONFIGURED**
 
 **Testing Strategy**:
-- **x86_64 (Linux/macOS/Windows)**: Fully tested on CI
+- **x86_64 (Linux/Windows)**: Fully tested on CI
 - **ARM64 (Linux)**: Built with QEMU cross-compilation, tested on actual hardware
-- **universal2 (macOS)**: x86_64 portion tested on CI, Apple Silicon tested post-release
+- **macOS (x86_64/universal2)**: CI runners (`macos-latest`) are Apple Silicon, so the installed universal2 wheel exercises its ARM64 slice; the x86_64 wheel is built but never installed on CI, and the x86_64 slice is covered post-release on Intel hardware
 
 **Rationale for Current Approach**:
 - Cannot directly test ARM64 wheels on x86_64 runners
@@ -291,14 +291,14 @@ windows:
 |----------|--------------|--------|---------------|-----------------|
 | Linux | x86_64 | Built & Tested | PTY excluded | 3.12, 3.13, 3.14 |
 | Linux | aarch64 (ARM64) | Built | Build-only* | 3.12, 3.13, 3.14 |
-| macOS | x86_64 | Built & Tested | PTY excluded | 3.12, 3.13, 3.14 |
-| macOS | universal2 | Built & Tested | x86_64 on CI | 3.12, 3.13, 3.14 |
+| macOS | x86_64 | Built | Build-only (ARM CI runners) | 3.12, 3.13, 3.14 |
+| macOS | universal2 | Built & Tested | ARM64 slice on CI | 3.12, 3.13, 3.14 |
 | Windows | x86_64 | Built & Tested | PTY excluded | 3.12, 3.13, 3.14 |
 
 **Total**: **15 wheels per deployment** (3 Python versions x 5 platform configurations)
 
 *ARM64 Linux wheels built via QEMU cross-compilation, not directly testable on x86_64 CI runners
-†macOS universal2 wheels tested for x86_64 portion on CI, Apple Silicon portion tested post-release
+†macOS CI runners (`macos-latest`) are Apple Silicon; the universal2 wheel's ARM64 slice is what CI tests exercise, and the x86_64 slice is covered post-release on Intel hardware
 ‡CI test runs exclude the PTY test files on every platform (Unix-only feature): Linux/macOS ignore the PTY test files, Windows filters with `-k "not pty"`
 
 ### CI/CD Build Matrix Visualization
@@ -476,7 +476,7 @@ strip = "debuginfo"     # Strip debug info (smaller wheel)
 
 ## Compliance Scorecard
 
-**Last verified**: 2026-10-11 against 0.60.0 — scores have not been re-verified for later releases
+**Last verified**: 2026-10-21 against 0.63.0
 
 | Category | Score | Notes |
 |----------|-------|-------|

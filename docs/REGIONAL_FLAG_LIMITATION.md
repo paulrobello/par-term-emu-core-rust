@@ -275,7 +275,7 @@ Located in `examples/streaming_client.html`:
 - xterm.js version: 5.5.0
 - Addons: fit, web-links, WebGL (loaded when available), Unicode11
 - Unicode11 addon activated (`term.unicode.activeVersion = '11'`)
-- Font stack: NerdFontsSymbols Nerd Font, JetBrains Mono, Fira Code, Noto Sans Mono, Cascadia Code, DejaVu Sans Mono, Consolas, Courier New, Segoe UI Emoji, Noto Color Emoji, Apple Color Emoji, Symbola, monospace
+- Font stack: NerdFontsSymbols Nerd Font, JetBrains Mono, Fira Code, Noto Sans Mono, Cascadia Code, Cascadia Code PL, DejaVu Sans Mono, Consolas, Courier New, Segoe UI Emoji, Noto Color Emoji, Apple Color Emoji, Symbola, monospace
 - `rescaleOverlappingGlyphs` option enabled
 
 **Next.js Web Terminal:**
@@ -297,7 +297,7 @@ Located in `web-terminal-frontend/components/Terminal.tsx`:
 
 ---
 
-**Last Updated**: 2026-10-11
+**Last Updated**: 2026-10-22
 **xterm.js Version**: 6.0.0 (Next.js), 5.5.0 (HTML client)
 **unicode-width Crate**: 0.2.2
 **Status**: Grapheme addon published upstream (0.4.0, experimental) but not yet integrated into this project's web clients

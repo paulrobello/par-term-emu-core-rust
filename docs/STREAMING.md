@@ -657,7 +657,7 @@ npm run proto:generate
 
 - `web-terminal-frontend/app/page.tsx`: Main application UI with connection controls and status indicator
 - `web-terminal-frontend/components/Terminal.tsx`: xterm.js integration with binary WebSocket handling, mouse/focus/paste forwarding
-- `web-terminal-frontend/lib/protocol.ts`: Message encoding/decoding with helper factories (`createInputMessage`, `createResizeMessage`, `createMouseMessage`, `createFocusMessage`, `createPasteMessage`, `createSubscribeMessage`, `createSnapshotRequestMessage`, etc.)
+- `web-terminal-frontend/lib/protocol.ts`: Message encoding/decoding with helper factories (`createInputMessage`, `createResizeMessage`, `createPingMessage`, `createRefreshMessage`, `createMouseMessage`, `createFocusMessage`, `createPasteMessage`, `createSubscribeMessage`)
 - `web-terminal-frontend/lib/proto/terminal_pb.ts`: Generated Protocol Buffers types (from `proto/terminal.proto`)
 - `web-terminal-frontend/next.config.js`: Configures Next.js for static export (`output: 'export'`)
 
@@ -865,12 +865,19 @@ The protocol is defined in `proto/terminal.proto`. Messages use Protocol Buffers
 > |---|---|
 > | `cwd_changed` | `cwdchanged` |
 > | `trigger_matched` | `triggermatched` |
-> | `user_var_changed` | `user_var_changed` (explicit rename) |
+> | `action_notify` | `actionnotify` |
+> | `action_mark_line` | `actionmarkline` |
+> | `mode_changed` | `modechanged` |
+> | `graphics_added` | `graphicsadded` |
+> | `hyperlink_added` | `hyperlinkadded` |
 > | `shell_integration_event` | `shell_integration` (explicit rename) |
 >
-> Single-word names (`output`, `resize`, `bell`, `pong`) are identical in both
-> forms. The WebSocket wire protocol itself is protobuf — this divergence only
-> affects code that serde-serializes `ServerMessage`/`ClientMessage` to JSON.
+> This table is the complete divergence list. Single-word names (`output`,
+> `resize`, `bell`, `pong`) are identical in both forms, and every other
+> multi-word name carries an explicit rename that preserves the underscores
+> (`user_var_changed`, `zone_opened`, `file_transfer_started`, ...). The
+> WebSocket wire protocol itself is protobuf — this divergence only affects
+> code that serde-serializes `ServerMessage`/`ClientMessage` to JSON.
 
 ### ThemeInfo Structure
 
@@ -1665,7 +1672,14 @@ Clients can request a semantic snapshot of the terminal state for advanced UI fe
 
 **Client Request:**
 ```typescript
-const msg = createSnapshotMessage("recent", 10);  // Last 10 commands
+// `create` comes from @bufbuild/protobuf; SnapshotRequestSchema and
+// ClientMessageSchema from @/lib/proto/terminal_pb
+const msg = create(ClientMessageSchema, {
+  message: {
+    case: "snapshot_request",
+    value: create(SnapshotRequestSchema, { scope: "recent", maxCommands: 10 }),  // Last 10 commands
+  },
+});
 ws.send(encodeClientMessage(msg));
 ```
 

@@ -3,7 +3,18 @@
 How to run the criterion throughput benches, why comparisons must interleave
 two binaries, and how the scheduled benchmark regression gate works (ENH-016).
 
+## Table of contents
+
+- [Running benches locally](#running-benches-locally)
+- [The 2x rule: only interleaved A/B comparisons are valid](#the-2x-rule-only-interleaved-ab-comparisons-are-valid)
+- [The scheduled bench gate](#the-scheduled-bench-gate)
+
 ## Running benches locally
+
+Run commands from the repository root with Rust/Cargo installed. Before and
+after each local timing run, check the host's 1-minute load average (for
+example, with `uptime`). Start only at a load of 15 or less, and discard and
+repeat a run whose post-run load exceeds 15.
 
 ```bash
 make bench         # cargo bench --no-default-features --features rust-only,ffi
@@ -16,14 +27,14 @@ The benches live in `benches/` and are declared as `[[bench]]` targets in
 | --- | --- | --- | --- |
 | `terminal_throughput` | `benches/terminal_throughput.rs` | `rust-only` | The real `Terminal::process` pipeline (VTE parser, sequence dispatch, grid writes, scrolling, Sixel/Kitty graphics) across seven groups: `plain_ascii`, `sgr_heavy`, `unicode_wide`, `scroll`, `cursor_addressing`, `sixel_decode`, `kitty_decode` |
 | `ffi_readback` | `benches/ffi_readback.rs` | `rust-only`, `ffi` | Per-frame dirty-readback cost through the C FFI surface |
-| `pty_geometry` | `benches/pty_geometry.rs` | `pty_session` | `Terminal::size()` reads against a live PTY session |
+| `pty_geometry` | `benches/pty_geometry.rs` | `pty_session` | `PtySession::size()` atomic-mirror reads versus a read-locked `Terminal::size()` baseline, while a feeder thread processes 1 MiB chunks under the terminal write lock (no child process is spawned) |
 
 Criterion reports `terminal_throughput` as MiB/s (`Throughput::Bytes`); the
 other two use element counts (frames per second, iterations per second). The
 targets build without the Python feature, so no `make dev` / maturin step is
 needed, and they never run as part of `make checkall`. `make bench` runs
 `terminal_throughput` and `ffi_readback`; `pty_geometry` runs on its own with
-`cargo bench --no-default-features --features pty_session`.
+`cargo bench --bench pty_geometry --no-default-features --features pty_session`.
 
 ## The 2x rule: only interleaved A/B comparisons are valid
 
@@ -34,26 +45,38 @@ Comparing a run today against a run from another session compares machine
 states, not code.
 
 To compare code, interleave the two binaries in one session — old, new, old,
-new — and compare within pairs. That shape is reproducible to ±1%; the full
-measurements live in `docs/fable/BENCH-BASELINE-2026-09.md`.
+new — and compare within pairs. The historical September measurements were
+reproducible to ±1% across alternations, not a guarantee for future runs. See
+the [September baseline report](fable/BENCH-BASELINE-2026-09.md) for those
+measurements and the binary-copy procedure.
 
-For quick manual A/B work:
+For a quick saved-baseline check (not a substitute for interleaved A/B runs):
 
 ```bash
-cargo bench --no-default-features --features rust-only -- --save-baseline my-change
+cargo bench --bench terminal_throughput --no-default-features --features rust-only -- --save-baseline my-change
 # ... after further changes ...
-cargo bench --no-default-features --features rust-only -- --baseline my-change
+cargo bench --bench terminal_throughput --no-default-features --features rust-only -- --baseline my-change
 ```
 
-(`--save-baseline` needs a named `--bench` target such as
-`--bench terminal_throughput` when cargo would also run the lib's unit-test
-pass. A criterion binary invoked directly needs `--bench`, or it runs one test
-iteration and exits without measuring.)
+The named `--bench` target prevents Cargo's lib unit-test benchmark pass from
+receiving Criterion-only flags such as `--save-baseline`. A Criterion binary
+invoked directly also needs `--bench`, or it runs one test iteration and exits
+without measuring.
 
 ## The scheduled bench gate
 
 `.github/workflows/bench.yml` runs weekly (Monday 09:17 UTC, plus manual
-`workflow_dispatch`) and is driven by `scripts/bench_gate.sh`:
+`workflow_dispatch`) and is driven by `scripts/bench_gate.sh`. The workflow
+checks `Cargo.lock` with `cargo fetch --locked` before running the gate.
+
+The driver requires Cargo and Python 3, runs from the repository root, and
+refuses tracked modifications. Use an isolated checkout: it temporarily
+checks out the baseline commit, restores the original ref after a successful
+baseline build, and clears its scratch Criterion results. Tag rotation is
+opt-in for local runs (`BENCH_ROTATE_TAG=1`) and force-pushes the baseline tag
+to `origin`.
+
+The gate follows these steps:
 
 1. Builds the bench binary for `HEAD` and for the `bench-baseline` git tag in
    one shared `target/` dir, copying each binary out. The gate builds with
@@ -65,7 +88,9 @@ iteration and exits without measuring.)
    of round means, widest confidence envelope) and flags any bench where HEAD
    is both >`BENCH_THRESHOLD` (default 1.2 = 20%) slower than baseline **and**
    the confidence intervals do not overlap — the overlap check keeps runner
-   noise from crying wolf.
+   noise from producing false alarms. Only benchmark names present in both
+   versions are compared. New and missing benchmarks are listed separately
+   and do not count as regressions.
 4. The verdict table lands in the job summary. **Verdicts are warning-level
    for now**: the job stays green while noise on GitHub-hosted runners is
    characterized. Promote to failing by setting `BENCH_FAIL_ON_REGRESSION=1`

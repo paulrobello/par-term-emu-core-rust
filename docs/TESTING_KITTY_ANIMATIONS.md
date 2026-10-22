@@ -16,6 +16,7 @@ This guide explains how to test Kitty graphics protocol animation support in `pa
 - [Debugging](#debugging)
 - [Animation Serialization](#animation-serialization)
 - [Related Documentation](#related-documentation)
+- [Implementation Status](#implementation-status)
 
 ## Current Status
 
@@ -174,7 +175,7 @@ tail -f "${TMPDIR:-/tmp}"/par_term_emu_core_rust_debug_rust_*.log
 
 ## Frontend Integration
 
-The frontend ([par-term](https://github.com/probello/par-term)) needs the following integration to enable animation playback:
+The frontend ([par-term](https://github.com/paulrobello/par-term)) needs the following integration to enable animation playback:
 
 > **Note:** This section describes the integration requirements for the par-term Rust frontend. The integration is not yet complete.
 
@@ -193,10 +194,15 @@ graph TD
     Redraw --> Render
     Render --> Update
 
-    style Update fill:#1b5e20,stroke:#4caf50,stroke-width:2px,color:#ffffff
-    style Changed fill:#ff6f00,stroke:#ffa726,stroke-width:2px,color:#ffffff
-    style Redraw fill:#0d47a1,stroke:#2196f3,stroke-width:2px,color:#ffffff
-    style Render fill:#4a148c,stroke:#9c27b0,stroke-width:2px,color:#ffffff
+    class Update active
+    class Changed warning
+    class Redraw info
+    class Render external
+
+    classDef active fill:#1b5e20,stroke:#4caf50,stroke-width:2px,color:#ffffff
+    classDef warning fill:#ff6f00,stroke:#ffa726,stroke-width:2px,color:#ffffff
+    classDef info fill:#0d47a1,stroke:#2196f3,stroke-width:2px,color:#ffffff
+    classDef external fill:#4a148c,stroke:#9c27b0,stroke-width:2px,color:#ffffff
 ```
 
 ### 1. Update Animations Periodically
@@ -441,13 +447,16 @@ graph LR
     Timing --> Serialization
     Serialization --> Frontend
 
-    style Storage fill:#1b5e20,stroke:#4caf50,stroke-width:2px,color:#ffffff
-    style Frames fill:#1b5e20,stroke:#4caf50,stroke-width:2px,color:#ffffff
-    style Control fill:#1b5e20,stroke:#4caf50,stroke-width:2px,color:#ffffff
-    style Loops fill:#1b5e20,stroke:#4caf50,stroke-width:2px,color:#ffffff
-    style Timing fill:#1b5e20,stroke:#4caf50,stroke-width:2px,color:#ffffff
-    style Serialization fill:#1b5e20,stroke:#4caf50,stroke-width:2px,color:#ffffff
-    style Frontend fill:#ff6f00,stroke:#ffa726,stroke-width:2px,color:#ffffff
+    class Storage active
+    class Frames active
+    class Control active
+    class Loops active
+    class Timing active
+    class Serialization active
+    class Frontend warning
+
+    classDef active fill:#1b5e20,stroke:#4caf50,stroke-width:2px,color:#ffffff
+    classDef warning fill:#ff6f00,stroke:#ffa726,stroke-width:2px,color:#ffffff
 ```
 
 ### Completed Features

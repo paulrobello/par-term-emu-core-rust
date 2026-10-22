@@ -27,7 +27,7 @@ This document covers the **terminal core configuration** (Rust library internals
 
 ## Overview
 
-The par-term-emu-core-rust library provides low-level terminal emulation with VT100/VT220/VT320/VT420 compatibility. Configuration is done programmatically via the Python or Rust API, or dynamically via escape sequences.
+The par-term-emu-core-rust library provides low-level terminal emulation with VT100/VT220/VT320/VT420/VT520 compatibility. Configuration is done programmatically via the Python or Rust API, or dynamically via escape sequences.
 
 **Configuration layers:**
 - **Terminal Core** (this document): Low-level terminal emulator settings (dimensions, modes, protocols)
@@ -115,7 +115,7 @@ These modes control terminal behavior and are typically set via escape sequences
 |------|-------------|---------|-------------|
 | Auto Wrap | `CSI ? 7 h/l` (DECAWM) | `true` | Automatic line wrapping at right margin |
 | Origin Mode | `CSI ? 6 h/l` (DECOM) | `false` | Cursor addressing relative to scroll region |
-| Reverse Video | `CSI ? 5 h/l` (DECSCNM) | `false` | Globally invert foreground/background colors |
+| Sixel Display Mode | `CSI ? 80 h/l` (DECSDM) | `false` | Sixel graphics paint at the home position without scrolling |
 
 ### Cursor Modes
 
@@ -130,7 +130,7 @@ These modes control terminal behavior and are typically set via escape sequences
 |------|-------------|---------|-------------|
 | Insert Mode | `CSI 4 h/l` (IRM) | `false` | Insert vs replace mode for character input |
 | Line Feed Mode | `CSI 20 h/l` (LNM) | `false` | LF does CR+LF (true) vs LF only (false) |
-| Character Protection | `CSI 0/1 " q` (DECSCA) | `false` | Mark characters as protected from erasure |
+| Character Protection | `CSI Ps " q` (DECSCA) | `false` | 1 marks written characters protected; 0/2 clears protection |
 | Attribute Change Extent | `CSI Ps * x` (DECSACE) | `2` | 0/1: stream mode, 2: rectangle mode (default) |
 
 **Notes:**
@@ -142,8 +142,9 @@ These modes control terminal behavior and are typically set via escape sequences
 
 | Mode | VT Sequence | Default | Description | Notes |
 |------|-------------|---------|-------------|-------|
-| Alternate Screen | `CSI ? 47/1047 h/l` | `false` | Switch to/from alternate screen buffer | No scrollback in alt |
-| Alternate + Save Cursor | `CSI ? 1049 h/l` | `false` | Alt screen + cursor save/restore | Combined operation |
+| Alternate Screen | `CSI ? 47 h/l` | `false` | Switch to/from alternate screen buffer | Preserves the alternate screen's prior contents |
+| Alternate + Clear | `CSI ? 1047 h/l` | `false` | Switch to/from alternate screen buffer | Clears the alternate screen on entry and exit |
+| Alternate + Save Cursor | `CSI ? 1049 h/l` | `false` | Alt screen + cursor save/restore | Clears the alternate screen on entry |
 
 ### Margin Modes
 
@@ -172,8 +173,8 @@ These settings control VT conformance and terminal bell behavior:
 
 **Python API:**
 ```python
-# Set conformance level
-term.set_conformance_level(level=520, c1_mode=0)  # VT520, 7-bit C1 controls
+# Set conformance level (1-5 or 61-65: 1 or 61=VT100, ..., 5 or 65=VT520)
+term.set_conformance_level(5)  # VT520
 
 # Configure bell volumes
 term.set_warning_bell_volume(5)  # Medium volume
@@ -183,7 +184,7 @@ term.set_margin_bell_volume(3)  # Low volume
 **Notes:**
 - Conformance level affects which VT features are available
 - Higher levels include features from lower levels
-- C1 mode: 0 = 7-bit, 1 = 8-bit control characters
+- `c1_mode` is accepted for compatibility and ignored; the terminal does not track 7-bit/8-bit C1 mode
 - Bell volumes are legacy VT features, separate from NotificationConfig
 
 ---
@@ -241,7 +242,7 @@ These settings control potentially sensitive or insecure terminal features at th
 |---------|------|---------|-------------|
 | `allow_clipboard_read` | `bool` | `false` | Allow OSC 52 clipboard queries (security risk) |
 | `accept_osc7` | `bool` | `true` | Accept OSC 7 directory tracking |
-| `disable_insecure_sequences` | `bool` | `false` | Block OSC 8, 52, 9, 777, and Sixel graphics |
+| `disable_insecure_sequences` | `bool` | `false` | Block OSC 8, 52, 9, 99, 777, and Sixel graphics |
 | `max_osc_data_length` | `usize` | `1048576` (1 MiB) | Cap on a single OSC sequence's payload (`DEFAULT_MAX_OSC_DATA_LENGTH`, QA-012/SEC-003); enforced incrementally — bytes past the cap never reach the parser and the sequence is dropped at dispatch |
 | `answerback_string` | `Option<String>` | `None` | Optional ENQ answerback payload returned via response buffer |
 
@@ -274,6 +275,7 @@ term.set_answerback_string(None)  # Disable (default, recommended for security)
   - OSC 8 (hyperlinks)
   - OSC 52 (clipboard operations)
   - OSC 9 (iTerm2 notifications)
+  - OSC 99 (kitty notifications)
   - OSC 777 (urxvt notifications)
   - Sixel graphics
 - Use in untrusted/sandboxed environments
@@ -582,7 +584,7 @@ png_bytes = term.screenshot(sixel_mode="pixels")  # Show actual image data
 
 **Location:**
 - Configuration: `crates/par-term-emu-core/src/screenshot/config.rs` - `ScreenshotConfig` struct
-- Python bindings: `src/python_bindings/terminal/mod.rs` - `screenshot()` and `screenshot_to_file()` methods
+- Python bindings: `src/python_bindings/common.rs` - `screenshot()` and `screenshot_to_file()` methods (`impl_terminal_screenshot_methods!` macro)
 - Renderer: `crates/par-term-emu-core/src/screenshot/renderer.rs` - Core rendering logic
 
 **Font Support:**
@@ -685,7 +687,7 @@ max_notifs = term.get_max_notifications()
 
 ---
 
-# Integration & Best Practices
+## Integration & Best Practices
 
 ## Configuration Validation
 

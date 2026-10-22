@@ -993,7 +993,7 @@ The `user_var_changed` event dict contains: `name`, `value`, and `old_value` (`N
 
 ### Content Search
 
-- `search(query: str, case_sensitive: bool = False) -> list[SearchMatch]`: Search terminal content. **Note:** `search()` defaults to case-**insensitive** (`case_sensitive=False`), unlike `find_text()` which defaults to case-**sensitive** (`case_sensitive=True`).
+- `search(query: str, case_sensitive: bool = False) -> list[SearchMatch]`: Search terminal content. `query` is a regular expression — escape metacharacters such as `.` or `(` to match them literally; an invalid pattern raises `RuntimeError`. **Note:** `search()` defaults to case-**insensitive** (`case_sensitive=False`), unlike `find_text()` which defaults to case-**sensitive** (`case_sensitive=True`).
 - `find_text(pattern: str, case_sensitive: bool = True) -> list[tuple[int, int]]`: Find all occurrences in visible screen
 - `find_next(pattern: str, from_col: int, from_row: int, case_sensitive: bool = True) -> tuple[int, int] | None`: Find next occurrence from position
 - `search_scrollback(query: str, case_sensitive: bool = False, max_lines: int | None = None) -> list[SearchMatch]`: Search the scrollback buffer. Returns `SearchMatch` objects with negative `row` indices for scrollback lines.
@@ -1131,7 +1131,7 @@ Terminal emulator with PTY (pseudo-terminal) support for interactive shell sessi
 PtyTerminal(cols: int, rows: int, scrollback: int = 10000)
 ```
 
-**Method availability:** `PtyTerminal` is a standalone wrapper around a live PTY session, not a `Terminal` subclass (`PtyTerminal.__mro__` is `(PtyTerminal, object)`). It exposes 164 of `Terminal`'s 387 public methods plus 40 PTY-specific ones (204 public methods in total) — process management, I/O, update tracking, macro playback, coprocesses — documented in this section. See [Method Availability](#method-availability) for the Terminal-only surface it lacks.
+**Method availability:** `PtyTerminal` is a standalone wrapper around a live PTY session, not a `Terminal` subclass (`PtyTerminal.__mro__` is `(PtyTerminal, object)`). It exposes 166 of `Terminal`'s 389 public methods plus 40 PTY-specific ones (206 public methods in total) — process management, I/O, update tracking, macro playback, coprocesses — documented in this section. See [Method Availability](#method-availability) for the Terminal-only surface it lacks.
 
 ### PTY-Specific Methods
 
@@ -1206,7 +1206,7 @@ Run external processes alongside the terminal session, optionally feeding termin
 
 ### Method Availability
 
-`PtyTerminal` is not a `Terminal` subclass. Of `Terminal`'s 387 public methods, 223 have no `PtyTerminal` counterpart (counts generated from `_native.pyi` at this release). The notable groups:
+`PtyTerminal` is not a `Terminal` subclass. Of `Terminal`'s 389 public methods, 223 have no `PtyTerminal` counterpart (counts generated from `_native.pyi` at this release). The notable groups:
 
 - **Input processing**: `process`/`process_str`/`reset` — a `PtyTerminal` is fed by its child through the PTY (`write`/`write_str`), not by host-side `process()` calls
 - **Observers and events**: `add_observer`/`add_async_observer`/`remove_observer`, the whole `poll_*` family, `set_event_subscription`
@@ -2144,6 +2144,7 @@ Create a streaming server bound to `addr` (e.g., `"127.0.0.1:8080"`). Automatica
 - `shutdown(reason: str)`: Shutdown the server and disconnect all clients
 - `client_count() -> int`: Get the number of connected clients
 - `max_clients() -> int`: Get the maximum allowed clients
+- `addr: str` (property, read-only): The address the server was bound to
 
 ### Event Polling
 
@@ -2415,7 +2416,7 @@ Complete capture of terminal state at a point in time. Defined in `crates/par-te
 
 #### GridSnapshot
 
-Snapshot of a single grid (primary or alternate screen). Defined in `crates/par-term-emu-core/src/terminal/replay_snapshot.rs`.
+Snapshot of a single grid (primary or alternate screen). Defined in `crates/par-term-emu-core/src/grid/snapshot.rs` and re-exported from `terminal/replay_snapshot.rs`.
 
 **Fields:**
 - `cells` (`Vec<Cell>`): Visible screen cells (row-major, cols * rows)
@@ -2429,7 +2430,7 @@ Snapshot of a single grid (primary or alternate screen). Defined in `crates/par-
 #### Terminal Methods
 
 - `capture_snapshot() -> TerminalSnapshot`: Capture a complete cell-level snapshot of terminal state including grids, cursors, colors, attributes, modes, scroll regions, and tab stops.
-- `restore_from_snapshot(snapshot: &TerminalSnapshot)`: Restore terminal state from a previously captured snapshot. Only restores if dimensions match.
+- `restore_from_snapshot(snapshot: TerminalSnapshot)`: Restore terminal state from a previously captured snapshot. Replaces the screen, cursor, and mode state wholesale; the terminal is resized to the snapshot's dimensions if they differ.
 
 ### SnapshotManager
 

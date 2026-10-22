@@ -68,6 +68,7 @@ Screen content and metadata changes:
 |-------|-------------|
 | `BellRang` | Bell event (visual, warning, margin) |
 | `TitleChanged` | Terminal title changed |
+| `PointerShapeChanged` | Pointer shape changed via OSC 22 (`None` restores the terminal's own pointer) |
 | `SizeChanged` | Terminal resized |
 | `ModeChanged` | Terminal mode toggled (e.g., DECCKM, DECAWM) |
 | `GraphicsAdded` | Graphics image added |
@@ -279,7 +280,7 @@ typedef struct {
     void (*on_screen_event)(void* user_data, const char* event_text);
     // Called for ALL events (catch-all, diagnostic text)
     void (*on_event)(void* user_data, const char* event_text);
-    // Called for ALL events with the structured TermEvent (ABI v4)
+    // Called for ALL events with the structured TermEvent (ABI v5)
     void (*on_event_v2)(void* user_data, const TermEvent* event);
     // Opaque pointer passed to every callback
     void* user_data;
@@ -334,6 +335,7 @@ All observer events are delivered as Python dicts with a `"type"` key identifyin
 |-------------|-----------|----------|
 | `bell` | `BellRang` | Screen |
 | `title_changed` | `TitleChanged` | Screen |
+| `pointer_shape_changed` | `PointerShapeChanged` | Screen |
 | `size_changed` | `SizeChanged` | Screen |
 | `mode_changed` | `ModeChanged` | Screen |
 | `graphics_added` | `GraphicsAdded` | Screen |
@@ -377,6 +379,13 @@ Every event dict begins with `"type"`, followed by the event's fields. Values us
 
 ```python
 {"type": "title_changed", "title": "New Terminal Title"}
+```
+
+#### Pointer Shape Changed
+
+```python
+# OSC 22; "shape" is None when reset to the terminal's own pointer
+{"type": "pointer_shape_changed", "shape": "text"}
 ```
 
 #### Size Changed

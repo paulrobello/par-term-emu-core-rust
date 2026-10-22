@@ -92,7 +92,7 @@ graph TB
 
 **Protocol Implementation Details:**
 - **Sixel**: DEC VT340 compatible bitmap graphics with color palette support
-- **iTerm2**: OSC 1337 inline images supporting PNG, JPEG, GIF with base64 encoding
+- **iTerm2**: OSC 1337 inline images with base64 encoding; the payload is decoded by content sniffing, supporting every format the `image` crate has enabled (BMP, GIF, ICO, JPEG, PNG, PNM, QOI, TGA, TIFF, WebP, farbfeld)
 - **Kitty**: APC-based protocol with image ID reuse, virtual placements, and frame composition
 
 ## Quick Tests

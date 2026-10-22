@@ -194,7 +194,7 @@ For step-by-step instructions:
 
 | Element | Format | Example |
 | --- | --- | --- |
-| File paths | Backticks | `src/config.ts` <!-- doc-path: example --> |
+| File paths | Backticks | `src/config.ts` |
 | Commands | Backticks or fenced blocks | `example-cli init` |
 | Function/class names | Backticks | `createClient()` |
 | Environment variables | Backticks | `API_KEY` |
@@ -207,9 +207,9 @@ Avoid line numbers in durable documentation because they become stale after edit
 
 Good:
 
-- “See `src/client.ts` for the client implementation.” <!-- doc-path: example -->
+- “See `src/client.ts` for the client implementation.”
 - “The `createClient()` function validates the options object.”
-- “The deployment workflow lives in `.github/workflows/deploy.yml`.” <!-- doc-path: example -->
+- “The deployment workflow lives in `.github/workflows/deploy.yml`.”
 
 Avoid:
 
@@ -554,9 +554,9 @@ Use whichever tools fit the project:
 - Spell checking or terminology checks
 - Code block extraction and testing
 - Mermaid rendering validation
-
-Intra-repo links and heading anchors are checked by `make doc-links-check` (lychee, GitHub slug rules; an emoji-prefixed heading's slug starts with `-`).
 - API reference generation or schema validation
+
+When the project defines a documentation link checker (for example a `doc-links-check` make target built on lychee), run it after every documentation edit and keep it green; treat its failures like test failures.
 
 ## Review Checklist
 

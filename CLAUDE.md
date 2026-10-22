@@ -17,7 +17,7 @@ make setup-venv          # Initial setup: creates .venv, installs deps
 make dev                 # Build library (release mode via maturin, streaming included) - USE THIS, not cargo build
 make dev-streaming       # Alias of make dev (streaming is in pyproject's [tool.maturin] features)
 make checkall            # All quality checks (run before every commit)
-make checkall-ci         # CI-parity gate: checkall + Windows MSVC cross-target checks (cross-target-check, -D warnings) + the CI mux-test job's suites (nextest, serial; run before pushing)
+make checkall-ci         # CI-parity gate: checkall + Windows MSVC cross-target checks (cross-target-check, -D warnings) + the CI mux-test job's suites (nextest, serial) + the streaming CI test (test-python-streaming-ci; run before pushing)
 make ffi-header          # Regenerate include/terminal_core.h with cbindgen (after FFI surface changes)
 make stubs               # Regenerate python/par_term_emu_core_rust/_native.pyi (after Rust-side binding changes; run after make dev)
 make completions         # Regenerate crates/par-mux/completions/ shell scripts (after any clap flag/subcommand/doc change in crates/par-mux/src/bin/par_mux/main.rs; completions-check in checkall fails otherwise)
