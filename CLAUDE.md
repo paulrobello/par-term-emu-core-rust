@@ -255,6 +255,8 @@ Also update:
 - **Mouse**: VT coords are 1-indexed, internal are 0-indexed
 - **Terminal events**: Queued in `terminal_events` vec, polled via `poll_events()` which takes/clears them
 
+- **par-mux config location**: the daemon reads `~/Library/Application Support/par-mux/config.toml` (`dirs::config_dir()`; `PAR_MUX_CONFIG` overrides). `~/.config/par-mux/` is never read. `par-mux --gen-config` refuses to print while the file exists; a `--gen-config --force` regenerates it from defaults and silently clobbers manual edits. After editing, `par-mux --cmd reload-config` applies the live `[daemon]` settings and prints one report line per setting.
+
 ## Workflow Rules
 
 - Never push unless the user requests it
