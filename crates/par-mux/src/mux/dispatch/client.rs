@@ -480,18 +480,27 @@ pub(super) fn cmd_client_snapshot(ctx: &Ctx<'_>, window: Target<WindowId>) -> Ou
     );
     drop(guard);
     // The git badges resolve OUTSIDE the tree lock: the bounded `git
-    // status` behind them (3 s cache) must never stretch the daemon's
-    // dispatch. The chain is per workspace: the workspace's active
-    // pane's live cwd, else the workspace's launch folder (its worktree
-    // checkout) — one row per workspace, id order.
-    let git_enabled = ctx
+    // status` behind them must never stretch the daemon's dispatch. The
+    // chain is per workspace: the workspace's active pane's live cwd,
+    // else the workspace's launch folder (its worktree checkout) — one
+    // row per workspace, id order. The cache TTL is the configured poll
+    // minus one second, so a scheduled poll lands after expiry and runs
+    // fresh, while the double-reads of one cycle are served.
+    let (git_enabled, git_ttl) = ctx
         .config
-        .map(|config| config.lock().git_status)
-        .unwrap_or(true);
+        .map(|config| {
+            let cfg = config.lock();
+            (
+                cfg.git_status,
+                std::time::Duration::from_secs(cfg.git_poll_secs.saturating_sub(1).max(1)),
+            )
+        })
+        .unwrap_or((true, std::time::Duration::from_secs(9)));
     if git_enabled {
         for (ws, cwd, launch) in &git_sources {
             if let Some(badge) = crate::mux::git_status::cached_badge(
                 crate::mux::git_status::badge_dir(cwd.as_deref(), launch.as_deref()),
+                git_ttl,
             ) {
                 lines.push(format!(
                     "git {}",

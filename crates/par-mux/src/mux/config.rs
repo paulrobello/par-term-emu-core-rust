@@ -412,7 +412,8 @@ pub struct ClientSection {
     )]
     pub git_status: Option<bool>,
     /// The git badge's snapshot re-query interval in seconds
-    /// (`[client] git-poll-secs`); clamped 1-600, default 10. File-only.
+    /// (`[client] git-poll-secs`); 0 disables polling, otherwise
+    /// clamped 3-600; default 10. File-only.
     #[serde(
         default,
         rename = "git-poll-secs",
@@ -569,7 +570,8 @@ pub struct EffectiveConfig {
     /// `git` row.
     pub git_status: bool,
     /// The git badge's snapshot re-query interval in seconds
-    /// (`[client] git-poll-secs`); clamped 1-600, default 10. Live on
+    /// (`[client] git-poll-secs`); 0 disables polling, otherwise
+    /// clamped 3-600; default 10. Live on
     /// reload.
     pub git_poll_secs: u64,
     /// What a `split-window` pane starts in when no `-c` is given
@@ -684,7 +686,7 @@ pub fn resolve(file: &ConfigFile, o: &Overrides) -> EffectiveConfig {
         eff.git_status = false;
     }
     if let Some(v) = file.client.git_poll_secs {
-        eff.git_poll_secs = v.clamp(1, 600);
+        eff.git_poll_secs = if v == 0 { 0 } else { v.clamp(3, 600) };
     }
     eff
 }
@@ -921,7 +923,8 @@ pub struct Chords {
     /// render the badge and run its refresh poll.
     pub git_status: bool,
     /// The badge's snapshot re-query interval in seconds (config
-    /// `git-poll-secs`); clamped 1-600, default 10. Live on reload.
+    /// `git-poll-secs`); 0 disables polling, otherwise clamped 3-600;
+    /// default 10. Live on reload.
     pub git_poll_secs: u64,
     /// The divider/border glyph set (config `border-lines`): `herdr`,
     /// `unicode`, `double`, `heavy`, or `ascii`. Default `herdr`.
@@ -1337,7 +1340,7 @@ pub fn reload_client_chords(file: &ConfigFile, current: &Chords) -> Result<Chord
     let git_poll_secs = file
         .client
         .git_poll_secs
-        .map(|v| v.clamp(1, 600))
+        .map(|v| if v == 0 { 0 } else { v.clamp(3, 600) })
         .unwrap_or(current.git_poll_secs);
     // The border line style rides as its spelling; an unknown value is
     // the renderer's warn-and-default (the file philosophy), not a
@@ -1852,7 +1855,8 @@ remain-on-exit = true
         assert!(text.contains("git-status = true"), "{text}");
     }
 
-    /// `git-poll-secs`: default 10, clamped 1-600 on resolve and reload,
+    /// `git-poll-secs`: default 10, 0 disables, otherwise clamped
+    /// 3-600 on resolve and reload,
     /// and gen-config emits the default.
     #[test]
     fn git_poll_secs_defaults_clamps_and_emits() {
@@ -1870,8 +1874,8 @@ remain-on-exit = true
             reload_client_chords(&zero, &defaults)
                 .unwrap()
                 .git_poll_secs,
-            1,
-            "below the floor clamps to 1"
+            0,
+            "0 disables the poll"
         );
         let huge: ConfigFile = toml::from_str("[client]\ngit-poll-secs = 99999\n").unwrap();
         assert_eq!(
@@ -1881,10 +1885,22 @@ remain-on-exit = true
             600,
             "above the ceiling clamps to 600"
         );
+        let one: ConfigFile = toml::from_str("[client]\ngit-poll-secs = 1\n").unwrap();
+        assert_eq!(
+            reload_client_chords(&one, &defaults).unwrap().git_poll_secs,
+            3,
+            "1-2 clamps to the 3s floor (never below the 2s git run)"
+        );
         let eff = resolve(&ConfigFile::default(), &Overrides::default());
         assert_eq!(eff.git_poll_secs, 10);
         let file: ConfigFile = toml::from_str("[client]\ngit-poll-secs = 45\n").unwrap();
         assert_eq!(resolve(&file, &Overrides::default()).git_poll_secs, 45);
+        let off: ConfigFile = toml::from_str("[client]\ngit-poll-secs = 0\n").unwrap();
+        assert_eq!(
+            resolve(&off, &Overrides::default()).git_poll_secs,
+            0,
+            "0 disables the poll on the resolve path too"
+        );
         let text = render(&EffectiveConfig::default());
         assert!(text.contains("git-poll-secs = 10"), "{text}");
     }

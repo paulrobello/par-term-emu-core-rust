@@ -877,7 +877,7 @@ struct WindowSession {
     git_status: bool,
     /// The git badge's snapshot re-query interval
     /// (`[client] git-poll-secs`, live on reload; the clock
-    /// `git_poll` runs on).
+    /// `git_poll` runs on). 0 disables the poll.
     git_poll_secs: u64,
     /// When the git badge's snapshot re-query last ran (the
     /// `git_poll_secs` clock).

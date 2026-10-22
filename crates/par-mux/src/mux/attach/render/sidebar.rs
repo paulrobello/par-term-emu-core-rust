@@ -538,7 +538,10 @@ impl WindowSession {
     /// idle would keep a stale badge until the next event; the poll
     /// restarts the clock.
     pub(super) fn git_poll_due(&mut self, now: std::time::Instant) -> bool {
-        let interval = std::time::Duration::from_secs(self.git_poll_secs.max(1));
+        if self.git_poll_secs == 0 {
+            return false; // 0 disables the poll; badges ride other refreshes.
+        }
+        let interval = std::time::Duration::from_secs(self.git_poll_secs);
         let due = self.git_status
             && self.sidebar.is_on()
             && now.duration_since(self.git_poll) >= interval;

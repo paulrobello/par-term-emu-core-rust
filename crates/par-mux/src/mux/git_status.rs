@@ -28,10 +28,6 @@ pub(crate) struct GitBadge {
     pub behind: u32,
 }
 
-/// How long a computed badge is served before the next snapshot request
-/// recomputes it.
-const STATUS_TTL: Duration = Duration::from_secs(3);
-
 /// The bound for one `git status` child (the card's 2 s): a wedged
 /// filesystem must not stretch the snapshot reply.
 const GIT_TIMEOUT: Duration = Duration::from_secs(2);
@@ -50,13 +46,16 @@ fn cache() -> &'static parking_lot::Mutex<HashMap<PathBuf, CacheEntry>> {
 }
 
 /// The badge for `dir` (the chain's chosen directory), served from the
-/// 3 s cache when fresh. `None` when the directory is `None`, not a
-/// repo, or has a detached HEAD — the sidebar's no-badge facts.
-pub(crate) fn cached_badge(dir: Option<&Path>) -> Option<GitBadge> {
+/// cache while younger than `ttl` — the configured poll interval minus
+/// one second, so a scheduled poll always lands after expiry and runs
+/// fresh, while the double-reads of one cycle (snapshot + re-query)
+/// are served. `None` when the directory is `None`, not a repo, or has
+/// a detached HEAD — the sidebar's no-badge facts.
+pub(crate) fn cached_badge(dir: Option<&Path>, ttl: Duration) -> Option<GitBadge> {
     let dir = dir?;
     let mut entries = cache().lock();
     if let Some(entry) = entries.get(dir) {
-        if entry.at.elapsed() < STATUS_TTL {
+        if entry.at.elapsed() < ttl {
             return entry.badge.clone();
         }
     }
@@ -241,6 +240,9 @@ pub(crate) fn parse_branch_header(line: &str) -> Option<GitBadge> {
 mod tests {
     use super::*;
 
+    /// The tests' stand-in for the dispatch-passed poll-minus-one TTL.
+    const TEST_TTL: Duration = Duration::from_secs(3);
+
     /// The header shapes the badge parses, including the unborn-branch
     /// and detached forms `git status -sb` really emits.
     #[test]
@@ -334,16 +336,16 @@ mod tests {
             &repo,
         );
         reset_cache();
-        let badge = cached_badge(Some(&repo)).expect("a committed repo badges");
+        let badge = cached_badge(Some(&repo), TEST_TTL).expect("a committed repo badges");
         assert_eq!(badge.branch, "feature/gitbadge");
         assert_eq!((badge.ahead, badge.behind), (0, 0));
         // The plain directory next door is not a repo.
         reset_cache();
         let plain = tmp.join("plain");
         std::fs::create_dir_all(&plain).unwrap();
-        assert_eq!(cached_badge(Some(&plain)), None);
+        assert_eq!(cached_badge(Some(&plain), TEST_TTL), None);
         reset_cache();
-        assert_eq!(cached_badge(None), None, "no directory, no badge");
+        assert_eq!(cached_badge(None, TEST_TTL), None, "no directory, no badge");
         let _ = std::fs::remove_dir_all(&tmp);
     }
 
@@ -380,7 +382,7 @@ mod tests {
             );
         }
         assert_eq!(
-            cached_badge(Some(&dir)).map(|b| b.branch),
+            cached_badge(Some(&dir), TEST_TTL).map(|b| b.branch),
             Some("fresh".to_string()),
             "inside the TTL the cached value is served"
         );
@@ -389,7 +391,7 @@ mod tests {
             entries.insert(
                 key,
                 CacheEntry {
-                    at: Instant::now() - STATUS_TTL - Duration::from_millis(1),
+                    at: Instant::now() - TEST_TTL - Duration::from_millis(1),
                     badge: Some(GitBadge {
                         branch: "stale".to_string(),
                         ahead: 0,
@@ -398,7 +400,7 @@ mod tests {
                 },
             );
         }
-        let recomputed = cached_badge(Some(&dir));
+        let recomputed = cached_badge(Some(&dir), TEST_TTL);
         assert_ne!(
             recomputed.map(|b| b.branch),
             Some("stale".to_string()),

@@ -120,7 +120,7 @@ impl SettingsSection {
                 SettingSpec {
                     key: "git-poll-secs",
                     label: "git poll secs",
-                    kind: SettingKind::Number { min: 1, max: 600 },
+                    kind: SettingKind::Number { min: 0, max: 600 },
                 },
                 SettingSpec {
                     key: "agent-rows",
