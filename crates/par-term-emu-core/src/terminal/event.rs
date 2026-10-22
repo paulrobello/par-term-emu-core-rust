@@ -324,9 +324,10 @@ pub enum TerminalEventKind {
 
 impl TerminalEventKind {
     /// Every event kind, in declaration order.
-    pub const ALL: [TerminalEventKind; 26] = [
+    pub const ALL: [TerminalEventKind; 27] = [
         Self::BellRang,
         Self::TitleChanged,
+        Self::PointerShapeChanged,
         Self::SizeChanged,
         Self::ModeChanged,
         Self::GraphicsAdded,
@@ -402,6 +403,54 @@ pub type ShellEvent = (
 mod tests {
     use super::*;
     use crate::terminal::Terminal;
+
+    /// ALL must list every variant. The exhaustive match makes adding a
+    /// variant without visiting this test a compile error, and the pinned
+    /// length fails when ALL omits a kind; the positional parity test in
+    /// `python_bindings` catches reordering and duplicates.
+    #[test]
+    fn all_matches_variant_count() {
+        use TerminalEventKind as K;
+
+        fn exhaustively(kind: &K) -> u8 {
+            match kind {
+                K::BellRang
+                | K::TitleChanged
+                | K::PointerShapeChanged
+                | K::SizeChanged
+                | K::ModeChanged
+                | K::GraphicsAdded
+                | K::HyperlinkAdded
+                | K::DirtyRegion
+                | K::CwdChanged
+                | K::TriggerMatched
+                | K::UserVarChanged
+                | K::ProgressBarChanged
+                | K::BadgeChanged
+                | K::ShellIntegrationEvent
+                | K::ZoneOpened
+                | K::ZoneClosed
+                | K::ZoneScrolledOut
+                | K::EnvironmentChanged
+                | K::RemoteHostTransition
+                | K::SubShellDetected
+                | K::FileTransferStarted
+                | K::FileTransferProgress
+                | K::FileTransferCompleted
+                | K::FileTransferFailed
+                | K::UploadRequested
+                | K::ScreenCleared
+                | K::InlineImageDropped => 1,
+            }
+        }
+
+        let total: usize = TerminalEventKind::ALL
+            .iter()
+            .map(|k| exhaustively(k) as usize)
+            .sum();
+        assert_eq!(total, TerminalEventKind::ALL.len());
+        assert_eq!(TerminalEventKind::ALL.len(), 27);
+    }
 
     #[test]
     fn test_event_kind_bell_rang() {

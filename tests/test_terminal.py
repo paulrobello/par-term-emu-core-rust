@@ -2656,3 +2656,17 @@ def test_osc22_pointer_shape_event():
     changed = [e for e in events if e.get("type") == "pointer_shape_changed"]
     assert changed, "reset event expected"
     assert changed[-1]["shape"] is None
+
+
+def test_pointer_shape_changed_subscription_filter():
+    """Regression: TerminalEventKind::ALL omitted pointer_shape_changed, so a
+    kinds-filtered subscription silently never matched. A filtered observer
+    must still receive the event."""
+    term = Terminal(80, 24)
+    received = []
+    term.add_observer(lambda e: received.append(e), kinds=["pointer_shape_changed"])
+
+    term.process(b"\x1b]22;ew-resize\x1b\\")
+    assert received, "filtered observer must receive pointer_shape_changed"
+    assert received[-1]["type"] == "pointer_shape_changed"
+    assert received[-1]["shape"] == "ew-resize"

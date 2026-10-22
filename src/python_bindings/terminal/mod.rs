@@ -1170,11 +1170,12 @@ impl PyTerminal {
     ///
     /// Args:
     ///     kinds: Optional list of event kinds to receive (strings).
-    ///            Valid kinds: bell, title_changed, size_changed, mode_changed,
-    ///            graphics_added, hyperlink_added, dirty_region, cwd_changed,
-    ///            trigger_matched, user_var_changed, progress_bar_changed,
-    ///            badge_changed, shell_integration, zone_opened, zone_closed,
-    ///            zone_scrolled_out, environment_changed, remote_host_transition,
+    ///            Valid kinds: bell, title_changed, pointer_shape_changed,
+    ///            size_changed, mode_changed, graphics_added, hyperlink_added,
+    ///            dirty_region, cwd_changed, trigger_matched, user_var_changed,
+    ///            progress_bar_changed, badge_changed, shell_integration,
+    ///            zone_opened, zone_closed, zone_scrolled_out,
+    ///            environment_changed, remote_host_transition,
     ///            sub_shell_detected, file_transfer_started,
     ///            file_transfer_progress, file_transfer_completed,
     ///            file_transfer_failed, upload_requested, screen_cleared,
@@ -1679,14 +1680,15 @@ mod tests {
 
     /// The `type` string emitted by `event_fields` and the string matched by
     /// `parse_event_kind` must remain one table (`TerminalEventKind::as_str`);
-    /// these 26 strings are pinned so the two sides cannot drift apart.
+    /// these 27 strings are pinned so the two sides cannot drift apart.
     #[test]
-    fn observer_event_type_strings_round_trip_all_26() {
+    fn observer_event_type_strings_round_trip_all_27() {
         use crate::terminal::TerminalEventKind;
 
-        const TABLE: [&str; 26] = [
+        const TABLE: [&str; 27] = [
             "bell",
             "title_changed",
+            "pointer_shape_changed",
             "size_changed",
             "mode_changed",
             "graphics_added",

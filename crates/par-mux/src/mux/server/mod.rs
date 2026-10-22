@@ -342,7 +342,7 @@ impl MuxServer {
 
         // Linux + the shutdown-inhibit feature: hold a logind delay lock
         // and push a Shutdown save to the worker when the host announces
-        // shutdown (par-mux.md D9). Absent elsewhere and when the system
+        // shutdown (MUX_DECISIONS.md D9). Absent elsewhere and when the system
         // bus is unreachable — the daemon serves on without it.
         #[cfg(all(target_os = "linux", feature = "shutdown-inhibit"))]
         if let Some(tx) = persist_tx.as_ref() {

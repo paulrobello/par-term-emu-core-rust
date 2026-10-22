@@ -64,7 +64,7 @@ ratatui = { version = "0.30", optional = true, default-features = false, feature
 toml_edit = { version = "0.25", optional = true }
 
 [target.'cfg(target_os = "linux")'.dependencies]
-# logind inhibitor for the `shutdown-inhibit` feature (par-mux.md D9);
+# logind inhibitor for the `shutdown-inhibit` feature (MUX_DECISIONS.md D9);
 # async-io is the lightest executor the blocking API runs on.
 zbus = { version = "5", default-features = false, features = ["async-io", "blocking-api"], optional = true }
 
@@ -104,8 +104,8 @@ mux-bin = ["mux", "dep:clap", "dep:clap_complete", "dep:jsonc-parser", "dep:toml
 # The `par-mux attach` client TUI; rides the daemon binary's clap surface.
 attach = ["mux-bin", "dep:crossterm", "dep:ratatui", "dep:toml_edit"]
 # Linux only: hold a logind delay lock and save the session tree when the
-# host announces shutdown (par-mux.md D9). Off by default — zbus is a heavy
-# tree and the Linux CI budget is tight (D9 records the trade); a build
+# host announces shutdown (MUX_DECISIONS.md D9). Off by default — zbus is a heavy
+# tree and the Linux CI budget is tight (D9 in MUX_DECISIONS.md records the trade); a build
 # that wants host-shutdown safety enables it explicitly.
 shutdown-inhibit = ["dep:zbus"]
 
