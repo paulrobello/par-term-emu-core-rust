@@ -139,6 +139,16 @@ impl MuxSessionFactory {
         *self.streaming_server.write() = Some(Arc::downgrade(&server));
     }
 
+    /// Test-only observable: how many mirror links the factory holds.
+    /// The dead-upstream close path's teardown leg removes the link; the
+    /// pre-fix panic at the spawn left it parked forever (the production
+    /// leak). `is_session_alive` cannot discriminate — it flips on the
+    /// `alive` flag well before the close.
+    #[cfg(test)]
+    fn mirror_link_count(&self) -> usize {
+        self.sessions.read().len()
+    }
+
     fn pane_for(
         &self,
         session_id: &str,
@@ -1173,6 +1183,44 @@ mod tests {
             factory
                 .is_session_alive(&session_id)
                 .then(|| "still alive".to_string())
+        });
+    }
+
+    /// The drain thread closes the mirror off the Tokio runtime when the
+    /// daemon dies mid-session: the close must complete — registry removal
+    /// AND the delayed factory teardown — instead of panicking on a bare
+    /// `tokio::spawn` (the production streamer panic at server.rs:551 in
+    /// 0.61.x, observed when the upstream daemon died under live sessions).
+    #[test]
+    fn dead_upstream_closes_the_mirror_off_the_runtime() {
+        let rt = runtime();
+        let _entered = rt.enter();
+        let (_dir, socket, serving, _control, pane) = daemon();
+        let factory = Arc::new(
+            MuxSessionFactory::new(&socket, MuxPaneSelector::FromSessionId)
+                .with_reply_timeout(CEILING),
+        );
+        let server = Arc::new(StreamingServer::with_factory(
+            "127.0.0.1:0".to_string(),
+            StreamingConfig::default(),
+            Arc::clone(&factory) as Arc<dyn SessionFactory>,
+        ));
+        factory.set_streaming_server(Arc::clone(&server));
+        let session_id = format!("pane-{}", pane.trim_start_matches('%'));
+        let session = mirror(&server, &pane);
+
+        // The mirror is live: typed input lands in the pane and its echo
+        // reaches the mirror's terminal.
+        type_line(&session, "echo MIRROR-ALIVE-MARKER");
+        wait_mirror(&session, "MIRROR-ALIVE-MARKER");
+
+        // Kill the upstream: the drain thread sees EOF and closes the
+        // session from a plain std thread, outside any Tokio context.
+        drop(serving);
+        wait("closed mirror and torn-down factory link", || {
+            let closed = server.get_session(&session_id).is_none();
+            let link_count = factory.mirror_link_count();
+            (!(closed && link_count == 0)).then(|| format!("closed={closed} links={link_count}"))
         });
     }
 

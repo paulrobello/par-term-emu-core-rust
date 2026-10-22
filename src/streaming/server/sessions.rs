@@ -89,16 +89,32 @@ impl StreamingServer {
 
     /// Close a session: remove from registry, shut it down, and tear down factory resources.
     /// Factory teardown is delayed 500ms so clients receive the shutdown message.
+    /// Callable from OFF the Tokio runtime: the mux bridge's drain thread
+    /// closes a dead upstream's session from a plain std thread, where a
+    /// bare `tokio::spawn` panics ("no reactor running") and takes the
+    /// streamer down instead of closing the session (server.rs:551 in
+    /// 0.61.x).
     pub fn close_session(&self, session_id: &str, reason: String) -> bool {
         if let Some(session) = self.sessions.remove(session_id) {
             session.shutdown(reason);
             if let Some(ref factory) = self.session_factory {
                 let factory = Arc::clone(factory);
                 let id = session_id.to_string();
-                tokio::spawn(async move {
-                    tokio::time::sleep(Duration::from_millis(500)).await;
+                // The 500ms delay before teardown is load-bearing in both
+                // shapes: clients need it to receive the shutdown message
+                // before the mirror's sink closes.
+                let teardown = move || {
+                    std::thread::sleep(Duration::from_millis(500));
                     factory.teardown_session(&id);
-                });
+                };
+                match tokio::runtime::Handle::try_current() {
+                    Ok(handle) => {
+                        handle.spawn_blocking(teardown);
+                    }
+                    Err(_) => {
+                        std::thread::spawn(teardown);
+                    }
+                }
             }
             crate::debug_info!("STREAMING", "Closed session: {}", session_id);
             true
