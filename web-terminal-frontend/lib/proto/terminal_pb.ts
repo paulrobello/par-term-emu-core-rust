@@ -2427,4 +2427,3 @@ export enum EventType {
  */
 export const EventTypeSchema: GenEnum<EventType> = /*@__PURE__*/
   enumDesc(file_terminal, 0);
-
