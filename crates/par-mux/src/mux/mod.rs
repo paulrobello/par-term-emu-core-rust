@@ -17,6 +17,7 @@ pub mod config;
 pub mod discovery;
 pub mod emit;
 pub(crate) mod foreground;
+pub(crate) mod git_status;
 pub mod hooks;
 pub(crate) mod host_probe;
 pub mod ids;

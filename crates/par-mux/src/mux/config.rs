@@ -403,6 +403,14 @@ pub struct ClientSection {
         skip_serializing_if = "Option::is_none"
     )]
     pub session_picker: Option<bool>,
+    /// The workspace side panel's git badge (` main ↑2` under the
+    /// displayed session's workspace; render mode). Default on.
+    #[serde(
+        default,
+        rename = "git-status",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub git_status: Option<bool>,
     /// The focused pane's border/divider highlight, `#rrggbb` hex. Empty
     /// = the built-in accent (bright cyan). Config-file only, like the
     /// other `[client]` display options.
@@ -537,6 +545,10 @@ pub struct EffectiveConfig {
     /// `#rrggbb` hex); empty = the built-in dim look. File-only: no
     /// attach flag sets it.
     pub border_color: String,
+    /// The sidebar git badge (`[client] git-status`); file-only, no
+    /// attach flag sets it. The daemon-side gate for the snapshot's
+    /// `git` row.
+    pub git_status: bool,
 }
 
 impl Default for EffectiveConfig {
@@ -553,6 +565,7 @@ impl Default for EffectiveConfig {
             exit_empty: true,
             border_active_color: String::new(),
             border_color: String::new(),
+            git_status: true,
         }
     }
 }
@@ -630,6 +643,9 @@ pub fn resolve(file: &ConfigFile, o: &Overrides) -> EffectiveConfig {
     }
     if let Some(v) = file.client.border_color.as_ref() {
         eff.border_color = v.clone();
+    }
+    if file.client.git_status == Some(false) {
+        eff.git_status = false;
     }
     eff
 }
@@ -759,6 +775,7 @@ pub fn render(eff: &EffectiveConfig) -> String {
             drag_cursor_shape: Some(defaults.drag_cursor_shape),
             kitty_graphics: Some(defaults.kitty_graphics),
             session_picker: Some(defaults.session_picker),
+            git_status: Some(defaults.git_status),
             border_active_color: Some(eff.border_active_color.clone()),
             border_color: Some(eff.border_color.clone()),
             theme: Some(defaults.theme.clone()),
@@ -858,6 +875,10 @@ pub struct Chords {
     /// The target-less multi-session picker (config `session-picker`).
     /// Default off. Read at launch: a reload changes the next attach.
     pub session_picker: bool,
+    /// The sidebar's git badge (config `git-status`). Default on. The
+    /// daemon reads it to emit the snapshot's `git` row; the client to
+    /// render the badge and run its refresh poll.
+    pub git_status: bool,
     /// The divider/border glyph set (config `border-lines`): `herdr`,
     /// `unicode`, `double`, `heavy`, or `ascii`. Default `herdr`.
     pub border_lines: String,
@@ -982,6 +1003,7 @@ impl Chords {
             drag_cursor_shape: false,
             kitty_graphics: true,
             session_picker: false,
+            git_status: true,
             border_lines: "herdr".to_string(),
             sidebar_width: 20,
             sidebar_on_launch: true,
@@ -1264,6 +1286,7 @@ pub fn reload_client_chords(file: &ConfigFile, current: &Chords) -> Result<Chord
         .unwrap_or(current.drag_cursor_shape);
     let kitty_graphics = file.client.kitty_graphics.unwrap_or(current.kitty_graphics);
     let session_picker = file.client.session_picker.unwrap_or(current.session_picker);
+    let git_status = file.client.git_status.unwrap_or(current.git_status);
     // The border line style rides as its spelling; an unknown value is
     // the renderer's warn-and-default (the file philosophy), not a
     // reload error.
@@ -1300,6 +1323,7 @@ pub fn reload_client_chords(file: &ConfigFile, current: &Chords) -> Result<Chord
         drag_cursor_shape,
         kitty_graphics,
         session_picker,
+        git_status,
         border_lines,
         sidebar_width,
         sidebar_on_launch,
@@ -1598,6 +1622,7 @@ remain-on-exit = true
             exit_empty: true,
             border_active_color: "#00ff00".into(),
             border_color: "#202020".into(),
+            git_status: true,
         };
         let file: ConfigFile = toml::from_str(&render(&eff)).expect("round-trip parse");
         assert_eq!(resolve(&file, &Overrides::default()), eff);
@@ -1734,6 +1759,33 @@ remain-on-exit = true
         );
         let text = render(&EffectiveConfig::default());
         assert!(text.contains("session-picker = false"), "{text}");
+    }
+
+    /// The git badge key: default ON (unlike `session-picker`), a stated
+    /// key resolves, an absent key keeps the value in force, gen-config
+    /// emits it, and the daemon-side `EffectiveConfig` gate follows the
+    /// file.
+    #[test]
+    fn git_status_defaults_on_resolves_and_reload_keeps_it() {
+        let defaults = Chords::with_defaults();
+        assert!(defaults.git_status, "on by default");
+        let absent: ConfigFile = toml::from_str("[client]\n").unwrap();
+        assert!(reload_client_chords(&absent, &defaults).unwrap().git_status);
+        let off: ConfigFile = toml::from_str("[client]\ngit-status = false\n").unwrap();
+        let chords = reload_client_chords(&off, &defaults).unwrap();
+        assert!(!chords.git_status);
+        assert!(
+            !reload_client_chords(&absent, &chords).unwrap().git_status,
+            "an absent key keeps the value in force (still the false above)"
+        );
+        // The daemon-side EffectiveConfig gate: default on, a false key
+        // turns it off, and gen-config emits the default.
+        let eff = resolve(&ConfigFile::default(), &Overrides::default());
+        assert!(eff.git_status);
+        let off_file: ConfigFile = toml::from_str("[client]\ngit-status = false\n").unwrap();
+        assert!(!resolve(&off_file, &Overrides::default()).git_status);
+        let text = render(&EffectiveConfig::default());
+        assert!(text.contains("git-status = true"), "{text}");
     }
 
     #[test]

@@ -24,7 +24,9 @@ pub use interprocess::local_socket::Stream as LocalStream;
 // The parsers' only consumer is the attach client; the daemon formats.
 #[cfg_attr(not(feature = "attach"), allow(dead_code))]
 pub(crate) mod rows;
-pub(crate) use rows::{AgentRow, PaneInfoRow, SessionRow, WindowRow, WorkspaceRow, WorktreeRow};
+pub(crate) use rows::{
+    AgentRow, GitStatusRow, PaneInfoRow, SessionRow, WindowRow, WorkspaceRow, WorktreeRow,
+};
 
 // Fuzz-only re-export (ENH-060): `rows` is pub(crate), the fuzz crate is an
 // external path dependency, and cargo-fuzz is the only builder that sets the

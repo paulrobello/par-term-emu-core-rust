@@ -325,7 +325,7 @@ fn settings_popup_rows_add_edit_and_delete() {
     std::fs::write(&path, "[client]\nresize-step = 2\n").unwrap();
     session.settings_path = Some(path.clone());
     session.enter_settings();
-    // The general tab (two Tabs): its 6 fixed rows, then the add row.
+    // The general tab (two Tabs): its 7 fixed rows, then the add row.
     session.route_stdin_bytes(&mut conn, b"\t\t");
     let rows = overlay_text(&session);
     assert!(
@@ -333,7 +333,7 @@ fn settings_popup_rows_add_edit_and_delete() {
             .any(|r| r.contains("+ add popup") && r.contains("KEY [WxH] COMMAND")),
         "the add row is listed: {rows:#?}"
     );
-    session.route_stdin_bytes(&mut conn, b"jjjjjj\r");
+    session.route_stdin_bytes(&mut conn, b"jjjjjjj\r");
     assert!(session.is_prompt(), "the add row opens the prompt");
     type_and_commit(&mut session, &mut conn, "t 80%x20 lazygit -p .");
     let written = std::fs::read_to_string(&path).unwrap();

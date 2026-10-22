@@ -371,6 +371,8 @@ The same file's `[client] kitty-graphics` (default `true`) draws the kitty graph
 
 The same file's `[client] session-picker` (default `false`) turns a target-less `par-mux attach` against several sessions into an inline picker (arrow keys or `j`/`k`, Enter attaches, Esc/`q` cancels to the usual refusal) instead of the refusal; it never runs unless stdin and stdout are both terminals. See [MUX.md Attaching from a terminal](MUX.md#attaching-from-a-terminal).
 
+The same file's `[client] git-status` (default `true`) shows herdr's git badge under the displayed session's workspace row in the attach side panel — ` main ↑2`, the active pane's repo branch with its ahead/behind against the upstream (the daemon resolves it per `client-snapshot` request through a 3 s-cached `git status -sb` on the pane's live cwd, falling back to the workspace's launch folder; no repo, a detached HEAD, or `false` shows nothing). `false` is live on reload; the badge also has a settings-dialog row. See [MUX.md Workspace side panel](MUX.md#workspace-side-panel-s).
+
 The same file's `[[client.popup]]` tables (`key`, `command`, optional `width`/`height` as cells or `"N%"`, and `description`) bind popup command windows: prefix + the key runs the command in a floating box over the attach TUI. See [MUX.md Popups](MUX.md#popups).
 
 ### Default Colors

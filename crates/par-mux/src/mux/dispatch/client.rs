@@ -374,6 +374,7 @@ pub(super) fn roster_rows(guard: &MuxTree) -> Vec<String> {
 /// pane %N [<title>]
 /// agent %N <agent> <state> <source> [key=value…]
 /// worktree +W <repo|worktree> <+P|-> <branch|-> <checkout>
+/// git +W <branch> <ahead|-> <behind|->
 /// ```
 ///
 /// `workspace` rows in id order (`*` = the daemon's active workspace);
@@ -382,7 +383,11 @@ pub(super) fn roster_rows(guard: &MuxTree) -> Vec<String> {
 /// window); `pane` rows follow `Window::panes()` with every `\r`/`\n` in
 /// the title turned into a space; `agent` rows are exactly the
 /// `list-agents` rows; `worktree` rows are exactly the `list-worktrees`
-/// rows (the side panel's grouping). Additive rule: clients ignore unknown row kinds and
+/// rows (the side panel's grouping); the `git` row is the displayed
+/// session's workspace's git badge — the active pane's live cwd, else
+/// the workspace's launch folder, resolved through a 3 s-cached
+/// `git status -sb`; absent for a detached HEAD, a non-repo, or when
+/// `[client] git-status` is off. Additive rule: clients ignore unknown row kinds and
 /// trailing `key=value` tokens; a positional change bumps the version.
 pub(super) fn cmd_client_snapshot(ctx: &Ctx<'_>, window: Target<WindowId>) -> Outcome {
     let guard = ctx.tree.lock();
@@ -400,6 +405,7 @@ pub(super) fn cmd_client_snapshot(ctx: &Ctx<'_>, window: Target<WindowId>) -> Ou
     let active_workspace = guard.active_workspace();
     let mut workspaces = guard.workspaces();
     workspaces.sort();
+    let mut owner_workspace = None;
     for ws in workspaces.iter().filter_map(|id| guard.workspace(*id)) {
         let marker = if Some(ws.id) == active_workspace {
             '*'
@@ -407,6 +413,9 @@ pub(super) fn cmd_client_snapshot(ctx: &Ctx<'_>, window: Target<WindowId>) -> Ou
             '-'
         };
         lines.push(format!("workspace {} {marker} {}", ws.id, ws.name));
+        if ws.sessions.contains(&owner) {
+            owner_workspace = Some(ws.id);
+        }
     }
     for ws in workspaces.iter().filter_map(|id| guard.workspace(*id)) {
         for session in ws.sessions.iter().filter_map(|id| guard.session(*id)) {
@@ -445,5 +454,46 @@ pub(super) fn cmd_client_snapshot(ctx: &Ctx<'_>, window: Target<WindowId>) -> Ou
             .into_iter()
             .map(|row| format!("worktree {row}")),
     );
+    drop(guard);
+    // The git badge resolves OUTSIDE the tree lock: the bounded `git
+    // status` behind it (3 s cache) must never stretch the daemon's
+    // dispatch. The chain is the card's: the displayed session's active
+    // pane's live cwd, else the workspace's launch folder.
+    let git_enabled = ctx
+        .config
+        .map(|config| config.lock().git_status)
+        .unwrap_or(true);
+    if git_enabled {
+        if let Some(ws) = owner_workspace {
+            let (pane_cwd, launch) = {
+                let guard = ctx.tree.lock();
+                let cwd = guard
+                    .session(owner)
+                    .and_then(|s| s.windows.get(s.active).copied())
+                    .and_then(|w| guard.window(w))
+                    .map(|w| w.active)
+                    .and_then(|p| guard.pane(p))
+                    .and_then(|pane| pane.persistence_cwd());
+                let launch = guard
+                    .workspace(ws)
+                    .and_then(|ws| ws.worktree.as_ref())
+                    .map(|link| link.checkout.clone());
+                (cwd, launch)
+            };
+            if let Some(badge) = crate::mux::git_status::cached_badge(
+                crate::mux::git_status::badge_dir(pane_cwd.as_deref(), launch.as_deref()),
+            ) {
+                lines.push(format!(
+                    "git {}",
+                    crate::mux::ipc::GitStatusRow {
+                        id: ws.to_string(),
+                        branch: badge.branch,
+                        ahead: badge.ahead,
+                        behind: badge.behind,
+                    }
+                ));
+            }
+        }
+    }
     Outcome::ok(ctx, &lines.join("\n"))
 }

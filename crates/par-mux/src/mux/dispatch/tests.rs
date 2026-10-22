@@ -1509,6 +1509,209 @@ fn client_snapshot_agent_rows_mirror_list_agents() {
     assert_eq!(body.last(), Some(&format!("agent {}", roster[0])));
 }
 
+/// Whether the git binary runs — the repo tests skip (answer nothing)
+/// where it does not.
+fn git_available() -> bool {
+    std::process::Command::new("git")
+        .arg("--version")
+        .output()
+        .is_ok_and(|o| o.status.success())
+}
+
+/// A real one-commit repo under the OS temp dir, branch `name`, plus a
+/// plain (non-repo) sibling. Returns `(repo, plain)`; both removed on
+/// drop.
+struct TempRepo {
+    repo: std::path::PathBuf,
+    plain: std::path::PathBuf,
+}
+
+impl TempRepo {
+    fn new(tag: &str, branch: &str) -> Self {
+        let root = std::env::temp_dir().join(format!(
+            "par-mux-snapshot-{tag}-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        let repo = root.join("repo");
+        let plain = root.join("plain");
+        std::fs::create_dir_all(&repo).unwrap();
+        std::fs::create_dir_all(&plain).unwrap();
+        let git = |args: &[&str]| {
+            std::process::Command::new("git")
+                .args(["-c", "core.fsmonitor=false", "-C"])
+                .arg(&repo)
+                .args(args)
+                .env("GIT_TERMINAL_PROMPT", "0")
+                .output()
+                .unwrap()
+        };
+        git(&["init", "-b", branch]);
+        std::fs::write(repo.join("f.txt"), "x\n").unwrap();
+        git(&["add", "."]);
+        git(&[
+            "-c",
+            "user.name=t",
+            "-c",
+            "user.email=t@t",
+            "commit",
+            "-m",
+            "c",
+        ]);
+        Self { repo, plain }
+    }
+}
+
+impl Drop for TempRepo {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_dir_all(
+            self.repo
+                .parent()
+                .expect("the temp root is the repo's parent"),
+        );
+    }
+}
+
+/// Plant an OSC 7 cwd report in `pane`'s terminal — the chain's
+/// pane-cwd source.
+fn plant_osc7(h: &Harness, pane: crate::mux::ids::PaneId, dir: &std::path::Path) {
+    let mut guard = h.tree.lock();
+    let pane = guard.pane_mut(pane).unwrap();
+    let seq = format!("\x1b]7;file://localhost{}\x07", dir.display());
+    pane.terminal().write().process(seq.as_bytes());
+}
+
+/// The snapshot reply for a harness with the given daemon-side
+/// `[client] git-status` gate (`None` = the no-config dispatch,
+/// enabled). The config copy and the output epoch live in the caller so
+/// the `Ctx` borrows stay valid.
+fn snapshot_with_gate(
+    h: &Harness,
+    git_status: Option<bool>,
+) -> (
+    parking_lot::Mutex<crate::mux::config::EffectiveConfig>,
+    crate::mux::server::OutputEpoch,
+    Vec<String>,
+) {
+    let config = parking_lot::Mutex::new(crate::mux::config::EffectiveConfig {
+        git_status: git_status.unwrap_or(true),
+        ..crate::mux::config::EffectiveConfig::default()
+    });
+    let epoch: crate::mux::server::OutputEpoch = std::sync::Arc::default();
+    let window = h.windows_of(h.session_named("main"))[0];
+    let ctx = Ctx {
+        output_epoch: &epoch,
+        tree: &h.tree,
+        clients: &h.clients,
+        command_number: 7,
+        shutdown: None,
+        client_id: None,
+        config: Some(&config),
+    };
+    let reply = dispatch_command(
+        parse_command(&format!("client-snapshot -t {window}")).unwrap(),
+        &ctx,
+        None,
+        None,
+    );
+    (config, epoch, assert_ok(&reply))
+}
+
+/// The snapshot's `git` row follows the ACTIVE pane's repo through the
+/// real chain: OSC 7-reported cwds in two panes of the displayed
+/// session's active window, the active pane's branch badges. A pane
+/// parked in a non-repo drops the row. (Skipped where git is missing.)
+#[test]
+fn client_snapshot_git_badge_follows_the_active_pane() {
+    if !git_available() {
+        return;
+    }
+    crate::mux::git_status::reset_cache();
+    let repos = TempRepo::new("chain-a", "feat/alpha");
+    let repos_b = TempRepo::new("chain-b", "feat/beta");
+    let h = Harness::new();
+    assert_ok(&h.run("new-session -s main"));
+    let w = h.windows_of(h.session_named("main"))[0];
+    let [p0] = <[_; 1]>::try_from(h.panes_of(w)).unwrap();
+    assert_ok(&h.run(&format!("split-window -t {p0}")));
+    let [p0, p1] = <[_; 2]>::try_from(h.panes_of(w)).unwrap();
+    plant_osc7(&h, p0, &repos.repo);
+    plant_osc7(&h, p1, &repos_b.repo);
+    // split-window activates the NEW pane (p1): its branch badges.
+    let (_, _, body) = snapshot_with_gate(&h, None);
+    let git_rows: Vec<&String> = body.iter().filter(|l| l.starts_with("git ")).collect();
+    assert_eq!(git_rows.len(), 1, "one git row: {body:?}");
+    assert_eq!(
+        crate::mux::ipc::GitStatusRow::parse(git_rows[0].strip_prefix("git ").unwrap())
+            .map(|r| r.branch),
+        Some("feat/beta".to_string()),
+        "{git_rows:?}"
+    );
+    // Selecting the other pane re-points the badge.
+    assert_ok(&h.run(&format!("select-pane -t {p0}")));
+    let (_, _, body) = snapshot_with_gate(&h, None);
+    let git_rows: Vec<&String> = body.iter().filter(|l| l.starts_with("git ")).collect();
+    assert_eq!(
+        crate::mux::ipc::GitStatusRow::parse(git_rows[0].strip_prefix("git ").unwrap())
+            .map(|r| r.branch),
+        Some("feat/alpha".to_string()),
+        "{git_rows:?}"
+    );
+    // A pane parked outside any repo drops the row entirely.
+    plant_osc7(&h, p0, &repos.plain);
+    let (_, _, body) = snapshot_with_gate(&h, None);
+    assert!(
+        !body.iter().any(|l| l.starts_with("git ")),
+        "a non-repo cwd serves no row: {body:?}"
+    );
+}
+
+/// The launch folder stands in when the pane reports no cwd, and the
+/// daemon-side `[client] git-status = false` gate drops the row even
+/// then.
+#[test]
+fn client_snapshot_git_badge_falls_back_and_respects_the_key() {
+    if !git_available() {
+        return;
+    }
+    crate::mux::git_status::reset_cache();
+    let repos = TempRepo::new("fallback", "launch-branch");
+    let h = Harness::new();
+    assert_ok(&h.run("new-session -s main"));
+    let ws = {
+        let guard = h.tree.lock();
+        guard.active_workspace().unwrap()
+    };
+    {
+        let mut guard = h.tree.lock();
+        guard
+            .set_worktree_link(
+                ws,
+                Some(crate::mux::tree::WorktreeLink {
+                    repo: repos.repo.clone(),
+                    checkout: repos.repo.clone(),
+                    branch: Some("launch-branch".to_string()),
+                }),
+            )
+            .unwrap();
+    }
+    // No OSC 7, no child: the pane reports no cwd — the workspace's
+    // launch folder (the link's checkout) answers.
+    let (_, _, body) = snapshot_with_gate(&h, None);
+    let git_rows: Vec<&String> = body.iter().filter(|l| l.starts_with("git ")).collect();
+    assert_eq!(git_rows.len(), 1, "one git row: {body:?}");
+    assert!(git_rows[0].contains(" launch-branch "), "{git_rows:?}");
+    // The daemon-side gate: `[client] git-status = false` drops the row.
+    let (_, _, body) = snapshot_with_gate(&h, Some(false));
+    assert!(
+        !body.iter().any(|l| l.starts_with("git ")),
+        "a disabled key serves no row: {body:?}"
+    );
+}
+
 /// `has-session`: ok on a live session, `%error` naming an absent one —
 /// the exit-code probe agents script against.
 #[test]

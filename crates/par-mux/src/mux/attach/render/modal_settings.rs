@@ -201,6 +201,11 @@ impl SettingsSection {
                     label: "session picker",
                     kind: SettingKind::Toggle,
                 },
+                SettingSpec {
+                    key: "git-status",
+                    label: "git status badge",
+                    kind: SettingKind::Toggle,
+                },
             ],
             Self::Notify => &[
                 SettingSpec {
@@ -457,6 +462,7 @@ pub(super) struct SettingsValues {
     pub drag_cursor_shape: bool,
     pub kitty_graphics: bool,
     pub session_picker: bool,
+    pub git_status: bool,
     pub resize_step: u32,
     pub notify_delivery: String,
     pub notify_states: Vec<String>,
@@ -515,6 +521,7 @@ impl SettingsValues {
             "drag-cursor-shape" => FieldVal::Bool(self.drag_cursor_shape),
             "kitty-graphics" => FieldVal::Bool(self.kitty_graphics),
             "session-picker" => FieldVal::Bool(self.session_picker),
+            "git-status" => FieldVal::Bool(self.git_status),
             "resize-step" => FieldVal::Num(self.resize_step),
             "notify-delivery" => FieldVal::Text(self.notify_delivery.clone()),
             "sound" => FieldVal::Bool(self.sound.enabled),
@@ -826,6 +833,7 @@ impl WindowSession {
             drag_cursor_shape: self.cursor.drag_shape,
             kitty_graphics: self.kitty.enabled,
             session_picker: self.session_picker,
+            git_status: self.git_status,
             resize_step: self.resize_step,
             notify_delivery: self.notify.delivery.name().to_string(),
             notify_states: self.notify.states.clone(),
@@ -1265,6 +1273,7 @@ mod tests {
             drag_cursor_shape: false,
             kitty_graphics: true,
             session_picker: false,
+            git_status: true,
             resize_step: 1,
             notify_delivery: "terminal".to_string(),
             notify_states: vec!["blocked".to_string(), "idle".to_string()],

@@ -153,8 +153,8 @@ fn worktree_create_opens_a_workspace_grouped_under_the_repo_workspace() {
         .collect();
     assert_eq!(worktree_rows.join("\n"), list);
     assert!(
-        snapshot.lines().last().unwrap().starts_with("worktree "),
-        "new row kinds append: {snapshot}"
+        snapshot.lines().last().unwrap().starts_with("git +"),
+        "the git badge row appends after the worktree rows: {snapshot}"
     );
 
     // A second create reuses the open repo workspace.

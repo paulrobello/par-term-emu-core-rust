@@ -872,6 +872,12 @@ struct WindowSession {
     /// The config's `session-picker` (launch-only like
     /// `sidebar_on_launch`: the next target-less attach reads it).
     session_picker: bool,
+    /// The config's `git-status` (the sidebar badge's render gate and
+    /// its idle refresh poll's gate). Live on reload.
+    git_status: bool,
+    /// When the git badge's snapshot re-query last ran
+    /// ([`GIT_POLL_INTERVAL`]'s clock, sidebar.rs).
+    git_poll: std::time::Instant,
     /// The config file the settings dialog writes; set only by a real
     /// attach, so a unit-test session never writes.
     settings_path: Option<std::path::PathBuf>,
@@ -1250,6 +1256,8 @@ impl WindowSession {
             scroll_match_ix: 0,
             sidebar_on_launch: chords.sidebar_on_launch,
             session_picker: chords.session_picker,
+            git_status: chords.git_status,
+            git_poll: std::time::Instant::now(),
             settings_path: None,
             editor_lookup: scrollback_edit::env_editor_lookup,
             popups: chords.popups.clone(),
@@ -1353,6 +1361,14 @@ impl WindowSession {
             //     on its 30 s sweep and broadcasts nothing, so re-query
             //     the roster on a slow cadence until every agent has one.
             if self.project_poll_due(std::time::Instant::now()) {
+                self.status_dirty = true;
+            }
+
+            // 6b. The git badge: the status stream carries no event when
+            //     a repo's branch or ahead/behind changes, so re-query on
+            //     a slow cadence while the panel is up and the key is on
+            //     (the daemon serves the row from its 3 s cache).
+            if self.git_poll_due(std::time::Instant::now()) {
                 self.status_dirty = true;
             }
 

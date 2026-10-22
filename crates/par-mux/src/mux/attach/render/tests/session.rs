@@ -4835,6 +4835,32 @@ fn settings_row_toggles_the_session_picker() {
     assert!(session.session_picker, "applied to the session");
 }
 
+/// The settings dialog's `general` tab lists `git status badge` (default
+/// on) and its toggle writes `git-status = false` into the file and
+/// applies it to the session (the badge's render and poll gate).
+#[test]
+fn settings_row_toggles_the_git_badge() {
+    let (_rx, mut conn, mut session) = command_menu_session("gitbadgesettings");
+    let dir = tempfile::tempdir().expect("tempdir");
+    let path = dir.path().join("config.toml");
+    std::fs::write(&path, "[client]\n").unwrap();
+    session.settings_path = Some(path.clone());
+    session.enter_settings();
+    session.route_stdin_bytes(&mut conn, b"\t\t");
+    let rows = overlay_text(&session);
+    assert!(
+        rows.iter()
+            .any(|r| r.contains("git status badge") && r.contains("on")),
+        "the row shows the default in force: {rows:#?}"
+    );
+    assert!(session.git_status);
+    session.route_stdin_bytes(&mut conn, b"jjjjjj\r");
+    settle(&mut session, &mut conn);
+    let written = std::fs::read_to_string(&path).unwrap();
+    assert!(written.contains("git-status = false"), "{written}");
+    assert!(!session.git_status, "applied to the session");
+}
+
 /// The daemon side of a seed whose target `%1` (window `@0`) resolved
 /// and whose workspace is then torn down, leaving workspace `+1` with
 /// session `$1` and its window `@5` (pane `%7`): the cascade landing's

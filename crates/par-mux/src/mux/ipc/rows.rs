@@ -312,6 +312,79 @@ impl AgentRow {
     }
 }
 
+/// One `client-snapshot` `git` row: `+N <branch> <ahead|->
+/// <behind|->` — the displayed session's workspace's git-badge facts.
+/// `0` is spelled `-` so the row keeps its fixed four-field shape. A
+/// detached HEAD or a non-repo chain emits no row (the sidebar hides
+/// the badge). Like the `worktree` row's branch column, a branch name
+/// containing a space would split the fields — the fixed shape spends
+/// no remainder on the branch.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct GitStatusRow {
+    /// The workspace id, `+N`.
+    pub id: String,
+    /// The checked-out branch.
+    pub branch: String,
+    /// Commits ahead of the upstream (0 with none).
+    pub ahead: u32,
+    /// Commits behind the upstream (0 with none).
+    pub behind: u32,
+}
+
+/// A count column: `0` spells `-`, so a fresh in-sync repo still reads
+/// as four whitespace-free fields.
+fn count_field(count: u32) -> String {
+    if count == 0 {
+        "-".to_string()
+    } else {
+        count.to_string()
+    }
+}
+
+impl fmt::Display for GitStatusRow {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(
+            f,
+            "{} {} {} {}",
+            self.id,
+            self.branch,
+            count_field(self.ahead),
+            count_field(self.behind)
+        )
+    }
+}
+
+impl GitStatusRow {
+    /// Parse one row; `None` when the id is not `+N`, a count is not a
+    /// number or `-`, or a field is missing.
+    pub fn parse(line: &str) -> Option<Self> {
+        let mut fields = line.splitn(4, ' ');
+        let id = fields.next()?;
+        if !is_typed_id(id, '+') {
+            return None;
+        }
+        let branch = fields.next()?.to_string();
+        let ahead = parse_count(fields.next()?)?;
+        let behind = parse_count(fields.next()?)?;
+        Some(Self {
+            id: id.to_string(),
+            branch,
+            ahead,
+            behind,
+        })
+    }
+}
+
+/// A `-` or a `0`-less count: `0` is spelled `-` on the wire so the row
+/// keeps its fixed shape, and a bare `0` parses back the same.
+fn parse_count(field: &str) -> Option<u32> {
+    match field {
+        "-" => Some(0),
+        n if n.bytes().all(|b| b.is_ascii_digit()) && !n.is_empty() => n.parse().ok(),
+        _ => None,
+    }
+}
+
 /// Fuzz/test invariant (ENH-060): every parser either rejects `line` or
 /// returns a row whose `Display` parses back to the same row.
 #[cfg(any(test, fuzzing))]
@@ -342,6 +415,13 @@ pub fn assert_round_trip(line: &str) {
             WorktreeRow::parse(&row.to_string()),
             Some(row),
             "worktree: {line:?}"
+        );
+    }
+    if let Some(row) = GitStatusRow::parse(line) {
+        assert_eq!(
+            GitStatusRow::parse(&row.to_string()),
+            Some(row),
+            "git: {line:?}"
         );
     }
     if let Some(row) = AgentRow::parse(line) {
@@ -641,6 +721,52 @@ mod tests {
         assert_eq!(WorktreeRow::parse("+3 other +2 feat /r/a"), None);
         assert_eq!(WorktreeRow::parse("+3 worktree %2 feat /r/a"), None);
         assert_eq!(WorktreeRow::parse("+3 worktree +2 feat"), None);
+    }
+
+    /// The git badge row: golden wire line, round-trip, and the fixed
+    /// shape's rejects (`-` is 0; a bare `0` parses back the same).
+    #[test]
+    fn git_status_row_round_trips() {
+        let rows = [
+            GitStatusRow {
+                id: "+0".to_string(),
+                branch: "main".to_string(),
+                ahead: 0,
+                behind: 0,
+            },
+            GitStatusRow {
+                id: "+2".to_string(),
+                branch: "feature/x".to_string(),
+                ahead: 2,
+                behind: 0,
+            },
+            GitStatusRow {
+                id: "+7".to_string(),
+                branch: "dev".to_string(),
+                ahead: 1,
+                behind: 3,
+            },
+        ];
+        for row in rows {
+            assert_eq!(GitStatusRow::parse(&row.to_string()), Some(row));
+        }
+        assert_eq!(
+            GitStatusRow {
+                id: "+0".to_string(),
+                branch: "main".to_string(),
+                ahead: 0,
+                behind: 0
+            }
+            .to_string(),
+            "+0 main - -"
+        );
+        assert_eq!(
+            GitStatusRow::parse("+2 feat 2 -").map(|r| (r.id, r.branch, r.ahead, r.behind)),
+            Some(("+2".to_string(), "feat".to_string(), 2, 0))
+        );
+        assert_eq!(GitStatusRow::parse("%0 main - -"), None, "wrong id prefix");
+        assert_eq!(GitStatusRow::parse("+0 main x -"), None, "bad count");
+        assert_eq!(GitStatusRow::parse("+0 main -"), None, "missing field");
     }
 
     #[test]

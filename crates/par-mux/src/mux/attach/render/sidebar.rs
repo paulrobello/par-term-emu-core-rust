@@ -362,6 +362,41 @@ pub(super) fn group_worktree_rows(
     section.rows = out;
 }
 
+/// The displayed session's workspace's git badge: ` main ↑2` as that
+/// workspace row's continuation line, when the snapshot's `git` row
+/// names the DISPLAYED session's workspace (`session_workspace`) — one
+/// badge for what's on screen. Pure — the unit-test surface.
+pub(super) fn apply_git_badge(
+    sections: &mut [SidebarSection],
+    git: Option<&crate::mux::ipc::GitStatusRow>,
+    displayed_workspace: Option<&str>,
+) {
+    let (Some(row), Some(ws)) = (git, displayed_workspace) else {
+        return;
+    };
+    if row.id != ws {
+        return;
+    }
+    let Some(section) = sections.iter_mut().find(|s| s.title == "workspaces") else {
+        return;
+    };
+    let Some(target) = section
+        .rows
+        .iter_mut()
+        .find(|r| matches!(&r.id, SidebarRowId::Workspace(id) if id == ws))
+    else {
+        return;
+    };
+    let mut badge = format!(" {}", row.branch);
+    if row.ahead > 0 {
+        badge.push_str(&format!(" \u{2191}{}", row.ahead));
+    }
+    if row.behind > 0 {
+        badge.push_str(&format!(" \u{2193}{}", row.behind));
+    }
+    target.continuation = vec![badge];
+}
+
 /// A sidebar drag in flight: the width handle on the strip's right
 /// edge, or the split rule between the areas.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -384,6 +419,11 @@ pub(super) enum SidebarDrag {
 /// How often the roster re-queries while a panel agent's project is
 /// unknown — a third of the host probe's 30 s sweep.
 pub(super) const PROJECT_POLL_INTERVAL: std::time::Duration = std::time::Duration::from_secs(10);
+
+/// How often the git badge's snapshot re-query runs while the panel is
+/// up: the badge's idle staleness bound (the daemon serves from its 3 s
+/// cache, so a poll lands fresh rows within this cadence).
+pub(super) const GIT_POLL_INTERVAL: std::time::Duration = std::time::Duration::from_secs(10);
 
 /// The panel width bounds: the footer chips need 12 columns; 60 keeps
 /// the panes usable on every host this targets.
@@ -474,6 +514,21 @@ impl WindowSession {
             return true;
         }
         false
+    }
+
+    /// Whether the git badge's snapshot re-query is due: the key is on,
+    /// the panel is up, and the last poll is [`GIT_POLL_INTERVAL`] old.
+    /// The status stream is event-driven, so without this poll a repo
+    /// that changed while idle would keep a stale badge until the next
+    /// event; the poll restarts the clock.
+    pub(super) fn git_poll_due(&mut self, now: std::time::Instant) -> bool {
+        let due = self.git_status
+            && self.sidebar.is_on()
+            && now.duration_since(self.git_poll) >= GIT_POLL_INTERVAL;
+        if due {
+            self.git_poll = now;
+        }
+        due
     }
 
     /// Press on the strip's right edge: start a width drag.
@@ -627,6 +682,11 @@ impl WindowSession {
         );
         if let Some(sections) = sections.as_mut() {
             group_worktree_rows(sections, self.status.worktrees());
+            apply_git_badge(
+                sections,
+                self.status.git(),
+                self.status.session_workspace.as_deref(),
+            );
         }
         self.renderer.set_sidebar_sections(sections);
     }
@@ -747,5 +807,62 @@ impl WindowSession {
         } else {
             Some(sections)
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn ws_row(id: &str) -> SidebarRow {
+        SidebarRow {
+            id: SidebarRowId::Workspace(id.to_string()),
+            label: "repo".to_string(),
+            active: false,
+            status: AgentStatus::None,
+            continuation: Vec::new(),
+        }
+    }
+
+    /// The badge rides the displayed session's workspace row, with the
+    /// herdr arrows; a row naming another workspace, or no row at all,
+    /// leaves the sections alone.
+    #[test]
+    fn git_badge_lands_on_the_displayed_workspace() {
+        let badge = |ahead: u32, behind: u32| crate::mux::ipc::GitStatusRow {
+            id: "+0".to_string(),
+            branch: "main".to_string(),
+            ahead,
+            behind,
+        };
+        let mut sections = vec![SidebarSection {
+            title: "workspaces",
+            rows: vec![ws_row("+0"), ws_row("+1")],
+        }];
+        apply_git_badge(&mut sections, Some(&badge(2, 0)), Some("+0"));
+        assert_eq!(sections[0].rows[0].continuation, vec![" main \u{2191}2"]);
+        assert!(sections[0].rows[1].continuation.is_empty(), "untouched");
+        apply_git_badge(&mut sections, Some(&badge(0, 3)), Some("+0"));
+        assert_eq!(sections[0].rows[0].continuation, vec![" main \u{2193}3"]);
+        apply_git_badge(&mut sections, Some(&badge(1, 1)), Some("+0"));
+        assert_eq!(
+            sections[0].rows[0].continuation,
+            vec![" main \u{2191}1 \u{2193}1"]
+        );
+        // A row naming another workspace leaves the sections alone (the
+        // builder rebuilds them fresh each refresh, so no stale badge
+        // can persist across renders).
+        apply_git_badge(&mut sections, Some(&badge(0, 0)), Some("+1"));
+        assert_eq!(
+            sections[0].rows[0].continuation,
+            vec![" main \u{2191}1 \u{2193}1"],
+            "a foreign workspace's row never lands"
+        );
+        apply_git_badge(&mut sections, None, Some("+0"));
+        assert_eq!(
+            sections[0].rows[0].continuation,
+            vec![" main \u{2191}1 \u{2193}1"],
+            "a no-row refresh leaves the rebuilt sections untouched"
+        );
     }
 }

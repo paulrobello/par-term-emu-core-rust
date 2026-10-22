@@ -24,7 +24,7 @@
 
 use super::conn::AttachConn;
 use super::spell_key;
-use crate::mux::ipc::{AgentRow, WindowRow, WorktreeRow};
+use crate::mux::ipc::{AgentRow, GitStatusRow, WindowRow, WorktreeRow};
 use ratatui::buffer::{Buffer, Cell as RtCell};
 use ratatui::layout::Rect as RtRect;
 use ratatui::style::{Color as RtColor, Modifier as RtModifier, Style as RtStyle};
@@ -222,6 +222,11 @@ pub(crate) struct StatusState {
     /// last `client-snapshot`; empty on the legacy query path) — the side
     /// panel groups linked worktree workspaces under their repo's.
     worktrees: Vec<WorktreeRow>,
+    /// The displayed session's workspace's git badge, from the last
+    /// `client-snapshot`'s `git` row (`None` on the legacy query path,
+    /// for a non-repo or detached-HEAD chain, and from a pre-`git`-row
+    /// daemon — the sidebar hides the badge in every case).
+    git: Option<GitStatusRow>,
 }
 
 /// One agent-roster row the client knows (ARC-140).
@@ -390,6 +395,10 @@ impl StatusState {
         let mut facts = StatusFacts::default();
         let mut owner = None;
         let mut owner_workspace = None;
+        // The git row commits straight onto the state (not through
+        // `StatusFacts`' keep-previous rule): a snapshot without one is
+        // the daemon's answer "no badge", never a failed query.
+        let mut git_row = None;
         for line in &body[1..] {
             let Some((kind, rest)) = line.split_once(' ') else {
                 continue;
@@ -455,6 +464,13 @@ impl StatusState {
                         facts.worktrees.get_or_insert_with(Vec::new).push(row);
                     }
                 }
+                "git" => {
+                    // The snapshot is the git row's only emitter and the
+                    // reply is authoritative: a body without one clears
+                    // the badge (the repo left, or the key was disabled
+                    // daemon-side).
+                    git_row = GitStatusRow::parse(rest);
+                }
                 _ => {}
             }
         }
@@ -472,6 +488,7 @@ impl StatusState {
         facts.pane_titles.get_or_insert_with(Vec::new);
         facts.agents.get_or_insert_with(Vec::new);
         facts.worktrees.get_or_insert_with(Vec::new);
+        self.git = git_row;
         Ok(self.commit(facts).unwrap_or_default())
     }
 
@@ -605,6 +622,13 @@ impl StatusState {
     /// order — the side panel's grouping source.
     pub(crate) fn worktrees(&self) -> &[WorktreeRow] {
         &self.worktrees
+    }
+
+    /// The displayed session's workspace's git badge, `None` when the
+    /// daemon serves none (non-repo, detached HEAD, disabled, or a
+    /// pre-`git`-row daemon).
+    pub(crate) fn git(&self) -> Option<&GitStatusRow> {
+        self.git.as_ref()
     }
 
     /// The focused pane's user title (the rename-pane prompt's seed).
@@ -1039,6 +1063,7 @@ mod tests {
                 kimi
             }],
             worktrees: Vec::new(),
+            git: None,
         }
     }
 
@@ -1122,6 +1147,23 @@ mod tests {
         let mut plain = StatusState::default();
         plain.apply_snapshot(&snapshot_body()).unwrap();
         assert_eq!(got, plain);
+    }
+
+    /// The snapshot's `git` row commits the badge; a snapshot without
+    /// one clears it (the reply is authoritative).
+    #[test]
+    fn apply_snapshot_commits_the_git_row_and_clears_without_one() {
+        let mut body = snapshot_body();
+        body.push("git +0 main 2 1".to_string());
+        let mut got = StatusState::default();
+        got.apply_snapshot(&body).expect("applies");
+        assert_eq!(
+            got.git()
+                .map(|r| (r.id.as_str(), r.branch.as_str(), r.ahead, r.behind)),
+            Some(("+0", "main", 2, 1))
+        );
+        got.apply_snapshot(&snapshot_body()).expect("applies");
+        assert!(got.git().is_none(), "no row clears the badge");
     }
 
     /// ENH-053: the legacy row shapes for `snapshot_body()`'s contents
