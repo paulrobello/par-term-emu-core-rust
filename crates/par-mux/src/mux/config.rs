@@ -503,6 +503,17 @@ pub struct DaemonSection {
         skip_serializing_if = "Option::is_none"
     )]
     pub exit_empty: Option<bool>,
+    /// What a `split-window` pane starts in when no `-c` is given:
+    /// `home-dir` (the default), `previous-pane-dir` (the target pane's
+    /// live cwd), or `workspace-dir` (the workspace's launch folder — a
+    /// plain workspace has none and keeps the home default). Any other
+    /// spelling keeps the home default.
+    #[serde(
+        default,
+        rename = "split-start-dir",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub split_start_dir: Option<String>,
 }
 
 /// The fully resolved settings after flags > env > file > defaults.
@@ -549,6 +560,12 @@ pub struct EffectiveConfig {
     /// attach flag sets it. The daemon-side gate for the snapshot's
     /// `git` row.
     pub git_status: bool,
+    /// What a `split-window` pane starts in when no `-c` is given
+    /// (`[daemon] split-start-dir`): `home-dir` | `previous-pane-dir` |
+    /// `workspace-dir`; any other spelling keeps the home default. The
+    /// third live daemon setting: read at each split, so `reload-config`
+    /// applies a change at once.
+    pub split_start_dir: String,
 }
 
 impl Default for EffectiveConfig {
@@ -566,6 +583,7 @@ impl Default for EffectiveConfig {
             border_active_color: String::new(),
             border_color: String::new(),
             git_status: true,
+            split_start_dir: "home-dir".to_string(),
         }
     }
 }
@@ -635,6 +653,11 @@ pub fn resolve(file: &ConfigFile, o: &Overrides) -> EffectiveConfig {
     }
     if let Some(v) = file.daemon.exit_empty {
         eff.exit_empty = v;
+    }
+    // split-start-dir is file-only daemon behavior (no flag or env
+    // tier); an unknown spelling keeps the home default.
+    if let Some(v) = file.daemon.split_start_dir.as_ref() {
+        eff.split_start_dir = v.clone();
     }
     // The border colors are file-only `[client]` options, like every
     // other client display option.
@@ -790,6 +813,7 @@ pub fn render(eff: &EffectiveConfig) -> String {
             expose_control_socket: Some(eff.expose_control_socket),
             remain_on_exit: Some(eff.remain_on_exit),
             exit_empty: Some(eff.exit_empty),
+            split_start_dir: Some(eff.split_start_dir.clone()),
         },
         machines: Default::default(),
     };
@@ -1346,11 +1370,12 @@ pub fn reload_client_chords(file: &ConfigFile, current: &Chords) -> Result<Chord
 /// flag is an override the file cannot express, so it never reads back
 /// as a change).
 ///
-/// `daemon.remain-on-exit` and `daemon.exit-empty` are the LIVE settings: a
-/// stated difference is applied to `applied` and reported `applied:`;
-/// every other stated difference is `restart-required:` — the socket and
-/// the persist path are fixed at bind, and the boot-tier bools (pane
-/// endpoints, expose-control-socket) decide how the daemon was built.
+/// `daemon.remain-on-exit`, `daemon.exit-empty`, and
+/// `daemon.split-start-dir` are the LIVE settings: a stated difference
+/// is applied to `applied` and reported `applied:`; every other stated
+/// difference is `restart-required:` — the socket and the persist path
+/// are fixed at bind, and the boot-tier bools (pane endpoints,
+/// expose-control-socket) decide how the daemon was built.
 pub fn reload_report(applied: &mut EffectiveConfig, file: Option<&ConfigFile>) -> String {
     let Some(file) = file else {
         // Absent file: nothing changed.
@@ -1361,6 +1386,7 @@ pub fn reload_report(applied: &mut EffectiveConfig, file: Option<&ConfigFile>) -
             "unchanged: daemon.expose-control-socket",
             "unchanged: daemon.remain-on-exit",
             "unchanged: daemon.exit-empty",
+            "unchanged: daemon.split-start-dir",
         ]
         .join("\n");
     };
@@ -1412,6 +1438,13 @@ pub fn reload_report(applied: &mut EffectiveConfig, file: Option<&ConfigFile>) -
             "applied: daemon.exit-empty".to_string()
         }
         _ => "unchanged: daemon.exit-empty".to_string(),
+    });
+    lines.push(match file.daemon.split_start_dir.as_deref() {
+        Some(v) if v != applied.split_start_dir => {
+            applied.split_start_dir = v.to_string();
+            "applied: daemon.split-start-dir".to_string()
+        }
+        _ => "unchanged: daemon.split-start-dir".to_string(),
     });
     lines.join("\n")
 }
@@ -1623,6 +1656,7 @@ remain-on-exit = true
             border_active_color: "#00ff00".into(),
             border_color: "#202020".into(),
             git_status: true,
+            split_start_dir: "previous-pane-dir".into(),
         };
         let file: ConfigFile = toml::from_str(&render(&eff)).expect("round-trip parse");
         assert_eq!(resolve(&file, &Overrides::default()), eff);

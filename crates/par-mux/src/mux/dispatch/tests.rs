@@ -583,13 +583,14 @@ fn reload_config_reports_restart_required_per_changed_setting() {
     let reply = dispatch_command(parse_command("reload-config").unwrap(), &ctx, None, None);
     let unchanged = reply.lines().filter(|l| l.contains("unchanged:")).count();
     assert_eq!(
-        unchanged, 6,
+        unchanged, 7,
         "an absent file leaves every setting unchanged: {reply}"
     );
     // The pure report over a written file: the moved/flipped settings
-    // are restart-required, the unstated one stays unchanged.
+    // are restart-required, the live trio applies, the unstated one
+    // stays unchanged.
     let file: crate::mux::config::ConfigFile =
-        toml::from_str("[daemon]\nstate-dir = \"/tmp/new-state\"\npane-endpoints = true\n")
+        toml::from_str("[daemon]\nstate-dir = \"/tmp/new-state\"\npane-endpoints = true\nsplit-start-dir = \"workspace-dir\"\n")
             .unwrap();
     let mut applied_copy = applied.lock().clone();
     let report = crate::mux::config::reload_report(&mut applied_copy, Some(&file));
@@ -600,6 +601,11 @@ fn reload_config_reports_restart_required_per_changed_setting() {
     assert!(
         report.contains("restart-required: daemon.pane-endpoints"),
         "the flipped bool is reported: {report}"
+    );
+    assert!(
+        report.contains("applied: daemon.split-start-dir")
+            && applied_copy.split_start_dir == "workspace-dir",
+        "the live split-start-dir applies: {report}"
     );
     assert!(
         report.contains("unchanged: daemon.socket"),
@@ -774,6 +780,26 @@ struct Harness {
 impl Harness {
     fn new() -> Self {
         let tree = Arc::new(Mutex::new(MuxTree::new(Box::new(DeadPaneFactory))));
+        let clients: crate::mux::server::Clients = Arc::new(Mutex::new(Vec::new()));
+        let (sink_tx, sink) = std::sync::mpsc::sync_channel(4096);
+        clients.lock().push((
+            u64::MAX,
+            sink_tx,
+            Arc::new(AtomicUsize::new(0)),
+            Arc::new(AtomicBool::new(false)),
+            crate::mux::ipc::ConnectionAbort::none(),
+        ));
+        Self {
+            tree,
+            clients,
+            sink,
+        }
+    }
+
+    /// The process-free harness over a caller-supplied factory — the
+    /// cwd-recording split-start-dir tests' shape.
+    fn with_factory(factory: Box<dyn PaneFactory>) -> Self {
+        let tree = Arc::new(Mutex::new(MuxTree::new(factory)));
         let clients: crate::mux::server::Clients = Arc::new(Mutex::new(Vec::new()));
         let (sink_tx, sink) = std::sync::mpsc::sync_channel(4096);
         clients.lock().push((
@@ -1709,6 +1735,193 @@ fn client_snapshot_git_badge_falls_back_and_respects_the_key() {
     assert!(
         !body.iter().any(|l| l.starts_with("git ")),
         "a disabled key serves no row: {body:?}"
+    );
+}
+
+/// Records the per-spawn cwd each `create_pane` receives, then builds a
+/// dead pane — the split-start-dir tests assert the dispatch→factory
+/// handoff exactly, with no process involved (the harness's dead panes
+/// have no child, so a kernel-cwd read can never answer).
+struct CwdRecordingFactory {
+    cwds: Arc<Mutex<Vec<Option<std::path::PathBuf>>>>,
+}
+
+impl PaneFactory for CwdRecordingFactory {
+    fn create_pane(
+        &self,
+        id: PaneId,
+        cols: u16,
+        rows: u16,
+        command: Option<&str>,
+        context: &SpawnContext<'_>,
+    ) -> Result<MuxPane, MuxError> {
+        self.cwds
+            .lock()
+            .push(context.cwd.map(std::path::Path::to_path_buf));
+        DeadPaneFactory.create_pane(id, cols, rows, command, context)
+    }
+
+    fn create_dead_pane(
+        &self,
+        id: PaneId,
+        cols: u16,
+        rows: u16,
+        command: Option<&str>,
+        exit_code: Option<i32>,
+    ) -> Result<MuxPane, MuxError> {
+        DeadPaneFactory.create_dead_pane(id, cols, rows, command, exit_code)
+    }
+}
+
+/// `[daemon] split-start-dir = "previous-pane-dir"`: a `split-window`
+/// with no `-c` starts the new pane in the target pane's live cwd (the
+/// same OSC 7-tracked cwd the git badge resolves), while an explicit
+/// `-c` always wins.
+#[test]
+fn split_window_start_dir_previous_pane_dir_and_explicit_c_wins() {
+    let recorded = Arc::new(Mutex::new(Vec::<Option<std::path::PathBuf>>::new()));
+    let h = Harness::with_factory(Box::new(CwdRecordingFactory {
+        cwds: recorded.clone(),
+    }));
+    assert_ok(&h.run("new-session -s main"));
+    let w = h.windows_of(h.session_named("main"))[0];
+    let [p0] = <[_; 1]>::try_from(h.panes_of(w)).unwrap();
+    let dir = tempfile::tempdir().unwrap();
+    plant_osc7(&h, p0, dir.path());
+    let config = Mutex::new(crate::mux::config::EffectiveConfig {
+        split_start_dir: "previous-pane-dir".to_string(),
+        ..crate::mux::config::EffectiveConfig::default()
+    });
+    let run = |line: &str| {
+        let __output_epoch: crate::mux::server::OutputEpoch = std::sync::Arc::default();
+        let ctx = Ctx {
+            output_epoch: &__output_epoch,
+            tree: &h.tree,
+            clients: &h.clients,
+            command_number: 7,
+            shutdown: None,
+            config: Some(&config),
+            client_id: None,
+        };
+        dispatch_command(parse_command(line).unwrap(), &ctx, None, None)
+    };
+    assert_ok(&run(&format!("split-window -t {p0}")));
+    let recorded_cwd = |recorded: &Arc<Mutex<Vec<Option<std::path::PathBuf>>>>| {
+        recorded.lock().last().cloned().flatten()
+    };
+    assert_eq!(
+        recorded_cwd(&recorded).as_deref(),
+        Some(dir.path()),
+        "the new pane spawns in the target pane's cwd: {:?}",
+        recorded.lock()
+    );
+    // An explicit `-c` beats the setting.
+    let override_dir = tempfile::tempdir().unwrap();
+    assert_ok(&run(&format!(
+        "split-window -t {p0} -c {}",
+        override_dir.path().display()
+    )));
+    assert_eq!(
+        recorded_cwd(&recorded).as_deref(),
+        Some(override_dir.path()),
+        "the explicit -c wins: {:?}",
+        recorded.lock()
+    );
+}
+
+/// `[daemon] split-start-dir = "workspace-dir"`: the new pane starts in
+/// the workspace's launch folder (its worktree link's checkout); a
+/// workspace without a link, and an unknown spelling, keep the factory
+/// default (`None` = home in the real daemon).
+#[test]
+fn split_window_start_dir_workspace_dir_and_unknown_value_fall_back() {
+    let recorded = Arc::new(Mutex::new(Vec::<Option<std::path::PathBuf>>::new()));
+    let h = Harness::with_factory(Box::new(CwdRecordingFactory {
+        cwds: recorded.clone(),
+    }));
+    assert_ok(&h.run("new-session -s main"));
+    let w = h.windows_of(h.session_named("main"))[0];
+    let [p0] = <[_; 1]>::try_from(h.panes_of(w)).unwrap();
+    let checkout = tempfile::tempdir().unwrap();
+    let ws = {
+        let guard = h.tree.lock();
+        guard.active_workspace().unwrap()
+    };
+    {
+        let mut guard = h.tree.lock();
+        guard
+            .set_worktree_link(
+                ws,
+                Some(crate::mux::tree::WorktreeLink {
+                    repo: checkout.path().to_path_buf(),
+                    checkout: checkout.path().to_path_buf(),
+                    branch: Some("main".to_string()),
+                }),
+            )
+            .unwrap();
+    }
+    let config = Mutex::new(crate::mux::config::EffectiveConfig {
+        split_start_dir: "workspace-dir".to_string(),
+        ..crate::mux::config::EffectiveConfig::default()
+    });
+    let run = |line: &str| {
+        let __output_epoch: crate::mux::server::OutputEpoch = std::sync::Arc::default();
+        let ctx = Ctx {
+            output_epoch: &__output_epoch,
+            tree: &h.tree,
+            clients: &h.clients,
+            command_number: 7,
+            shutdown: None,
+            config: Some(&config),
+            client_id: None,
+        };
+        dispatch_command(parse_command(line).unwrap(), &ctx, None, None)
+    };
+    assert_ok(&run(&format!("split-window -t {p0}")));
+    let recorded_cwd = |recorded: &Arc<Mutex<Vec<Option<std::path::PathBuf>>>>| {
+        recorded.lock().last().cloned().flatten()
+    };
+    assert_eq!(
+        recorded_cwd(&recorded).as_deref(),
+        Some(checkout.path()),
+        "the new pane spawns in the launch folder: {:?}",
+        recorded.lock()
+    );
+    // A workspace without a worktree link keeps the factory default.
+    let mut guard = h.tree.lock();
+    guard.set_worktree_link(ws, None).unwrap();
+    drop(guard);
+    assert_ok(&run(&format!("split-window -t {p0}")));
+    assert_eq!(
+        recorded_cwd(&recorded),
+        None,
+        "no launch folder, no setting dir: {:?}",
+        recorded.lock()
+    );
+    // An unknown spelling keeps the factory default too.
+    let config = Mutex::new(crate::mux::config::EffectiveConfig {
+        split_start_dir: "bogus-value".to_string(),
+        ..crate::mux::config::EffectiveConfig::default()
+    });
+    let run = |line: &str| {
+        let __output_epoch: crate::mux::server::OutputEpoch = std::sync::Arc::default();
+        let ctx = Ctx {
+            output_epoch: &__output_epoch,
+            tree: &h.tree,
+            clients: &h.clients,
+            command_number: 7,
+            shutdown: None,
+            config: Some(&config),
+            client_id: None,
+        };
+        dispatch_command(parse_command(line).unwrap(), &ctx, None, None)
+    };
+    assert_ok(&run(&format!("split-window -t {p0}")));
+    assert_eq!(
+        recorded_cwd(&recorded),
+        None,
+        "an unknown spelling keeps the default: {:?}",
+        recorded.lock()
     );
 }
 

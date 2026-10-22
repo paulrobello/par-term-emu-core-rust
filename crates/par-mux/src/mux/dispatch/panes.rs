@@ -274,6 +274,10 @@ pub(super) fn cmd_split_window(
     start_dir: Option<&str>,
     command: Option<&str>,
 ) -> Outcome {
+    let mode = ctx
+        .config
+        .map(|config| config.lock().split_start_dir.clone())
+        .unwrap_or_default();
     let (cwd, note) = resolve_start_dir(start_dir);
     // Two-phase spawn (ARC-022): resolve + reserve under the lock, fork/exec
     // off it, re-lock to insert, wire, and shape the layout. A target killed
@@ -286,6 +290,23 @@ pub(super) fn cmd_split_window(
             Ok(id) => id,
             Err(err) => return Outcome::err(ctx, &err.to_string()),
         };
+        // No `-c`: the daemon's split-start-dir setting picks the start
+        // directory (an explicit `-c` always wins; `home-dir` and an
+        // unknown spelling keep the factory default). A setting source
+        // that is gone (a stale pane cwd, a workspace without a launch
+        // folder) keeps the factory default too.
+        let cwd = cwd.or_else(|| {
+            match mode.as_str() {
+                "previous-pane-dir" => guard.pane(pane).and_then(|p| p.persistence_cwd()),
+                "workspace-dir" => guard
+                    .workspace_of_pane(pane)
+                    .and_then(|ws| guard.workspace(ws))
+                    .and_then(|ws| ws.worktree.as_ref())
+                    .map(|link| link.checkout.clone()),
+                _ => None,
+            }
+            .filter(|dir| dir.is_dir())
+        });
         match guard.begin_split(
             pane,
             direction,
