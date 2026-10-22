@@ -1371,7 +1371,12 @@ fn render_mode_zoom_rename_border_chords() {
     // borders), so the first press turns them off.
     host.to_child.write_all(&[0x02, b'l']).expect("prefix l");
     host.to_child.flush().ok();
-    let mut got = wait_for_output(&host, b"labels", Duration::from_secs(10));
+    // The exact phrase, not the shared `labels` stem: under runner load the
+    // FIRST press's flash can arrive after this wait starts, and a stem
+    // needle then returns press 1's window — press 2's flash never enters
+    // `got` and the screen assert below fails (measured on macos-latest,
+    // run 39700463900).
+    let mut got = wait_for_output(&host, b"labels off", Duration::from_secs(10));
     got.extend(wait_for_output(
         &host,
         b"\x00-never",
@@ -1392,7 +1397,7 @@ fn render_mode_zoom_rename_border_chords() {
         .write_all(&[0x02, b'l'])
         .expect("prefix l again");
     host.to_child.flush().ok();
-    let mut got = wait_for_output(&host, b"labels", Duration::from_secs(10));
+    let mut got = wait_for_output(&host, b"labels on", Duration::from_secs(10));
     got.extend(wait_for_output(
         &host,
         b"\x00-never",
