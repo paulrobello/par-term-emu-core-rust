@@ -532,6 +532,9 @@ mod tests {
             ServerMessage::AgentStateChanged { agent, released } => {
                 assert!(!released);
                 assert_eq!((agent.pane_id, agent.state.as_str()), (3, "working"));
+                // State pushes carry no title: the delta keeps the label
+                // the snapshot fetched for its pane.
+                assert_eq!(agent.pane_label, "zed");
             }
             other => panic!("expected delta, got {other:?}"),
         }
