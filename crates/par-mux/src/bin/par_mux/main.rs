@@ -1670,6 +1670,10 @@ fn run_daemon(cli: Cli, path: std::path::PathBuf) -> std::io::Result<std::proces
     };
     // Publish the applied settings: `reload-config` diffs its re-read
     // against this copy (restart-required vs unchanged, per setting).
+    // The copy carries the file it was resolved from so the reload
+    // re-reads THAT path, not whatever the env resolves to later.
+    let mut eff = eff;
+    eff.config_path = config::config_file_path();
     server.set_config(std::sync::Arc::new(parking_lot::Mutex::new(eff.clone())));
     log::info!("par-mux listening on {}", path.display());
 

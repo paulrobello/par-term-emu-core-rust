@@ -580,6 +580,14 @@ pub struct EffectiveConfig {
     /// third live daemon setting: read at each split, so `reload-config`
     /// applies a change at once.
     pub split_start_dir: String,
+    /// The config file this copy was resolved from, stamped by the daemon
+    /// before serving (its `effective()` read resolves the same path).
+    /// `reload-config` re-reads THIS path, so an env change mid-run cannot
+    /// move the file under a running daemon. `None` = a hand-built copy
+    /// (embedders, tests): the dispatch falls back to the canonical
+    /// lookup. Not a setting: `render` never emits it and the reload diff
+    /// never compares it.
+    pub config_path: Option<std::path::PathBuf>,
 }
 
 impl Default for EffectiveConfig {
@@ -599,6 +607,7 @@ impl Default for EffectiveConfig {
             git_status: true,
             git_poll_secs: 10,
             split_start_dir: "home-dir".to_string(),
+            config_path: None,
         }
     }
 }
@@ -1690,6 +1699,7 @@ remain-on-exit = true
             git_status: true,
             git_poll_secs: 30,
             split_start_dir: "previous-pane-dir".into(),
+            config_path: None,
         };
         let file: ConfigFile = toml::from_str(&render(&eff)).expect("round-trip parse");
         assert_eq!(resolve(&file, &Overrides::default()), eff);

@@ -562,9 +562,13 @@ fn reload_config_reports_restart_required_per_changed_setting() {
         ShellPaneFactory::default(),
     ))));
     let clients = Arc::new(Mutex::new(Vec::new()));
-    // The applied copy: what this (fake) daemon started with.
+    // The applied copy: what this (fake) daemon started with. The
+    // stamped config path names a file that does not exist, so the
+    // dispatch sees the absent-file shape regardless of the host's real
+    // config (QA-196 forbids env mutation to pin one).
     let applied = Arc::new(Mutex::new(crate::mux::config::EffectiveConfig {
         state_dir: "/tmp/old-state".to_string(),
+        config_path: Some("/tmp/par-mux-reload-test-absent.toml".into()),
         ..crate::mux::config::EffectiveConfig::default()
     }));
     let __output_epoch: crate::mux::server::OutputEpoch = std::sync::Arc::default();
@@ -577,9 +581,9 @@ fn reload_config_reports_restart_required_per_changed_setting() {
         shutdown: None,
         config: Some(&applied),
     };
-    // No canonical config file is readable in the test harness (and
-    // QA-196 forbids env mutation to pin one): the dispatch with an
-    // absent file is the all-unchanged reply shape.
+    // The dispatch re-reads the stamped path (above: absent), so the
+    // reply is the all-unchanged shape no matter what the host's real
+    // config.toml holds.
     let reply = dispatch_command(parse_command("reload-config").unwrap(), &ctx, None, None);
     let unchanged = reply.lines().filter(|l| l.contains("unchanged:")).count();
     assert_eq!(
@@ -610,6 +614,60 @@ fn reload_config_reports_restart_required_per_changed_setting() {
     assert!(
         report.contains("unchanged: daemon.socket"),
         "an unstated setting says unchanged: {report}"
+    );
+}
+
+/// Positive control for the stamped-path seam: the dispatch re-reads the
+/// file the applied copy names — a planted temp file the canonical
+/// lookup could never produce — not the host's real config.
+#[test]
+fn reload_config_reads_the_applied_copys_stamped_path() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("config.toml");
+    std::fs::write(
+        &path,
+        "[daemon]\nstate-dir = \"/tmp/new-state\"\npane-endpoints = true\n",
+    )
+    .unwrap();
+    let tree = Arc::new(Mutex::new(MuxTree::new(Box::new(
+        ShellPaneFactory::default(),
+    ))));
+    let clients = Arc::new(Mutex::new(Vec::new()));
+    // The applied copy names the planted file: the dispatch must diff
+    // against IT, not the host's canonical config.
+    let applied = Arc::new(Mutex::new(crate::mux::config::EffectiveConfig {
+        state_dir: "/tmp/old-state".to_string(),
+        config_path: Some(path),
+        ..crate::mux::config::EffectiveConfig::default()
+    }));
+    let __output_epoch: crate::mux::server::OutputEpoch = std::sync::Arc::default();
+    let ctx = Ctx {
+        output_epoch: &__output_epoch,
+        client_id: None,
+        tree: &tree,
+        clients: &clients,
+        command_number: 1,
+        shutdown: None,
+        config: Some(&applied),
+    };
+    let reply = dispatch_command(parse_command("reload-config").unwrap(), &ctx, None, None);
+    assert!(
+        reply.contains("restart-required: daemon.state-dir"),
+        "the planted file's state-dir is restart-required: {reply}"
+    );
+    assert!(
+        reply.contains("restart-required: daemon.pane-endpoints"),
+        "the planted file's flipped bool is restart-required: {reply}"
+    );
+    // The pure report over the same file agrees with the dispatch.
+    let file: crate::mux::config::ConfigFile =
+        toml::from_str("[daemon]\nstate-dir = \"/tmp/new-state\"\npane-endpoints = true\n")
+            .unwrap();
+    let mut applied_copy = applied.lock().clone();
+    let report = crate::mux::config::reload_report(&mut applied_copy, Some(&file));
+    assert!(
+        report.contains("restart-required: daemon.state-dir"),
+        "the pure report agrees with the dispatch: {report}"
     );
 }
 

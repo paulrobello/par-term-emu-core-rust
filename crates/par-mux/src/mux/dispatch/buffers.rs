@@ -386,9 +386,18 @@ pub(super) fn cmd_reload_config(ctx: &Ctx<'_>) -> Outcome {
             "reload-config: this server has no applied config to reload",
         );
     };
-    // A PRESENT file that does not parse is an error, not defaults: the
+    // The reload re-reads the file the applied copy was resolved from —
+    // the path the daemon stamped on it at startup — so an env change
+    // mid-run cannot move the file under a running daemon. A hand-built
+    // copy (embedders, tests) falls back to the canonical lookup. A
+    // PRESENT file that does not parse is an error, not defaults: the
     // user's edit must surface, not vanish. Absent = nothing changed.
-    let Some(path) = crate::mux::config::config_file_path() else {
+    let path = applied
+        .lock()
+        .config_path
+        .clone()
+        .or_else(crate::mux::config::config_file_path);
+    let Some(path) = path else {
         return Outcome::err(ctx, "reload-config: no config path on this platform");
     };
     let file = match load_file(&path) {
