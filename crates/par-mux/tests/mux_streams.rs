@@ -488,7 +488,19 @@ fn seed_export_racing_output_stays_ordered() {
         assert!(
             seed.contains(marker),
             "{marker} reached the observer before the seed but the seed \
-             does not reflect it — the fast path lost racing output"
+             does not reflect it — the fast path lost racing output \
+             [pre-seed markers: {}, first: {:?}, last: {:?}; seed bytes: {}; \
+             seed has first: {}, seed has last: {}; seed head: {:?}; seed tail: {:?}]",
+            raced_markers.len(),
+            raced_markers.first(),
+            raced_markers.last(),
+            seed.len(),
+            raced_markers
+                .first()
+                .is_some_and(|first| seed.contains(first)),
+            raced_markers.last().is_some_and(|last| seed.contains(last)),
+            &seed[..seed.len().min(160)],
+            &seed[seed.len().saturating_sub(160)..],
         );
     }
 
