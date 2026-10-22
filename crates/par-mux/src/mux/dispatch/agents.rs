@@ -35,7 +35,7 @@ const PROMPT_SUBMIT_DELAY: Duration = Duration::from_millis(300);
 pub(super) const PROMPT_EFFECT_TIMEOUT: Duration = Duration::from_millis(5_000);
 
 /// The states `agent-prompt -w` ends on when `-u` names none.
-const DEFAULT_PROMPT_UNTIL: &[&str] = &["idle", "done", "blocked"];
+const DEFAULT_PROMPT_UNTIL: &[&str] = &["idle", "done", "blocked", "question"];
 
 /// The agent group's router; `route_command` sends only this group's
 /// variants here.
@@ -309,7 +309,7 @@ pub(super) fn cmd_agent_start(
                         &format!("agent-start: expected {kind}, detected {agent} on {pane}"),
                     );
                 }
-                (Some(_), Some(state)) if state == "blocked" => {
+                (Some(_), Some(state)) if matches!(state.as_str(), "blocked" | "question") => {
                     return Outcome::err(
                         ctx,
                         &format!(
@@ -410,11 +410,24 @@ pub(super) fn cmd_agent_prompt(
             return Outcome::err(ctx, &format!("agent-prompt: pane {id} has no agent"));
         };
         let state = metadata.get("agent_state").cloned();
-        if state.as_deref() == Some("blocked") {
-            return Outcome::err(
-                ctx,
-                &format!("agent-prompt: {agent} on {id} is blocked and requires interactive input"),
-            );
+        match state.as_deref() {
+            Some("blocked") => {
+                return Outcome::err(
+                    ctx,
+                    &format!(
+                        "agent-prompt: {agent} on {id} is blocked and requires interactive input"
+                    ),
+                );
+            }
+            Some("question") => {
+                return Outcome::err(
+                    ctx,
+                    &format!(
+                        "agent-prompt: {agent} on {id} is asking a question and requires interactive input"
+                    ),
+                );
+            }
+            _ => {}
         }
         let input = match target.input_handle() {
             Ok(input) => input,
@@ -506,7 +519,7 @@ pub(super) fn cmd_agent_prompt(
             return Outcome::err(
                 ctx,
                 &format!(
-                    "agent-prompt: stalled: no working or blocked state on {pane} within {}ms of the prompt; current state is {}",
+                    "agent-prompt: stalled: no working, blocked, or question state on {pane} within {}ms of the prompt; current state is {}",
                     PROMPT_EFFECT_TIMEOUT.as_millis(),
                     state.as_deref().unwrap_or("unknown")
                 ),

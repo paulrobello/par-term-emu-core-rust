@@ -39,7 +39,7 @@ regex = ['(?:^| )[⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏](?: |$)']
 
 [[rules]]
 id = "trust_directory"
-state = "blocked"
+state = "question"
 priority = 950
 region = "top_non_empty_lines(20)"
 all = [

@@ -57,7 +57,10 @@ const BUNDLED_PATTERNS: &[(&str, &str)] = &[
 
 /// The states a rule may assert. `unknown` is not among them: it is the
 /// absence of a match, produced by no rule at all.
-const VALID_STATES: &[&str] = &["working", "blocked", "done", "idle"];
+/// The states a rule may store; `question` marks a dialog asking the
+/// user to choose (permission prompts, pickers), blocked-class for
+/// notifications and the prompt verbs.
+const VALID_STATES: &[&str] = &["working", "blocked", "question", "done", "idle"];
 
 /// The rule id the scrape tier stores for a fallback `idle`: a set with
 /// `idle_fallback = true`, no rule matching, the agent's process alive.
@@ -848,11 +851,11 @@ contains = ["Override Idle"]
     }
 
     #[test]
-    fn claude_blocked_rules_match_mixed_case_prompts() {
+    fn claude_question_rules_match_mixed_case_prompts() {
         // herdr parity: the ported needles are authored lowercase, but real
         // claude chrome renders mixed case ("Bash command", "Do you want to
         // proceed?"), so contains matching must fold case on both sides or
-        // the blocked rules never fire on a real screen (card
+        // the question rules never fire on a real screen (card
         // 01a0d9b38b0c7780a67f3a14e73e4bcd).
         let engine = ScrapeEngine::load(None);
         let set = engine.set_for("claude").expect("claude bundled");
@@ -873,17 +876,17 @@ contains = ["Override Idle"]
         assert_eq!(
             set.evaluate(&snapshot)
                 .map(|(s, r)| (s.to_string(), r.to_string())),
-            Some(("blocked".to_string(), "bash_permission_prompt".to_string()))
+            Some(("question".to_string(), "bash_permission_prompt".to_string()))
         );
     }
 
     #[test]
-    fn claude_blocked_rules_match_a_captured_real_prompt() {
+    fn claude_question_rules_match_a_captured_real_prompt() {
         // Captured 2026-09-25 from a live Claude Code v2.1.282 session
         // (PTY 100x30, /tmp/claude-capture, bash permission prompt for
         // `cat /etc/hosts`) via this crate's own PtyTerminal — original
         // casing preserved. Against the pre-fix case-sensitive contains,
-        // this screen matched no blocked rule and the pane read idle.
+        // this screen matched no question rule and the pane read idle.
         let engine = ScrapeEngine::load(None);
         let set = engine.set_for("claude").expect("claude bundled");
         let snapshot = PaneSnapshot {
@@ -920,7 +923,7 @@ contains = ["Override Idle"]
         assert_eq!(
             set.evaluate(&snapshot)
                 .map(|(s, r)| (s.to_string(), r.to_string())),
-            Some(("blocked".to_string(), "bash_permission_prompt".to_string()))
+            Some(("question".to_string(), "bash_permission_prompt".to_string()))
         );
     }
 
@@ -997,7 +1000,7 @@ contains = ["Override Idle"]
 
     #[test]
     fn claude_content_rule_beats_a_stale_title() {
-        // Blocked permission chrome outranks an idle title (priority 980
+        // Question permission chrome outranks an idle title (priority 980
         // over 250), exercised through the bottom-lines region.
         let engine = ScrapeEngine::load(None);
         let set = engine.set_for("claude").expect("claude bundled");
@@ -1008,7 +1011,7 @@ contains = ["Override Idle"]
         };
         assert_eq!(
             set.evaluate(&snapshot).map(|(s, _)| s.to_string()),
-            Some("blocked".to_string())
+            Some("question".to_string())
         );
     }
 
@@ -1043,15 +1046,15 @@ contains = ["Override Idle"]
         let engine = ScrapeEngine::load(None);
         let set = engine.set_for("grok").expect("grok bundled");
 
-        // Permission footer hints read as blocked at priority 1190 even
+        // Permission footer hints read as question at priority 1190 even
         // against a busy-looking title (spinner rule is 1000).
-        let blocked = PaneSnapshot {
+        let dialog = PaneSnapshot {
             title: "⠧ building".to_string(),
             screen: "┃  1 (●) Yes, proceed\n1/3:select │ Ctrl+o:yolo │ Ctrl+c:cancel\n".to_string(),
         };
         assert_eq!(
-            set.evaluate(&blocked).map(|(s, _)| s.to_string()),
-            Some("blocked".to_string())
+            set.evaluate(&dialog).map(|(s, _)| s.to_string()),
+            Some("question".to_string())
         );
 
         // The [stop] chip marks a live turn.
@@ -1112,7 +1115,9 @@ contains = ["Override Idle"]
         };
         assert_eq!(set.evaluate(&working), None, "bundled rules are shadowed");
 
-        // Other agents keep their bundled sets.
+        // Other agents keep their bundled sets. Codex's title rule
+        // (1100) outranks the flipped trust dialog (950), so the title
+        // still reads blocked.
         let codex = engine.set_for("codex").expect("codex untouched");
         let snapshot = PaneSnapshot {
             title: "Action Required: trust".to_string(),
@@ -1686,7 +1691,10 @@ contains = ["Override Idle"]
         assert_eq!(
             set.evaluate(&trust)
                 .map(|(s, r)| (s.to_string(), r.to_string())),
-            Some(("blocked".to_string(), "workspace_trust_blocked".to_string()))
+            Some((
+                "question".to_string(),
+                "workspace_trust_blocked".to_string()
+            ))
         );
 
         // The paired picker controls distinguish a real question from
@@ -1698,7 +1706,7 @@ contains = ["Override Idle"]
         };
         assert_eq!(
             set.evaluate(&picker).map(|(s, _)| s.to_string()),
-            Some("blocked".to_string())
+            Some("question".to_string())
         );
 
         // A working turn names its interrupt hint.
@@ -1764,7 +1772,7 @@ contains = ["Override Idle"]
         assert_eq!(
             scrape_screen("droid", approval),
             Some((
-                "blocked".to_string(),
+                "question".to_string(),
                 "execute_selection_blocker".to_string()
             ))
         );
@@ -1798,7 +1806,7 @@ contains = ["Override Idle"]
         );
         assert_eq!(
             scrape_screen("copilot", selection),
-            Some(("blocked".to_string(), "selection_blocker".to_string()))
+            Some(("question".to_string(), "selection_blocker".to_string()))
         );
         assert_eq!(
             rule_of("copilot", "◎ Waiting for background agents · 12s\n").as_deref(),
@@ -1823,7 +1831,7 @@ contains = ["Override Idle"]
         );
         assert_eq!(
             scrape_screen("cursor", write),
-            Some(("blocked".to_string(), "write_file_approval".to_string()))
+            Some(("question".to_string(), "write_file_approval".to_string()))
         );
         let run = concat!(
             "Waiting for approval...\n",

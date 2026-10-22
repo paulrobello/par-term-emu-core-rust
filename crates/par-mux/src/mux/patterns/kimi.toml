@@ -13,7 +13,7 @@ aliases = ["kimi-code", "kimi code"]
 
 [[rules]]
 id = "current_approval_panel"
-state = "blocked"
+state = "question"
 priority = 400
 # Upstream region: whole_recent (remapped to whole).
 region = "whole"
@@ -34,7 +34,7 @@ all = [
 
 [[rules]]
 id = "question_panel"
-state = "blocked"
+state = "question"
 priority = 390
 # Upstream region: whole_recent (remapped to whole).
 region = "whole"
@@ -49,7 +49,7 @@ any = [
 
 [[rules]]
 id = "legacy_approval_panel"
-state = "blocked"
+state = "question"
 priority = 300
 # Upstream region: whole_recent (remapped to whole).
 region = "whole"

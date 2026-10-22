@@ -479,4 +479,29 @@ mod pane_binding_tests {
             "the pane-less report landed on the bound pane"
         );
     }
+
+    /// A `question` report is a valid state: the scrape tier's dialog
+    /// rules store it and the roster carries it.
+    #[test]
+    fn a_question_state_report_is_accepted() {
+        let tree = pane_tree();
+        let bound: PaneId = "%0".parse().expect("parses");
+        let (reply, broadcast) = handle_report_for(
+            bound,
+            r#"{"id":3,"method":"pane.report_agent","params":{"agent":"a","seq":1,"state":"question"}}"#,
+            &tree,
+        );
+        assert!(reply.contains("\"result\":\"ok\""), "{reply}");
+        assert!(broadcast.is_some(), "an accepted state report broadcasts");
+        assert_eq!(
+            tree.lock()
+                .pane(bound)
+                .expect("pane")
+                .metadata()
+                .get("agent_state")
+                .map(String::as_str),
+            Some("question"),
+            "the question state landed on the bound pane"
+        );
+    }
 }

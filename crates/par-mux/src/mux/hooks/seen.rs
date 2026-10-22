@@ -49,7 +49,11 @@ pub(crate) fn pane_in_view(tree: &MuxTree, pane: PaneId) -> bool {
 /// `prior` stored state and whether it is in view.
 pub(crate) fn derive_state<'a>(prior: Option<&str>, incoming: &'a str, in_view: bool) -> &'a str {
     match incoming {
-        "idle" if !in_view && matches!(prior, Some("working" | "blocked" | "done")) => "done",
+        "idle"
+            if !in_view && matches!(prior, Some("working" | "blocked" | "question" | "done")) =>
+        {
+            "done"
+        }
         "done" if in_view => "idle",
         _ => incoming,
     }
@@ -99,7 +103,7 @@ mod tests {
 
     #[test]
     fn idle_after_work_out_of_view_is_done_and_in_view_is_idle() {
-        for prior in ["working", "blocked", "done"] {
+        for prior in ["working", "blocked", "question", "done"] {
             assert_eq!(derive_state(Some(prior), "idle", false), "done", "{prior}");
             assert_eq!(derive_state(Some(prior), "idle", true), "idle", "{prior}");
         }

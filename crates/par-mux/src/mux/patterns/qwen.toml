@@ -36,7 +36,7 @@ regex = ['^\x{25D0}\x{FE0E}? ']
 
 [[rules]]
 id = "waiting_for_confirmation"
-state = "blocked"
+state = "question"
 priority = 1000
 region = "bottom_non_empty_lines(20)"
 visible_blocker = true
@@ -55,7 +55,7 @@ any = [
 
 [[rules]]
 id = "tool_confirmation"
-state = "blocked"
+state = "question"
 priority = 990
 region = "bottom_non_empty_lines(20)"
 visible_blocker = true
@@ -70,7 +70,7 @@ any = [
 
 [[rules]]
 id = "question_dialog"
-state = "blocked"
+state = "question"
 priority = 980
 region = "bottom_non_empty_lines(20)"
 visible_blocker = true
@@ -81,7 +81,7 @@ line_regex = [
 
 [[rules]]
 id = "folder_trust_dialog"
-state = "blocked"
+state = "question"
 priority = 970
 region = "bottom_non_empty_lines(20)"
 visible_blocker = true

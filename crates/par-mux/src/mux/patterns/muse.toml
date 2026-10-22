@@ -31,7 +31,7 @@ aliases = ["muse-code", "muse-cli"]
 
 [[rules]]
 id = "workspace_trust_blocked"
-state = "blocked"
+state = "question"
 priority = 970
 region = "bottom_non_empty_lines(12)"
 contains = ["Do you trust this workspace?"]
@@ -42,7 +42,7 @@ any = [
 
 [[rules]]
 id = "pick_request_blocked"
-state = "blocked"
+state = "question"
 priority = 950
 region = "bottom_non_empty_lines(8)"
 any = [
@@ -63,7 +63,7 @@ not = [
 
 [[rules]]
 id = "blocked_approval"
-state = "blocked"
+state = "question"
 priority = 850
 region = "bottom_non_empty_lines(8)"
 any = [

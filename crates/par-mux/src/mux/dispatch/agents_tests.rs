@@ -458,7 +458,7 @@ fn agent_prompt_reports_a_stall() {
     assert_eq!(
         lines,
         vec![
-            "agent-prompt: stalled: no working or blocked state on %0 within 5000ms of the prompt; current state is idle"
+            "agent-prompt: stalled: no working, blocked, or question state on %0 within 5000ms of the prompt; current state is idle"
         ]
     );
     let waited = started.elapsed();

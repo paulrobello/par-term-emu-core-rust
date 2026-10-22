@@ -4856,10 +4856,10 @@ fn render_mode_sidebar_on_launch_default_shows_panel_on_first_frame() {
         "the daemon's first division already reserves the 20-col panel. text: {text:?}"
     );
     // The strip's ROWS, not just the tab strip's ` workspaces ` title:
-    // the active workspace row's `▸` marker (raw bytes — plain_text
-    // splits multi-byte glyphs).
+    // the workspace area's ` new ` footer chip only composes when the
+    // rows exist.
     assert!(
-        got.windows(3).any(|w| w == "▸".as_bytes()),
+        got.windows(5).any(|w| w == b" new "),
         "the panel's workspace rows paint without a chord: {text:?}"
     );
     host.killer.kill().ok();

@@ -27,14 +27,20 @@ pub(super) fn handle_state_report(
     else {
         return (error_reply(id, "missing state"), None);
     };
-    // herdr's fixed set plus its derived `done`: anything else would ride
-    // the roster and broadcast lines as a word consumers cannot parse (or,
-    // with a newline, forge whole ones).
-    if !matches!(state, "working" | "blocked" | "done" | "idle" | "unknown") {
+    // herdr's fixed set plus its derived `done` and the scrape tier's
+    // `question` (a dialog asking the user to choose): anything else
+    // would ride the roster and broadcast lines as a word consumers
+    // cannot parse (or, with a newline, forge whole ones).
+    if !matches!(
+        state,
+        "working" | "blocked" | "question" | "done" | "idle" | "unknown"
+    ) {
         return (
             error_reply(
                 id,
-                &format!("invalid state: {state} (working, blocked, done, idle, or unknown)"),
+                &format!(
+                    "invalid state: {state} (working, blocked, question, done, idle, or unknown)"
+                ),
             ),
             None,
         );

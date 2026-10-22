@@ -28,7 +28,7 @@ idle_fallback = true
 
 [[rules]]
 id = "write_file_approval"
-state = "blocked"
+state = "question"
 priority = 320
 region = "bottom_non_empty_lines(8)"
 contains = ["write to this file?", "proceed (y)"]
@@ -41,7 +41,7 @@ any = [
 # Upstream region: whole_recent.
 [[rules]]
 id = "approval_prompt"
-state = "blocked"
+state = "question"
 priority = 300
 region = "whole"
 any = [

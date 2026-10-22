@@ -989,7 +989,7 @@ pub fn display_option_warnings(chords: &Chords) -> Vec<String> {
 }
 
 /// The agent states `notify-states` may select.
-pub const NOTIFY_STATES: &[&str] = &["working", "blocked", "done", "idle"];
+pub const NOTIFY_STATES: &[&str] = &["working", "blocked", "question", "done", "idle"];
 
 /// The agent entry's tokens a line may name (config `agent-rows`).
 pub const AGENT_ROW_TOKENS: &[&str] = &[

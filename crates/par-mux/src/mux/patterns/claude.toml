@@ -79,7 +79,7 @@ not = [
 # Upstream region: whole_recent.
 [[rules]]
 id = "dynamic_workflow_prompt"
-state = "blocked"
+state = "question"
 priority = 980
 region = "whole"
 contains = ["run a dynamic workflow?", "esc to cancel"]
@@ -87,7 +87,7 @@ contains = ["run a dynamic workflow?", "esc to cancel"]
 # Upstream region: whole_recent.
 [[rules]]
 id = "mcp_elicitation_prompt"
-state = "blocked"
+state = "question"
 priority = 980
 region = "whole"
 # MCP elicitation dialogs (elicitation/create) show Accept/Decline controls
@@ -106,7 +106,7 @@ all = [
 # Upstream region: whole_recent.
 [[rules]]
 id = "bash_permission_prompt"
-state = "blocked"
+state = "question"
 priority = 850
 region = "whole"
 contains = ["do you want to proceed?"]
@@ -136,7 +136,7 @@ all = [
 # runs against the whole screen instead.
 [[rules]]
 id = "generic_permission_prompt"
-state = "blocked"
+state = "question"
 priority = 840
 region = "whole"
 contains = ["do you want to proceed?", "esc to cancel"]

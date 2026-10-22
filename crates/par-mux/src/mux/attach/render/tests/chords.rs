@@ -2340,7 +2340,7 @@ fn sidebar_active_entry_paints_a_subtle_band() {
     // The active agent entry (rows 14 and 15 of the 23-row frame: the
     // rule at 12, the header at 13): the band on both lines, the glyph
     // yellow on it, the second line dim.
-    assert_eq!(buf[(3, 14)].symbol(), "\u{25CF}");
+    assert_eq!(buf[(3, 14)].symbol(), "\u{25D0}");
     assert_eq!(buf[(3, 14)].fg, RtColor::Indexed(3), "working stays yellow");
     assert_eq!(buf[(3, 14)].bg, band);
     assert_eq!(buf[(3, 15)].bg, band);

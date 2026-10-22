@@ -181,7 +181,15 @@ impl WindowSession {
             || in_view
             || seen_flip
             || previous == Some(state)
-            || !self.notify.states.iter().any(|s| s == state);
+            // A question notifies wherever `blocked` would: it is
+            // blocked-class for the delivery channels (the config's
+            // notify-states keeps working unchanged for existing
+            // configs), while the toast still titles the real state.
+            || !self
+                .notify
+                .states
+                .iter()
+                .any(|s| s == state || (state == "question" && s == "blocked"));
         let bell_fallback = self.play_transition_sound(agent, previous, state, in_view);
         // The inside toast rings the bell itself.
         if bell_fallback && (silent || self.notify.delivery != NotifyDelivery::Inside) {

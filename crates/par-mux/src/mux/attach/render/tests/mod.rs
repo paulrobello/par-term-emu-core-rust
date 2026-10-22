@@ -1843,6 +1843,7 @@ fn srow(id: SidebarRowId, label: &str, active: bool) -> SidebarRow {
         active,
         status,
         continuation: Vec::new(),
+        badge: false,
     }
 }
 
@@ -1860,6 +1861,7 @@ fn arow(pane: u32, ws: Option<&str>, agent: &str, state: &str, active: bool) -> 
         active,
         status: AgentStatus::from_state(state),
         continuation: vec![agent.to_string()],
+        badge: false,
     }
 }
 

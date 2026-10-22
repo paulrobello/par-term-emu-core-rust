@@ -31,7 +31,7 @@ idle_fallback = true
 # Upstream region: whole_recent.
 [[rules]]
 id = "selection_blocker"
-state = "blocked"
+state = "question"
 priority = 300
 region = "whole"
 all = [

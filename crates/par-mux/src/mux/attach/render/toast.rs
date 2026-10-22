@@ -25,7 +25,13 @@ pub(crate) struct Toast {
 /// How long a toast stays up: herdr's 8 s for needs-attention, 5 s
 /// otherwise.
 pub(crate) fn toast_lifetime(status: AgentStatus) -> std::time::Duration {
-    std::time::Duration::from_secs(if status == AgentStatus::Blocked { 8 } else { 5 })
+    std::time::Duration::from_secs(
+        if status == AgentStatus::Blocked || status == AgentStatus::Question {
+            8
+        } else {
+            5
+        },
+    )
 }
 
 impl PaneRenderer {
@@ -116,7 +122,7 @@ impl PaneRenderer {
             }
         };
         let themed = self.palette.map(|p| match toast.status {
-            AgentStatus::Blocked => p.red,
+            AgentStatus::Blocked | AgentStatus::Question => p.red,
             AgentStatus::Working => p.yellow,
             AgentStatus::Done => p.teal,
             AgentStatus::Idle => p.green,
@@ -125,7 +131,7 @@ impl PaneRenderer {
         let dot = themed
             .map(crate::mux::theme::rt)
             .unwrap_or(match toast.status {
-                AgentStatus::Blocked => RtColor::Indexed(1),
+                AgentStatus::Blocked | AgentStatus::Question => RtColor::Indexed(1),
                 AgentStatus::Working => RtColor::Indexed(3),
                 AgentStatus::Done => RtColor::Indexed(6),
                 AgentStatus::Idle => RtColor::Indexed(4),

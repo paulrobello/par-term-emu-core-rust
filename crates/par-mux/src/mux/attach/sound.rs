@@ -34,9 +34,13 @@ pub(crate) fn sound_for_transition(
         return None;
     }
     match state {
-        "blocked" => Some(Sound::Blocked),
+        // A question is blocked-class for sound (input is needed either
+        // way): herdr's blocked sound, wherever the agent is.
+        "blocked" | "question" => Some(Sound::Blocked),
         "done" if !in_view => Some(Sound::Done),
-        "idle" if !in_view && matches!(previous, Some("working" | "blocked")) => Some(Sound::Done),
+        "idle" if !in_view && matches!(previous, Some("working" | "blocked" | "question")) => {
+            Some(Sound::Done)
+        }
         _ => None,
     }
 }
@@ -217,6 +221,16 @@ mod tests {
         assert_eq!(
             sound_for_transition(Some("working"), "blocked", true),
             Some(Blocked)
+        );
+        // A question is blocked-class for sound: input is needed either
+        // way, and a question answered into idleness reads as a finish.
+        assert_eq!(
+            sound_for_transition(Some("working"), "question", true),
+            Some(Blocked)
+        );
+        assert_eq!(
+            sound_for_transition(Some("question"), "idle", false),
+            Some(Done)
         );
         assert_eq!(sound_for_transition(None, "blocked", false), Some(Blocked));
         assert_eq!(

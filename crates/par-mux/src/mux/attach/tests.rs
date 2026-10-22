@@ -1692,6 +1692,7 @@ fn srow(id: super::SidebarRowId, label: &str, active: bool) -> super::SidebarRow
         active,
         status: super::AgentStatus::None,
         continuation: Vec::new(),
+        badge: false,
     }
 }
 
@@ -1736,7 +1737,7 @@ fn compose_sidebar_drops_spoofing_chars() {
         )],
     }];
     let lines = super::compose_sidebar(&sections, 20, 10, super::SIDEBAR_SPLIT_DEFAULT);
-    assert_eq!(lines[0].text, "   evil");
+    assert_eq!(lines[0].text, " · evil");
 }
 
 /// herdr's panel shape at the default split: the workspace area takes
@@ -1750,10 +1751,10 @@ fn compose_sidebar_splits_half_and_ends_the_workspace_area_with_the_chips() {
     use super::{SidebarLineKind, SidebarRowId};
     let lines = super::compose_sidebar(&two_area_sections(), 20, 20, super::SIDEBAR_SPLIT_DEFAULT);
     let at = |y: u16| -> Vec<&super::SidebarLine> { lines.iter().filter(|l| l.y == y).collect() };
-    assert_eq!(at(0)[0].text, " ▸ main");
+    assert_eq!(at(0)[0].text, " · main");
     assert!(at(0)[0].active, "the active row is flagged");
-    assert_eq!(at(1)[0].text, "   dev");
-    assert_eq!(at(2)[0].text, "   ops");
+    assert_eq!(at(1)[0].text, " · dev");
+    assert_eq!(at(2)[0].text, " · ops");
     // The chips sit on the workspace area's last row (10 of 20 -> row 9).
     let new_chip = line_with(&lines, &SidebarRowId::New);
     assert_eq!((new_chip.y, new_chip.x, new_chip.x_end), (9, 0, 5));
@@ -1784,7 +1785,7 @@ fn compose_sidebar_splits_half_and_ends_the_workspace_area_with_the_chips() {
         )],
     }];
     let clipped = super::compose_sidebar(&long, 20, 20, super::SIDEBAR_SPLIT_DEFAULT);
-    assert_eq!(clipped[0].text, "   a very long work");
+    assert_eq!(clipped[0].text, " · a very long work");
     // With no agents section the agents area still opens with its rule
     // and header (the panel shape holds).
     assert!(clipped
@@ -1814,12 +1815,12 @@ fn compose_sidebar_split_ratio_moves_the_rule_and_clamps() {
     // spend a row on).
     let tight = super::compose_sidebar(&sections, 20, 20, 0.2);
     assert_eq!(rule_y(&tight), Some(4));
-    assert!(tight.iter().any(|l| l.text == "   ops"));
+    assert!(tight.iter().any(|l| l.text == " · ops"));
     // The clamp floor: a 3-row area holds two rows and the chips — ops
     // clips past the footer row.
     let floor = super::compose_sidebar(&sections, 20, 20, 0.15);
     assert_eq!(rule_y(&floor), Some(3));
-    assert!(floor.iter().any(|l| l.text == "   dev"));
+    assert!(floor.iter().any(|l| l.text == " · dev"));
     assert!(
         !floor.iter().any(|l| l.text == "   ops"),
         "rows past the footer clip: {floor:?}"
@@ -1972,7 +1973,7 @@ fn compose_sidebar_rail_shows_indices_statuses_and_the_expand_chevron() {
     sections[1].rows[1].status = AgentStatus::Blocked;
     let lines = super::compose_sidebar_rail(&sections, 12, super::SIDEBAR_SPLIT_DEFAULT);
     let at = |y: u16| lines.iter().find(|l| l.y == y).cloned();
-    assert_eq!(at(0).unwrap().text, "1●");
+    assert_eq!(at(0).unwrap().text, "1◐");
     assert!(
         at(0).unwrap().active,
         "the active workspace keeps its block"
@@ -1985,7 +1986,7 @@ fn compose_sidebar_rail_shows_indices_statuses_and_the_expand_chevron() {
     assert_eq!(at(2).unwrap().text, "3·", "no agents: the dim dot");
     assert_eq!(at(6).unwrap().kind, SidebarLineKind::Rule);
     assert_eq!(at(6).unwrap().text, "──");
-    assert_eq!(at(7).unwrap().text, "1●");
+    assert_eq!(at(7).unwrap().text, "1◐");
     assert_eq!(at(7).unwrap().id, Some(SidebarRowId::Pane(1)));
     assert_eq!(at(8).unwrap().text, "2●");
     let chevron = at(11).unwrap();
@@ -2002,14 +2003,45 @@ fn compose_sidebar_rail_shows_indices_statuses_and_the_expand_chevron() {
     let tall = super::compose_sidebar_rail(&many, 40, 0.5);
     assert_eq!(tall[8].text, "9·");
     assert_eq!(tall[9].text, "+·");
-    // The workspace glyph is its agents' most urgent state.
+    // The workspace glyph is its agents' most urgent state: question
+    // (a dialog asking the user to choose) outranks everything, and the
+    // working glyph is the half-circle.
+    assert!(AgentStatus::Question > AgentStatus::Blocked);
     assert!(AgentStatus::Blocked > AgentStatus::Done);
     assert!(AgentStatus::Done > AgentStatus::Working);
     assert!(AgentStatus::Working > AgentStatus::Idle);
     assert_eq!(AgentStatus::from_state("blocked"), AgentStatus::Blocked);
+    assert_eq!(AgentStatus::from_state("question"), AgentStatus::Question);
     assert_eq!(AgentStatus::from_state("done"), AgentStatus::Done);
     assert_eq!(AgentStatus::Done.glyph(), "●", "unseen reads as busy");
+    assert_eq!(
+        AgentStatus::Working.glyph(),
+        "◐",
+        "working is the half-circle"
+    );
     assert_eq!(AgentStatus::from_state("unknown"), AgentStatus::None);
+}
+
+/// The git badge's continuation line carries the Badge kind (blue in
+/// paint_sidebar) while a plain continuation stays dim.
+#[test]
+fn compose_sidebar_marks_the_git_badge_line() {
+    use super::SidebarLineKind;
+    let mut sections = two_area_sections();
+    sections[0].rows[0].continuation = vec![" main \u{2191}2".to_string()];
+    sections[0].rows[0].badge = true;
+    sections[0].rows[1].continuation = vec!["a second line".to_string()];
+    let lines = super::compose_sidebar(&sections, 20, 20, super::SIDEBAR_SPLIT_DEFAULT);
+    let badge = lines
+        .iter()
+        .find(|l| l.text == "    main \u{2191}2")
+        .expect("the badge line composes");
+    assert_eq!(badge.kind, SidebarLineKind::Badge);
+    let plain = lines
+        .iter()
+        .find(|l| l.text == "   a second line")
+        .expect("the plain continuation composes");
+    assert_eq!(plain.kind, SidebarLineKind::Continuation);
 }
 
 /// The new-workspace prompt's default bumps past conflicts: one past

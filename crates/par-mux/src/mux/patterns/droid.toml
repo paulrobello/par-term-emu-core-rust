@@ -27,7 +27,7 @@ idle_fallback = true
 # Upstream region: whole_recent.
 [[rules]]
 id = "execute_selection_blocker"
-state = "blocked"
+state = "question"
 priority = 300
 region = "whole"
 contains = ["enter to select", "esc to cancel"]
@@ -41,7 +41,7 @@ all = [
 
 [[rules]]
 id = "selection_menu_blocker"
-state = "blocked"
+state = "question"
 priority = 290
 region = "bottom_non_empty_lines(8)"
 contains = ["enter select", "esc cancel"]

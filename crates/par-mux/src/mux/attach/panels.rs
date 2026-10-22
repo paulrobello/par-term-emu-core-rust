@@ -676,7 +676,9 @@ pub(crate) enum SidebarRowId {
 
 /// One side-panel entry: its click target, first-line label, any
 /// continuation lines (a multi-line agent entry, config `agent-rows`),
-/// active flag, and the status glyph the collapsed rail paints for it.
+/// active flag, the status glyph the collapsed rail paints for it, and
+/// whether its first continuation line is the git badge (painted blue,
+/// not dim).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct SidebarRow {
     pub id: SidebarRowId,
@@ -684,6 +686,7 @@ pub(crate) struct SidebarRow {
     pub active: bool,
     pub status: AgentStatus,
     pub continuation: Vec<String>,
+    pub badge: bool,
 }
 
 /// One agent's facts the entry tokens render from.
@@ -745,7 +748,10 @@ pub(crate) fn agent_entry_lines(rows: &[Vec<String>], facts: &AgentFacts<'_>) ->
 }
 
 /// An agent's state as the side panel shows it (herdr's status dot): a
-/// workspace row carries its agents' most urgent state.
+/// workspace row carries its agents' most urgent state. Priority is
+/// declaration order: `question` (a dialog asking the user to choose)
+/// outranks everything, then `blocked`, `done` (finished while out of
+/// view), `working`, `idle`, none.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Default)]
 pub(crate) enum AgentStatus {
     /// No agent, or a state the panel does not know.
@@ -757,6 +763,9 @@ pub(crate) enum AgentStatus {
     /// blocked).
     Done,
     Blocked,
+    /// A dialog asks the user to choose (the scrape tier's `question`
+    /// rules); the magenta glyph is the roster's "you are wanted" flag.
+    Question,
 }
 
 impl AgentStatus {
@@ -767,17 +776,19 @@ impl AgentStatus {
             "working" => Self::Working,
             "done" => Self::Done,
             "blocked" => Self::Blocked,
+            "question" => Self::Question,
             _ => Self::None,
         }
     }
 
-    /// The rail glyph: herdr's dots (`●` busy or unseen, `○` idle, `·`
-    /// nothing).
+    /// The rail glyph: herdr's dots with the working half-circle
+    /// (`●` busy or unseen, `◐` working, `○` idle, `·` nothing).
     pub(crate) fn glyph(self) -> &'static str {
         match self {
             Self::None => "·",
             Self::Idle => "○",
-            Self::Working | Self::Done | Self::Blocked => "●",
+            Self::Working => "◐",
+            Self::Done | Self::Blocked | Self::Question => "●",
         }
     }
 }
@@ -836,6 +847,9 @@ pub(crate) enum SidebarLineKind {
     /// A multi-line entry's later line: it clicks and highlights with
     /// its entry but stays dim, like herdr's secondary lines.
     Continuation,
+    /// The git badge continuation line (` main ↑2`): clickable like a
+    /// continuation but painted blue instead of dim.
+    Badge,
     /// An area header: ` agents` (the workspace area carries no
     /// header — the tab strip's lead segment labels it).
     Header,
@@ -880,14 +894,23 @@ pub(crate) fn compose_sidebar(
     };
     let clip = |text: String| -> String { text.chars().take(text_width).collect() };
     // The entries of one area written from `top` while below `end`:
-    // each entry's first line carries the `▸` marker, its continuation
-    // lines indent under the label, and every line keeps the entry's
-    // click target and active block. An entry that does not fit whole
-    // still shows the lines that do.
+    // each entry's first line carries the status glyph (a workspace
+    // row's agents' most urgent state) in the marker column; an agent
+    // row keeps the `▸` cursor when active (its state already leads the
+    // entry text as the state icon), and its continuation lines indent
+    // under the label. Every line keeps the entry's click target and
+    // active block. An entry that does not fit whole still shows the
+    // lines that do.
     let entries = |lines: &mut Vec<SidebarLine>, rows: &[SidebarRow], top: u16, end: u16| {
         let mut y = top;
         for row in rows {
-            let marker = if row.active { "▸" } else { " " };
+            let marker = if matches!(row.id, SidebarRowId::Workspace(_)) {
+                row.status.glyph()
+            } else if row.active {
+                "▸"
+            } else {
+                " "
+            };
             let first = format!(" {marker} {}", super::chrome_safe(&row.label));
             let rest = row
                 .continuation
@@ -906,6 +929,8 @@ pub(crate) fn compose_sidebar(
                     active: row.active,
                     kind: if i == 0 {
                         SidebarLineKind::Row
+                    } else if row.badge && i == 1 {
+                        SidebarLineKind::Badge
                     } else {
                         SidebarLineKind::Continuation
                     },

@@ -13,7 +13,7 @@ aliases = ["qoderclicn", "qoder", "qodercn"]
 
 [[rules]]
 id = "confirmation_or_input_blocker"
-state = "blocked"
+state = "question"
 priority = 300
 # Upstream region: whole_recent (remapped to whole).
 region = "whole"

@@ -178,24 +178,37 @@ impl PaneRenderer {
                 (true, SidebarLineKind::Row) => {
                     RtStyle::default().bg(band).add_modifier(RtModifier::BOLD)
                 }
+                (_, SidebarLineKind::Badge) => {
+                    // The git badge: blue in its own right, band-aware so
+                    // the displayed workspace's badge stays legible.
+                    let base = RtStyle::default().fg(RtColor::Indexed(4));
+                    if line.active {
+                        base.bg(band)
+                    } else {
+                        base
+                    }
+                }
                 (true, _) => dim.bg(band),
                 (false, SidebarLineKind::Header) => dim.add_modifier(RtModifier::BOLD),
                 (false, _) => dim,
             };
             // The status glyph paints in its state's color: the rail's
-            // second column, and an expanded agent line's state icon.
-            let glyph = line
+            // second column, an expanded workspace row's marker column,
+            // and an expanded agent line's state icon.
+            let status = line
                 .id
                 .as_ref()
                 .filter(|id| !matches!(id, SidebarRowId::Collapse))
-                .map(|id| {
-                    let glyph = status_style(self.sidebar_row_status(id), self.palette);
-                    if line.active {
-                        glyph.bg(band)
-                    } else {
-                        glyph
-                    }
-                });
+                .map(|id| self.sidebar_row_status(id));
+            let glyph = status.map(|st| {
+                let glyph = status_style(st, self.palette);
+                if line.active {
+                    glyph.bg(band)
+                } else {
+                    glyph
+                }
+            });
+            let ws_line = matches!(line.id, Some(SidebarRowId::Workspace(_)));
             let agent_line = matches!(line.id, Some(SidebarRowId::Pane(_)));
             for (j, ch) in line.text.chars().enumerate() {
                 let x = line.x + j as u16;
@@ -205,10 +218,16 @@ impl PaneRenderer {
                 let is_glyph = if rail {
                     j == 1
                 } else {
-                    agent_line && ch == STATE_ICON
+                    (ws_line && j == 1) || (agent_line && ch == STATE_ICON)
                 };
                 let cell = &mut self.buffer[(x, line.y)];
                 cell.set_symbol(&ch.to_string());
+                // The glyph cell carries the status's own shape, so the
+                // working half-circle shows on the rail, the workspace
+                // markers, and the agent state icons alike.
+                if let Some(st) = status.filter(|_| is_glyph) {
+                    cell.set_symbol(st.glyph());
+                }
                 cell.set_style(match glyph {
                     Some(glyph) if is_glyph => glyph,
                     _ => style,
@@ -256,7 +275,7 @@ pub(super) fn active_row_bg(bg: Option<RtColor>) -> RtColor {
 
 /// A rail status glyph's style: herdr's palette mapped onto the host's
 /// indexed colors (so the host theme applies) — working yellow, blocked
-/// red, done teal (cyan), idle green, no agent dim.
+/// red, done teal (cyan), idle green, question magenta, no agent dim.
 fn status_style(status: AgentStatus, palette: Option<crate::mux::theme::Palette>) -> RtStyle {
     use crate::mux::theme::rt;
     let base = RtStyle::default();
@@ -266,6 +285,9 @@ fn status_style(status: AgentStatus, palette: Option<crate::mux::theme::Palette>
             AgentStatus::Done => base.fg(rt(p.teal)),
             AgentStatus::Blocked => base.fg(rt(p.red)),
             AgentStatus::Idle => base.fg(rt(p.green)),
+            // No preset carries a magenta token, so question reads the
+            // host's indexed magenta under themed palettes too.
+            AgentStatus::Question => base.fg(RtColor::Indexed(5)),
             AgentStatus::None => base.fg(rt(p.overlay0)),
         };
     }
@@ -274,6 +296,7 @@ fn status_style(status: AgentStatus, palette: Option<crate::mux::theme::Palette>
         AgentStatus::Done => base.fg(RtColor::Indexed(6)),
         AgentStatus::Blocked => base.fg(RtColor::Indexed(1)),
         AgentStatus::Idle => base.fg(RtColor::Indexed(2)),
+        AgentStatus::Question => base.fg(RtColor::Indexed(5)),
         AgentStatus::None => base.add_modifier(RtModifier::DIM),
     }
 }
@@ -395,6 +418,7 @@ pub(super) fn apply_git_badge(
         badge.push_str(&format!(" \u{2193}{}", row.behind));
     }
     target.continuation = vec![badge];
+    target.badge = true;
 }
 
 /// A sidebar drag in flight: the width handle on the strip's right
@@ -748,6 +772,7 @@ impl WindowSession {
                     active: *active,
                     status: workspace_status(id),
                     continuation: Vec::new(),
+                    badge: false,
                 })
                 .collect();
             sections.push(SidebarSection {
@@ -791,6 +816,7 @@ impl WindowSession {
                         active: focused == Some(entry.pane),
                         status: AgentStatus::from_state(&entry.state),
                         continuation: lines,
+                        badge: false,
                     };
                     ((group(ws), entry.pane), row)
                 })
@@ -821,7 +847,42 @@ mod tests {
             active: false,
             status: AgentStatus::None,
             continuation: Vec::new(),
+            badge: false,
         }
+    }
+
+    /// A workspace row's status is its agents' most urgent state: a
+    /// question (a dialog asking the user to choose) outranks a blocked
+    /// peer.
+    #[test]
+    fn workspace_row_status_ranks_question_over_blocked() {
+        let agents = vec![
+            crate::mux::attach::status::RosterEntry {
+                pane: 1,
+                agent: "a".to_string(),
+                state: "blocked".to_string(),
+                workspace: Some("+0".to_string()),
+                project: None,
+                message: None,
+            },
+            crate::mux::attach::status::RosterEntry {
+                pane: 2,
+                agent: "b".to_string(),
+                state: "question".to_string(),
+                workspace: Some("+0".to_string()),
+                project: None,
+                message: None,
+            },
+        ];
+        let sections = crate::mux::attach::render::WindowSession::sidebar_sections(
+            &[("+0".to_string(), "main".to_string(), false)],
+            &agents,
+            &[("+0".to_string(), "main".to_string())],
+            None,
+            &[vec!["agent".to_string()]],
+        )
+        .expect("sections");
+        assert_eq!(sections[0].rows[0].status, AgentStatus::Question);
     }
 
     /// The badge rides the displayed session's workspace row, with the

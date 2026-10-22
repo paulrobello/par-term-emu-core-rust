@@ -273,7 +273,7 @@ printf '%s\n' "{\"id\":1,\"method\":\"pane.report_agent\",\"params\":{
   \"state\":\"blocked\",\"message\":\"waiting for review\"}}" | nc -U "$PAR_MUX_SOCKET"
 ```
 
-- `state` is `working` / `blocked` / `done` / `idle` (`unknown` accepted, never
+- `state` is `working` / `blocked` / `question` / `done` / `idle` (`unknown` accepted, never
   stored; the daemon stores an `idle` after work as `done` until a client views
   the pane, so a reporter need not send `done` itself);
   `seq` must increase per pane **per source** — stale reports are dropped
