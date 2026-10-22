@@ -8667,7 +8667,11 @@ const KITTY_CLIENT_CONFIG: &str =
 fn render_mode_kitty_graphics_reach_a_kitty_host_positioned() {
     let (fixture, _daemon, mut client) = fixture_with_session("kittyhost");
     let pane = session_first_pane(&mut client, "att");
-    let dir = tempfile::tempdir().expect("tempdir");
+    // The echoed command must wrap before ED2, regardless of the host's temp path.
+    let dir = tempfile::Builder::new()
+        .prefix(&"kitty-wrap-".repeat(8))
+        .tempdir()
+        .expect("tempdir");
     let script = kitty_image_script(dir.path());
     let (mut host, _stderr) = spawn_attach_host(
         &fixture,

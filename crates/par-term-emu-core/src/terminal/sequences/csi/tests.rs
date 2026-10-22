@@ -3,6 +3,22 @@ use crate::cursor::CursorStyle;
 use crate::mouse::{MouseEncoding, MouseMode};
 use crate::terminal::{Terminal, TerminalEvent};
 
+#[test]
+fn erase_display_clears_wrapped_line_metadata() {
+    for erase in [b"\x1b[2J", b"\x1b[3J"] {
+        let mut term = Terminal::new(10, 8);
+        term.process(b"0123456789wrapped");
+        assert!(term.active_grid().is_line_wrapped(0));
+
+        term.process(erase);
+        term.process(b"\x1b[6;1HMARKER");
+
+        assert_eq!(term.cursor.row, 5);
+        assert!(!term.active_grid().is_line_wrapped(0));
+        assert_eq!(term.content().lines().nth(5), Some("MARKER"));
+    }
+}
+
 // ========== Cursor Movement Tests ==========
 
 #[test]

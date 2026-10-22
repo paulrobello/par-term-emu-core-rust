@@ -18,6 +18,7 @@ impl Grid {
             cell.reset();
             cell.bg = PackedColor::pack(bg);
         }
+        self.wrapped.fill(false);
         self.zones.clear();
         // Every cell changed, not just moved (ENH-038).
         self.mark_rows_content(0, self.rows.saturating_sub(1));

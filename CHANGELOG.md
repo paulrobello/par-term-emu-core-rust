@@ -7,6 +7,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+- **Core: full-screen erase clears soft-wrap metadata** (`crates/par-term-emu-core/src/grid/erase.rs`): ED2/ED3 no longer leave erased rows joined in `content()` and par-mux `capture-pane`. A wrapped shell command before an image script could make the kitty graphics positioning test report the marker one or more logical rows above its physical position. Pinned by `erase_display_clears_wrapped_line_metadata` and the kitty attach test with a command path long enough to wrap.
+
 ## [0.63.0] - 2026-10-21
 
 ### Added
