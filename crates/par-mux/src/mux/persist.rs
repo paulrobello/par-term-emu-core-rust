@@ -361,11 +361,18 @@ pub struct PersistPane {
 /// is the agent's own reported invocation, stored verbatim as a JSON argv
 /// string — the hook-first override the per-agent table falls back from.
 ///
+/// The last-known state rides along (`state`/`state_source`/`message`) so
+/// a restored pane stays on the roster without waiting for its agent's
+/// next hook report. Staleness is bounded twice: the liveness sweep clears
+/// a claim whose agent is provably out of the pane's process tree (the
+/// resumed invocation counts — restore spawns it), and the agent's next
+/// accepted report rewrites the state. Absent on older state files
+/// (`serde(default)`), where the post-restart roster is simply empty.
+///
 /// Deliberately absent: `agent_session_start_source` (stale and misleading
 /// after a restart; task 6.4 reads it from the post-restore report instead)
-/// and everything state-shaped (`agent_state`, `agent_state_source`,
-/// `agent_seq`) — a restored pane holds no state until its agent reports
-/// again, which is why the post-restart roster is empty by design.
+/// and the sweep's liveness-miss counters and `agent_seq` (process-local
+/// bookkeeping: a restored pane reports its own sequence from scratch).
 #[derive(Debug, Clone, PartialEq, Eq)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct PersistAgentSession {
@@ -379,6 +386,26 @@ pub struct PersistAgentSession {
     pub source: Option<String>,
     /// The reported resume invocation, verbatim JSON argv.
     pub resume_argv: Option<String>,
+    /// The last-known agent state (`metadata["agent_state"]`).
+    #[cfg_attr(
+        feature = "serde",
+        serde(default, skip_serializing_if = "Option::is_none")
+    )]
+    pub state: Option<String>,
+    /// Who authored the state: `"hook"` or `"scrape"`
+    /// (`metadata["agent_state_source"]`).
+    #[cfg_attr(
+        feature = "serde",
+        serde(default, skip_serializing_if = "Option::is_none")
+    )]
+    pub state_source: Option<String>,
+    /// The blocked reason, whitespace-collapsed at the report door
+    /// (`metadata["agent_message"]`).
+    #[cfg_attr(
+        feature = "serde",
+        serde(default, skip_serializing_if = "Option::is_none")
+    )]
+    pub message: Option<String>,
 }
 
 /// Capture one pane's agent-session identity from its metadata, or `None`
@@ -398,6 +425,9 @@ fn agent_session_from_metadata(metadata: &HashMap<String, String>) -> Option<Per
         resume_argv: claim
             .resume_argv
             .map(|argv| serde_json::to_string(&argv).unwrap_or_default()),
+        state: claim.state,
+        state_source: claim.state_source,
+        message: claim.message,
     };
     (session.session_id.is_some()
         || session.session_path.is_some()
@@ -929,15 +959,19 @@ fn restored_spawn_cwd(
 
 /// Identity comes back through the typed claim (ARC-113c) so the format
 /// round-trips and task 6.3's hook-first lookup reads it from the same
-/// place it reads a live pane's. Only the identity fields — no state, no
-/// seq, no start source (a restored pane reports those anew or holds
-/// none).
+/// place it reads a live pane's. The last-known state rides back too, so
+/// the restored pane is on the roster before its agent's next hook report;
+/// the seq and the sweep's miss counters do not (the restored pane reports
+/// its own from scratch).
 fn restore_agent_claim(
     created: &mut crate::mux::pane::MuxPane,
     agent_session: &PersistAgentSession,
 ) {
     let mut claim = crate::mux::hooks::AgentClaim {
         agent: agent_session.agent.clone(),
+        state: agent_session.state.clone(),
+        state_source: agent_session.state_source.clone(),
+        message: agent_session.message.clone(),
         session_id: agent_session.session_id.clone(),
         session_path: agent_session.session_path.clone(),
         source: agent_session.source.clone(),
@@ -3478,10 +3512,12 @@ mod tests {
                 "agent_resume_argv",
                 r#"["pi","--session","/tmp/pi-session.jsonl"]"#,
             ),
-            // Keys that must NOT travel: state-shaped and
-            // provenance-of-start.
+            // State travels now: the roster survives a restart (bounded by
+            // the liveness sweep and the agent's next report).
             ("agent_state", "working"),
             ("agent_state_source", "hook"),
+            // Keys that must NOT travel: process-local bookkeeping and
+            // provenance-of-start.
             ("agent_seq", "1000"),
             ("agent_session_start_source", "startup"),
         ]);
@@ -3580,8 +3616,11 @@ mod tests {
                 session_path: Some("/tmp/pi-session.jsonl".to_string()),
                 source: Some("par-mux:pi".to_string()),
                 resume_argv: Some(r#"["pi","--session","/tmp/pi-session.jsonl"]"#.to_string()),
+                state: Some("working".to_string()),
+                state_source: Some("hook".to_string()),
+                message: None,
             },
-            "capture reads exactly the identity keys, nothing state-shaped"
+            "capture reads identity plus the last-known state"
         );
 
         // Restore writes the identity back as metadata, so a re-capture of
@@ -3591,6 +3630,21 @@ mod tests {
         // invocation, verbatim.
         let factory = RecordingFactory::default();
         let restored = MuxTree::from_persist_state(&state, Box::new(factory.clone())).unwrap();
+        {
+            let pane = restored.pane(pane_id).expect("restored pane");
+            assert_eq!(
+                pane.metadata().get("agent_state").map(String::as_str),
+                Some("working"),
+                "the restored pane is on the roster before its agent's next report"
+            );
+            assert_eq!(
+                pane.metadata()
+                    .get("agent_state_source")
+                    .map(String::as_str),
+                Some("hook"),
+                "the restored claim keeps its hook authority"
+            );
+        }
         let expected = if cfg!(windows) {
             // The POSIX surviving tail cannot cross cmd.exe; on Windows the
             // recorded spawn is the bare invocation (the real argv path is
@@ -3611,13 +3665,15 @@ mod tests {
             "identity survives tree -> format -> tree -> format"
         );
 
-        // The restored pane holds identity metadata and none of the
-        // state-shaped keys — the post-restart roster stays empty until
-        // the agent reports again.
+        // The restored pane holds the identity and the last-known state
+        // (the roster survives the restart), but none of the process-local
+        // bookkeeping.
         let pane = restored.pane(pane_id).unwrap();
         assert_eq!(pane.metadata().get("agent").map(String::as_str), Some("pi"));
-        assert!(!pane.metadata().contains_key("agent_state"));
-        assert!(!pane.metadata().contains_key("agent_seq"));
+        assert!(
+            !pane.metadata().contains_key("agent_seq"),
+            "the restarted agent's first report is never stale"
+        );
         assert!(
             !pane.metadata().contains_key("agent_session_start_source"),
             "start source describes the PREVIOUS process's start — stale after a restart"
@@ -3734,6 +3790,9 @@ mod tests {
                 session_path: Some("/tmp/omp-session.jsonl".to_string()),
                 source: None,
                 resume_argv: Some(r#"["omp","--resume=/tmp/omp-session.jsonl"]"#.to_string()),
+                state: None,
+                state_source: None,
+                message: None,
             }),
             "a path-only ref is identity enough — the id-OR-path wire contract"
         );
@@ -4241,6 +4300,8 @@ mod serde_tests {
         pane.set_metadata("agent", "pi");
         pane.set_metadata("agent_session_path", "/tmp/pi.jsonl");
         pane.set_metadata("agent_resume_argv", r#"["pi","--session","/tmp/pi.jsonl"]"#);
+        pane.set_metadata("agent_state", "working");
+        pane.set_metadata("agent_state_source", "hook");
 
         let json = serde_json::to_string(&tree.to_persist_state()).expect("serializes");
         let revived: PersistState = serde_json::from_str(&json).expect("deserializes");
@@ -4252,8 +4313,11 @@ mod serde_tests {
                 session_path: Some("/tmp/pi.jsonl".to_string()),
                 source: None,
                 resume_argv: Some(r#"["pi","--session","/tmp/pi.jsonl"]"#.to_string()),
+                state: Some("working".to_string()),
+                state_source: Some("hook".to_string()),
+                message: None,
             }),
-            "identity survives the JSON wire form"
+            "identity and last-known state survive the JSON wire form"
         );
     }
 

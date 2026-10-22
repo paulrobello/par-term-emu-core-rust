@@ -129,13 +129,9 @@ fn script_reports(path: &std::path::Path, pane: &str, action: &str, session_id: 
 fn any_state_key(value: &serde_json::Value) -> bool {
     match value {
         serde_json::Value::Object(map) => {
-            map.keys().any(|key| {
-                key == "agent_state"
-                    || key == "agent_state_source"
-                    || key == "agent_seq"
-                    || key == "agent_message"
-                    || key == "agent_session_start_source"
-            }) || map.values().any(any_state_key)
+            map.keys()
+                .any(|key| key == "agent_seq" || key == "agent_session_start_source")
+                || map.values().any(any_state_key)
         }
         serde_json::Value::Array(items) => items.iter().any(any_state_key),
         _ => false,
@@ -185,9 +181,11 @@ fn the_agent_arc_lives_and_dies_with_the_daemon() {
     drop(control.0.shutdown(Shutdown::Both));
     sigterm_clean(&mut first);
 
-    // The deferral after task 6.1: the save carries the pane's agent-session
-    // IDENTITY — the resume path's data — but still nothing state-shaped.
-    // Asserted on the actual bytes on disk, not the struct definition.
+    // The save carries the pane's agent-session IDENTITY — the resume
+    // path's data — plus the last-known state, provenance, and blocked
+    // message, so the roster survives the restart. Asserted on the actual
+    // bytes on disk, not the struct definition. The process-local
+    // bookkeeping (seq, start source) still does not travel.
     let saved = std::fs::read_to_string(&state_path).expect("the clean stop saved state");
     let parsed: serde_json::Value = serde_json::from_str(&saved).expect("the save is JSON");
     assert!(
@@ -195,11 +193,17 @@ fn the_agent_arc_lives_and_dies_with_the_daemon() {
         "the reported session identity travels in the save (task 6.1): {saved}"
     );
     assert!(
+        saved.contains(r#""state":"blocked""#) && saved.contains(r#""state_source":"hook""#),
+        "the last-known state travels in the save: {saved}"
+    );
+    assert!(
         !any_state_key(&parsed),
-        "state, provenance, seq, message and start source must not travel: {saved}"
+        "seq and start source must not travel: {saved}"
     );
 
-    // The second daemon serves the layout back but an EMPTY roster.
+    // The second daemon serves the layout back AND the roster: the
+    // restored pane is on list-agents with its last-known state before
+    // the agent's next hook report.
     let mut second = spawn_daemon(&fixture);
     wait_listening(path);
     let mut control = Control::connect(path);
@@ -209,9 +213,10 @@ fn the_agent_arc_lives_and_dies_with_the_daemon() {
         "the pane itself survived the restart: {panes:?}"
     );
     let roster = control.body_lines("list-agents");
-    assert!(
-        roster.is_empty(),
-        "agent state deliberately did not survive: {roster:?}"
+    assert_eq!(
+        roster,
+        vec![format!("{pane} kimi blocked hook ws=+0")],
+        "the restored pane stays on the roster with its last-known state"
     );
 
     drop(control.0.shutdown(Shutdown::Both));
