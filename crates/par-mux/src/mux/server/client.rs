@@ -610,12 +610,19 @@ impl Connection {
             // then the export raced a fan-out — re-export under the lock
             // instead (the original, ordered shape; bounded by one
             // re-export, and a quiet pane never pays it).
+            // The epoch baseline is sampled BEFORE the export: any marker
+            // processed while the export runs bumps the epoch, so the
+            // re-check under the lock sees it and re-exports. (Sampling
+            // after the export only covers the lock-acquisition gap — the
+            // seed_export_racing_output_stays_ordered failure on the
+            // macos runner: a load-slowed export lost markers that raced
+            // it while the check compared two equal post-export loads.)
+            let before = self.output_epoch.load(std::sync::atomic::Ordering::Acquire);
             let (seed, (cols, rows)) = {
                 let terminal = pane.terminal();
                 let term = terminal.read();
                 (term.export_screen_restore_sequence(), term.size())
             };
-            let before = self.output_epoch.load(std::sync::atomic::Ordering::Acquire);
             let _clients = self.clients.lock();
             let raced = self.output_epoch.load(std::sync::atomic::Ordering::Acquire) != before;
             let item = if raced {

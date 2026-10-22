@@ -8,6 +8,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Fixed
+- **par-mux: the pane-stream seed's race check now covers the export window** (`crates/par-mux/src/mux/server/client.rs`): `observe-pane`/`control-pane` export the seed off the clients lock and re-check the daemon's output epoch under it, but the epoch baseline was sampled AFTER the export — the check only ever covered the lock-acquisition gap, so output that raced a slow export shipped a stale seed (its `%output` queued ahead of it while the seed predated it; measured on the macos runner, `seed_export_racing_output_stays_ordered`, run 39705399886). The baseline now precedes the export, so the re-export fires for anything that raced it. Pinned by `seed_export_racing_output_stays_ordered`.
 - **Core: full-screen erase clears soft-wrap metadata** (`crates/par-term-emu-core/src/grid/erase.rs`): ED2/ED3 no longer leave erased rows joined in `content()` and par-mux `capture-pane`. A wrapped shell command before an image script could make the kitty graphics positioning test report the marker one or more logical rows above its physical position. Pinned by `erase_display_clears_wrapped_line_metadata` and the kitty attach test with a command path long enough to wrap.
 
 ## [0.63.0] - 2026-10-21
