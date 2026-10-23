@@ -479,6 +479,18 @@ pub enum MuxCommand {
         /// Target pane.
         pane: Target<PaneId>,
     },
+    /// Label a pane the user launched an agent in by hand (`adopt-pane`):
+    /// the `agent` tag `agent-start` writes, minus the launch — the pane
+    /// keeps its process, the scrape tier gains the pane, and the roster
+    /// shows the row.
+    AdoptPane {
+        /// Target pane.
+        pane: Target<PaneId>,
+        /// The agent label (`claude`, `codex`, …) — the same tag
+        /// `agent-start` writes; a kind without a scrape pattern set is
+        /// refused, since the tier is what keeps the row populated.
+        kind: String,
+    },
     /// Turn this connection into a raw stream of one pane
     /// (`observe-pane` read-only, `control-pane` writable): the reply
     /// carries the pane's seed, and from then on the connection receives
@@ -723,7 +735,8 @@ impl MuxCommand {
             | MuxCommand::WorktreeCreate { .. }
             | MuxCommand::WorktreeOpen { .. }
             | MuxCommand::WorktreeRemove { .. } => true,
-            | MuxCommand::AgentStart { .. } => true,
+            | MuxCommand::AgentStart { .. }
+            | MuxCommand::AdoptPane { .. } => true,
             // The query form reads only.
             MuxCommand::SetWorkspaceRespawn { change, .. } => change.is_some(),
             MuxCommand::RefreshClient { size, .. } => size.is_some(),
@@ -1533,6 +1546,7 @@ const COMMANDS: &[(&str, CommandParser, &[&str])] = &[
     ("agent-start", parse_agent_start, &[]),
     ("agent-prompt", parse_agent_prompt, &["wait", "until"]),
     ("agent-explain", parse_agent_explain, &[]),
+    ("adopt-pane", parse_adopt_pane, &[]),
     ("set-buffer", parse_set_buffer, &[]),
     ("set-client-colors", parse_set_client_colors, &[]),
     ("set-environment", parse_set_environment, &[]),

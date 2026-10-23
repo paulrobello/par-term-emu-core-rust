@@ -1,11 +1,13 @@
 # par-mux claude session hook (Windows) — reports session identity to the
 # par-mux daemon on claude SessionStart events (no action argument, or
-# `session`) and releases the pane claim on SessionEnd (`release`).
+# `session`), releases the pane claim on SessionEnd (`release`), and keeps
+# a live session registered between those (`prompt` on UserPromptSubmit,
+# `notify` on Notification, `stop` on Stop).
 # PowerShell port of the POSIX reporter (par-mux-claude-session-hook.sh):
 # one JSON line over the control socket, one reply read, close. Inert
 # outside a par-mux pane (env guards) and silent on every failure.
 # PAR_MUX_INTEGRATION_ID=claude
-# PAR_MUX_INTEGRATION_VERSION=2
+# PAR_MUX_INTEGRATION_VERSION=3
 
 if ($env:PAR_MUX_ENV -ne "1") { exit 0 }
 if ([string]::IsNullOrWhiteSpace($env:PAR_MUX_SOCKET)) { exit 0 }
@@ -70,6 +72,42 @@ $inputText = [Console]::In.ReadToEnd()
 try {
     $payload = if ([string]::IsNullOrWhiteSpace($inputText)) { $null } else { $inputText | ConvertFrom-Json }
 } catch {
+    exit 0
+}
+
+# State reports keep a live session on the roster between its start and
+# end events: a prompt submit is working, the permission prompt is a
+# question, and the 60s-idle notification / a finished turn are idle.
+# (prompt/notify/stop — the installer registers the same-named action
+# under UserPromptSubmit/Notification/Stop.)
+if ($action -in @("prompt", "notify", "stop")) {
+    if ($action -eq "prompt") {
+        $state = "working"
+    } elseif ($action -eq "notify") {
+        $state = "idle"
+        $message = $payload.message
+        if ($message -is [string] -and $message.ToLower().Contains("permission")) {
+            $state = "question"
+        }
+    } else {
+        $state = "idle"
+    }
+    $request = [ordered]@{
+        id = "par-mux:claude:$action`:$seq"
+        method = "pane.report_agent"
+        params = [ordered]@{
+            pane_id = "$($env:PAR_MUX_PANE_ID)"
+            source = "par-mux:claude"
+            agent = "claude"
+            seq = $seq
+            state = $state
+        }
+    } | ConvertTo-Json -Compress -Depth 6
+    try {
+        $bytes = [System.Text.Encoding]::UTF8.GetBytes($request + "`n")
+        Send-MuxReport $env:PAR_MUX_SOCKET $bytes
+    } catch {
+    }
     exit 0
 }
 

@@ -601,6 +601,30 @@ pub fn scrape_tick(tree: &Arc<Mutex<MuxTree>>, engine: &ScrapeEngine) -> Vec<Tmu
     scrape_tick_with(tree, engine, ProcessTable::snapshot().as_ref())
 }
 
+/// One labeled pane's classification (the tick's evaluate-or-fallback
+/// step, shared with `adopt-pane`): a rule match from the live screen,
+/// else the idle fallback. Returns `(state, rule)` as the tick reads
+/// them, owned so the caller need not hold pattern-set borrows.
+pub(crate) fn evaluate_pane(
+    pane: &MuxPane,
+    agent: &str,
+    engine: &ScrapeEngine,
+    table: Option<&ProcessTable>,
+) -> Option<(String, String)> {
+    let set = engine.set_for(agent)?;
+    let snapshot = {
+        let terminal = pane.terminal();
+        let term = terminal.read();
+        PaneSnapshot {
+            title: term.title().to_string(),
+            screen: term.content(),
+        }
+    };
+    set.evaluate(&snapshot)
+        .or_else(|| set.fallback(agent, pane.child_pid(), table))
+        .map(|(state, rule)| (state.to_string(), rule.to_string()))
+}
+
 /// Mismatching ticks (not interrupted by a proven match) before a hook
 /// claim is cleared. One never clears: the probe runs while a pane's
 /// process tree is in ordinary flux (a shell pipeline between execs, an

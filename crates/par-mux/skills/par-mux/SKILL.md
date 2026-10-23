@@ -3,7 +3,7 @@ name: par-mux
 description: Use when managing par-mux (the terminal multiplexer bundled with par-term) from a script or agent — starting/stopping/restarting the par-mux daemon, creating workspaces, sessions, windows, and panes, spawning panes for dev servers or long-running commands, sending keys or text to a pane, capturing pane output, reading the agent roster (list-agents), reporting agent state via hook reports, resizing/renaming/titling panes, or debugging "no daemon running" and stale-daemon errors. Covers the `par-mux` CLI (client mode) and the pane env contract.
 ---
 
-<!-- PAR_MUX_INTEGRATION_VERSION=6 -->
+<!-- PAR_MUX_INTEGRATION_VERSION=7 -->
 
 # par-mux
 
@@ -86,6 +86,7 @@ par-mux --cmd list-workspaces   # "+N: name" lines; " active" marks the daemon o
 par-mux --cmd list-sessions     # "+W: wname: $N: name" lines, every workspace when bare
 par-mux --cmd list-windows      # "@N: name" lines
 par-mux --cmd list-panes        # "%N" lines, global
+par-mux --cmd "adopt-pane -t %N claude"   # label a hand-launched agent pane so the roster sees it
 par-mux --cmd list-agents       # agent roster: "%N <agent> <state> <source> [key=value…]"
                                 #   extras: reason=<base64> telemetry=<base64>
                                 #   host_telemetry=<base64> ws=+N — parse fields

@@ -151,3 +151,28 @@ pub(super) fn parse_agent_explain(a: &Args<'_>) -> Result<MuxCommand, String> {
         pane: pane_flag(a.name, lead.value("-t"))?,
     })
 }
+
+/// `adopt-pane -t <pane> <kind>` — label a pane the user launched an agent
+/// in by hand. The kind must be a valid agent label; the dispatch refuses
+/// kinds the scrape tier has no patterns for.
+pub(super) fn parse_adopt_pane(a: &Args<'_>) -> Result<MuxCommand, String> {
+    use LeadingFlag::Valued;
+    let lead = split_leading_flags(a.line, a.name, &[Valued("-t")])?;
+    let mut words = shell_split(lead.tail).into_iter();
+    let Some(kind) = words.next() else {
+        return Err(format!("{} requires an agent kind", a.name));
+    };
+    if !valid_agent_kind(&kind) {
+        return Err(format!(
+            "{}: invalid agent kind {kind:?} (lowercase letters, digits, '-', '_', '.')",
+            a.name
+        ));
+    }
+    if let Some(extra) = words.next() {
+        return Err(format!("{}: unexpected argument {extra:?}", a.name));
+    }
+    Ok(MuxCommand::AdoptPane {
+        pane: pane_flag(a.name, lead.value("-t"))?,
+        kind,
+    })
+}

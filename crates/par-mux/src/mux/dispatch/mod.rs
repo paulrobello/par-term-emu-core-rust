@@ -269,7 +269,8 @@ fn route_command(
         | MuxCommand::ListWorktrees) => route_worktree_command(ctx, command),
         command @ (MuxCommand::AgentStart { .. }
         | MuxCommand::AgentPrompt { .. }
-        | MuxCommand::AgentExplain { .. }) => route_agent_command(ctx, command),
+        | MuxCommand::AgentExplain { .. }
+        | MuxCommand::AdoptPane { .. }) => route_agent_command(ctx, command),
     }
 }
 

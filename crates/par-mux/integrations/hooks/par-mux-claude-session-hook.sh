@@ -1,12 +1,14 @@
 #!/bin/sh
 # par-mux claude session hook — reports session identity to the par-mux
-# daemon on claude SessionStart events (no action argument, or `session`)
-# and releases the pane's claim on SessionEnd (`release`). Same reporter
-# shape as the kimi port (core tests/assets/par-mux-agent-state.sh): one
-# JSON line over the control socket, one reply read, close. Inert outside
-# a par-mux pane (env guards) and silent on every failure.
+# daemon on claude SessionStart events (no action argument, or `session`),
+# releases the pane's claim on SessionEnd (`release`), and keeps a live
+# session registered between those (`prompt` on UserPromptSubmit,
+# `notify` on Notification, `stop` on Stop). Same reporter shape as the
+# kimi port (core tests/assets/par-mux-agent-state.sh): one JSON line over
+# the control socket, one reply read, close. Inert outside a par-mux pane
+# (env guards) and silent on every failure.
 # PAR_MUX_INTEGRATION_ID=claude
-# PAR_MUX_INTEGRATION_VERSION=2
+# PAR_MUX_INTEGRATION_VERSION=3
 
 action="${1:-}"
 
@@ -43,6 +45,36 @@ if action == "release":
                 "source": "par-mux:claude",
                 "agent": "claude",
                 "seq": seq,
+            },
+        }
+    )
+elif action in ("prompt", "notify", "stop"):
+    # State reports keep a live session on the roster between its start
+    # and end events: a prompt submit is working, the permission prompt
+    # is a question, and the 60s-idle notification / a finished turn are
+    # idle. (prompt/notify/stop — the installer registers the same-named
+    # action under UserPromptSubmit/Notification/Stop.)
+    if action == "prompt":
+        state = "working"
+    elif action == "notify":
+        message = payload.get("message")
+        state = (
+            "question"
+            if isinstance(message, str) and "permission" in message.lower()
+            else "idle"
+        )
+    else:
+        state = "idle"
+    request = json.dumps(
+        {
+            "id": f"par-mux:claude:{action}:{seq}",
+            "method": "pane.report_agent",
+            "params": {
+                "pane_id": os.environ["PAR_MUX_PANE_ID"],
+                "source": "par-mux:claude",
+                "agent": "claude",
+                "seq": seq,
+                "state": state,
             },
         }
     )

@@ -7,6 +7,14 @@
   ],
   "commands": [
     {
+      "name": "adopt-pane",
+      "features": [],
+      "flags": [
+        "-t"
+      ],
+      "synopsis": "-t <pane> <kind>"
+    },
+    {
       "name": "agent-explain",
       "features": [],
       "flags": [

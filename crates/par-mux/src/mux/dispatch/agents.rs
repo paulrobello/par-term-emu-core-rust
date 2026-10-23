@@ -56,6 +56,7 @@ pub(super) fn route_agent_command(ctx: &Ctx<'_>, command: MuxCommand) -> Outcome
             timeout_ms,
         } => cmd_agent_prompt(ctx, pane, &text, wait, &until, timeout_ms),
         MuxCommand::AgentExplain { pane } => cmd_agent_explain(ctx, pane),
+        MuxCommand::AdoptPane { pane, kind } => cmd_adopt_pane(ctx, pane, &kind),
         other => unreachable!("route_command sent {other:?} to the agent group"),
     }
 }
@@ -652,6 +653,86 @@ pub(super) fn cmd_agent_explain(ctx: &Ctx<'_>, pane: Target<PaneId>) -> Outcome 
         }
     }
     Outcome::ok(ctx, &lines.join("\n"))
+}
+
+/// `adopt-pane -t %N <kind>`: label a pane the user launched an agent in
+/// by hand — the `agent` tag `agent-start` writes, minus the launch. The
+/// pane keeps its process; the scrape tier gains it, exactly like a
+/// TUI-started pane, and the roster shows the row. The classification
+/// runs once, now — the reply carries the state the tick would take up to
+/// its cadence to find — and the `%agent-state-changed` broadcast rides
+/// with the reply so attached clients re-read the roster at once.
+pub(super) fn cmd_adopt_pane(ctx: &Ctx<'_>, pane: Target<PaneId>, kind: &str) -> Outcome {
+    let engine = {
+        let guard = ctx.tree.lock();
+        engine_of(&guard)
+    };
+    if engine.set_for(kind).is_none() {
+        return Outcome::err(
+            ctx,
+            &format!(
+                "adopt-pane: no scrape patterns for {kind:?} — an adopted pane is visible only through the scrape tier's rules"
+            ),
+        );
+    }
+    // The process table reads the whole OS process list: off the lock,
+    // the order the scrape tick keeps.
+    let table = crate::mux::foreground::ProcessTable::snapshot();
+    let (id, ws, state) = {
+        let mut guard = ctx.tree.lock();
+        let id = match guard.resolve_pane_target(pane) {
+            Ok(id) => id,
+            Err(err) => return Outcome::err(ctx, &err.to_string()),
+        };
+        let Some(target) = guard.pane(id) else {
+            return Outcome::err(ctx, &format!("no such pane: {id}"));
+        };
+        if !target.is_running() || target.dead() {
+            return Outcome::err(ctx, &format!("adopt-pane: pane {id} has exited"));
+        }
+        if let Some(agent) = target.metadata().get("agent") {
+            return Outcome::err(
+                ctx,
+                &format!("adopt-pane: pane {id} already hosts agent {agent}"),
+            );
+        }
+        // The tick's borrow order: viewed/workspace reads before pane_mut.
+        let in_view = crate::mux::hooks::pane_in_view(&guard, id);
+        let ws = guard
+            .workspace_of_pane(id)
+            .map(|w| w.to_string())
+            .unwrap_or_default();
+        let target = guard.pane_mut(id).expect("pane checked alive above");
+        target.set_metadata("agent", kind);
+        let prior = target.metadata().get("agent_state").map(String::as_str);
+        let classified = crate::mux::scrape::evaluate_pane(target, kind, &engine, table.as_ref())
+            .map(|(state, rule)| {
+                let state = crate::mux::hooks::derive_state(prior, &state, in_view);
+                (state.to_string(), rule)
+            });
+        match classified {
+            Some((state, rule)) => {
+                target.set_metadata("agent_state", &state);
+                target.set_metadata("agent_state_source", "scrape");
+                target.set_metadata("agent_state_rule", &rule);
+                (id, ws, Some(state))
+            }
+            None => (id, ws, None),
+        }
+    };
+    match state {
+        Some(state) => Outcome::ok(ctx, &format!("{id} {kind} {state} scrape")).notifying(
+            TmuxNotification::AgentStateChanged {
+                pane_id: id.to_string(),
+                agent: kind.to_string(),
+                state,
+                source: "scrape".to_string(),
+                ws,
+                msg: String::new(),
+            },
+        ),
+        None => Outcome::ok(ctx, &format!("{id} {kind} unknown none")),
+    }
 }
 
 #[cfg(all(test, unix))]

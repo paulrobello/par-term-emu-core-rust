@@ -722,3 +722,67 @@ fn agent_activity_counts_only_working_and_blocked_entries() {
     f.report("testagent", "idle", 5);
     assert_eq!(f.activity(), 2);
 }
+
+/// AC1: adopt-pane labels a live pane the user started an agent in, and
+/// the classification runs once, now — a claude idle title on the screen
+/// yields the roster row with no scrape tick and no hook report.
+#[test]
+fn adopt_pane_labels_the_pane_and_classifies_at_once() {
+    let f = Fixture::new();
+    let terminal = f.tree.lock().pane(PANE).unwrap().terminal();
+    let title = String::from("\x1b]2;\u{2733} ready\x07");
+    terminal.write().process(title.as_bytes());
+    drop(terminal);
+
+    let reply = f.run("adopt-pane -t %0 claude");
+    let (lines, ok) = body(&reply);
+    assert!(ok, "{reply}");
+    assert_eq!(lines, vec!["%0 claude idle scrape"]);
+    assert_eq!(f.metadata("agent").as_deref(), Some("claude"));
+    assert_eq!(f.metadata("agent_state_source").as_deref(), Some("scrape"));
+    let roster = f.run("list-agents");
+    assert!(roster.contains("%0 claude idle scrape"), "{roster}");
+}
+
+/// A pane already carrying an agent label — here a hook claim — is
+/// refused; adoption never overwrites another reporter's claim.
+#[test]
+fn adopt_pane_refuses_a_pane_that_already_hosts_an_agent() {
+    let f = Fixture::new();
+    f.report("claude", "idle", 1);
+
+    let reply = f.run("adopt-pane -t %0 claude");
+    let (_, ok) = body(&reply);
+    assert!(!ok, "{reply}");
+    assert!(reply.contains("already hosts agent claude"), "{reply}");
+}
+
+/// A kind without a scrape pattern set is refused: the tier is what keeps
+/// the adopted pane's row populated between states.
+#[test]
+fn adopt_pane_refuses_kinds_without_scrape_patterns() {
+    let f = Fixture::new();
+
+    let reply = f.run("adopt-pane -t %0 zeta-agent");
+    let (_, ok) = body(&reply);
+    assert!(!ok, "{reply}");
+    assert!(reply.contains("no scrape patterns for"), "{reply}");
+}
+
+/// With no rule matching the live screen the reply says `unknown none` —
+/// and the roster stays without the row (no state, no row) until the
+/// tick's rules or fallback find one, never a guessed idle.
+#[test]
+fn adopt_pane_without_a_matching_rule_reports_unknown_and_no_roster_row() {
+    let f = Fixture::new();
+
+    let reply = f.run("adopt-pane -t %0 claude");
+    let (lines, ok) = body(&reply);
+    assert!(ok, "{reply}");
+    assert_eq!(lines, vec!["%0 claude unknown none"]);
+    let roster = f.run("list-agents");
+    assert!(
+        !roster.contains("%0 claude"),
+        "no state, no roster row: {roster}"
+    );
+}

@@ -96,8 +96,37 @@ fn hook_asset_path() -> io::Result<PathBuf> {
     asset_path_for(claude_hook_install_name())
 }
 
+/// The claude settings entries par-mux installs, in merge order: the event
+/// name, the hook command, and the matcher (claude's SessionStart sources;
+/// every other event matches everything).
+fn install_entries(hook_path: &Path) -> [(&'static str, String, Option<&'static str>); 5] {
+    let command = hook_command_for(hook_path);
+    [
+        ("SessionStart", command, Some(SESSION_START_MATCHER)),
+        (
+            "SessionEnd",
+            hook_command_with_action(hook_path, "release"),
+            None,
+        ),
+        (
+            "UserPromptSubmit",
+            hook_command_with_action(hook_path, "prompt"),
+            None,
+        ),
+        (
+            "Notification",
+            hook_command_with_action(hook_path, "notify"),
+            None,
+        ),
+        ("Stop", hook_command_with_action(hook_path, "stop"), None),
+    ]
+}
+
 /// Install the claude session hook: write the script asset and merge the
-/// SessionStart entry into the user's settings.
+/// session entries into the user's settings — SessionStart (the identity
+/// report), SessionEnd (the release), and the mid-flight events that keep
+/// a live session registered (UserPromptSubmit → `prompt`, Notification
+/// → `notify`, Stop → `stop`).
 pub fn install_claude_hook() -> io::Result<ClaudeHookInstall> {
     install_claude_hook_into(&claude_settings_path()?, &hook_asset_path()?)
 }
@@ -129,34 +158,25 @@ pub fn install_claude_hook_into(
     };
 
     // Merge and verify BEFORE writing anything: a malformed user config must
-    // fail with the file — and the asset — untouched. Both events merge
-    // against the sequentially updated text so a fresh install splices the
-    // SessionStart entry and the SessionEnd entry in one write.
-    let command = hook_command_for(hook_path);
-    let release_command = hook_command_with_action(hook_path, "release");
-    let start_merged = merge_hook_event(
-        &content,
-        settings_path,
-        &command,
-        Some(SESSION_START_MATCHER),
-        "SessionStart",
-    )?;
-    let after_start: &str = start_merged.as_deref().unwrap_or(&content);
-    // SessionEnd runs the release arm matcher-less: every end reason
-    // (clear/logout/exit/restart/boom) means this agent process is gone.
-    let end_merged = merge_hook_event(
-        after_start,
-        settings_path,
-        &release_command,
-        None,
-        "SessionEnd",
-    )?;
-    let settings_changed = start_merged.is_some() || end_merged.is_some();
+    // fail with the file — and the asset — untouched. All five entries merge
+    // against the sequentially updated text so a fresh install (or an
+    // upgrade from the two-entry version) splices in one write.
+    let mut current = content;
+    let mut settings_changed = false;
+    for (event, entry_command, matcher) in install_entries(hook_path) {
+        current = match merge_hook_event(&current, settings_path, &entry_command, matcher, event)? {
+            Some(updated) => {
+                settings_changed = true;
+                updated
+            }
+            None => current,
+        };
+    }
 
     write_hook_asset(hook_path, claude_hook_asset())?;
 
     if settings_changed {
-        save_settings(settings_path, end_merged.as_deref().unwrap_or(after_start))?;
+        save_settings(settings_path, &current)?;
     }
 
     Ok(ClaudeHookInstall {
@@ -180,16 +200,12 @@ pub fn uninstall_claude_hook_into(
     let mut settings_changed = false;
     if settings_path.is_file() {
         let content = fs::read_to_string(settings_path)?;
-        let command = hook_command_for(hook_path);
-        let release_command = hook_command_with_action(hook_path, "release");
-        if let Some(updated) = unmerge_hook_entries(
-            &content,
-            settings_path,
-            &[
-                ("SessionStart", command.as_str()),
-                ("SessionEnd", release_command.as_str()),
-            ],
-        )? {
+        let entries = install_entries(hook_path);
+        let pairs: Vec<(&str, &str)> = entries
+            .iter()
+            .map(|(event, command, _)| (*event, command.as_str()))
+            .collect();
+        if let Some(updated) = unmerge_hook_entries(&content, settings_path, &pairs)? {
             save_settings(settings_path, &updated)?;
             settings_changed = true;
         }
@@ -606,6 +622,80 @@ mod tests {
         assert!(
             our_group.get("matcher").is_none(),
             "SessionEnd matches every end reason: {our_group}"
+        );
+    }
+
+    /// The mid-flight events keep a live session registered between its
+    /// start and end: the installer registers the same-named action under
+    /// each of claude's UserPromptSubmit, Notification, and Stop events,
+    /// matcher-less, beside the start/end entries.
+    #[test]
+    fn install_registers_the_mid_flight_state_entries() {
+        let root = temp_root();
+        let settings = root.path().join("settings.json");
+        let hook = root.path().join("par-mux-claude-session-hook.sh");
+        fs::write(&settings, REAL_WORLD_SETTINGS).unwrap();
+
+        install_claude_hook_into(&settings, &hook).unwrap();
+
+        let value: JsonValue =
+            parse_serde(&fs::read_to_string(&settings).unwrap(), Path::new("<test>")).unwrap();
+        let hooks = value
+            .get("hooks")
+            .and_then(JsonValue::as_object)
+            .expect("hooks object");
+        for (event, action) in [
+            ("UserPromptSubmit", "prompt"),
+            ("Notification", "notify"),
+            ("Stop", "stop"),
+        ] {
+            let expected = hook_command_with_action(&hook, action);
+            let group = hooks
+                .get(event)
+                .and_then(JsonValue::as_array)
+                .and_then(|groups| {
+                    groups.iter().find(|group| {
+                        group
+                            .get("hooks")
+                            .and_then(JsonValue::as_array)
+                            .is_some_and(|entries| {
+                                entries.iter().any(|entry| {
+                                    entry.get("command").and_then(JsonValue::as_str)
+                                        == Some(expected.as_str())
+                                })
+                            })
+                    })
+                })
+                .unwrap_or_else(|| panic!("{event} carries our {action} entry"));
+            assert!(
+                group.get("matcher").is_none(),
+                "{event} matches every payload: {group}"
+            );
+        }
+    }
+
+    /// The hook assets dispatch the new actions: the POSIX reporter and
+    /// its PowerShell port both speak pane.report_agent with a state, and
+    /// the version marker moved so status surfaces flag stale installs.
+    #[test]
+    fn the_hook_assets_handle_the_mid_flight_state_actions() {
+        for asset in [CLAUDE_HOOK_ASSET_POSIX, CLAUDE_HOOK_ASSET_WINDOWS] {
+            assert!(
+                asset.contains("\"prompt\", \"notify\", \"stop\""),
+                "the state-report action set"
+            );
+            assert!(
+                asset.contains("pane.report_agent"),
+                "the state-report method"
+            );
+            assert!(
+                asset.contains("PAR_MUX_INTEGRATION_VERSION=3"),
+                "the version marker moved past the two-event install"
+            );
+        }
+        assert!(
+            CLAUDE_HOOK_ASSET_POSIX.contains("permission"),
+            "the notify arm reads the message for the permission question"
         );
     }
 
