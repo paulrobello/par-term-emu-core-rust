@@ -6,7 +6,7 @@ Real-time terminal streaming over WebSocket with browser-based frontend for remo
 
 - `--check-update`: report a newer stable GitHub release or "up to date", without changing files.
 - `--self-update`: download the exact platform binary and its `<asset>.sha256` sidecar, verify SHA-256, retain `<executable>.previous`, replace, and restart.
-- `--auto-update` / `PAR_TERM_AUTO_UPDATE=true`: opt in to automatic installation at startup and while serving. Default **off**.
+- `--auto-update` / `PAR_TERM_AUTO_UPDATE`: opt in to automatic installation at startup and while serving (set it to `true`). Default **off**.
 - `--update-interval hourly|daily|weekly` / `PAR_TERM_UPDATE_INTERVAL`: cadence, default **daily**.
 - `--launchd-label LABEL` / `PAR_TERM_LAUNCHD_LABEL`: restart label, default `net.pardev.pardeck.streamer`.
 
