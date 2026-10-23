@@ -21,11 +21,14 @@ die() { log "error: $*"; exit 1; }
 
 usage() {
   cat >&2 <<'EOF'
-Usage: install.sh [--streamer | --mux] [--version vX.Y.Z] [--bin-dir DIR]
+Usage: install.sh [--streamer | --streamer-mux | --mux] [--version vX.Y.Z] [--bin-dir DIR]
 
 Options:
-  --streamer        Install only par-term-streamer (default: both binaries)
-  --mux             Install only par-mux (default: both binaries)
+  --streamer        Install only the plain par-term-streamer
+  --streamer-mux    Install only the mux-enabled par-term-streamer
+  --mux             Install only par-mux
+  (default: the plain streamer and par-mux; --mux may combine with either
+  streamer variant, but --streamer and --streamer-mux are mutually exclusive)
   --version vX.Y.Z  Pin a release (default: latest GitHub release)
   --bin-dir DIR     Install destination (default: ~/.cargo/bin)
   --self-test       Run offline self-tests of the pure helper functions
@@ -51,6 +54,18 @@ map_streamer_asset() {
     darwin/x86_64) printf 'par-term-streamer-macos-x86_64' ;;
     linux/arm64)   printf 'par-term-streamer-linux-aarch64' ;;
     linux/x86_64)  printf 'par-term-streamer-linux-x86_64' ;;
+    *) return 1 ;;
+  esac
+}
+
+# Map os/arch to the mux-enabled par-term-streamer release asset name
+# (Binary::StreamerMux in self_update.rs).
+map_streamer_mux_asset() {
+  case "$1/$2" in
+    darwin/arm64)  printf 'par-term-streamer-mux-macos-aarch64' ;;
+    darwin/x86_64) printf 'par-term-streamer-mux-macos-x86_64' ;;
+    linux/arm64)   printf 'par-term-streamer-mux-linux-aarch64' ;;
+    linux/x86_64)  printf 'par-term-streamer-mux-linux-x86_64' ;;
     *) return 1 ;;
   esac
 }
@@ -148,6 +163,14 @@ self_test() {
   check_err "unsupported platform streamer" map_streamer_asset windows x86_64
   check_err "unsupported arch streamer" map_streamer_asset linux i686
 
+  # Platform -> mux-enabled streamer asset: every name deployment.yml uploads.
+  check "darwin arm64 streamer-mux" "par-term-streamer-mux-macos-aarch64" "$(map_streamer_mux_asset darwin arm64)"
+  check "darwin x86_64 streamer-mux" "par-term-streamer-mux-macos-x86_64" "$(map_streamer_mux_asset darwin x86_64)"
+  check "linux arm64 streamer-mux" "par-term-streamer-mux-linux-aarch64" "$(map_streamer_mux_asset linux arm64)"
+  check "linux x86_64 streamer-mux" "par-term-streamer-mux-linux-x86_64" "$(map_streamer_mux_asset linux x86_64)"
+  check_err "unsupported platform streamer-mux" map_streamer_mux_asset windows x86_64
+  check_err "unsupported arch streamer-mux" map_streamer_mux_asset linux i686
+
   # Platform -> mux archive: every name deployment.yml uploads.
   check "darwin arm64 mux" "par-mux-v1.2.3-aarch64-apple-darwin.tar.gz" "$(map_mux_archive darwin arm64 1.2.3)"
   check "darwin x86_64 mux" "par-mux-v1.2.3-x86_64-apple-darwin.tar.gz" "$(map_mux_archive darwin x86_64 1.2.3)"
@@ -227,27 +250,31 @@ install_binary() { # $1=staged-file $2=destination
   log "installed $dest"
 }
 
-install_one() { # $1=streamer|mux  $2=version $3=os $4=arch $5=dest-dir $6=tmpdir
+install_one() { # $1=streamer|streamer-mux|mux  $2=version $3=os $4=arch $5=dest-dir $6=tmpdir
   local kind=$1 version=$2 os=$3 arch=$4 dest_dir=$5 tmp=$6
   local asset sidecar dest
-  if [ "$kind" = "streamer" ]; then
-    asset=$(map_streamer_asset "$os" "$arch") || die "unsupported platform: $os/$arch (see ${DL_BASE})"
-    sidecar="${asset}.sha256"
-    dest="${dest_dir}/par-term-streamer"
-  else
+  if [ "$kind" = "mux" ]; then
     asset=$(map_mux_archive "$os" "$arch" "$version") || die "unsupported platform: $os/$arch (see ${DL_BASE})"
     sidecar="par-mux-v${version}-SHA256SUMS.txt"
     dest="${dest_dir}/par-mux"
+  elif [ "$kind" = "streamer-mux" ]; then
+    asset=$(map_streamer_mux_asset "$os" "$arch") || die "unsupported platform: $os/$arch (see ${DL_BASE})"
+    sidecar="${asset}.sha256"
+    dest="${dest_dir}/par-term-streamer"
+  else
+    asset=$(map_streamer_asset "$os" "$arch") || die "unsupported platform: $os/$arch (see ${DL_BASE})"
+    sidecar="${asset}.sha256"
+    dest="${dest_dir}/par-term-streamer"
   fi
 
   log "fetching $asset (v$version, $os/$arch)"
   local sums_file asset_file expected actual member
   sums_file="${tmp}/${sidecar}"
-  if ! fetch "${DL_BASE}/v${version}/${sidecar}" "$sums_file"; then
-    if [ "$kind" = "streamer" ]; then
-      die "no checksum sidecar ${sidecar} for this release; releases older than the sidecar feature ship no sidecar — install manually from https://github.com/${REPO}/releases"
+    if ! fetch "${DL_BASE}/v${version}/${sidecar}" "$sums_file"; then
+    if [ "$kind" = "mux" ]; then
+      die "checksum file ${sidecar} not found for release v${version}"
     fi
-    die "checksum file ${sidecar} not found for release v${version}"
+    die "no checksum sidecar ${sidecar} for this release; releases older than the sidecar feature ship no sidecar — install manually from https://github.com/${REPO}/releases"
   fi
   expected=$(parse_sums "$asset" <"$sums_file") || die "checksum file has no valid entry for ${asset}"
 
@@ -269,10 +296,11 @@ install_one() { # $1=streamer|mux  $2=version $3=os $4=arch $5=dest-dir $6=tmpdi
 }
 
 main() {
-  local want_streamer=false want_mux=false pinned="" bin_dir="${HOME}/.cargo/bin"
+  local want_streamer=false want_mux=false want_streamer_mux=false pinned="" bin_dir="${HOME}/.cargo/bin"
   while [ $# -gt 0 ]; do
     case "$1" in
       --streamer) want_streamer=true ;;
+      --streamer-mux) want_streamer_mux=true ;;
       --mux) want_mux=true ;;
       --version)
         [ $# -ge 2 ] || die "--version requires a value"
@@ -293,10 +321,10 @@ main() {
     esac
     shift
   done
-  if $want_streamer && $want_mux; then
-    die "--streamer and --mux are mutually exclusive"
+  if $want_streamer && $want_streamer_mux; then
+    die "--streamer and --streamer-mux are mutually exclusive (pick one streamer variant per run)"
   fi
-  if ! $want_streamer && ! $want_mux; then
+  if ! $want_streamer && ! $want_mux && ! $want_streamer_mux; then
     want_streamer=true
     want_mux=true
   fi
@@ -334,6 +362,9 @@ main() {
   if $want_streamer; then
     install_one streamer "$version" "$os" "$arch" "$bin_dir" "$tmp"
   fi
+  if $want_streamer_mux; then
+    install_one streamer-mux "$version" "$os" "$arch" "$bin_dir" "$tmp"
+  fi
   if $want_mux; then
     install_one mux "$version" "$os" "$arch" "$bin_dir" "$tmp"
   fi
@@ -345,7 +376,7 @@ main() {
 
   log ""
   log "done (v${version}). Next steps:"
-  if $want_streamer; then
+  if $want_streamer || $want_streamer_mux; then
     log "  par-term-streamer: ${bin_dir}/par-term-streamer"
     log "    serve the web terminal:  par-term-streamer --port 8099  (then open http://127.0.0.1:8099)"
   fi

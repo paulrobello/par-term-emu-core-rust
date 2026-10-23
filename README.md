@@ -29,7 +29,7 @@ Windows (PowerShell):
 irm https://raw.githubusercontent.com/paulrobello/par-term-emu-core-rust/main/install.ps1 | iex
 ```
 
-Options: `--streamer` / `--mux` (PowerShell: `-Streamer` / `-Mux`) install just one binary, `--version vX.Y.Z` / `-Version` pins a release, and `--bin-dir DIR` / `-BinDir` picks a different destination.
+Options: `--streamer` / `--streamer-mux` / `--mux` (PowerShell: `-Streamer` / `-StreamerMux` / `-Mux`) install a subset, `--version vX.Y.Z` / `-Version` pins a release, and `--bin-dir DIR` / `-BinDir` picks a different destination. The default (no selectors) installs the plain streamer and par-mux; `--mux` combines with either streamer variant, `--streamer` and `--streamer-mux` are mutually exclusive.
 
 ## What's New
 

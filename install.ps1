@@ -6,9 +6,13 @@
 # Installs par-term-streamer and/or par-mux into $HOME\.cargo\bin (or -BinDir),
 # verifying every download against its release SHA-256 before anything is
 # moved into place. Never touches services or startup entries.
+#
+# Default (no switches): the plain streamer and par-mux. -Mux may combine with
+# either streamer variant; -Streamer and -StreamerMux are mutually exclusive.
 
 param(
     [switch]$Streamer,
+    [switch]$StreamerMux,
     [switch]$Mux,
     [string]$Version,
     [string]$BinDir
@@ -71,11 +75,13 @@ function Get-RemoteFile([string]$Url, [string]$Dest) {
     }
 }
 
-if ($Streamer -and $Mux) {
-    Die "-Streamer and -Mux are mutually exclusive"
+if ($Streamer -and $StreamerMux) {
+    Die "-Streamer and -StreamerMux are mutually exclusive (pick one streamer variant per run)"
 }
-$wantStreamer = $Streamer -or -not ($Streamer -or $Mux)
-$wantMux = $Mux -or -not ($Streamer -or $Mux)
+$anySelector = $Streamer -or $Mux -or $StreamerMux
+$wantStreamer = $Streamer -or -not $anySelector
+$wantMux = $Mux -or -not $anySelector
+$wantStreamerMux = $StreamerMux
 
 # Windows-only; other platforms use install.sh.
 if ($env:PROCESSOR_ARCHITECTURE -ne 'AMD64') {
@@ -118,6 +124,14 @@ try {
             DestName = 'par-term-streamer.exe'
         }
     }
+    if ($wantStreamerMux) {
+        $targets += [pscustomobject]@{
+            Kind = 'streamer-mux'
+            Asset = 'par-term-streamer-mux-windows-x86_64.exe'
+            Sidecar = 'par-term-streamer-mux-windows-x86_64.exe.sha256'
+            DestName = 'par-term-streamer.exe'
+        }
+    }
     if ($wantMux) {
         $targets += [pscustomobject]@{
             Kind = 'mux'
@@ -133,7 +147,7 @@ try {
 
         $sumsFile = Join-Path $tempRoot $target.Sidecar
         if (-not (Get-RemoteFile "$DlBase/v$version/$($target.Sidecar)" $sumsFile)) {
-            if ($target.Kind -eq 'streamer') {
+            if ($target.Kind -ne 'mux') {
                 Die "no checksum sidecar $($target.Sidecar) for this release; releases older than the sidecar feature ship no sidecar - install manually from https://github.com/$Repo/releases"
             }
             Die "checksum file $($target.Sidecar) not found for release v$version"
@@ -183,7 +197,7 @@ try {
     Write-Host "install.ps1: done (v$version). Next steps:"
     foreach ($target in $targets) {
         $dest = Join-Path $BinDir $target.DestName
-        if ($target.Kind -eq 'streamer') {
+        if ($target.Kind -ne 'mux') {
             Write-Host "  par-term-streamer: $dest"
             Write-Host "    serve the web terminal:  par-term-streamer.exe --port 8099  (then open http://127.0.0.1:8099)"
         } else {
