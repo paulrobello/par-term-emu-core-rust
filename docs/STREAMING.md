@@ -15,6 +15,9 @@ Other invocations re-execute the installed binary with their existing arguments 
 This follows the streamer's existing flag/environment configuration surface, with no new config file.
 Updates need `curl` on PATH, HTTPS access to GitHub and its release CDN, and write access to the
 executable's directory. Missing checksums fail closed, including older releases that have no binary sidecars.
+macOS release binaries are Developer ID signed and notarized by `scripts/ci-macos-sign.sh` (ad-hoc
+until the APPLE_* secrets exist), so the macOS application firewall's per-binary allow rule survives
+self-update swaps; unsigned swaps would silently drop inbound LAN connections until re-allowed.
 Standalone PTY sessions reconnect after restart but are not persisted by the streamer. In mux mirror
 mode the mux daemon continues owning the sessions.
 
