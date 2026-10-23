@@ -2188,14 +2188,14 @@ export type AgentEntry = Message<"terminal.AgentEntry"> & {
   workspace: string;
 
   /**
-   * host-attributed project ("" when unknown; no streamer source yet)
+   * host-attributed project from the host_telemetry token ("" when unknown)
    *
    * @generated from field: string project = 7;
    */
   project: string;
 
   /**
-   * pane title/label ("" when unknown; no streamer source yet)
+   * pane title/label from the daemon's pane-title query ("" when unknown)
    *
    * @generated from field: string pane_label = 8;
    */

@@ -656,6 +656,29 @@ expose-control-socket = false
 remain-on-exit = false  # hold a pane whose child exited instead of removing it (the attach respawn cue; under the default auto-remove a shown pane's death flashes the affordance instead)
 exit-empty = true       # exit after the 5 s grace once no sessions (or only dead panes) remain; attached clients do not hold it
 split-start-dir = "home-dir"  # what a split-window pane starts in with no -c: "home-dir", "previous-pane-dir" (the target pane's live cwd), or "workspace-dir" (the workspace's launch folder)
+
+[daemon.agent-append]
+# Extra words agent-start appends when launching/resuming an agent — the
+# resume flags a shell alias would carry, e.g.:
+#   claude = "--continue --name {name}"
+# {name} expands to the pane cwd's basename; unknown {tokens} stay
+# literal. Words are whitespace-split and each is shell-quoted on typing,
+# so a value can never run shell syntax. Every supported kind has a key;
+# blank = launch bare.
+claude = ""
+codex = ""
+grok = ""
+muse = ""
+droid = ""
+copilot = ""
+cursor = ""
+kimi = ""
+qwen = ""
+qodercli = ""
+devin = ""
+gemini = ""
+amp = ""
+mastracode = ""
 ```
 
 Every setting maps to an existing flag or resolution rule: `[client]` keys
@@ -682,6 +705,7 @@ setting:
 | `daemon.remain-on-exit` | **Live** — a `reload-config` whose file states a different value applies it at once and reports `applied: daemon.remain-on-exit`; the NEXT observed death honors it (the reaper reads the flag at every pass). |
 | `daemon.exit-empty` | **Live** — a stated difference applies at once (`applied: daemon.exit-empty`); the accept loop re-reads the applied copy every idle tick, so an off daemon holds past the grace without a restart. |
 | `daemon.split-start-dir` | **Live** — a stated difference applies at once (`applied: daemon.split-start-dir`); the next `split-window` honors it. A value other than `home-dir`, `previous-pane-dir`, or `workspace-dir` keeps the home default; a setting source that is gone (a stale pane cwd, a workspace without a launch folder) does too. An explicit `split-window -c` always wins. |
+| `daemon.agent-append.<kind>` | **Live** — a stated difference applies at once (`applied: daemon.agent-append.<kind>`), one report line per supported kind; the next `agent-start` of that kind appends the words. Words are whitespace-split and shell-quoted on typing (a value can never execute shell syntax); `{name}` expands to the pane cwd's basename, unknown `{tokens}` stay literal. Blank = launch bare. |
 | `daemon.pane-endpoints` / `daemon.expose-control-socket` | Startup-only in v1 (reported as restart-required). |
 | `daemon.state-dir` | Startup-only — the daemon resolves the persist path once at startup and the persist worker writes to that fixed path. |
 
@@ -691,10 +715,11 @@ There are three reload entry points:
   the canonical path): the daemon re-reads the file and replies one line
   per `[daemon]` setting, `unchanged: <name>` or
   `restart-required: <name>` — except `daemon.remain-on-exit`,
-  `daemon.exit-empty`, and `daemon.split-start-dir`, the live settings:
-  a stated difference is applied at once and reported
+  `daemon.exit-empty`, `daemon.split-start-dir`, and every
+  `daemon.agent-append.<kind>` key, the live settings: a stated
+  difference is applied at once and reported
   `applied: daemon.remain-on-exit` / `applied: daemon.exit-empty` /
-  `applied: daemon.split-start-dir`. The file speaks only for settings it
+  `applied: daemon.split-start-dir` / `applied: daemon.agent-append.<kind>`. The file speaks only for settings it
   actually states — a setting absent from the file is `unchanged`, which
   is what keeps a daemon started with one-shot `--socket`/`--state-dir`
   flags quiet. A PRESENT file that fails to parse is a `%error` (the

@@ -583,15 +583,17 @@ fn reload_config_reports_restart_required_per_changed_setting() {
     };
     // The dispatch re-reads the stamped path (above: absent), so the
     // reply is the all-unchanged shape no matter what the host's real
-    // config.toml holds.
+    // config.toml holds: 7 daemon settings + one line per
+    // daemon.agent-append kind.
     let reply = dispatch_command(parse_command("reload-config").unwrap(), &ctx, None, None);
     let unchanged = reply.lines().filter(|l| l.contains("unchanged:")).count();
     assert_eq!(
-        unchanged, 7,
+        unchanged,
+        7 + crate::mux::config::AGENT_APPEND_KINDS.len(),
         "an absent file leaves every setting unchanged: {reply}"
     );
     // The pure report over a written file: the moved/flipped settings
-    // are restart-required, the live trio applies, the unstated one
+    // are restart-required, the live settings apply, the unstated one
     // stays unchanged.
     let file: crate::mux::config::ConfigFile =
         toml::from_str("[daemon]\nstate-dir = \"/tmp/new-state\"\npane-endpoints = true\nsplit-start-dir = \"workspace-dir\"\n")

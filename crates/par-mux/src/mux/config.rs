@@ -468,6 +468,59 @@ pub struct ClientSection {
     pub popup: Option<Vec<crate::mux::popup::PopupEntry>>,
 }
 
+/// `[daemon.agent-append]`: extra command-line words the daemon appends
+/// when `agent-start` (re)launches that agent in a pane — the resume
+/// flags a shell alias would carry (`--continue` and friends). Words are
+/// whitespace-split and every one is shell-quoted before typing, so a
+/// value can never close the quoting and run shell syntax; `{name}` is
+/// the one template var, replaced daemon-side with the pane cwd's
+/// basename. Each key defaults to blank (the agent launches bare).
+#[derive(Debug, Clone, Default, PartialEq, Eq, Deserialize, Serialize)]
+pub struct AgentAppendFile {
+    /// Extra words appended when `agent-start` launches claude.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub claude: Option<String>,
+    /// Extra words appended when `agent-start` launches codex.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub codex: Option<String>,
+    /// Extra words appended when `agent-start` launches grok.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub grok: Option<String>,
+    /// Extra words appended when `agent-start` launches muse.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub muse: Option<String>,
+    /// Extra words appended when `agent-start` launches droid.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub droid: Option<String>,
+    /// Extra words appended when `agent-start` launches copilot.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub copilot: Option<String>,
+    /// Extra words appended when `agent-start` launches cursor.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cursor: Option<String>,
+    /// Extra words appended when `agent-start` launches kimi.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub kimi: Option<String>,
+    /// Extra words appended when `agent-start` launches qwen.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub qwen: Option<String>,
+    /// Extra words appended when `agent-start` launches qodercli.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub qodercli: Option<String>,
+    /// Extra words appended when `agent-start` launches devin.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub devin: Option<String>,
+    /// Extra words appended when `agent-start` launches gemini.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub gemini: Option<String>,
+    /// Extra words appended when `agent-start` launches amp.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub amp: Option<String>,
+    /// Extra words appended when `agent-start` launches mastracode.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub mastracode: Option<String>,
+}
+
 /// `[daemon]`: what the daemon reads at startup.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Deserialize, Serialize)]
 pub struct DaemonSection {
@@ -523,6 +576,10 @@ pub struct DaemonSection {
         skip_serializing_if = "Option::is_none"
     )]
     pub split_start_dir: Option<String>,
+    /// Per-agent resume words appended at `agent-start` (see
+    /// [`AgentAppendFile`]); a key the file omits stays blank.
+    #[serde(default, rename = "agent-append")]
+    pub agent_append: AgentAppendFile,
 }
 
 /// The fully resolved settings after flags > env > file > defaults.
@@ -588,6 +645,11 @@ pub struct EffectiveConfig {
     /// lookup. Not a setting: `render` never emits it and the reload diff
     /// never compares it.
     pub config_path: Option<std::path::PathBuf>,
+    /// The resolved per-agent resume words (`[daemon.agent-append]`);
+    /// blank = the agent launches bare. The fourth live daemon setting:
+    /// read at each `agent-start`, so `reload-config` applies a change at
+    /// once.
+    pub agent_append: AgentAppend,
 }
 
 impl Default for EffectiveConfig {
@@ -607,7 +669,67 @@ impl Default for EffectiveConfig {
             git_status: true,
             git_poll_secs: 10,
             split_start_dir: "home-dir".to_string(),
+            agent_append: AgentAppend::default(),
             config_path: None,
+        }
+    }
+}
+
+/// The resolved `[daemon.agent-append]` table: one entry per supported
+/// agent, blank = launch bare.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct AgentAppend {
+    /// The resolved claude entry; blank = launch bare.
+    pub claude: String,
+    /// The resolved codex entry; blank = launch bare.
+    pub codex: String,
+    /// The resolved grok entry; blank = launch bare.
+    pub grok: String,
+    /// The resolved muse entry; blank = launch bare.
+    pub muse: String,
+    /// The resolved droid entry; blank = launch bare.
+    pub droid: String,
+    /// The resolved copilot entry; blank = launch bare.
+    pub copilot: String,
+    /// The resolved cursor entry; blank = launch bare.
+    pub cursor: String,
+    /// The resolved kimi entry; blank = launch bare.
+    pub kimi: String,
+    /// The resolved qwen entry; blank = launch bare.
+    pub qwen: String,
+    /// The resolved qodercli entry; blank = launch bare.
+    pub qodercli: String,
+    /// The resolved devin entry; blank = launch bare.
+    pub devin: String,
+    /// The resolved gemini entry; blank = launch bare.
+    pub gemini: String,
+    /// The resolved amp entry; blank = launch bare.
+    pub amp: String,
+    /// The resolved mastracode entry; blank = launch bare.
+    pub mastracode: String,
+}
+
+impl AgentAppend {
+    /// The entry for the `agent-start` kind: one of the supported kinds,
+    /// or blank for any other (an unknown kind still launches, bare).
+    #[must_use]
+    pub fn entry(&self, kind: &str) -> &str {
+        match kind {
+            "claude" => &self.claude,
+            "codex" => &self.codex,
+            "grok" => &self.grok,
+            "muse" => &self.muse,
+            "droid" => &self.droid,
+            "copilot" => &self.copilot,
+            "cursor" => &self.cursor,
+            "kimi" => &self.kimi,
+            "qwen" => &self.qwen,
+            "qodercli" => &self.qodercli,
+            "devin" => &self.devin,
+            "gemini" => &self.gemini,
+            "amp" => &self.amp,
+            "mastracode" => &self.mastracode,
+            _ => "",
         }
     }
 }
@@ -682,6 +804,38 @@ pub fn resolve(file: &ConfigFile, o: &Overrides) -> EffectiveConfig {
     // tier); an unknown spelling keeps the home default.
     if let Some(v) = file.daemon.split_start_dir.as_ref() {
         eff.split_start_dir = v.clone();
+    }
+    // agent-append is file-only daemon behavior like split-start-dir; a
+    // stated key replaces the blank entry, an omitted key keeps it.
+    let stated_append = &file.daemon.agent_append;
+    for (stated, resolved) in [
+        (stated_append.claude.as_ref(), &mut eff.agent_append.claude),
+        (stated_append.codex.as_ref(), &mut eff.agent_append.codex),
+        (stated_append.grok.as_ref(), &mut eff.agent_append.grok),
+        (stated_append.muse.as_ref(), &mut eff.agent_append.muse),
+        (stated_append.droid.as_ref(), &mut eff.agent_append.droid),
+        (
+            stated_append.copilot.as_ref(),
+            &mut eff.agent_append.copilot,
+        ),
+        (stated_append.cursor.as_ref(), &mut eff.agent_append.cursor),
+        (stated_append.kimi.as_ref(), &mut eff.agent_append.kimi),
+        (stated_append.qwen.as_ref(), &mut eff.agent_append.qwen),
+        (
+            stated_append.qodercli.as_ref(),
+            &mut eff.agent_append.qodercli,
+        ),
+        (stated_append.devin.as_ref(), &mut eff.agent_append.devin),
+        (stated_append.gemini.as_ref(), &mut eff.agent_append.gemini),
+        (stated_append.amp.as_ref(), &mut eff.agent_append.amp),
+        (
+            stated_append.mastracode.as_ref(),
+            &mut eff.agent_append.mastracode,
+        ),
+    ] {
+        if let Some(v) = stated {
+            *resolved = v.clone();
+        }
     }
     // The border colors are file-only `[client]` options, like every
     // other client display option.
@@ -842,6 +996,22 @@ pub fn render(eff: &EffectiveConfig) -> String {
             remain_on_exit: Some(eff.remain_on_exit),
             exit_empty: Some(eff.exit_empty),
             split_start_dir: Some(eff.split_start_dir.clone()),
+            agent_append: AgentAppendFile {
+                claude: Some(eff.agent_append.claude.clone()),
+                codex: Some(eff.agent_append.codex.clone()),
+                grok: Some(eff.agent_append.grok.clone()),
+                muse: Some(eff.agent_append.muse.clone()),
+                droid: Some(eff.agent_append.droid.clone()),
+                copilot: Some(eff.agent_append.copilot.clone()),
+                cursor: Some(eff.agent_append.cursor.clone()),
+                kimi: Some(eff.agent_append.kimi.clone()),
+                qwen: Some(eff.agent_append.qwen.clone()),
+                qodercli: Some(eff.agent_append.qodercli.clone()),
+                devin: Some(eff.agent_append.devin.clone()),
+                gemini: Some(eff.agent_append.gemini.clone()),
+                amp: Some(eff.agent_append.amp.clone()),
+                mastracode: Some(eff.agent_append.mastracode.clone()),
+            },
         },
         machines: Default::default(),
     };
@@ -1403,6 +1573,26 @@ pub fn reload_client_chords(file: &ConfigFile, current: &Chords) -> Result<Chord
     })
 }
 
+/// The supported `agent-start` kinds in table order: the bundled scrape
+/// patterns plus the hook-only mastracode arm. The reload report emits a
+/// line per kind and `[daemon.agent-append]` carries a key per kind.
+pub const AGENT_APPEND_KINDS: [&str; 14] = [
+    "claude",
+    "codex",
+    "grok",
+    "muse",
+    "droid",
+    "copilot",
+    "cursor",
+    "kimi",
+    "qwen",
+    "qodercli",
+    "devin",
+    "gemini",
+    "amp",
+    "mastracode",
+];
+
 /// The daemon-side `reload-config` report, over the re-read file and the
 /// applied copy: one `unchanged:`/`restart-required:`/`applied:` line per
 /// `[daemon]` setting. The file speaks only for settings it states — a
@@ -1411,16 +1601,16 @@ pub fn reload_client_chords(file: &ConfigFile, current: &Chords) -> Result<Chord
 /// flag is an override the file cannot express, so it never reads back
 /// as a change).
 ///
-/// `daemon.remain-on-exit`, `daemon.exit-empty`, and
-/// `daemon.split-start-dir` are the LIVE settings: a stated difference
-/// is applied to `applied` and reported `applied:`; every other stated
-/// difference is `restart-required:` — the socket and the persist path
-/// are fixed at bind, and the boot-tier bools (pane endpoints,
-/// expose-control-socket) decide how the daemon was built.
+/// `daemon.remain-on-exit`, `daemon.exit-empty`, `daemon.split-start-dir`,
+/// and every `daemon.agent-append.<kind>` are the LIVE settings: a stated
+/// difference is applied to `applied` and reported `applied:`; every
+/// other stated difference is `restart-required:` — the socket and the
+/// persist path are fixed at bind, and the boot-tier bools (pane
+/// endpoints, expose-control-socket) decide how the daemon was built.
 pub fn reload_report(applied: &mut EffectiveConfig, file: Option<&ConfigFile>) -> String {
     let Some(file) = file else {
         // Absent file: nothing changed.
-        return [
+        let mut lines: Vec<String> = [
             "unchanged: daemon.socket",
             "unchanged: daemon.state-dir",
             "unchanged: daemon.pane-endpoints",
@@ -1429,7 +1619,13 @@ pub fn reload_report(applied: &mut EffectiveConfig, file: Option<&ConfigFile>) -
             "unchanged: daemon.exit-empty",
             "unchanged: daemon.split-start-dir",
         ]
-        .join("\n");
+        .iter()
+        .map(|s| s.to_string())
+        .collect();
+        for kind in AGENT_APPEND_KINDS {
+            lines.push(format!("unchanged: daemon.agent-append.{kind}"));
+        }
+        return lines.join("\n");
     };
     let mut lines = Vec::new();
     for (name, stated, current) in [
@@ -1487,6 +1683,87 @@ pub fn reload_report(applied: &mut EffectiveConfig, file: Option<&ConfigFile>) -
         }
         _ => "unchanged: daemon.split-start-dir".to_string(),
     });
+    let stated_append = &file.daemon.agent_append;
+    for (kind, stated, current) in [
+        (
+            "claude",
+            stated_append.claude.as_deref(),
+            &mut applied.agent_append.claude,
+        ),
+        (
+            "codex",
+            stated_append.codex.as_deref(),
+            &mut applied.agent_append.codex,
+        ),
+        (
+            "grok",
+            stated_append.grok.as_deref(),
+            &mut applied.agent_append.grok,
+        ),
+        (
+            "muse",
+            stated_append.muse.as_deref(),
+            &mut applied.agent_append.muse,
+        ),
+        (
+            "droid",
+            stated_append.droid.as_deref(),
+            &mut applied.agent_append.droid,
+        ),
+        (
+            "copilot",
+            stated_append.copilot.as_deref(),
+            &mut applied.agent_append.copilot,
+        ),
+        (
+            "cursor",
+            stated_append.cursor.as_deref(),
+            &mut applied.agent_append.cursor,
+        ),
+        (
+            "kimi",
+            stated_append.kimi.as_deref(),
+            &mut applied.agent_append.kimi,
+        ),
+        (
+            "qwen",
+            stated_append.qwen.as_deref(),
+            &mut applied.agent_append.qwen,
+        ),
+        (
+            "qodercli",
+            stated_append.qodercli.as_deref(),
+            &mut applied.agent_append.qodercli,
+        ),
+        (
+            "devin",
+            stated_append.devin.as_deref(),
+            &mut applied.agent_append.devin,
+        ),
+        (
+            "gemini",
+            stated_append.gemini.as_deref(),
+            &mut applied.agent_append.gemini,
+        ),
+        (
+            "amp",
+            stated_append.amp.as_deref(),
+            &mut applied.agent_append.amp,
+        ),
+        (
+            "mastracode",
+            stated_append.mastracode.as_deref(),
+            &mut applied.agent_append.mastracode,
+        ),
+    ] {
+        lines.push(match stated {
+            Some(v) if v != current => {
+                *current = v.to_string();
+                format!("applied: daemon.agent-append.{kind}")
+            }
+            _ => format!("unchanged: daemon.agent-append.{kind}"),
+        });
+    }
     lines.join("\n")
 }
 
@@ -1699,6 +1976,10 @@ remain-on-exit = true
             git_status: true,
             git_poll_secs: 30,
             split_start_dir: "previous-pane-dir".into(),
+            agent_append: AgentAppend {
+                claude: "--continue".into(),
+                ..AgentAppend::default()
+            },
             config_path: None,
         };
         let file: ConfigFile = toml::from_str(&render(&eff)).expect("round-trip parse");
@@ -1751,6 +2032,65 @@ remain-on-exit = true
         );
     }
 
+    /// The agent-append keys are LIVE like the other boot-surviving
+    /// settings: a stated difference applies to the applied copy and
+    /// reports `applied:`; the same value, an omitted key, and the
+    /// absent-file report all stay `unchanged:`.
+    #[test]
+    fn reload_applies_agent_append_live() {
+        let mut applied = EffectiveConfig::default();
+        let file: ConfigFile =
+            toml::from_str("[daemon.agent-append]\nclaude = \"--continue\"\n").unwrap();
+        let report = reload_report(&mut applied, Some(&file));
+        assert!(
+            report.contains("applied: daemon.agent-append.claude"),
+            "a stated difference applies live: {report}"
+        );
+        assert_eq!(applied.agent_append.claude, "--continue");
+        let report = reload_report(&mut applied, Some(&file));
+        assert!(
+            report.contains("unchanged: daemon.agent-append.claude"),
+            "the same value is unchanged: {report}"
+        );
+        let absent = reload_report(&mut applied, None);
+        for kind in AGENT_APPEND_KINDS {
+            assert!(
+                absent.contains(&format!("unchanged: daemon.agent-append.{kind}")),
+                "the absent file keeps every kind unchanged: {report}"
+            );
+        }
+    }
+
+    /// Every supported kind has a table key: the sentinel round-trip
+    /// fails for any kind whose key the struct lacks (the parser drops
+    /// unknown TOML keys silently). Unknown kinds and the blank default
+    /// read empty.
+    #[test]
+    fn agent_append_covers_every_supported_kind() {
+        let mut text = String::from("[daemon.agent-append]\n");
+        for kind in AGENT_APPEND_KINDS {
+            text.push_str(&format!("{kind} = \"--{kind}-flag\"\n"));
+        }
+        let eff = resolve(
+            &toml::from_str::<ConfigFile>(&text).unwrap(),
+            &Overrides::default(),
+        );
+        for kind in AGENT_APPEND_KINDS {
+            let want = format!("--{kind}-flag");
+            assert_eq!(eff.agent_append.entry(kind), want, "{kind} keeps its entry");
+        }
+        assert_eq!(
+            eff.agent_append.entry("unknown-agent"),
+            "",
+            "an unknown kind reads blank"
+        );
+        assert_eq!(
+            EffectiveConfig::default().agent_append.entry("claude"),
+            "",
+            "the default table is blank"
+        );
+    }
+
     /// exit-empty's default is ON — exit-when-empty ships enabled, as
     /// before the knob existed.
     #[test]
@@ -1783,6 +2123,7 @@ remain-on-exit = true
             "expose-control-socket",
             "remain-on-exit",
             "exit-empty",
+            "agent-append",
         ] {
             assert!(text.contains(key), "default render names {key}: {text}");
         }

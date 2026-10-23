@@ -512,8 +512,8 @@ message AgentEntry {
   string source = 4;   // "hook" | "scrape" — provenance, shown as reported
   string reason = 5;   // decoded blocked reason ("" when none)
   string workspace = 6; // par-mux workspace id (`+N`) from the ws= token ("" when unknown)
-  string project = 7;   // host-attributed project ("" when unknown; no streamer source yet)
-  string pane_label = 8; // pane title/label ("" when unknown; no streamer source yet)
+  string project = 7;   // host-attributed project from the host_telemetry token ("" when unknown)
+  string pane_label = 8; // pane title/label from the daemon's pane-title query ("" when unknown)
 }
 
 // Full roster snapshot (pane-id ascending), pushed once per client connect.

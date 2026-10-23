@@ -194,9 +194,26 @@ pub(super) fn cmd_agent_start(
     args: &[String],
     timeout_ms: Option<u64>,
 ) -> Outcome {
+    // The `[daemon.agent-append]` words for this kind ride along on every
+    // start; each word is shell-quoted below, so a configured value can
+    // never close the quoting and run shell syntax. `{name}` is the one
+    // template var, expanded daemon-side below.
+    let append_words: Vec<String> = ctx
+        .config
+        .map(|config| {
+            let config = config.lock();
+            config
+                .agent_append
+                .entry(kind)
+                .split_whitespace()
+                .map(str::to_string)
+                .collect()
+        })
+        .unwrap_or_default();
     if cfg!(windows)
         && std::iter::once(program.as_deref().unwrap_or(kind))
             .chain(args.iter().map(String::as_str))
+            .chain(append_words.iter().map(String::as_str))
             .any(|word| word.contains('"'))
     {
         return Outcome::err(
@@ -206,7 +223,7 @@ pub(super) fn cmd_agent_start(
     }
     let timeout = Duration::from_millis(timeout_ms.unwrap_or(AGENT_START_DEFAULT_TIMEOUT_MS));
     let deadline = Instant::now() + timeout;
-    let (pane, child_pid, input, engine) = {
+    let (pane, child_pid, input, pane_cwd, engine) = {
         let guard = ctx.tree.lock();
         let id = match guard.resolve_pane_target(pane) {
             Ok(id) => id,
@@ -228,7 +245,8 @@ pub(super) fn cmd_agent_start(
             Ok(input) => input,
             Err(err) => return Outcome::err(ctx, &format!("agent-start: {err}")),
         };
-        (id, target.child_pid(), input, engine_of(&guard))
+        let pane_cwd = target.persistence_cwd();
+        (id, target.child_pid(), input, pane_cwd, engine_of(&guard))
     };
     // The process table reads the whole OS process list: off the lock.
     // An unreadable table (Windows) cannot prove the pane busy. A shell
@@ -265,8 +283,22 @@ pub(super) fn cmd_agent_start(
         }
         target.set_metadata("agent", kind);
     }
+    // `{name}` expands to the pane cwd's basename — the shell's `$PWD`
+    // stem, what an alias's `$(basename "$PWD")` sees. A pane with no
+    // readable cwd falls back to its id; any other `{token}` stays
+    // literal (a quoted word, never executed).
+    let pane_name = pane_cwd
+        .as_deref()
+        .and_then(std::path::Path::file_name)
+        .map(|name| name.to_string_lossy().into_owned())
+        .unwrap_or_else(|| pane.to_string());
+    let append: Vec<String> = append_words
+        .iter()
+        .map(|word| word.replace("{name}", &pane_name))
+        .collect();
     let mut line = std::iter::once(program.as_deref().unwrap_or(kind))
         .chain(args.iter().map(String::as_str))
+        .chain(append.iter().map(String::as_str))
         .map(shell_word)
         .collect::<Vec<_>>()
         .join(" ");

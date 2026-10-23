@@ -22,18 +22,26 @@ const DRIVEN_MS: u64 = crate::mux::test_wait::CEILING.as_secs() * 1000;
 struct Fixture {
     tree: Arc<Mutex<MuxTree>>,
     clients: crate::mux::server::Clients,
+    config: Option<Arc<Mutex<crate::mux::config::EffectiveConfig>>>,
 }
 
 const PANE: PaneId = PaneId(0);
 
 impl Fixture {
-    /// A tree with one live shell pane.
+    /// A tree with one live shell pane and no applied config.
     fn new() -> Self {
+        Self::with_config(crate::mux::config::EffectiveConfig::default())
+    }
+
+    /// A tree with one live shell pane and `eff` as the daemon's applied
+    /// settings copy (what `Ctx.config` hands the dispatch).
+    fn with_config(eff: crate::mux::config::EffectiveConfig) -> Self {
         let f = Self {
             tree: Arc::new(Mutex::new(MuxTree::new(Box::new(
                 ShellPaneFactory::default(),
             )))),
             clients: Arc::new(Mutex::new(Vec::new())),
+            config: Some(Arc::new(Mutex::new(eff))),
         };
         let reply = f.run("new-session -s agents");
         assert!(reply.contains("%end"), "{reply}");
@@ -48,7 +56,7 @@ impl Fixture {
             clients: &self.clients,
             command_number: 1,
             shutdown: None,
-            config: None,
+            config: self.config.as_deref(),
             client_id: None,
         };
         dispatch_command(parse_command(line).unwrap(), &ctx, None, None)
@@ -108,6 +116,24 @@ impl Fixture {
                 return;
             }
             assert!(Instant::now() < deadline, "never saw {want:?}:\n{screen}");
+            std::thread::sleep(Duration::from_millis(100));
+        }
+    }
+
+    /// [`Self::wait_for_line`] for a TYPED command: the echo shares its
+    /// capture line with the shell prompt, so `want` only needs to end
+    /// the line.
+    fn wait_for_typed_line(&self, want: &str) {
+        let deadline = Instant::now() + crate::mux::test_wait::CEILING;
+        loop {
+            let screen = self.run(&format!("capture-pane -t {PANE}"));
+            if screen.lines().any(|l| l.trim_end().ends_with(want)) {
+                return;
+            }
+            assert!(
+                Instant::now() < deadline,
+                "never saw the typed {want:?}:\n{screen}"
+            );
             std::thread::sleep(Duration::from_millis(100));
         }
     }
@@ -192,6 +218,80 @@ fn agent_start_replies_only_after_a_hook_claim() {
         assert!(ok, "{reply}");
         assert_eq!(lines, vec!["%0 testagent idle hook"]);
         assert!(started.elapsed() >= Duration::from_millis(600));
+    });
+}
+
+/// The `[daemon.agent-append]` words ride along on the typed line with
+/// `{name}` expanded to the pane cwd's basename (what the shell's
+/// `$(basename "$PWD")` alias sees). `-x cat` keeps the pane busy so the
+/// echoed line is capturable before detection.
+#[test]
+fn agent_start_appends_the_configured_resume_words() {
+    let dir = tempfile::tempdir().unwrap();
+    let name = dir
+        .path()
+        .file_name()
+        .unwrap()
+        .to_string_lossy()
+        .into_owned();
+    let eff = crate::mux::config::EffectiveConfig {
+        agent_append: crate::mux::config::AgentAppend {
+            claude: "--continue --name {name}".into(),
+            ..crate::mux::config::AgentAppend::default()
+        },
+        ..crate::mux::config::EffectiveConfig::default()
+    };
+    let f = Fixture::with_config(eff);
+    f.wait_for_shell();
+    // Park the shell in the temp dir so the pane cwd (OSC 7 absent, the
+    // child's kernel cwd) carries the expansion.
+    f.run(&format!(
+        "send-keys -t %0 'cd {}' Enter",
+        dir.path().display()
+    ));
+    let deadline = Instant::now() + crate::mux::test_wait::CEILING;
+    loop {
+        let cwd = f.tree.lock().pane(PANE).and_then(|p| p.persistence_cwd());
+        if cwd.as_deref() == Some(dir.path()) {
+            break;
+        }
+        assert!(Instant::now() < deadline, "the pane cwd never moved");
+        std::thread::sleep(Duration::from_millis(50));
+    }
+    std::thread::scope(|scope| {
+        let start =
+            scope.spawn(|| f.run(&format!("agent-start -t %0 -T {DRIVEN_MS} -x cat claude")));
+        let start = f.tagged("claude", start);
+        f.wait_for_typed_line(&format!("cat --continue --name {name}"));
+        f.report("claude", "idle", 1);
+        let (lines, ok) = body(&start.join().unwrap());
+        assert!(ok, "{lines:?}");
+        assert_eq!(lines, vec!["%0 claude idle hook"]);
+    });
+}
+
+/// A configured value can never execute: the words are whitespace-split
+/// and every one is shell-quoted on typing, so shell syntax in the value
+/// lands as literal text inside quotes.
+#[test]
+fn agent_start_shell_quotes_the_configured_words() {
+    let eff = crate::mux::config::EffectiveConfig {
+        agent_append: crate::mux::config::AgentAppend {
+            claude: "--eval ; echo pwned #".into(),
+            ..crate::mux::config::AgentAppend::default()
+        },
+        ..crate::mux::config::EffectiveConfig::default()
+    };
+    let f = Fixture::with_config(eff);
+    f.wait_for_shell();
+    std::thread::scope(|scope| {
+        let start =
+            scope.spawn(|| f.run(&format!("agent-start -t %0 -T {DRIVEN_MS} -x cat claude")));
+        let start = f.tagged("claude", start);
+        f.wait_for_typed_line("cat --eval ';' echo pwned '#'");
+        f.report("claude", "idle", 1);
+        let (_, ok) = body(&start.join().unwrap());
+        assert!(ok, "the quoted value still confirms the start");
     });
 }
 
