@@ -88,7 +88,8 @@ impl StreamingServer {
     }
 
     /// Close a session: remove from registry, shut it down, and tear down factory resources.
-    /// Factory teardown is delayed 500ms so clients receive the shutdown message.
+    /// PTY factory teardown is delayed 500ms so clients receive the shutdown message.
+    /// Viewer-only mirrors detach immediately without terminating the upstream pane.
     /// Callable from OFF the Tokio runtime: the mux bridge's drain thread
     /// closes a dead upstream's session from a plain std thread, where a
     /// bare `tokio::spawn` panics ("no reactor running") and takes the
@@ -98,6 +99,10 @@ impl StreamingServer {
         if let Some(session) = self.sessions.remove(session_id) {
             session.shutdown(reason);
             if let Some(ref factory) = self.session_factory {
+                if factory.close_on_last_disconnect() {
+                    factory.teardown_session(session_id);
+                    return true;
+                }
                 let factory = Arc::clone(factory);
                 let id = session_id.to_string();
                 // The 500ms delay before teardown is load-bearing in both
@@ -215,27 +220,27 @@ impl StreamingServer {
         Err(StreamingError::SessionNotFound(session_id.clone()))
     }
 
-    /// [`Self::resolve_session`] for async callers.
+    /// Resolve a session and reserve its viewer slot off the async runtime.
     ///
-    /// Creating a session runs the factory, which blocks on process spawns
-    /// or daemon round trips (`MuxSessionFactory`); that work runs on the
-    /// blocking pool so a slow or wedged backend cannot park runtime
-    /// workers. Resolving an existing session, or the default session of a
-    /// factory-less server, does no I/O and stays inline.
+    /// Admission is serialized with last-viewer teardown so a reconnect
+    /// cannot acquire a mirror that is about to close. Factory creation and
+    /// waiting for that lifecycle lock must not park runtime workers.
     pub(super) async fn resolve_session_off_runtime(
         self: &Arc<Self>,
         params: &ConnectionParams,
     ) -> Result<Arc<StreamSessionState>> {
-        if self.session_factory.is_none() || self.sessions.get(&params.session_id).is_some() {
-            return self.resolve_session(params);
-        }
         let this = Arc::clone(self);
         let params = params.clone();
-        tokio::task::spawn_blocking(move || this.resolve_session(&params))
-            .await
-            .map_err(|e| {
-                StreamingError::ServerError(format!("session creation task failed: {e}"))
-            })?
+        tokio::task::spawn_blocking(move || {
+            let _lifecycle = this.session_lifecycle.lock();
+            let session = this.resolve_session(&params)?;
+            if !session.try_add_client(this.config.max_clients_per_session) {
+                return Err(StreamingError::MaxClientsReached);
+            }
+            Ok(session)
+        })
+        .await
+        .map_err(|e| StreamingError::ServerError(format!("session admission failed: {e}")))?
     }
 
     /// Spawn the session reaper task (always runs for dead session cleanup)

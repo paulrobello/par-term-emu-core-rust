@@ -152,6 +152,11 @@ pub trait SessionFactory: Send + Sync {
     fn is_session_alive(&self, _session_id: &str) -> bool {
         true
     }
+
+    /// Close viewer-only sessions as soon as their last client leaves.
+    fn close_on_last_disconnect(&self) -> bool {
+        false
+    }
 }
 
 // =============================================================================
@@ -240,11 +245,27 @@ impl ConnectionParams {
 /// Guard that decrements session client count when dropped
 struct SessionClientGuard {
     session: Arc<StreamSessionState>,
+    server: Arc<StreamingServer>,
 }
 
 impl Drop for SessionClientGuard {
     fn drop(&mut self) {
+        let _lifecycle = self.server.session_lifecycle.lock();
         self.session.remove_client();
+        if self.session.client_count() == 0
+            && self
+                .server
+                .get_session(&self.session.id)
+                .is_some_and(|s| Arc::ptr_eq(&s, &self.session))
+            && self
+                .server
+                .session_factory
+                .as_ref()
+                .is_some_and(|f| f.close_on_last_disconnect())
+        {
+            self.server
+                .close_session(&self.session.id, "Last viewer disconnected".to_string());
+        }
     }
 }
 
@@ -420,6 +441,8 @@ pub struct StreamingServer {
     config: StreamingConfig,
     /// Registry of active sessions
     sessions: SessionRegistry,
+    /// Serializes viewer admission with last-viewer teardown.
+    session_lifecycle: Mutex<()>,
     /// Factory for creating new sessions on demand
     session_factory: Option<Arc<dyn SessionFactory>>,
     /// Optional theme information to send to clients
@@ -474,6 +497,7 @@ impl StreamingServer {
             addr,
             config,
             sessions,
+            session_lifecycle: Mutex::new(()),
             session_factory: None,
             theme: None,
             shutdown: Arc::new(tokio::sync::Notify::new()),
@@ -496,6 +520,7 @@ impl StreamingServer {
             addr,
             config,
             sessions,
+            session_lifecycle: Mutex::new(()),
             session_factory: Some(factory),
             theme: None,
             shutdown: Arc::new(tokio::sync::Notify::new()),

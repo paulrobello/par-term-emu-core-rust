@@ -89,7 +89,7 @@ struct MirrorLink {
     /// The pane's window (`@W`), which its layout changes and close name.
     window: String,
     terminal: Arc<RwLock<Terminal>>,
-    writer: Arc<Mutex<LocalStream>>,
+    writer: Arc<Mutex<Option<LocalStream>>>,
     /// False once the daemon connection closed or the pane went away.
     alive: AtomicBool,
     /// Set by teardown so the drain thread stops forwarding.
@@ -182,6 +182,17 @@ impl MuxSessionFactory {
 /// or at its first send after the receiver drops.
 struct MuxLines {
     rx: Receiver<io::Result<String>>,
+    stopped: Arc<AtomicBool>,
+    wake: LocalStream,
+}
+
+impl Drop for MuxLines {
+    fn drop(&mut self) {
+        self.stopped.store(true, Ordering::Relaxed);
+        // A quiet pane otherwise leaves the reader blocked in read forever.
+        let _ = writeln!(self.wake, "list-panes");
+        let _ = self.wake.flush();
+    }
 }
 
 impl MuxLines {
@@ -189,17 +200,20 @@ impl MuxLines {
     fn spawn(stream: LocalStream) -> io::Result<Self> {
         let (tx, rx): (SyncSender<io::Result<String>>, _) =
             std::sync::mpsc::sync_channel(MUX_LINE_BACKLOG);
+        let stopped = Arc::new(AtomicBool::new(false));
+        let stop = Arc::clone(&stopped);
+        let wake = stream.try_clone()?;
         std::thread::Builder::new()
             .name("mux-mirror-reader".to_string())
             .spawn(move || {
                 for line in BufReader::new(stream).lines() {
                     let failed = line.is_err();
-                    if tx.send(line).is_err() || failed {
+                    if stop.load(Ordering::Relaxed) || tx.send(line).is_err() || failed {
                         break;
                     }
                 }
             })?;
-        Ok(Self { rx })
+        Ok(Self { rx, stopped, wake })
     }
 }
 
@@ -318,12 +332,15 @@ fn send_keys_line_reference(pane: u32, chunk: &[u8]) -> String {
 /// Hex bypasses the command grammar's quoting entirely.
 struct SendKeysWriter {
     pane: u32,
-    stream: Arc<Mutex<LocalStream>>,
+    stream: Arc<Mutex<Option<LocalStream>>>,
 }
 
 impl Write for SendKeysWriter {
     fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
-        let mut stream = self.stream.lock();
+        let mut guard = self.stream.lock();
+        let stream = guard
+            .as_mut()
+            .ok_or_else(|| io::Error::from(io::ErrorKind::BrokenPipe))?;
         for chunk in buf.chunks(INPUT_CHUNK) {
             writeln!(stream, "{}", send_keys_line(self.pane, chunk))?;
         }
@@ -332,7 +349,11 @@ impl Write for SendKeysWriter {
     }
 
     fn flush(&mut self) -> io::Result<()> {
-        self.stream.lock().flush()
+        self.stream
+            .lock()
+            .as_mut()
+            .ok_or_else(|| io::Error::from(io::ErrorKind::BrokenPipe))?
+            .flush()
     }
 }
 
@@ -387,7 +408,7 @@ impl SessionFactory for MuxSessionFactory {
         terminal.drain_responses();
         let terminal = Arc::new(RwLock::new(terminal));
 
-        let writer = Arc::new(Mutex::new(writer));
+        let writer = Arc::new(Mutex::new(Some(writer)));
         let link = Arc::new(MirrorLink {
             pane,
             window,
@@ -450,7 +471,10 @@ impl SessionFactory for MuxSessionFactory {
                 // runtime worker.
                 let writer = Arc::clone(&writer);
                 let sent = tokio::task::spawn_blocking(move || {
-                    let mut stream = writer.lock();
+                    let mut guard = writer.lock();
+                    let stream = guard
+                        .as_mut()
+                        .ok_or_else(|| io::Error::from(io::ErrorKind::BrokenPipe))?;
                     writeln!(stream, "refresh-client -t %{pane} -C {cols}x{rows}")
                         .and_then(|()| stream.flush())
                 })
@@ -468,7 +492,16 @@ impl SessionFactory for MuxSessionFactory {
         if let Some(link) = self.sessions.write().remove(session_id) {
             link.closed.store(true, Ordering::Relaxed);
             *link.sink.lock() = Sink::Closed;
+            if let Some(mut writer) = link.writer.lock().take() {
+                // Wake the drain on a quiet pane so it drops MuxLines too.
+                let _ = writeln!(writer, "list-panes");
+                let _ = writer.flush();
+            }
         }
+    }
+
+    fn close_on_last_disconnect(&self) -> bool {
+        true
     }
 
     fn is_session_alive(&self, session_id: &str) -> bool {
@@ -934,6 +967,108 @@ mod tests {
             (pane_now != (70, 20) || mirror_now != (70, 20))
                 .then(|| format!("pane {pane_now:?}, mirror {mirror_now:?}"))
         });
+    }
+
+    #[test]
+    fn closing_a_resized_mirror_withdraws_its_size_claim() {
+        let rt = runtime();
+        let _entered = rt.enter();
+        let (_dir, socket, _serving, mut control, pane) = daemon();
+        control
+            .send(&format!("refresh-client -t {pane} -C 100x30"))
+            .expect("desktop size");
+        let server = streaming(&socket);
+        let session = mirror(&server, &pane);
+        session.resize_tx.send((40, 12)).expect("phone fit");
+        wait("phone size", || {
+            let size = pane_size(&mut control, &pane);
+            (size != (40, 12)).then(|| format!("pane {size:?}"))
+        });
+
+        assert!(server.close_session(&session.id, "viewer left".to_string()));
+        wait("desktop size after mirror teardown", || {
+            let size = pane_size(&mut control, &pane);
+            (size != (100, 30)).then(|| format!("pane {size:?}"))
+        });
+    }
+
+    #[test]
+    fn last_websocket_disconnect_releases_the_mirror() {
+        use tokio_tungstenite::tungstenite::protocol::Role;
+
+        let rt = runtime();
+        let _entered = rt.enter();
+        let (_dir, socket, _serving, mut control, pane) = daemon();
+        control
+            .send(&format!("refresh-client -t {pane} -C 100x30"))
+            .expect("desktop size");
+        let server = streaming(&socket);
+        let session = mirror(&server, &pane);
+        let params = ConnectionParams::from_uri_query(Some(&format!("session={}", session.id)));
+        let (mut phone, connection) = rt.block_on(async {
+            let (phone, connection) = tokio::io::duplex(65536);
+            (
+                tokio_tungstenite::WebSocketStream::from_raw_socket(phone, Role::Client, None)
+                    .await,
+                tokio_tungstenite::WebSocketStream::from_raw_socket(connection, Role::Server, None)
+                    .await,
+            )
+        });
+        let serving = Arc::clone(&server);
+        let websocket = rt.spawn(async move {
+            serving
+                .handle_test_ws(connection, &params)
+                .await
+                .expect("websocket session");
+        });
+        wait("websocket registered", || {
+            (session.client_count() != 1).then(|| "no websocket client".to_string())
+        });
+        session.resize_tx.send((40, 12)).expect("phone fit");
+        wait("phone size", || {
+            let size = pane_size(&mut control, &pane);
+            (size != (40, 12)).then(|| format!("pane {size:?}"))
+        });
+        let (mut second_phone, second_connection) = rt.block_on(async {
+            let (phone, connection) = tokio::io::duplex(65536);
+            (
+                tokio_tungstenite::WebSocketStream::from_raw_socket(phone, Role::Client, None)
+                    .await,
+                tokio_tungstenite::WebSocketStream::from_raw_socket(connection, Role::Server, None)
+                    .await,
+            )
+        });
+        let serving = Arc::clone(&server);
+        let params = ConnectionParams::from_uri_query(Some(&format!("session={}", session.id)));
+        let second_websocket = rt.spawn(async move {
+            serving
+                .handle_test_ws(second_connection, &params)
+                .await
+                .expect("second viewer");
+        });
+        wait("second websocket registered", || {
+            (session.client_count() != 2).then(|| "second viewer absent".to_string())
+        });
+        rt.block_on(async {
+            phone.close(None).await.expect("phone closes");
+            websocket.await.expect("websocket task");
+        });
+        assert_eq!(session.client_count(), 1);
+        assert!(server.get_session(&session.id).is_some());
+        assert_eq!(pane_size(&mut control, &pane), (40, 12));
+        rt.block_on(async {
+            second_phone.close(None).await.expect("last viewer closes");
+            second_websocket.await.expect("last websocket task");
+        });
+        wait("desktop size after websocket disconnect", || {
+            let size = pane_size(&mut control, &pane);
+            (size != (100, 30)).then(|| format!("pane {size:?}"))
+        });
+        assert!(server.get_session(&session.id).is_none());
+        let reconnected = mirror(&server, &pane);
+        assert_eq!(reconnected.terminal.read().size(), (100, 30));
+        type_line(&reconnected, TYPED_AFTER);
+        wait_mirror(&reconnected, "DELTA-AFTER");
     }
 
     /// Mouse reports: the server's Mouse arm encodes with the session

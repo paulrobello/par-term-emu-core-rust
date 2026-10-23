@@ -4,6 +4,20 @@
 use super::*;
 
 impl StreamingServer {
+    #[cfg(test)]
+    pub(crate) async fn handle_test_ws<S>(
+        self: &Arc<Self>,
+        stream: tokio_tungstenite::WebSocketStream<S>,
+        params: &ConnectionParams,
+    ) -> Result<()>
+    where
+        S: tokio::io::AsyncRead + tokio::io::AsyncWrite + Unpin + Send,
+    {
+        assert!(self.try_add_client());
+        self.handle_ws_connection(stream, params, GlobalClientGuard { server: self }, "test")
+            .await
+    }
+
     /// Run a session over an upgraded tungstenite WebSocket (plain or TLS).
     pub(super) async fn handle_ws_connection<S>(
         self: &Arc<Self>,
@@ -40,14 +54,12 @@ impl StreamingServer {
         SessionClientGuard,
         bool,
     )> {
+        let read_only = params.readonly || self.config.default_read_only;
         let session = self.resolve_session_off_runtime(params).await?;
-        if !session.try_add_client(self.config.max_clients_per_session) {
-            return Err(StreamingError::MaxClientsReached);
-        }
         let session_guard = SessionClientGuard {
             session: Arc::clone(&session),
+            server: Arc::clone(self),
         };
-        let read_only = params.readonly || self.config.default_read_only;
         Ok((session, global_guard, session_guard, read_only))
     }
 
