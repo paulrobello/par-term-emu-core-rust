@@ -322,6 +322,19 @@ jobs:
           mkdir -p release-binaries
           cp target/${{ matrix.target }}/release/${{ matrix.artifact_name }} release-binaries/${{ matrix.asset_name }}
 
+      # Sign after rename so the uploaded artifact (and the sidecar checksum
+      # generated from it downstream) covers the signed bytes. Ad-hoc until
+      # the APPLE_* secrets exist; Developer ID + notarization otherwise.
+      - name: Codesign macOS binary
+        if: contains(matrix.target, 'apple-darwin')
+        env:
+          APPLE_CERTIFICATE_P12: ${{ secrets.APPLE_CERTIFICATE_P12 }}
+          APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+          APPLE_API_KEY_ID: ${{ secrets.APPLE_API_KEY_ID }}
+          APPLE_API_ISSUER_ID: ${{ secrets.APPLE_API_ISSUER_ID }}
+          APPLE_API_KEY: ${{ secrets.APPLE_API_KEY }}
+        run: bash scripts/ci-macos-sign.sh "release-binaries/${{ matrix.asset_name }}"
+
       - name: Upload binary artifact
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
@@ -386,6 +399,19 @@ jobs:
       - name: Strip binary (Unix)
         if: runner.os != 'Windows'
         run: strip target/${{ matrix.target }}/release/par-mux
+
+      # Sign before the smoke test so the smoke exercises the signed binary;
+      # the packaged archive and its sha256 then cover signed bytes. Ad-hoc
+      # until the APPLE_* secrets exist; Developer ID + notarization otherwise.
+      - name: Codesign macOS binary
+        if: contains(matrix.target, 'apple-darwin')
+        env:
+          APPLE_CERTIFICATE_P12: ${{ secrets.APPLE_CERTIFICATE_P12 }}
+          APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+          APPLE_API_KEY_ID: ${{ secrets.APPLE_API_KEY_ID }}
+          APPLE_API_ISSUER_ID: ${{ secrets.APPLE_API_ISSUER_ID }}
+          APPLE_API_KEY: ${{ secrets.APPLE_API_KEY }}
+        run: bash scripts/ci-macos-sign.sh "target/${{ matrix.target }}/release/par-mux"
 
       - name: Smoke test --version/--help (native targets)
         if: matrix.cross == false
