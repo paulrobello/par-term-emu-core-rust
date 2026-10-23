@@ -217,6 +217,9 @@ impl StreamSessionState {
         }
     }
 
+    // Only the mux-gated mirror reconciler calls this; the streaming-only
+    // build otherwise lints the method as dead (same shape as parse_titles_output).
+    #[cfg_attr(not(feature = "mux"), allow(dead_code))]
     pub(crate) fn update_mux_status(&self, size: ServerMessage, viewers: Vec<String>) {
         let mut status = self.pane_size_status.write();
         let unchanged = matches!((status.as_ref(), &size),
