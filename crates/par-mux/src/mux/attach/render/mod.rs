@@ -918,6 +918,11 @@ struct WindowSession {
     /// [`Self::effective_render_opts`]. Setters update this first, then
     /// the live renderer.
     render_opts: RenderOptions,
+    /// The focused pane's clipboard state already forwarded to the host:
+    /// `(pane, content)` — the OSC 52 bridge's dedup. `None` when the
+    /// focused pane holds no clipboard content (a pane switch re-forwards
+    /// the pane it lands on).
+    clipboard_bridge: Option<(u32, String)>,
     /// Whether the side panel is shown (toggled by the `sidebar`
     /// chord); its width is `render_opts.sidebar_width`.
     sidebar: SidebarState,
@@ -1239,6 +1244,7 @@ impl WindowSession {
         let (frame_w, frame_h) = geometry.frame_size();
         Self {
             window: String::new(),
+            clipboard_bridge: None,
             renderer: PaneRenderer::new(frame_w, frame_h, RenderOptions::default().glyphs),
             pending: PendingWork::default(),
             status: status::StatusState::default(),
@@ -1422,10 +1428,48 @@ impl WindowSession {
                 continue; // the loop re-runs every step against the new events
             }
             self.frame_hold_since = None;
+            self.bridge_pane_clipboard();
             self.frame(sink);
             if self.wait_next_push(conn).is_break() {
                 return Ok(());
             }
+        }
+    }
+
+    /// Bridge the focused pane's OSC 52 clipboard writes to the host
+    /// terminal (par-term's `clipboard_sync` contract, attach side): a
+    /// pane program's copy — local or over SSH — updates the pane
+    /// emulator's clipboard state, and this re-emits the wire form to
+    /// the host when it changes. The tracker is per pane: a pane switch
+    /// forwards the pane it lands on, and a pane with no clipboard
+    /// content clears the dedup (a later identical write re-forwards,
+    /// which is correct after the user copied elsewhere). The host's OSC
+    /// 52 policy applies, the same contract the scroll-mode yank rides.
+    fn bridge_pane_clipboard(&mut self) {
+        use base64::Engine as _;
+        let Some(pane) = self.renderer.focused() else {
+            self.clipboard_bridge = None;
+            return;
+        };
+        let content = self
+            .renderer
+            .pane_terminal(pane)
+            .and_then(|term| term.get_clipboard());
+        let fresh = match (&self.clipboard_bridge, &content) {
+            (Some((last_pane, last)), Some(text)) => *last_pane != pane || *last != *text,
+            (None, Some(_)) => true,
+            _ => false,
+        };
+        if fresh {
+            if let Some(text) = content {
+                let encoded = base64::engine::general_purpose::STANDARD.encode(text.as_bytes());
+                self.notify
+                    .outbox
+                    .extend_from_slice(format!("\x1b]52;c;{encoded}\x1b\\").as_bytes());
+                self.clipboard_bridge = Some((pane, text));
+            }
+        } else if content.is_none() {
+            self.clipboard_bridge = None;
         }
     }
 
