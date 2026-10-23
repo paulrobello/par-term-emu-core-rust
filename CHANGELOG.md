@@ -7,6 +7,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+- **par-mux: the attach input parser decodes kitty CSI-u key sequences** (`crates/par-mux/src/mux/attach/input.rs`): `csi_key` handled arrows, the `~` family, and SS3 forms only, so a host's CSI-u Shift+Enter (`ESC [ 13 ; 2 u` — par-term sends it whenever the hosted TUI owns the alternate screen) hit the unknown-final arm and was consumed whole: claude panes never saw Shift+Enter, and every CSI-u-only chord died the same way. CSI-u now decodes (kitty functional codes map onto `TermKey`'s identical discriminants, scalar codepoints decode as Char keys, modifier param in the standard xterm order, absent = none) and re-encodes against the pane's tracked input state, so a legacy pane gets LF where a kitty-negotiated pane gets the CSI-u form back. Pinned by `csi_u_shift_enter_decodes_to_enter_with_shift`, `csi_u_without_modifier_param_is_the_plain_key`, `csi_u_functional_codes_decode`, `csi_u_text_codepoints_decode_as_char_keys`, and `csi_u_shift_enter_reencodes_to_lf_for_a_legacy_pane`. Card 01a169736b617377932539aec33f24f6.
+
 ## [0.65.0] - 2026-10-23
 
 ### Added

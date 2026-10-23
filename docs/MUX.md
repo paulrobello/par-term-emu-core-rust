@@ -368,8 +368,8 @@ The host terminal captures the mouse (SGR + button-event tracking), and stdin is
 
 #### Keys
 
-An incremental parser tokenizes the raw stdin stream; plain byte runs forward verbatim behind the prefix scan (prefix `d` detaches, `C-b C-b` sends the literal), while escape-sequence keys (arrows, Home/End, tilde function keys, SS3 forms, modifier chords) are decoded and re-encoded against the FOCUSED pane's tracked input state — DECCKM application cursor keys, kitty keyboard flags, modifyOtherKeys — exactly what the pane's replay and `%output` set (the shared `keyboard::encode_key` encoder, the same one the daemon's `send-keys` uses).
-A pane running vim gets `ESC O A` for Up; a plain shell gets `ESC [ A`. Full kitty keyboard protocol forwarding (negotiating flags on a pane's behalf, CSI u re-encoding) is not implemented.
+An incremental parser tokenizes the raw stdin stream; plain byte runs forward verbatim behind the prefix scan (prefix `d` detaches, `C-b C-b` sends the literal), while escape-sequence keys (arrows, Home/End, tilde function keys, SS3 forms, modifier chords, kitty CSI-u keys) are decoded and re-encoded against the FOCUSED pane's tracked input state — DECCKM application cursor keys, kitty keyboard flags, modifyOtherKeys — exactly what the pane's replay and `%output` set (the shared `keyboard::encode_key` encoder, the same one the daemon's `send-keys` uses).
+A pane running vim gets `ESC O A` for Up; a plain shell gets `ESC [ A`. Full kitty keyboard protocol forwarding (negotiating flags on a pane's behalf) is not implemented; incoming host CSI-u keys decode through the same key path and re-encode per the pane's tracked state.
 
 #### Mouse
 

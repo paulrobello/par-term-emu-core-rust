@@ -539,6 +539,53 @@ fn split_params(params: &[u8]) -> (u32, u32) {
 /// [`modifiers`] (shift 1, alt 2, ctrl 4), and 1 (or absent) means none.
 fn csi_key(final_byte: u8, first: u32, modifier: u32) -> Option<TermKeyEvent> {
     let mods = xterm_mods(modifier);
+    // CSI-u (kitty keyboard protocol level 1): `ESC [ codepoint [; mods] u`.
+    // The codepoint is a Unicode scalar for text keys or, for functional
+    // keys, a code that matches `TermKey`'s discriminants (Tab 9, Enter 13,
+    // Escape 27, Backspace 127, F1..F12 57376..57387, Insert..End
+    // 57426..57435). Kitty omits the modifier field when none is held
+    // (`ESC [ 13 u` is plain Enter); split_params already defaults an
+    // absent modifier to 1, which xterm_mods maps to none. The event
+    // re-encodes against the pane's tracked input state, so a legacy pane
+    // gets the form it speaks instead of a sequence it never asked for.
+    if final_byte == b'u' {
+        let key = match first {
+            9 => TermKey::Tab,
+            13 => TermKey::Enter,
+            27 => TermKey::Escape,
+            127 => TermKey::Backspace,
+            57376..=57387 => match first {
+                57376 => TermKey::F1,
+                57377 => TermKey::F2,
+                57378 => TermKey::F3,
+                57379 => TermKey::F4,
+                57380 => TermKey::F5,
+                57381 => TermKey::F6,
+                57382 => TermKey::F7,
+                57383 => TermKey::F8,
+                57384 => TermKey::F9,
+                57385 => TermKey::F10,
+                57386 => TermKey::F11,
+                _ => TermKey::F12,
+            },
+            57426..=57435 => match first {
+                57426 => TermKey::Insert,
+                57427 => TermKey::Delete,
+                57428 => TermKey::Left,
+                57429 => TermKey::Right,
+                57430 => TermKey::Up,
+                57431 => TermKey::Down,
+                57432 => TermKey::PageUp,
+                57433 => TermKey::PageDown,
+                57434 => TermKey::Home,
+                _ => TermKey::End,
+            },
+            _ => {
+                return char::from_u32(first).map(|c| TermKeyEvent::char_(c, mods));
+            }
+        };
+        return Some(TermKeyEvent::functional(key, mods));
+    }
     let key = match (final_byte, first) {
         (b'A', _) => TermKey::Up,
         (b'B', _) => TermKey::Down,
@@ -687,6 +734,89 @@ mod tests {
         // as ESC[Z which maps to nothing and is consumed.
         let tokens = feed_str(&mut p, "\x1b[Z");
         assert!(matches!(tokens[0], Token::Bytes(_)));
+    }
+
+    /// CSI-u (kitty keyboard protocol level 1) — the form hosts send for
+    /// modifier-only chords when the hosted TUI owns the alternate screen:
+    /// par-term's Shift+Enter is `ESC [ 13 ; 2 u`, and claude 2.1.269+
+    /// keys its multi-line input on exactly this form. Dropped here, the
+    /// pane never sees the key at all (measured 2026-10-23).
+    #[test]
+    fn csi_u_shift_enter_decodes_to_enter_with_shift() {
+        let mut p = InputParser::default();
+        let tokens = feed_str(&mut p, "\x1b[13;2u");
+        match &tokens[0] {
+            Token::Key(ev) => {
+                assert_eq!(ev.key(), TermKey::Enter);
+                assert_eq!(ev.modifiers, modifiers::SHIFT);
+            }
+            other => panic!("expected a Key token, got {other:?}"),
+        }
+    }
+
+    /// Kitty omits the modifier field when none is held: `ESC [ 13 u` is
+    /// plain Enter, not a decode failure.
+    #[test]
+    fn csi_u_without_modifier_param_is_the_plain_key() {
+        let mut p = InputParser::default();
+        let tokens = feed_str(&mut p, "\x1b[13u");
+        match &tokens[0] {
+            Token::Key(ev) => {
+                assert_eq!(ev.key(), TermKey::Enter);
+                assert_eq!(ev.modifiers, 0);
+            }
+            other => panic!("expected a Key token, got {other:?}"),
+        }
+    }
+
+    /// Kitty functional codes share `TermKey`'s discriminants: 57380 = F5,
+    /// 57430 = Up.
+    #[test]
+    fn csi_u_functional_codes_decode() {
+        let mut p = InputParser::default();
+        for (params, key, mods) in [
+            ("57380;3", TermKey::F5, modifiers::ALT),
+            ("57430;5", TermKey::Up, modifiers::CTRL),
+        ] {
+            let tokens = feed_str(&mut p, &format!("\x1b[{params}u"));
+            match &tokens[0] {
+                Token::Key(ev) => {
+                    assert_eq!(ev.key(), key, "code {params}");
+                    assert_eq!(ev.modifiers, mods, "code {params}");
+                }
+                other => panic!("code {params}: expected a Key token, got {other:?}"),
+            }
+        }
+    }
+
+    /// A text codepoint with Ctrl decodes as a Char key so the re-encoder
+    /// picks the chord form the pane's own input state speaks.
+    #[test]
+    fn csi_u_text_codepoints_decode_as_char_keys() {
+        let mut p = InputParser::default();
+        let tokens = feed_str(&mut p, "\x1b[120;5u"); // Ctrl+X
+        match &tokens[0] {
+            Token::Key(ev) => {
+                assert_eq!(ev.key(), TermKey::Char);
+                assert_eq!(ev.codepoint, u32::from('x'));
+                assert_eq!(ev.modifiers, modifiers::CTRL);
+            }
+            other => panic!("expected a Key token, got {other:?}"),
+        }
+    }
+
+    /// The point of the decode: a pane that never negotiated kitty still
+    /// receives a form its input state speaks — LF, the convention claude
+    /// accepts for Shift+Enter.
+    #[test]
+    fn csi_u_shift_enter_reencodes_to_lf_for_a_legacy_pane() {
+        let mut p = InputParser::default();
+        let tokens = feed_str(&mut p, "\x1b[13;2u");
+        let pane = Terminal::new(80, 24);
+        let Token::Key(ev) = &tokens[0] else {
+            panic!("expected a Key token, got {:?}", tokens[0])
+        };
+        assert_eq!(reencode_key(ev, &pane), b"\n");
     }
 
     #[test]
