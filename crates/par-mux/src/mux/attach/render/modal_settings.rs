@@ -306,6 +306,16 @@ impl SettingsSection {
                     kind: SettingKind::Chord,
                 },
                 SettingSpec {
+                    key: "move-window-left",
+                    label: "swap prev pane",
+                    kind: SettingKind::Chord,
+                },
+                SettingSpec {
+                    key: "move-window-right",
+                    label: "swap prev pane",
+                    kind: SettingKind::Chord,
+                },
+                SettingSpec {
                     key: "swap-next",
                     label: "swap next pane",
                     kind: SettingKind::Chord,
@@ -561,6 +571,8 @@ impl SettingsValues {
             "new-window" => FieldVal::Text(spell_key(m.new_window)),
             "resize" => FieldVal::Text(spell_key(m.resize)),
             "swap-prev" => FieldVal::Text(spell_key(m.swap_prev)),
+            "move-window-left" => FieldVal::Text(spell_key(m.move_window_left)),
+            "move-window-right" => FieldVal::Text(spell_key(m.move_window_right)),
             "swap-next" => FieldVal::Text(spell_key(m.swap_next)),
             "workspace-next" => FieldVal::Text(spell_key(m.workspace_next)),
             "workspace-prev" => FieldVal::Text(spell_key(m.workspace_prev)),

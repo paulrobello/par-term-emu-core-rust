@@ -51,6 +51,8 @@ impl WindowSession {
             ManagementKey::Palette => self.enter_palette(),
             ManagementKey::SwapPrev => self.chord_swap(conn, -1),
             ManagementKey::SwapNext => self.chord_swap(conn, 1),
+            ManagementKey::MoveWindowLeft => self.chord_move_window(conn, -1),
+            ManagementKey::MoveWindowRight => self.chord_move_window(conn, 1),
             ManagementKey::NewWindow => self.chord_new_window(conn),
             ManagementKey::WorkspaceNext => self.switch_workspace(conn, 1),
             ManagementKey::WorkspacePrev => self.switch_workspace(conn, -1),
@@ -276,6 +278,38 @@ impl WindowSession {
         let next = order[((position as i32 + dir).rem_euclid(order.len() as i32)) as usize];
         let focused = self.focused_pane();
         let _ = conn.send_forget(&format!("swap-pane -s {focused} -t %{next}"));
+    }
+
+    /// The move-active-tab chords (tmux's `<` / `>`): swap the shown
+    /// window with its neighbor in the session's tab order via
+    /// `swap-window` — the `%sessions-changed` broadcast the daemon
+    /// queues repaints the strip, and the shown window stays shown by
+    /// identity. An edge press flashes instead of wrapping.
+    fn chord_move_window(&mut self, conn: &mut crate::mux::attach::conn::AttachConn, delta: isize) {
+        let windows: Vec<String> = self
+            .status
+            .windows()
+            .iter()
+            .map(|(id, _)| id.clone())
+            .collect();
+        let Some(at) = windows.iter().position(|id| id == &self.window) else {
+            return;
+        };
+        let neighbor = at.checked_add_signed(delta).filter(|i| *i < windows.len());
+        let Some(neighbor_at) = neighbor else {
+            self.chrome.flash(if delta < 0 {
+                "already the first tab".to_string()
+            } else {
+                "already the last tab".to_string()
+            });
+            self.draw_status_row();
+            return;
+        };
+        let _ = conn.send_forget(&format!(
+            "swap-window -s {} -t {}",
+            self.window, windows[neighbor_at]
+        ));
+        self.status_dirty = true;
     }
 
     fn chord_new_window(&mut self, conn: &mut crate::mux::attach::conn::AttachConn) {

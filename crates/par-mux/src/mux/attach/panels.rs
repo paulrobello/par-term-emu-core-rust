@@ -186,6 +186,14 @@ pub(crate) fn help_rows(
                 "swap pane prev/next".to_string(),
             ),
             (
+                format!(
+                    "{p} {} / {}",
+                    spell_key(m.move_window_left),
+                    spell_key(m.move_window_right)
+                ),
+                "move tab left/right".to_string(),
+            ),
+            (
                 format!("{p} S-arrows"),
                 "swap with the pane in that direction".to_string(),
             ),

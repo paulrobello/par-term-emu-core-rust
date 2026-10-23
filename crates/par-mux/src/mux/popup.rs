@@ -244,6 +244,8 @@ fn bound_keys(chords: &crate::mux::config::Chords) -> Vec<u8> {
         m.resize,
         m.swap_prev,
         m.swap_next,
+        m.move_window_left,
+        m.move_window_right,
         m.workspace_next,
         m.workspace_prev,
         m.help,

@@ -150,6 +150,20 @@ pub struct ClientSection {
     /// The swap-with-next-pane chord (tmux's `}`).
     #[serde(default, rename = "swap-next", skip_serializing_if = "Option::is_none")]
     pub swap_next: Option<String>,
+    /// The move-active-tab-left chord (tmux's `<`).
+    #[serde(
+        default,
+        rename = "move-window-left",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub move_window_left: Option<String>,
+    /// The move-active-tab-right chord (tmux's `>`).
+    #[serde(
+        default,
+        rename = "move-window-right",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub move_window_right: Option<String>,
     /// The next-workspace chord: the key matched after the prefix that
     /// selects the next workspace (id order) and lands the view on it.
     #[serde(
@@ -994,6 +1008,8 @@ pub fn render(eff: &EffectiveConfig) -> String {
             resize: None,
             resize_step: None,
             swap_prev: None,
+            move_window_left: None,
+            move_window_right: None,
             swap_next: None,
             workspace_next: None,
             workspace_prev: None,
@@ -1332,6 +1348,12 @@ pub struct Management {
     /// Swap the focused pane with the next pane in layout order —
     /// `swap-pane -s <focused> -t <next>`.
     pub swap_next: u8,
+    /// Move the shown window one tab left in its session's order —
+    /// `swap-window -s <shown> -t <prev>` (tmux's `<`).
+    pub move_window_left: u8,
+    /// Move the shown window one tab right in its session's order —
+    /// `swap-window -s <shown> -t <next>` (tmux's `>`).
+    pub move_window_right: u8,
     /// Select the next workspace in id order — `select-workspace -t +N`
     /// — and land the view on the workspace's session. Prefix `W` by
     /// default (prefix `w` is reserved for the workspace picker).
@@ -1389,6 +1411,8 @@ impl Default for Management {
             resize: b'R',
             swap_prev: b'{',
             swap_next: b'}',
+            move_window_left: b'<',
+            move_window_right: b'>',
             workspace_next: b'W',
             workspace_prev: 0x17, // C-w
             help: b'?',
@@ -1471,6 +1495,8 @@ pub fn reload_client_chords(file: &ConfigFile, current: &Chords) -> Result<Chord
         resize: chord!(resize, "resize"),
         swap_prev: chord!(swap_prev, "swap-prev"),
         swap_next: chord!(swap_next, "swap-next"),
+        move_window_left: chord!(move_window_left, "move-window-left"),
+        move_window_right: chord!(move_window_right, "move-window-right"),
         workspace_next: chord!(workspace_next, "workspace-next"),
         workspace_prev: chord!(workspace_prev, "workspace-prev"),
         help: chord!(help, "help"),
@@ -2442,6 +2468,8 @@ remain-on-exit = true
                 resize: b'R',
                 swap_prev: b'{',
                 swap_next: b'}',
+                move_window_left: b'<',
+                move_window_right: b'>',
                 workspace_next: b'W',
                 workspace_prev: 0x17,
                 help: b'?',

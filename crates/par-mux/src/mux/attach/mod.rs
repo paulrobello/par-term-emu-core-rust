@@ -667,6 +667,11 @@ impl Session {
                         self.flash = Some("palette: render mode only".to_string());
                         self.draw_status();
                     }
+                    // Moving a tab needs the render session's tab strip.
+                    Some(ManagementKey::MoveWindowLeft | ManagementKey::MoveWindowRight) => {
+                        self.flash = Some("move tab: render mode only".to_string());
+                        self.draw_status();
+                    }
                     Some(ManagementKey::NewWindow) => self.new_window_in_session(),
                     Some(ManagementKey::SwapPrev) => self.swap_pane(-1),
                     Some(ManagementKey::SwapNext) => self.swap_pane(1),
@@ -843,6 +848,12 @@ pub(crate) enum ManagementKey {
     /// Swap the focused pane with the next pane in layout order
     /// (`swap-pane`).
     SwapNext,
+    /// Move the shown window one tab left in its session's order
+    /// (`swap-window` with the previous tab).
+    MoveWindowLeft,
+    /// Move the shown window one tab right in its session's order
+    /// (`swap-window` with the next tab).
+    MoveWindowRight,
     /// Select the next workspace in id order (`select-workspace -t +N`)
     /// and land the view on the workspace's session.
     WorkspaceNext,

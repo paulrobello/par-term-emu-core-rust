@@ -2424,9 +2424,10 @@ fn settings_keys_section_scrolls_to_every_row() {
     assert_eq!(state.selected, 0);
     assert_eq!(state.top, 0);
     // Down to the last row: the window follows the selection (the keys
-    // section holds every management chord plus prefix and reload — 25
-    // rows with break-pane, join-pane and notify-jump aboard).
-    session.route_stdin_bytes(&mut conn, &[b'j'; 25][..]);
+    // section holds every management chord plus prefix and reload — 27
+    // rows with break-pane, join-pane, the move-tab chords and
+    // notify-jump aboard).
+    session.route_stdin_bytes(&mut conn, &[b'j'; 27][..]);
     let Modal::Settings(state) = &session.modal else {
         panic!("open")
     };
@@ -2439,7 +2440,7 @@ fn settings_keys_section_scrolls_to_every_row() {
     assert!(last_row.contains("respawn dead pane"), "{last_row}");
     assert!(last_row.trim_end().ends_with(" r"), "{last_row}");
     // Up to the first: the window snaps back.
-    session.route_stdin_bytes(&mut conn, &[b'k'; 25][..]);
+    session.route_stdin_bytes(&mut conn, &[b'k'; 27][..]);
     let Modal::Settings(state) = &session.modal else {
         panic!("open")
     };
@@ -3467,6 +3468,34 @@ fn pane_osc52_clipboard_bridges_to_the_host_outbox() {
         "the landed pane forwards: {:?}",
         String::from_utf8_lossy(&out)
     );
+}
+
+/// The move-active-tab chords (tmux's `<` / `>`): `swap-window -s
+/// <shown> -t <neighbor>` within the shown session — and an edge press
+/// flashes instead of sending (no wrap).
+#[test]
+fn move_window_chords_swap_the_shown_window_with_its_neighbor() {
+    let (rx, mut conn) = fake_daemon("movetab", snapshot_script());
+    let mut session = snapshot_session();
+    session
+        .refresh_status_facts(&mut conn)
+        .expect("snapshot refresh");
+    drained(&rx);
+
+    session.route_stdin_bytes(&mut conn, &[0x02, b'>']);
+    assert_eq!(
+        received_within_300ms(&rx),
+        vec!["swap-window -s @0 -t @1".to_string()],
+        "the shown window swaps with its right neighbor"
+    );
+
+    // The first tab has no left neighbor: a flash, no wire line.
+    session.route_stdin_bytes(&mut conn, &[0x02, b'<']);
+    assert!(
+        received_within_300ms(&rx).is_empty(),
+        "an edge press never wraps"
+    );
+    assert_eq!(session.chrome.flash_text(), Some("already the first tab"));
 }
 
 fn snapshot_session() -> WindowSession {

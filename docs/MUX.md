@@ -415,8 +415,8 @@ Keys never reach the pane while the viewport is up. Typed letters (`v` `y` `/` `
 
 #### Management chords (`%`, `"`, `x`, `c`, `{`/`}`)
 
-The same daemon commands the passthrough chords send, mirrored onto the render view: `%`/`"` split the FOCUSED pane (`split-window -t <focused> [-h]`), focus the fresh split (the reply body is its id), and re-seed the window from the layout the split broadcast — the new pane renders at its rect immediately; `x` kills the focused pane and lands the view on the window's surviving active pane (killing the window's last pane lands the view on the session's active window, or ends it when the session went with the window); `!` breaks the focused pane out into a new window of its session (`break-pane -s <focused>`) and lands the view on the fresh window; `J` opens the session/window picker in join mode — the picked window (a session header counts as its active window) receives the focused pane (`join-pane -s <focused> -t <its marked pane>`), and the view lands on the destination; `c` opens a window in the shown session and re-seeds onto it; `{`/`}` swap the focused pane with its layout-order neighbor (`swap-pane -s <focused> -t <neighbor>`; the swap's `%layout-change` re-seeds the window). Passthrough carries `!` too; `J` needs the picker's overlay surface and is render-mode only there.
-All rebind live on the reload chord, settable as `[client] split-right` / `split-down` / `kill-pane` / `break-pane` / `join-pane` / `palette` / `new-window` / `swap-prev` / `swap-next`.
+The same daemon commands the passthrough chords send, mirrored onto the render view: `%`/`"` split the FOCUSED pane (`split-window -t <focused> [-h]`), focus the fresh split (the reply body is its id), and re-seed the window from the layout the split broadcast — the new pane renders at its rect immediately; `x` kills the focused pane and lands the view on the window's surviving active pane (killing the window's last pane lands the view on the session's active window, or ends it when the session went with the window); `!` breaks the focused pane out into a new window of its session (`break-pane -s <focused>`) and lands the view on the fresh window; `J` opens the session/window picker in join mode — the picked window (a session header counts as its active window) receives the focused pane (`join-pane -s <focused> -t <its marked pane>`), and the view lands on the destination; `c` opens a window in the shown session and re-seeds onto it; `{`/`}` swap the focused pane with its layout-order neighbor (`swap-pane -s <focused> -t <neighbor>`; the swap's `%layout-change` re-seeds the window). `<`/`>` move the shown window left/right in the session's tab order (`swap-window -s <shown> -t <neighbor>`; the `%sessions-changed` broadcast repaints the strip, the shown window stays shown by identity, and an edge press flashes instead of wrapping). Passthrough carries `!` too; `J` needs the picker's overlay surface and is render-mode only there.
+All rebind live on the reload chord, settable as `[client] split-right` / `split-down` / `kill-pane` / `break-pane` / `join-pane` / `palette` / `new-window` / `swap-prev` / `swap-next` / `move-window-left` / `move-window-right`.
 
 #### Command palette (`:`)
 
@@ -627,6 +627,8 @@ palette = ":"         # the filterable command palette (render mode)
 new-window = "c"      # new window in the focused pane's session
 swap-prev = "{"       # swap the focused pane with the previous pane
 swap-next = "}"       # swap the focused pane with the next pane
+move-window-left = "<"  # move the active tab left in the tab order
+move-window-right = ">"  # move the active tab right in the tab order
 workspace-next = "W"  # select the next workspace
 workspace-prev = "C-w"  # select the previous workspace
 resize = "R"          # enter the sticky resize mode (arrows move the edge)
@@ -725,7 +727,7 @@ setting:
 |---------|-----------------|
 | `client.prefix` | **Live** — the running attach rebinds its prefix immediately (the old prefix stops intercepting the same keystroke). |
 | `client.reload` | **Live** — it rebinds itself: the NEXT reload follows the new chord. The chord's key is matched by byte, so the default `C-r` (0x12) never collides with prefix `r` (respawn, the literal 0x72). |
-| `client.split-right` / `split-down` / `kill-pane` / `break-pane` / `join-pane` / `palette` / `new-window` / `swap-prev` / `swap-next` / `workspace-next` / `workspace-prev` / `resize` / `help` / `zoom` / `rename-window` / `rename-pane` / `border-cycle` | **Live** — the running attach rebinds these chords immediately (parsed with the same prefix grammar as `prefix`; defaults `%`, `"`, `x`, `!`, `J`, `:`, `c`, `{`, `}`, `W`, `C-w`, `R`, `?`, `z`, `,`, `$`, `B`). |
+| `client.split-right` / `split-down` / `kill-pane` / `break-pane` / `join-pane` / `palette` / `new-window` / `swap-prev` / `swap-next` / `move-window-left` / `move-window-right` / `workspace-next` / `workspace-prev` / `resize` / `help` / `zoom` / `rename-window` / `rename-pane` / `border-cycle` | **Live** — the running attach rebinds these chords immediately (parsed with the same prefix grammar as `prefix`; defaults `%`, `"`, `x`, `!`, `J`, `:`, `c`, `{`, `}`, `W`, `C-w`, `R`, `?`, `z`, `,`, `$`, `B`). |
 | `client.border-lines` | **Live** — the border style re-applies on reload (`herdr`, `unicode`, `double`, `heavy`, `ascii`; an unknown value keeps the current set and says so on the status row). |
 | `client.theme` / `theme-dark` / `theme-light` | **Live** — the theme re-applies on reload and `auto` re-picks from the last host appearance (an unknown name uses `default` and says so on the status row). |
 | `client.resize-step` | **Live** — cells per resize step; a file value below 1 clamps to 1. |
