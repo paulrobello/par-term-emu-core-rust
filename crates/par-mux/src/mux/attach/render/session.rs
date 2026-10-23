@@ -648,6 +648,13 @@ impl WindowSession {
                         baseline.remove(&pane);
                     }
                 }
+                // The panel installed before this refresh — against an
+                // empty roster (its pre-refresh install only marks the
+                // status stale). Re-install from the committed cache, or
+                // a re-attach with QUIET agents stays agents-empty until
+                // an unrelated event marks the status stale: quiet
+                // agents send no pushes to patch the panel later.
+                self.rebuild_agent_section();
             }
             Err(status::StatusError::SessionGone) => {
                 // The session died mid-seed: re-land on a survivor.

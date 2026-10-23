@@ -4021,6 +4021,44 @@ fn mid_seed_script(push_on: &str) -> FakeScript {
 
 /// Seed `script`'s `@0` view with inside delivery on, run the pump's
 /// first drain, and return the session.
+/// A re-attach with QUIET agents (no state pushes coming): the seed's
+/// panel install runs before the status refresh — against an empty
+/// roster — so the agents section must be re-installed once the refresh
+/// commits, or the panel stays agents-empty until an unrelated event
+/// marks the status stale.
+#[test]
+fn the_seed_installs_the_agents_section_after_the_roster_lands() {
+    let mut script = snapshot_script();
+    script
+        .replies
+        .insert("pane-info -t %1".to_string(), "%1 @0 90x24".to_string());
+    script.notify.insert(
+        "refresh-client -t %1 -C 90x24".to_string(),
+        format!(
+            "%layout-change @0 {} {} *",
+            "0000,90x24,0,0{30x24,0,0,1,30x24,30,0,2,30x24,60,0,3}",
+            "0000,90x24,0,0{30x24,0,0,1,30x24,30,0,2,30x24,60,0,3}"
+        ),
+    );
+    let (_rx, mut conn) = fake_daemon("seedroster", script);
+    let mut session = WindowSession::new(90, 26);
+    session.sidebar.set(true);
+    let mut sink = super::RecordingSink::default();
+    session
+        .seed(&mut conn, Some("%1"), &mut sink)
+        .expect("the seed lands");
+    let sections = session
+        .renderer
+        .sidebar_sections
+        .clone()
+        .expect("panel sections");
+    let agents = sections
+        .iter()
+        .find(|section| section.title == "agents")
+        .expect("agents section installed from the snapshot");
+    assert_eq!(agents.rows.len(), 2, "the snapshot's two agents");
+}
+
 fn seed_then_drain(tag: &str, script: FakeScript) -> WindowSession {
     use super::super::notify::NotifyDelivery;
     let (_rx, mut conn) = fake_daemon(tag, script);
