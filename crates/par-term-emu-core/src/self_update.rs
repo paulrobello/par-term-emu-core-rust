@@ -10,6 +10,9 @@ use std::process::Command;
 pub enum Binary {
     /// The streaming server.
     Streamer,
+    /// The streaming server built with the `mux` feature: its release
+    /// artifacts are the `par-term-streamer-mux-<os>-<arch>` assets.
+    StreamerMux,
     /// The multiplexer.
     Mux,
 }
@@ -70,6 +73,10 @@ pub fn asset_name(binary: Binary, version: &str, os: &str, arch: &str) -> Result
     Ok(match binary {
         Binary::Streamer => format!(
             "par-term-streamer-{os}-{arch}{}",
+            if os == "windows" { ".exe" } else { "" }
+        ),
+        Binary::StreamerMux => format!(
+            "par-term-streamer-mux-{os}-{arch}{}",
             if os == "windows" { ".exe" } else { "" }
         ),
         Binary::Mux => format!(
@@ -321,8 +328,8 @@ fn update_release(
         std::env::consts::ARCH,
     )?;
     let sidecar = match binary {
-        Binary::Streamer => format!("{name}.sha256"),
         Binary::Mux => format!("par-mux-v{version}-SHA256SUMS.txt"),
+        Binary::Streamer | Binary::StreamerMux => format!("{name}.sha256"),
     };
     let assets = release["assets"]
         .as_array()
@@ -374,7 +381,7 @@ fn update_release(
         .collect::<String>();
     let backup = install_verified(exe, &payload, &digest)?;
     Ok(Outcome {
-        report: format!("updated to {tag}; backup: {}", backup.display()),
+        report: format!("updated to {tag} ({name}); backup: {}", backup.display()),
         installed: true,
     })
 }
@@ -533,6 +540,66 @@ mod tests {
         );
     }
 
+    /// The mux streamer variant resolves its own asset name and sidecar, and
+    /// fails closed when a release only carries the plain streamer's assets.
+    #[test]
+    fn streamer_mux_pulls_its_own_asset_and_sidecar() {
+        let dir = tempfile::tempdir().unwrap();
+        let exe = dir.path().join("streamer");
+        std::fs::write(&exe, b"original").unwrap();
+        let name = asset_name(
+            Binary::StreamerMux,
+            "99.0.0",
+            std::env::consts::OS,
+            std::env::consts::ARCH,
+        )
+        .unwrap();
+        let digest = "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad";
+        let release = serde_json::json!({"tag_name": "v99.0.0", "assets": [
+            {"name": name, "browser_download_url": "https://example.test/mux-binary"},
+            {"name": format!("{name}.sha256"), "browser_download_url": "https://example.test/mux-checksum"}
+        ]});
+        let download = |url: &str, _cap| {
+            Ok(if url.ends_with("mux-checksum") {
+                format!("{digest}  {name}\n").into_bytes()
+            } else {
+                b"abc".to_vec()
+            })
+        };
+        let outcome = update_release(
+            Binary::StreamerMux,
+            "1.0.0",
+            &exe,
+            false,
+            false,
+            &release,
+            download,
+        )
+        .unwrap();
+        assert!(outcome.installed);
+        assert!(outcome.report.contains(&name));
+        assert_eq!(std::fs::read(&exe).unwrap(), b"abc");
+        // A release carrying only the plain streamer's assets fails closed.
+        let plain_only = serde_json::json!({"tag_name": "v99.0.0", "assets": [
+            {"name": "par-term-streamer-test", "browser_download_url": "https://example.test/binary"},
+            {"name": "par-term-streamer-test.sha256", "browser_download_url": "https://example.test/checksum"}
+        ]});
+        let err = update_release(
+            Binary::StreamerMux,
+            "1.0.0",
+            &exe,
+            false,
+            false,
+            &plain_only,
+            |_, _| panic!("wrong-variant release must not be downloaded"),
+        )
+        .unwrap_err();
+        assert!(
+            err.contains(&name),
+            "expected missing-mux-asset error, got: {err}"
+        );
+    }
+
     #[cfg(unix)]
     #[test]
     fn mux_archive_uses_packaged_top_directory() {
@@ -621,15 +688,37 @@ mod tests {
     #[test]
     fn all_release_platforms_match_workflow() {
         let workflow = include_str!("../../../.github/workflows/deployment.yml");
-        for (os, arch, target) in [
+        let platforms = [
             ("macos", "aarch64", "aarch64-apple-darwin"),
             ("macos", "x86_64", "x86_64-apple-darwin"),
             ("linux", "aarch64", "aarch64-unknown-linux-gnu"),
             ("linux", "x86_64", "x86_64-unknown-linux-gnu"),
             ("windows", "x86_64", "x86_64-pc-windows-msvc"),
-        ] {
+        ];
+        // Every streamer asset the workflow lists must be exactly the set the
+        // engine's map produces — no missing, no extra, for either variant.
+        let mut listed: Vec<&str> = workflow
+            .lines()
+            .filter_map(|l| l.trim().strip_prefix("asset_name: "))
+            .filter(|a| a.starts_with("par-term-streamer"))
+            .collect();
+        listed.sort_unstable();
+        let mut expected: Vec<String> = platforms
+            .iter()
+            .flat_map(|(os, arch, _)| {
+                [
+                    asset_name(Binary::Streamer, "1.2.3", os, arch).unwrap(),
+                    asset_name(Binary::StreamerMux, "1.2.3", os, arch).unwrap(),
+                ]
+            })
+            .collect();
+        expected.sort();
+        assert_eq!(listed, expected, "deployment.yml streamer asset_name lines must match the engine's asset map exactly (both variants, all platforms)");
+        for (os, arch, target) in platforms {
             let streamer = asset_name(Binary::Streamer, "1.2.3", os, arch).unwrap();
+            let streamer_mux = asset_name(Binary::StreamerMux, "1.2.3", os, arch).unwrap();
             assert!(workflow.contains(&format!("asset_name: {streamer}")));
+            assert!(workflow.contains(&format!("asset_name: {streamer_mux}")));
             assert!(workflow.contains(&format!("target: {target}")));
             let ext = if os == "windows" { "zip" } else { "tar.gz" };
             assert_eq!(
@@ -638,6 +727,8 @@ mod tests {
             );
         }
         assert!(asset_name(Binary::Mux, "1.0.0", "windows", "aarch64").is_err());
+        assert!(asset_name(Binary::Streamer, "1.0.0", "windows", "aarch64").is_err());
+        assert!(asset_name(Binary::StreamerMux, "1.0.0", "windows", "aarch64").is_err());
     }
 
     #[test]

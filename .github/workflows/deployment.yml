@@ -210,32 +210,82 @@ jobs:
           - name: Linux x86_64
             os: ubuntu-latest
             target: x86_64-unknown-linux-gnu
+            variant: plain
             artifact_name: par-term-streamer
             asset_name: par-term-streamer-linux-x86_64
+            features: streaming-bin
+
+          - name: Linux x86_64 (mux)
+            os: ubuntu-latest
+            target: x86_64-unknown-linux-gnu
+            variant: mux
+            artifact_name: par-term-streamer
+            asset_name: par-term-streamer-mux-linux-x86_64
+            features: streaming-bin,mux
 
           - name: Linux ARM64
             os: ubuntu-latest
             target: aarch64-unknown-linux-gnu
+            variant: plain
             artifact_name: par-term-streamer
             asset_name: par-term-streamer-linux-aarch64
+            features: streaming-bin
+
+          - name: Linux ARM64 (mux)
+            os: ubuntu-latest
+            target: aarch64-unknown-linux-gnu
+            variant: mux
+            artifact_name: par-term-streamer
+            asset_name: par-term-streamer-mux-linux-aarch64
+            features: streaming-bin,mux
 
           - name: macOS x86_64
             os: macos-latest
             target: x86_64-apple-darwin
+            variant: plain
             artifact_name: par-term-streamer
             asset_name: par-term-streamer-macos-x86_64
+            features: streaming-bin
+
+          - name: macOS x86_64 (mux)
+            os: macos-latest
+            target: x86_64-apple-darwin
+            variant: mux
+            artifact_name: par-term-streamer
+            asset_name: par-term-streamer-mux-macos-x86_64
+            features: streaming-bin,mux
 
           - name: macOS ARM64
             os: macos-latest
             target: aarch64-apple-darwin
+            variant: plain
             artifact_name: par-term-streamer
             asset_name: par-term-streamer-macos-aarch64
+            features: streaming-bin
+
+          - name: macOS ARM64 (mux)
+            os: macos-latest
+            target: aarch64-apple-darwin
+            variant: mux
+            artifact_name: par-term-streamer
+            asset_name: par-term-streamer-mux-macos-aarch64
+            features: streaming-bin,mux
 
           - name: Windows x86_64
             os: windows-latest
             target: x86_64-pc-windows-msvc
+            variant: plain
             artifact_name: par-term-streamer.exe
             asset_name: par-term-streamer-windows-x86_64.exe
+            features: streaming-bin
+
+          - name: Windows x86_64 (mux)
+            os: windows-latest
+            target: x86_64-pc-windows-msvc
+            variant: mux
+            artifact_name: par-term-streamer.exe
+            asset_name: par-term-streamer-mux-windows-x86_64.exe
+            features: streaming-bin,mux
 
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -253,7 +303,7 @@ jobs:
           sudo apt-get install -y gcc-aarch64-linux-gnu
 
       - name: Build streaming server binary
-        run: cargo build --locked --release --bin par-term-streamer --no-default-features --features streaming-bin --target ${{ matrix.target }}
+        run: cargo build --locked --release --bin par-term-streamer --no-default-features --features ${{ matrix.features }} --target ${{ matrix.target }}
         env:
           CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_LINKER: aarch64-linux-gnu-gcc
 
@@ -275,7 +325,7 @@ jobs:
       - name: Upload binary artifact
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
-          name: binary-${{ matrix.target }}
+          name: binary-${{ matrix.variant }}-${{ matrix.target }}
           path: release-binaries/${{ matrix.asset_name }}
           retention-days: 1
 

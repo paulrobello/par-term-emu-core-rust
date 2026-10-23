@@ -151,10 +151,10 @@ async fn run_mux_mode(
 }
 
 fn run_self_update(check: bool, label: &str) -> Result<(), String> {
-    use par_term_emu_core::self_update::{self, Binary};
+    use par_term_emu_core::self_update;
     let exe = std::env::current_exe().map_err(|e| e.to_string())?;
     let outcome = self_update::update(
-        Binary::Streamer,
+        streamer_update_binary(),
         env!("CARGO_PKG_VERSION"),
         &exe,
         check,
@@ -165,6 +165,37 @@ fn run_self_update(check: bool, label: &str) -> Result<(), String> {
         self_update::restart_streamer(&exe, label)?;
     }
     Ok(())
+}
+
+/// The update track this build follows, fixed at compile time from the `mux`
+/// feature: a mux-enabled streamer pulls the `par-term-streamer-mux-` assets
+/// and a plain build the plain ones, so neither can update into the other's
+/// release artifact.
+fn streamer_update_binary() -> par_term_emu_core::self_update::Binary {
+    if cfg!(feature = "mux") {
+        par_term_emu_core::self_update::Binary::StreamerMux
+    } else {
+        par_term_emu_core::self_update::Binary::Streamer
+    }
+}
+
+#[cfg(test)]
+mod update_target_tests {
+    use par_term_emu_core::self_update::Binary;
+
+    /// Only the active feature side compiles, so each gate run pins exactly
+    /// the selection its build makes.
+    #[cfg(feature = "mux")]
+    #[test]
+    fn mux_build_tracks_mux_assets() {
+        assert_eq!(super::streamer_update_binary(), Binary::StreamerMux);
+    }
+
+    #[cfg(not(feature = "mux"))]
+    #[test]
+    fn plain_build_tracks_plain_assets() {
+        assert_eq!(super::streamer_update_binary(), Binary::Streamer);
+    }
 }
 
 /// Run the streaming server on a background task until it is aborted.
