@@ -5,6 +5,9 @@ use super::*;
 
 impl StreamingServer {
     #[cfg(test)]
+    // Only the mux-gated mirror tests call this; the streaming-only build
+    // otherwise lints the helper as dead (same shape as parse_titles_output).
+    #[cfg_attr(not(feature = "mux"), allow(dead_code))]
     pub(crate) async fn handle_test_ws<S>(
         self: &Arc<Self>,
         stream: tokio_tungstenite::WebSocketStream<S>,
