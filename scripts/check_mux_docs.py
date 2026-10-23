@@ -112,6 +112,8 @@ FOREIGN_FLAGS: dict[str, str] = {
     "enter": "send-keys --enter (wire command flag: append the Enter byte)",
     "base": "worktree-create --base (wire command flag: the start point, D7)",
     "format": "devin list --format json (devin CLI, session-id fallback)",
+    "continue": "claude --continue (agent resume argv, [daemon.agent-append] example)",
+    "name": "claude --name <basename> (agent identity argv, [daemon.agent-append] example)",
 }
 
 
