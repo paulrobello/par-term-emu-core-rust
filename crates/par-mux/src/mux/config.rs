@@ -420,6 +420,15 @@ pub struct ClientSection {
         skip_serializing_if = "Option::is_none"
     )]
     pub git_poll_secs: Option<u64>,
+    /// The agents area's roster ordering (herdr's `agent_panel_sort`):
+    /// `grouped` (workspace groups, status priority beneath) or
+    /// `priority` (status first). Default `grouped`.
+    #[serde(
+        default,
+        rename = "agents-sort",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub agents_sort: Option<String>,
     /// The focused pane's border/divider highlight, `#rrggbb` hex. Empty
     /// = the built-in accent (bright cyan). Config-file only, like the
     /// other `[client]` display options.
@@ -974,6 +983,7 @@ pub fn render(eff: &EffectiveConfig) -> String {
             mode: Some(eff.mode.clone()),
             reload: Some(eff.reload.clone()),
             git_poll_secs: Some(eff.git_poll_secs),
+            agents_sort: Some(defaults.agents_sort.clone()),
             split_right: None,
             split_down: None,
             kill_pane: None,
@@ -1147,6 +1157,10 @@ pub struct Chords {
     /// The divider/border glyph set (config `border-lines`): `herdr`,
     /// `unicode`, `double`, `heavy`, or `ascii`. Default `herdr`.
     pub border_lines: String,
+    /// The agents area's roster ordering (config `agents-sort`): herdr's
+    /// `agent_panel_sort` — `grouped` (workspace groups, status priority
+    /// beneath) or `priority` (status first). Default `grouped`.
+    pub agents_sort: String,
     /// The workspace side panel's width in columns when shown.
     pub sidebar_width: u16,
     /// Whether the side panel shows when a render client attaches
@@ -1271,6 +1285,7 @@ impl Chords {
             git_status: true,
             git_poll_secs: 10,
             border_lines: "herdr".to_string(),
+            agents_sort: "grouped".to_string(),
             sidebar_width: 20,
             sidebar_on_launch: true,
             agent_rows: default_agent_rows(),
@@ -1568,6 +1583,15 @@ pub fn reload_client_chords(file: &ConfigFile, current: &Chords) -> Result<Chord
         .border_lines
         .clone()
         .unwrap_or_else(|| current.border_lines.clone());
+    // The roster's ordering word: an unknown spelling keeps the current
+    // (the file philosophy's warn-and-default; the header toggle and the
+    // settings row are the only writers, so divergence is not a user
+    // hazard).
+    let agents_sort = match file.client.agents_sort.as_deref() {
+        Some("priority") => "priority".to_string(),
+        Some("grouped") => "grouped".to_string(),
+        _ => current.agents_sort.clone(),
+    };
     let theme = client
         .theme
         .clone()
@@ -1599,6 +1623,7 @@ pub fn reload_client_chords(file: &ConfigFile, current: &Chords) -> Result<Chord
         git_status,
         git_poll_secs,
         border_lines,
+        agents_sort,
         sidebar_width,
         sidebar_on_launch,
         agent_rows,
@@ -1865,6 +1890,27 @@ pub fn parse_prefix(spec: &str) -> Option<u8> {
 
 #[cfg(test)]
 mod tests {
+    /// `[client] agents-sort` resolves into the client chords (`grouped`
+    /// default, `priority` respected, an unknown word keeping the
+    /// current), and the generated file spells the setting.
+    #[test]
+    fn agents_sort_round_trips_through_the_file_and_chords() {
+        use super::{reload_client_chords, render, resolve, Chords, ConfigFile, Overrides};
+        let mut file = ConfigFile::default();
+        file.client.agents_sort = Some("priority".to_string());
+        let chords = reload_client_chords(&file, &Chords::with_defaults()).expect("chords");
+        assert_eq!(chords.agents_sort, "priority");
+
+        // An unknown word keeps the current value.
+        file.client.agents_sort = Some("newest".to_string());
+        let chords = reload_client_chords(&file, &chords).expect("chords");
+        assert_eq!(chords.agents_sort, "priority");
+
+        // The generated file names the key.
+        let eff = resolve(&file, &Overrides::default());
+        assert!(render(&eff).contains("agents-sort"));
+    }
+
     use super::*;
 
     #[test]

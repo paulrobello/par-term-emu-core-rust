@@ -400,6 +400,9 @@ pub struct PaneRenderer {
     /// (default [`super::SIDEBAR_SPLIT_DEFAULT`]). Set by the split drag
     /// and the persisted client state.
     sidebar_split: f32,
+    /// The agents area's ordering (config `agents-sort`): what the
+    /// header's right-edge toggle flips and the roster composes with.
+    agents_sort: super::AgentSortMode,
     /// The panel is collapsed to the status rail (its strip is
     /// [`super::SIDEBAR_RAIL_WIDTH`] columns).
     sidebar_collapsed: bool,

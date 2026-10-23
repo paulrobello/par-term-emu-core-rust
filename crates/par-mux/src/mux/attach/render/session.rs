@@ -285,6 +285,13 @@ impl WindowSession {
             self.agent_rows = chords.agent_rows.clone();
             self.rebuild_agent_section();
         }
+        // The roster's ordering word is resolve-normalized (`grouped` |
+        // `priority`); an unknown file value kept the default there.
+        self.renderer
+            .set_agents_sort(match chords.agents_sort.as_str() {
+                "priority" => crate::mux::attach::panels::AgentSortMode::Priority,
+                _ => crate::mux::attach::panels::AgentSortMode::Grouped,
+            });
         // An unknown delivery keeps the default (its warning rides
         // `display_option_warnings`).
         self.notify.delivery = super::notify::NotifyDelivery::parse(&chords.notify_delivery)

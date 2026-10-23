@@ -46,6 +46,9 @@ pub(super) enum Hit {
     SidebarMenu,
     /// The side panel's chevron: collapse to the rail, or expand it.
     SidebarCollapse,
+    /// The agents header's right-aligned sort label: flip the roster's
+    /// grouped/priority ordering (herdr's `agent_sort_toggle`).
+    SidebarAgentsSort,
     /// A side panel workspace row (`+N`): land on it, or open its
     /// context menu on a right press (`menu`).
     SidebarWorkspace { id: String, menu: bool },
@@ -630,6 +633,7 @@ impl WindowSession {
                 self.renderer.set_overlay_anchor(anchor);
             }
             Hit::SidebarCollapse => self.toggle_sidebar_collapse(conn),
+            Hit::SidebarAgentsSort => self.toggle_agents_sort(conn),
             Hit::SidebarWorkspace { id, menu: true } => {
                 self.open_menu(MenuTarget::Workspace(id));
             }
@@ -960,6 +964,7 @@ impl WindowSession {
             SidebarRowId::New => Hit::SidebarNewWorkspace,
             SidebarRowId::Menu => Hit::SidebarMenu,
             SidebarRowId::Collapse => Hit::SidebarCollapse,
+            SidebarRowId::AgentsSort => Hit::SidebarAgentsSort,
             SidebarRowId::Pane(pane) => Hit::SidebarPane { pane },
             SidebarRowId::Workspace(id) => Hit::SidebarWorkspace {
                 id,

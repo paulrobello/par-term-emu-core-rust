@@ -1697,6 +1697,32 @@ fn srow(id: super::SidebarRowId, label: &str, active: bool) -> super::SidebarRow
 }
 
 /// The two areas the compose tests share: three workspaces, two agents.
+/// The agents header carries the sort toggle at its right edge (herdr's
+/// `agent_sort_toggle`): the label names the CURRENT mode and its span
+/// clicks as `AgentsSort`, on the header's own row.
+#[test]
+fn agents_header_sort_toggle_is_clickable_and_names_the_mode() {
+    let sections = two_area_sections();
+    for mode in [
+        super::AgentSortMode::Grouped,
+        super::AgentSortMode::Priority,
+    ] {
+        let lines = super::compose_sidebar(&sections, 20, 20, super::SIDEBAR_SPLIT_DEFAULT, mode);
+        let header_y = lines
+            .iter()
+            .find(|line| line.kind == super::SidebarLineKind::Header)
+            .map(|line| line.y)
+            .expect("agents header");
+        let toggle = lines
+            .iter()
+            .find(|line| line.id == Some(super::SidebarRowId::AgentsSort))
+            .expect("sort toggle");
+        assert_eq!(toggle.y, header_y);
+        assert_eq!(toggle.text, mode.label());
+        assert_eq!(toggle.x_end, 19, "flush with the content's right edge");
+    }
+}
+
 fn two_area_sections() -> Vec<super::SidebarSection> {
     vec![
         super::SidebarSection {
@@ -1736,7 +1762,13 @@ fn compose_sidebar_drops_spoofing_chars() {
             false,
         )],
     }];
-    let lines = super::compose_sidebar(&sections, 20, 10, super::SIDEBAR_SPLIT_DEFAULT);
+    let lines = super::compose_sidebar(
+        &sections,
+        20,
+        10,
+        super::SIDEBAR_SPLIT_DEFAULT,
+        super::AgentSortMode::Grouped,
+    );
     assert_eq!(lines[0].text, "   evil");
 }
 
@@ -1749,7 +1781,13 @@ fn compose_sidebar_drops_spoofing_chars() {
 #[test]
 fn compose_sidebar_splits_half_and_ends_the_workspace_area_with_the_chips() {
     use super::{SidebarLineKind, SidebarRowId};
-    let lines = super::compose_sidebar(&two_area_sections(), 20, 20, super::SIDEBAR_SPLIT_DEFAULT);
+    let lines = super::compose_sidebar(
+        &two_area_sections(),
+        20,
+        20,
+        super::SIDEBAR_SPLIT_DEFAULT,
+        super::AgentSortMode::Grouped,
+    );
     let at = |y: u16| -> Vec<&super::SidebarLine> { lines.iter().filter(|l| l.y == y).collect() };
     assert_eq!(at(0)[0].text, " ▸ main");
     assert!(at(0)[0].active, "the active row is flagged");
@@ -1784,7 +1822,13 @@ fn compose_sidebar_splits_half_and_ends_the_workspace_area_with_the_chips() {
             false,
         )],
     }];
-    let clipped = super::compose_sidebar(&long, 20, 20, super::SIDEBAR_SPLIT_DEFAULT);
+    let clipped = super::compose_sidebar(
+        &long,
+        20,
+        20,
+        super::SIDEBAR_SPLIT_DEFAULT,
+        super::AgentSortMode::Grouped,
+    );
     assert_eq!(clipped[0].text, "   a very long work");
     // With no agents section the agents area still opens with its rule
     // and header (the panel shape holds).
@@ -1808,17 +1852,17 @@ fn compose_sidebar_split_ratio_moves_the_rule_and_clamps() {
             .map(|l| l.y)
     };
     // 0.3 of 20 rows: a 6-row workspace area, chips on row 5.
-    let low = super::compose_sidebar(&sections, 20, 20, 0.3);
+    let low = super::compose_sidebar(&sections, 20, 20, 0.3, super::AgentSortMode::Grouped);
     assert_eq!(rule_y(&low), Some(6));
     assert_eq!(line_with(&low, &SidebarRowId::New).y, 5);
     // A 4-row area holds all three rows and the chips (no header to
     // spend a row on).
-    let tight = super::compose_sidebar(&sections, 20, 20, 0.2);
+    let tight = super::compose_sidebar(&sections, 20, 20, 0.2, super::AgentSortMode::Grouped);
     assert_eq!(rule_y(&tight), Some(4));
     assert!(tight.iter().any(|l| l.text == "   ops"));
     // The clamp floor: a 3-row area holds two rows and the chips — ops
     // clips past the footer row.
-    let floor = super::compose_sidebar(&sections, 20, 20, 0.15);
+    let floor = super::compose_sidebar(&sections, 20, 20, 0.15, super::AgentSortMode::Grouped);
     assert_eq!(rule_y(&floor), Some(3));
     assert!(floor.iter().any(|l| l.text == "   dev"));
     assert!(
@@ -1827,11 +1871,23 @@ fn compose_sidebar_split_ratio_moves_the_rule_and_clamps() {
     );
     // The extremes clamp to keep each area 3 rows.
     assert_eq!(
-        rule_y(&super::compose_sidebar(&sections, 20, 20, 0.01)),
+        rule_y(&super::compose_sidebar(
+            &sections,
+            20,
+            20,
+            0.01,
+            super::AgentSortMode::Grouped
+        )),
         Some(3)
     );
     assert_eq!(
-        rule_y(&super::compose_sidebar(&sections, 20, 20, 0.99)),
+        rule_y(&super::compose_sidebar(
+            &sections,
+            20,
+            20,
+            0.99,
+            super::AgentSortMode::Grouped
+        )),
         Some(17)
     );
     assert_eq!(super::sidebar_workspace_rows(20, 0.5), 10);
@@ -1841,7 +1897,7 @@ fn compose_sidebar_split_ratio_moves_the_rule_and_clamps() {
         "a short panel halves"
     );
     // Agent rows past the chevron row clip.
-    let short = super::compose_sidebar(&sections, 20, 8, 0.5);
+    let short = super::compose_sidebar(&sections, 20, 8, 0.5, super::AgentSortMode::Grouped);
     assert_eq!(rule_y(&short), Some(4));
     assert!(short
         .iter()
@@ -1909,7 +1965,13 @@ fn compose_sidebar_lays_out_multi_line_agent_entries() {
     for row in &mut sections[1].rows {
         row.continuation = vec!["agent".to_string()];
     }
-    let lines = super::compose_sidebar(&sections, 20, 20, super::SIDEBAR_SPLIT_DEFAULT);
+    let lines = super::compose_sidebar(
+        &sections,
+        20,
+        20,
+        super::SIDEBAR_SPLIT_DEFAULT,
+        super::AgentSortMode::Grouped,
+    );
     let at = |y: u16| lines.iter().find(|l| l.y == y).cloned().expect("line");
     assert_eq!(at(12).text, " ▸ claude (working)");
     assert_eq!(at(13).text, "   agent");
@@ -1930,7 +1992,7 @@ fn compose_sidebar_lays_out_multi_line_agent_entries() {
     assert!(!at(15).active);
     // The 8-row panel's agents area holds one line before the chevron:
     // the first entry's first line only.
-    let short = super::compose_sidebar(&sections, 20, 8, 0.5);
+    let short = super::compose_sidebar(&sections, 20, 8, 0.5, super::AgentSortMode::Grouped);
     assert_eq!(
         short
             .iter()
@@ -1946,10 +2008,10 @@ fn compose_sidebar_lays_out_multi_line_agent_entries() {
 fn compose_sidebar_narrow_strips_drop_what_does_not_fit() {
     use super::SidebarRowId;
     let sections = two_area_sections();
-    let narrow = super::compose_sidebar(&sections, 7, 10, 0.5);
+    let narrow = super::compose_sidebar(&sections, 7, 10, 0.5, super::AgentSortMode::Grouped);
     assert!(narrow.iter().any(|l| l.id == Some(SidebarRowId::New)));
     assert!(!narrow.iter().any(|l| l.id == Some(SidebarRowId::Menu)));
-    let tiny = super::compose_sidebar(&sections, 4, 10, 0.5);
+    let tiny = super::compose_sidebar(&sections, 4, 10, 0.5, super::AgentSortMode::Grouped);
     assert!(
         !tiny
             .iter()
@@ -2031,7 +2093,13 @@ fn compose_sidebar_marks_the_git_badge_line() {
     sections[0].rows[0].continuation = vec![" main \u{2191}2".to_string()];
     sections[0].rows[0].badge = true;
     sections[0].rows[1].continuation = vec!["a second line".to_string()];
-    let lines = super::compose_sidebar(&sections, 20, 20, super::SIDEBAR_SPLIT_DEFAULT);
+    let lines = super::compose_sidebar(
+        &sections,
+        20,
+        20,
+        super::SIDEBAR_SPLIT_DEFAULT,
+        super::AgentSortMode::Grouped,
+    );
     let badge = lines
         .iter()
         .find(|l| l.text == "    main \u{2191}2")
@@ -2054,7 +2122,13 @@ fn compose_sidebar_puts_the_workspace_status_next_to_the_name() {
     sections[0].rows[0].status = super::AgentStatus::Working;
     sections[0].rows[0].badge = true;
     sections[0].rows[0].continuation = vec![" main \u{2191}2".to_string()];
-    let lines = super::compose_sidebar(&sections, 20, 20, super::SIDEBAR_SPLIT_DEFAULT);
+    let lines = super::compose_sidebar(
+        &sections,
+        20,
+        20,
+        super::SIDEBAR_SPLIT_DEFAULT,
+        super::AgentSortMode::Grouped,
+    );
     assert_eq!(
         lines[0].text,
         format!(" ▸ main {}", super::STATE_ICON),

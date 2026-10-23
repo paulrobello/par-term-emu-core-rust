@@ -672,6 +672,10 @@ pub(crate) enum SidebarRowId {
     /// The bottom-right chevron: collapses the panel to the status rail
     /// (or expands the rail back).
     Collapse,
+    /// The agents header's sort toggle (herdr's `agent_sort_toggle`):
+    /// the right-aligned `grouped`/`priority` label, a click flipping
+    /// the roster's ordering.
+    AgentsSort,
 }
 
 /// One side-panel entry: its click target, first-line label, any
@@ -804,6 +808,43 @@ pub(crate) const SIDEBAR_RAIL_WIDTH: u16 = 2;
 pub(crate) const CHEVRON_COLLAPSE: &str = "«";
 pub(crate) const CHEVRON_EXPAND: &str = "»";
 
+/// The agents area's ordering (herdr's `agent_panel_sort`, config
+/// `agents-sort`). `Grouped` is herdr's spaces view: workspace groups in
+/// daemon id order, agents beneath by status priority. `Priority` is
+/// herdr's attention queue: status first, most urgent at the top,
+/// workspace beneath.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub(crate) enum AgentSortMode {
+    #[default]
+    Grouped,
+    Priority,
+}
+
+impl AgentSortMode {
+    /// The header toggle's label — the mode's own name, herdr's
+    /// `grouped` / `priority`.
+    pub(crate) fn label(self) -> &'static str {
+        match self {
+            Self::Grouped => "grouped",
+            Self::Priority => "priority",
+        }
+    }
+
+    /// The config word (`[client] agents-sort`) — the same vocabulary
+    /// the settings dialog's row writes.
+    pub(crate) fn config_value(self) -> &'static str {
+        self.label()
+    }
+
+    /// The flipped mode — the header toggle's click.
+    pub(crate) fn toggled(self) -> Self {
+        match self {
+            Self::Grouped => Self::Priority,
+            Self::Priority => Self::Grouped,
+        }
+    }
+}
+
 /// The workspace area's row count for a panel `height` rows tall at
 /// `split` — herdr's `sidebar_section_heights`: each area keeps at
 /// least 3 rows (a header, one entry, its last row), a short panel
@@ -873,6 +914,7 @@ pub(crate) fn compose_sidebar(
     width: u16,
     height: u16,
     split: f32,
+    agents_sort: AgentSortMode,
 ) -> Vec<SidebarLine> {
     let mut lines: Vec<SidebarLine> = Vec::new();
     if height == 0 {
@@ -997,6 +1039,23 @@ pub(crate) fn compose_sidebar(
             clip(" agents".to_string()),
             SidebarLineKind::Header,
         );
+        // The sort toggle rides the header's right edge (herdr's
+        // `agent_sort_toggle`): the label names the CURRENT mode, the
+        // click flips it. Painted after the header filler so it wins
+        // the right-edge cells; ` new `/` menu ` use the same
+        // same-row-two-lines shape.
+        let label = agents_sort.label();
+        if text_width >= label.len() {
+            lines.push(SidebarLine {
+                y: ws_rows + 1,
+                x: (text_width - label.len()) as u16,
+                x_end: content_end,
+                text: label.to_string(),
+                id: Some(SidebarRowId::AgentsSort),
+                active: false,
+                kind: SidebarLineKind::Row,
+            });
+        }
     }
     let last = height - 1;
     if let Some(section) = agents {

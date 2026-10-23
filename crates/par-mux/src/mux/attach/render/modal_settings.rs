@@ -127,6 +127,11 @@ impl SettingsSection {
                     label: "agent lines",
                     kind: SettingKind::Choice(&["default", "compact", "detailed", "verbose"]),
                 },
+                SettingSpec {
+                    key: "agents-sort",
+                    label: "agents sort",
+                    kind: SettingKind::Choice(&["grouped", "priority"]),
+                },
             ],
             Self::Borders => &[
                 SettingSpec {
@@ -457,6 +462,9 @@ pub(super) struct SettingsValues {
     pub sidebar_width: u16,
     pub agent_rows: Vec<Vec<String>>,
     pub border_lines: String,
+    /// The agents area's roster ordering (config `agents-sort`) — the
+    /// word in force, `grouped` or `priority`.
+    pub agents_sort: String,
     pub pane_borders: bool,
     pub show_label_in_border: bool,
     pub pane_gaps: u16,
@@ -508,6 +516,7 @@ impl SettingsValues {
             "sidebar-width" => FieldVal::Num(self.sidebar_width as u32),
             "git-poll-secs" => FieldVal::Num(u32::try_from(self.git_poll_secs).unwrap_or(600)),
             "agent-rows" => FieldVal::Text(self.agent_rows_preset()),
+            "agents-sort" => FieldVal::Text(self.agents_sort.clone()),
             "border-lines" => FieldVal::Text(self.border_lines.clone()),
             "pane-borders" => FieldVal::Bool(self.pane_borders),
             "show-label-in-border" => FieldVal::Bool(self.show_label_in_border),
@@ -831,6 +840,7 @@ impl WindowSession {
             sidebar_width: self.render_opts.sidebar_width,
             agent_rows: self.agent_rows.clone(),
             border_lines: self.render_opts.glyphs.name().to_string(),
+            agents_sort: self.renderer.agents_sort().config_value().to_string(),
             pane_borders: self.render_opts.pane_borders,
             show_label_in_border: self.render_opts.show_label_in_border,
             pane_gaps: self.render_opts.pane_gaps,
@@ -1269,6 +1279,7 @@ mod tests {
             sidebar_width: 31,
             agent_rows: SettingsValues::preset_rows("default"),
             border_lines: "herdr".to_string(),
+            agents_sort: "grouped".to_string(),
             pane_borders: false,
             show_label_in_border: true,
             pane_gaps: 0,

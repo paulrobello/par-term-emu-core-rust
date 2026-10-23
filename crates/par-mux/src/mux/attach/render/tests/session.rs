@@ -3456,6 +3456,7 @@ fn sidebar_agents_section_groups_by_workspace() {
         &names,
         Some(2),
         &crate::mux::config::default_agent_rows(),
+        crate::mux::attach::panels::AgentSortMode::Grouped,
     );
     session.renderer.set_sidebar_sections(sections);
     let sections = session.renderer.sidebar_sections.clone().expect("sections");
@@ -3484,18 +3485,27 @@ fn sidebar_shows_done_agents_and_ranks_them_over_working() {
         &names,
         None,
         &crate::mux::config::default_agent_rows(),
+        crate::mux::attach::panels::AgentSortMode::Grouped,
     )
     .expect("sections");
+    // Grouped sub-sorts by status priority: the done pi leads.
     assert_eq!(
-        sections[1].rows[1],
+        sections[1].rows[0],
         arow(3, Some("main"), "pi", "done", false)
     );
-    assert_eq!(sections[1].rows[1].status, AgentStatus::Done);
+    assert_eq!(sections[1].rows[0].status, AgentStatus::Done);
     assert_eq!(sections[0].rows[0].status, AgentStatus::Done);
     let custom = vec![vec!["agent".to_string(), "state".to_string()]];
-    let sections =
-        WindowSession::sidebar_sections(&roster, &agents, &names, None, &custom).expect("sections");
-    assert_eq!(sections[1].rows[1].label, "pi \u{b7} done");
+    let sections = WindowSession::sidebar_sections(
+        &roster,
+        &agents,
+        &names,
+        None,
+        &custom,
+        crate::mux::attach::panels::AgentSortMode::Grouped,
+    )
+    .expect("sections");
+    assert_eq!(sections[1].rows[0].label, "pi \u{b7} done");
 }
 
 /// The agent entry follows `agent-rows`: the default puts the project
@@ -3518,13 +3528,15 @@ fn sidebar_agent_entries_follow_agent_rows() {
         &names,
         None,
         &crate::mux::config::default_agent_rows(),
+        crate::mux::attach::panels::AgentSortMode::Grouped,
     )
     .expect("sections");
+    // Grouped sub-sorts by status priority: the blocked kimi leads.
     assert_eq!(
-        default[1].rows[0].label,
+        default[1].rows[1].label,
         format!("{STATE_ICON} main \u{b7} par-term")
     );
-    assert_eq!(default[1].rows[0].continuation, vec!["claude".to_string()]);
+    assert_eq!(default[1].rows[1].continuation, vec!["claude".to_string()]);
     assert_eq!(
         default[0].rows[0].status,
         AgentStatus::Blocked,
@@ -3534,16 +3546,23 @@ fn sidebar_agent_entries_follow_agent_rows() {
         vec!["agent".to_string(), "state".to_string()],
         vec!["pane".to_string(), "project".to_string()],
     ];
-    let sections =
-        WindowSession::sidebar_sections(&roster, &agents, &names, None, &custom).expect("sections");
-    assert_eq!(sections[1].rows[0].label, "claude \u{b7} working");
-    assert_eq!(
-        sections[1].rows[0].continuation,
-        vec!["%2 \u{b7} par-term".to_string()]
-    );
-    assert_eq!(sections[1].rows[1].label, "kimi \u{b7} blocked");
+    let sections = WindowSession::sidebar_sections(
+        &roster,
+        &agents,
+        &names,
+        None,
+        &custom,
+        crate::mux::attach::panels::AgentSortMode::Grouped,
+    )
+    .expect("sections");
+    assert_eq!(sections[1].rows[0].label, "kimi \u{b7} blocked");
+    assert_eq!(sections[1].rows[1].label, "claude \u{b7} working");
     assert_eq!(
         sections[1].rows[1].continuation,
+        vec!["%2 \u{b7} par-term".to_string()]
+    );
+    assert_eq!(
+        sections[1].rows[0].continuation,
         vec!["%3".to_string()],
         "an unprobed project drops out of its line"
     );
@@ -3570,6 +3589,7 @@ fn sidebar_agents_group_by_workspace_id_not_name() {
         &names,
         None,
         &crate::mux::config::default_agent_rows(),
+        crate::mux::attach::panels::AgentSortMode::Grouped,
     );
     session.renderer.set_sidebar_sections(sections);
     let sections = session.renderer.sidebar_sections.clone().expect("sections");
@@ -3685,8 +3705,9 @@ fn snapshot_refresh_is_one_round_trip() {
             crate::mux::attach::panels::SidebarSection {
                 title: "agents",
                 rows: vec![
-                    arow(1, None, "claude", "working", true),
+                    // Grouped sub-sorts by status priority: blocked first.
                     arow(3, None, "kimi", "blocked", false),
+                    arow(1, None, "claude", "working", true),
                 ],
             },
         ])

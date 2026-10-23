@@ -103,6 +103,7 @@ impl PaneRenderer {
             ),
             sidebar_sections: None,
             sidebar_split: crate::mux::attach::panels::SIDEBAR_SPLIT_DEFAULT,
+            agents_sort: crate::mux::attach::panels::AgentSortMode::default(),
             sidebar_collapsed: false,
             user_titles: HashMap::new(),
             glyphs: options.glyphs,

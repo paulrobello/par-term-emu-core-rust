@@ -2,7 +2,7 @@
 //! and the toggle/refresh the session drives.
 
 use super::{PaneRenderer, WindowSession};
-use crate::mux::attach::panels::{compose_sidebar, compose_sidebar_rail};
+use crate::mux::attach::panels::{compose_sidebar, compose_sidebar_rail, AgentSortMode};
 use crate::mux::attach::status;
 use crate::mux::attach::targets::parse_workspace_line;
 use ratatui::style::{Color as RtColor, Modifier as RtModifier, Style as RtStyle};
@@ -63,6 +63,20 @@ impl PaneRenderer {
         self.sidebar_split
     }
 
+    /// The agents area's ordering: what the header toggle flips.
+    pub(crate) fn agents_sort(&self) -> crate::mux::attach::panels::AgentSortMode {
+        self.agents_sort
+    }
+
+    /// Set the agents area's ordering (config seed, the header toggle's
+    /// click, and every reload's rebind). Repaints.
+    pub(crate) fn set_agents_sort(&mut self, mode: crate::mux::attach::panels::AgentSortMode) {
+        if self.agents_sort != mode {
+            self.agents_sort = mode;
+            self.dirty = true;
+        }
+    }
+
     /// Show the panel collapsed to the status rail, or expanded.
     /// Repaints.
     pub(crate) fn set_sidebar_collapsed(&mut self, collapsed: bool) {
@@ -83,7 +97,13 @@ impl PaneRenderer {
         if self.sidebar_collapsed {
             compose_sidebar_rail(sections, self.height, self.sidebar_split)
         } else {
-            compose_sidebar(sections, w, self.height, self.sidebar_split)
+            compose_sidebar(
+                sections,
+                w,
+                self.height,
+                self.sidebar_split,
+                self.agents_sort,
+            )
         }
     }
 
@@ -506,6 +526,23 @@ impl WindowSession {
         }
     }
 
+    /// The agents header's sort toggle (herdr's `agent_sort_toggle`):
+    /// flip the roster's grouped/priority ordering, rebuild the panel,
+    /// and persist `[client] agents-sort` through the settings dialog's
+    /// write path — the reload's rebind re-applies the written value, so
+    /// the file and the panel agree.
+    pub(super) fn toggle_agents_sort(&mut self, conn: &mut crate::mux::attach::conn::AttachConn) {
+        if !self.sidebar.is_on() {
+            return;
+        }
+        let next = self.renderer.agents_sort().toggled();
+        self.renderer.set_agents_sort(next);
+        self.rebuild_agent_section();
+        let value =
+            crate::mux::attach::settings_write::SettingValue::Str(next.config_value().to_string());
+        self.settings_write_and_reload(conn, "agents-sort", value);
+    }
+
     /// Whether the roster is due a re-query for a missing project: the
     /// panel is up, an agent's project is unknown, and the last poll is
     /// [`PROJECT_POLL_INTERVAL`] old (the poll restarts the clock). A
@@ -693,6 +730,7 @@ impl WindowSession {
             self.status.workspaces(),
             focused,
             &self.agent_rows,
+            self.renderer.agents_sort(),
         );
         if let Some(sections) = sections.as_mut() {
             group_worktree_rows(sections, self.status.worktrees());
@@ -729,15 +767,19 @@ impl WindowSession {
     /// active)`), then the agent roster — herdr's grouped panel. Each
     /// agent entry renders its `agent_rows` lines ([`agent_entry_lines`]:
     /// by default the state icon, workspace name, and project, then the
-    /// agent) and activates when its pane is the view's focus. Grouped by
-    /// workspace id in id order (unknown workspaces last), panes
-    /// ascending within a group. `None` when both are empty.
+    /// agent) and activates when its pane is the view's focus. Grouped
+    /// mode keeps herdr's spaces view — workspace groups in daemon id
+    /// order (unknown workspaces trail as one group), agents beneath by
+    /// status priority, panes ascending as the tiebreak. Priority mode is
+    /// the attention queue — status first, most urgent at the top, then
+    /// workspace, then panes. `None` when both are empty.
     pub(super) fn sidebar_sections(
         roster: &[(String, String, bool)],
         agents: &[status::RosterEntry],
         ws_names: &[(String, String)],
         focused: Option<u32>,
         agent_rows: &[Vec<String>],
+        mode: AgentSortMode,
     ) -> Option<Vec<SidebarSection>> {
         let mut sections: Vec<SidebarSection> = Vec::new();
         if !roster.is_empty() {
@@ -767,11 +809,12 @@ impl WindowSession {
             });
         }
         if !agents.is_empty() {
-            // Group by workspace ID in the daemon's id order (`ws_names` is
-            // the workspace cache, id order), panes ascending within a
-            // group; rows whose workspace is unknown (pre-`ws=` daemon, or
-            // a row a patch inserted before the refresh filled it) trail as
-            // one group.
+            // Grouped keeps herdr's spaces view — workspace groups in the
+            // daemon's id order (`ws_names` is the workspace cache, id
+            // order; unknown workspaces trail as one group), agents
+            // beneath by status priority, panes ascending as the
+            // tiebreak. Priority is the attention queue — status first,
+            // most urgent at the top, then workspace, then panes.
             let group = |ws: Option<&str>| {
                 ws.and_then(|ws| ws_names.iter().position(|(id, _)| id == ws))
                     .unwrap_or(ws_names.len())
@@ -784,6 +827,7 @@ impl WindowSession {
                         .iter()
                         .find(|(id, _)| Some(id.as_str()) == ws)
                         .map(|(_, name)| name.as_str());
+                    let status = AgentStatus::from_state(&entry.state);
                     let mut lines = agent_entry_lines(
                         agent_rows,
                         &AgentFacts {
@@ -800,14 +844,25 @@ impl WindowSession {
                         id: SidebarRowId::Pane(entry.pane),
                         label,
                         active: focused == Some(entry.pane),
-                        status: AgentStatus::from_state(&entry.state),
+                        status,
                         continuation: lines,
                         badge: false,
                     };
-                    ((group(ws), entry.pane), row)
+                    ((status, group(ws), entry.pane), row)
                 })
                 .collect();
-            keyed.sort_by_key(|(key, _)| *key);
+            keyed.sort_by(|(a, _), (b, _)| match mode {
+                AgentSortMode::Grouped => {
+                    a.1.cmp(&b.1)
+                        .then_with(|| b.0.cmp(&a.0))
+                        .then_with(|| a.2.cmp(&b.2))
+                }
+                AgentSortMode::Priority => {
+                    b.0.cmp(&a.0)
+                        .then_with(|| a.1.cmp(&b.1))
+                        .then_with(|| a.2.cmp(&b.2))
+                }
+            });
             let rows = keyed.into_iter().map(|(_, row)| row).collect();
             sections.push(SidebarSection {
                 title: "agents",
@@ -866,9 +921,87 @@ mod tests {
             &[("+0".to_string(), "main".to_string())],
             None,
             &[vec!["agent".to_string()]],
+            AgentSortMode::Grouped,
         )
         .expect("sections");
         assert_eq!(sections[0].rows[0].status, AgentStatus::Question);
+    }
+
+    fn roster_entry(pane: u32, agent: &str, state: &str, ws: Option<&str>) -> status::RosterEntry {
+        status::RosterEntry {
+            pane,
+            agent: agent.to_string(),
+            state: state.to_string(),
+            workspace: ws.map(str::to_string),
+            project: None,
+            message: None,
+        }
+    }
+
+    fn agent_panes(sections: &[SidebarSection]) -> Vec<u32> {
+        sections
+            .iter()
+            .find(|s| s.title == "agents")
+            .expect("agents section")
+            .rows
+            .iter()
+            .map(|row| match &row.id {
+                SidebarRowId::Pane(pane) => *pane,
+                other => panic!("agent row expected, got {other:?}"),
+            })
+            .collect()
+    }
+
+    /// Grouped mode sub-sorts each workspace's agents by status priority
+    /// (question > blocked > done > working > idle): a working agent no
+    /// longer displaces its blocked sibling inside the group.
+    #[test]
+    fn grouped_mode_subsorts_agents_by_status_priority() {
+        let agents = vec![
+            roster_entry(1, "calm", "working", Some("+0")),
+            roster_entry(2, "needy", "blocked", Some("+0")),
+            roster_entry(3, "idle1", "idle", Some("+0")),
+        ];
+        let sections = WindowSession::sidebar_sections(
+            &[("+0".to_string(), "main".to_string(), false)],
+            &agents,
+            &[("+0".to_string(), "main".to_string())],
+            None,
+            &[vec!["agent".to_string()]],
+            AgentSortMode::Grouped,
+        )
+        .expect("sections");
+        assert_eq!(agent_panes(&sections), vec![2, 1, 3]);
+    }
+
+    /// Priority mode is the attention queue: status first, most urgent at
+    /// the top across every workspace, workspace order as the sub-sort,
+    /// panes as the tiebreak.
+    #[test]
+    fn priority_mode_sorts_by_status_then_workspace() {
+        let agents = vec![
+            roster_entry(4, "calm", "working", Some("+1")),
+            roster_entry(5, "idle1", "idle", Some("+0")),
+            roster_entry(6, "needy", "blocked", Some("+0")),
+        ];
+        let roster = vec![
+            ("+0".to_string(), "main".to_string(), false),
+            ("+1".to_string(), "zeta".to_string(), false),
+        ];
+        let names = vec![
+            ("+0".to_string(), "main".to_string()),
+            ("+1".to_string(), "zeta".to_string()),
+        ];
+        let sections = WindowSession::sidebar_sections(
+            &roster,
+            &agents,
+            &names,
+            None,
+            &[vec!["agent".to_string()]],
+            AgentSortMode::Priority,
+        )
+        .expect("sections");
+        assert_eq!(agent_panes(&sections), vec![6, 4, 5]);
     }
 
     /// Badges ride every named workspace's row, with the herdr arrows;

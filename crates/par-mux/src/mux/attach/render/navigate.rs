@@ -652,6 +652,7 @@ impl WindowSession {
                 git_status: self.git_status,
                 git_poll_secs: self.git_poll_secs,
                 border_lines: self.render_opts.glyphs.name().to_string(),
+                agents_sort: self.renderer.agents_sort().config_value().to_string(),
                 sidebar_width: self.render_opts.sidebar_width,
                 // Launch-only: the live panel's visibility stays as it
                 // is; the session keeps the configured value for the
