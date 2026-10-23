@@ -541,4 +541,59 @@ async fn clipboard_set_denied_when_allow_clipboard_write_is_off() {
     assert!(rx.try_recv().is_err());
 }
 
+/// A `SnapshotRequest` must come back as a `SemanticSnapshot` reply whose
+/// payload carries the scoped content, and an unknown scope must come back
+/// as an `Error` naming the valid scopes.
+#[tokio::test]
+async fn snapshot_request_replies_with_semantic_snapshot() {
+    use crate::streaming::protocol::ClientMessage;
+    use crate::terminal::semantic_snapshot::SemanticSnapshot;
+
+    let terminal = Arc::new(RwLock::new(Terminal::new(80, 24)));
+    terminal.write().process(b"hello snapshot\r\n".as_slice());
+    let server = Arc::new(StreamingServer::new(terminal, "127.0.0.1:0".to_string()));
+    let session = server.get_session("default").expect("default session");
+
+    let dispatch = |msg: ClientMessage| {
+        server.handle_client_message(
+            &session,
+            super::ConnCtx {
+                transport_label: "ws-test",
+                client_id: uuid::Uuid::new_v4(),
+                read_only: false,
+            },
+            &mut None,
+            &mut None,
+            msg,
+        )
+    };
+
+    for scope in ["visible", "recent", "full"] {
+        let replies = dispatch(ClientMessage::SnapshotRequest {
+            scope: scope.to_string(),
+            max_commands: if scope == "recent" { Some(3) } else { None },
+        });
+        let snapshot_json = match replies.as_slice() {
+            [ServerMessage::SemanticSnapshot { snapshot_json }] => snapshot_json.clone(),
+            other => panic!("scope {scope}: expected one SemanticSnapshot reply, got {other:?}"),
+        };
+        let snap: SemanticSnapshot = serde_json::from_str(&snapshot_json)
+            .unwrap_or_else(|e| panic!("scope {scope}: bad snapshot JSON: {e}"));
+        assert!(
+            snap.visible_text.contains("hello snapshot"),
+            "scope {scope}: visible_text must carry the screen content"
+        );
+    }
+
+    let replies = dispatch(ClientMessage::SnapshotRequest {
+        scope: "bogus".to_string(),
+        max_commands: None,
+    });
+    let message = match replies.as_slice() {
+        [ServerMessage::Error { message, .. }] => message.clone(),
+        other => panic!("invalid scope: expected one Error reply, got {other:?}"),
+    };
+    assert!(message.contains("visible"));
+}
+
 // ─── InputRateLimiter tests ─────────────────────────────────────────────

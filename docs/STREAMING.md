@@ -1690,6 +1690,7 @@ ws.send(encodeClientMessage(msg));
 
 **Server Response:**
 - `semantic_snapshot`: JSON-encoded snapshot with command history, zones, exit codes
+- An unrecognized scope gets an `error` reply naming the valid scopes
 
 ### Environment and Remote Host Tracking
 
