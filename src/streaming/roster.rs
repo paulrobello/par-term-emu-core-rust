@@ -147,6 +147,9 @@ fn project_from_host_telemetry(raw: &str) -> String {
 /// Parses `list-panes -F '#{pane_id} #{pane_title}'` output into a
 /// pane-id → title map. Rows whose first token is not a well-formed pane
 /// id are skipped; a later duplicate row wins.
+// Only the mux-gated roster_watcher consumes this outside tests, so the
+// streaming-only clippy gate sees it as dead unless the allow rides along.
+#[cfg_attr(not(feature = "mux"), allow(dead_code))]
 pub fn parse_titles_output(raw: &str) -> BTreeMap<u32, String> {
     raw.lines()
         .filter_map(|line| {
