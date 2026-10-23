@@ -150,6 +150,23 @@ async fn run_mux_mode(
     Ok(())
 }
 
+fn run_self_update(check: bool, label: &str) -> Result<(), String> {
+    use par_term_emu_core::self_update::{self, Binary};
+    let exe = std::env::current_exe().map_err(|e| e.to_string())?;
+    let outcome = self_update::update(
+        Binary::Streamer,
+        env!("CARGO_PKG_VERSION"),
+        &exe,
+        check,
+        false,
+    )?;
+    println!("{}", outcome.report);
+    if outcome.installed {
+        self_update::restart_streamer(&exe, label)?;
+    }
+    Ok(())
+}
+
 /// Run the streaming server on a background task until it is aborted.
 fn spawn_server_task(server: Arc<StreamingServer>) -> tokio::task::JoinHandle<()> {
     tokio::spawn(async move {
@@ -197,6 +214,22 @@ use theme::Theme;
 #[tokio::main]
 async fn main() -> Result<()> {
     let args = Args::parse();
+    if args.check_update || args.self_update {
+        run_self_update(args.check_update, &args.launchd_label).map_err(anyhow::Error::msg)?;
+        return Ok(());
+    }
+    if args.auto_update {
+        let interval = args.update_interval;
+        let label = args.launchd_label.clone();
+        std::thread::Builder::new()
+            .name("streamer-updater".into())
+            .spawn(move || loop {
+                if let Err(err) = run_self_update(false, &label) {
+                    eprintln!("streamer auto-update: {err}");
+                }
+                std::thread::sleep(Duration::from_secs(interval.seconds()));
+            })?;
+    }
 
     // Handle --download-frontend command
     if args.download_frontend {

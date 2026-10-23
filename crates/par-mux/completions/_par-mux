@@ -22,6 +22,9 @@ _par-mux() {
 '(--state-dir)--cmd=[Client mode\: send one control command to the daemon on this socket, print its reply body to stdout (one line per reply line), and exit. A \`%error\` reply prints to stderr and exits non-zero. Never starts a daemon. A flag, like --stop, so the positional NAME stays unambiguous]:COMMAND:_default' \
 '--skills-dir=[With --install-skill\: write under this skills root instead of the Claude Code default (tests, other agent harnesses)]:DIR:_files' \
 '--print-completions=[Print the shell-completion script for SHELL (bash, zsh, fish, powershell, elvish) generated from this CLI, and exit. Never contacts a daemon]:SHELL:(bash elvish fish powershell zsh)' \
+'(--self-update)--check-update[Report the latest release without changing the installation]' \
+'--self-update[Install a checksum-verified release and restart the same daemon]' \
+'--force-self-update[Permit replacing a binary inside an .app bundle (breaks signature/TCC)]' \
 '--stop[Stop the daemon serving this socket cleanly (final state save, \`%exit\` to clients) and wait for it to exit. Flags rather than subcommands\: the positional NAME would otherwise be ambiguous with a session named \`stop\`]' \
 '--restart[Stop the running daemon (as --stop), then start a fresh one on the same socket — it restores the tree the stop just saved. Use after rebuilding par-mux\: clients attach to whatever daemon owns the socket, so an old daemon keeps serving old code until restarted]' \
 '(--no-attach --stop -c --cmd --list-servers --gen-config --install-skill --install-agent-hooks --uninstall-agent-hooks --agent-hooks-status --integration-status --install-agent-extensions --uninstall-agent-extensions --heal-agent-hooks --print-schema --print-completions)--foreground[Serve the daemon in the foreground of this process instead of the default daemonize-to-background\: the debugging and supervision escape, and the shape programmatic spawners use (they own and kill the child they spawned). Not a daemon_mode member on purpose\: it composes with --restart (stop, then serve here)]' \
@@ -365,8 +368,8 @@ esac
 ;;
 (update)
 _arguments "${_arguments_options[@]}" : \
-'--channel=[The release channel\: \`stable\` (latest release, the default) or \`preview\` (newest prerelease)]:CHANNEL:((stable\:"The latest non-prerelease release"
-preview\:"The newest prerelease, falling back to stable when none exists"))' \
+'--channel=[The release channel\: \`stable\` (latest release, the default) or \`preview\` (newest prerelease)]:CHANNEL:((stable\:"Latest non-prerelease release"
+preview\:"Newest prerelease, falling back to stable when none exists"))' \
 '--machine=[Relay this invocation to a saved machine over SSH (the machine'\''s profile in \`\[machines.<label>\]\` names the ssh target; credentials stay with ssh itself). One-shot commands (\`--cmd\`, \`status\`, \`ls\`, \`observe\`, \`control\`, \`--stop\`) run non-interactively; \`attach\` forces passthrough under a pty — the thin client]:LABEL:_default' \
 '--check[Report what would install, touch nothing]' \
 '-h[Print help (see more with '\''--help'\'')]' \

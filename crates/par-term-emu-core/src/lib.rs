@@ -28,6 +28,8 @@ pub mod conformance_level;
 pub mod coprocess;
 /// Cursor position and DECSCUSR style.
 pub mod cursor;
+#[cfg(feature = "self-update")]
+pub mod self_update;
 #[macro_use]
 pub mod debug;
 /// Grapheme cluster, variation selector, and emoji-sequence helpers.

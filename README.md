@@ -108,6 +108,16 @@ Every other release is documented in [CHANGELOG.md](CHANGELOG.md).
 - **Attach Client** - `par-mux attach` renders sessions in your terminal (render mode, the default) or byte-pumps one pane (passthrough), with workspaces, a sidebar, and a config file; see [docs/MUX.md](docs/MUX.md#attaching-from-a-terminal)
 - **Crash-Safe State** - Atomic saves with quarantine of unreadable state files; a clean SIGTERM never loses the last window
 
+### Standalone Binary Updates
+
+Both `par-term-streamer` and `par-mux` support `--check-update` (report only) and
+`--self-update` (install and restart). Updates use this repository's GitHub releases,
+require SHA-256 checksum sidecars, and retain a `.previous` binary beside the installation.
+Automatic installation is **off by default**. Enable streamer `--auto-update` or
+mux `[daemon] auto-update = true`, with an `hourly`, `daily` (default), or `weekly`
+interval. See [streamer configuration](docs/STREAMING.md#binary-updates) and
+[mux configuration](docs/MUX.md#binary-updates) for restart behavior and the app-bundle guard.
+
 ### Screenshots and Export
 
 - **Multiple Formats** - PNG, JPEG, BMP, SVG (vector); HTML via `export_html()`

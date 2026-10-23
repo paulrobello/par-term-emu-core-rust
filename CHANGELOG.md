@@ -7,6 +7,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- **Standalone binary self-updates**: `par-term-streamer` and `par-mux` gain `--check-update` and `--self-update`, plus opt-in automatic installation at startup and hourly/daily/weekly intervals (daily by default). One core `self-update` engine selects exact GitHub release assets, requires SHA-256 sidecars, stages beside the executable, and preserves a backup before replacement. Streamer releases now include binary checksum sidecars. Streamer restarts through its configurable launchd label or re-executes, while mux uses its same-socket stop/save/restore restart flow. App-bundled mux binaries refuse replacement unless explicitly forced. The existing mux `update` command also uses the verified shared engine. Card 01a166d8fc6070189ffa83b541c4713a.
+
 ## [0.64.0] - 2026-10-22
 
 ### Added

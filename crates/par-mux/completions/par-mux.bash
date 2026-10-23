@@ -209,7 +209,7 @@ _par__mux() {
 
     case "${cmd}" in
         par__mux)
-            opts="-c -h -V --socket --state-dir --machine --stop --restart --foreground --no-attach --cmd --list-servers --pane-endpoints --expose-control-socket --gen-config --force --install-skill --skills-dir --install-agent-hooks --uninstall-agent-hooks --agent-hooks-status --integration-status --install-agent-extensions --uninstall-agent-extensions --heal-agent-hooks --print-schema --print-completions --help --version start stop restart status ls attach config observe control completion machine plugin update help"
+            opts="-c -h -V --check-update --self-update --force-self-update --socket --state-dir --machine --stop --restart --foreground --no-attach --cmd --list-servers --pane-endpoints --expose-control-socket --gen-config --force --install-skill --skills-dir --install-agent-hooks --uninstall-agent-hooks --agent-hooks-status --integration-status --install-agent-extensions --uninstall-agent-extensions --heal-agent-hooks --print-schema --print-completions --help --version start stop restart status ls attach config observe control completion machine plugin update help"
             if [[ ${cur} == -* || ${COMP_CWORD} -eq 1 ]] ; then
                 COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
                 return 0

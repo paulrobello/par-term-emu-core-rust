@@ -95,6 +95,25 @@ fn parse_file_media(s: &str) -> Result<FileMediaMode, String> {
 #[command(name = "par-term-streamer")]
 #[command(version, about = "Terminal streaming server with WebSocket support")]
 pub struct Args {
+    /// Report the latest release without changing the installation.
+    #[arg(long, conflicts_with = "self_update")]
+    pub check_update: bool,
+    /// Install the latest release and restart this server.
+    #[arg(long)]
+    pub self_update: bool,
+    /// Automatically install updates at startup and on the configured interval.
+    #[arg(long, env = "PAR_TERM_AUTO_UPDATE")]
+    pub auto_update: bool,
+    /// Automatic update cadence: hourly, daily, or weekly.
+    #[arg(long, default_value = "daily", env = "PAR_TERM_UPDATE_INTERVAL")]
+    pub update_interval: par_term_emu_core::self_update::Interval,
+    /// launchd job label used when restarting a managed streamer.
+    #[arg(
+        long,
+        default_value = "net.pardev.pardeck.streamer",
+        env = "PAR_TERM_LAUNCHD_LABEL"
+    )]
+    pub launchd_label: String,
     /// Host address to bind to
     #[arg(long, default_value = "127.0.0.1", env = "PAR_TERM_HOST")]
     pub host: String,
@@ -334,6 +353,23 @@ mod tests {
 
     fn parse(args: &[&str]) -> Result<Args, clap::Error> {
         Args::try_parse_from(std::iter::once("par-term-streamer").chain(args.iter().copied()))
+    }
+
+    #[test]
+    fn update_flags_and_daily_default() {
+        assert!(parse(&["--check-update"]).unwrap().check_update);
+        assert!(parse(&["--self-update"]).unwrap().self_update);
+        assert!(parse(&["--check-update", "--self-update"]).is_err());
+        let defaults = parse(&[]).unwrap();
+        assert!(!defaults.auto_update);
+        assert_eq!(defaults.update_interval.seconds(), 86400);
+        assert_eq!(defaults.launchd_label, "net.pardev.pardeck.streamer");
+        for (text, seconds) in [("hourly", 3600), ("daily", 86400), ("weekly", 604800)] {
+            let args = parse(&["--auto-update", "--update-interval", text]).unwrap();
+            assert!(args.auto_update);
+            assert_eq!(args.update_interval.seconds(), seconds);
+        }
+        assert!(parse(&["--update-interval", "bad"]).is_err());
     }
 
     #[test]

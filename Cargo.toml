@@ -204,7 +204,8 @@ streaming = ["par-term-emu-derive", "tokio", "tokio-tungstenite", "axum", "tower
 
 # Standalone `par-term-streamer` binary only (ARC-015): CLI/logging/download
 # deps the library streaming module never uses. Depends on `streaming`.
-streaming-bin = ["streaming", "clap", "anyhow", "tracing", "tracing-subscriber", "reqwest", "tar", "sha2", "pty_session", "macro-yaml"]
+self-update = ["par-term-emu-core/self-update"]
+streaming-bin = ["self-update", "streaming", "clap", "anyhow", "tracing", "tracing-subscriber", "reqwest", "tar", "sha2", "pty_session", "macro-yaml"]
 
 # Terminal multiplexer (par-mux): the `par-mux` workspace member, re-exported
 # as `crate::mux` (ARC-007 O2 Phase 2). Needs real PTYs and a local socket, so

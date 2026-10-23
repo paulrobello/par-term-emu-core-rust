@@ -521,9 +521,32 @@ pub struct AgentAppendFile {
     pub mastracode: Option<String>,
 }
 
+fn deserialize_update_interval<'de, D: serde::Deserializer<'de>>(
+    deserializer: D,
+) -> Result<Option<String>, D::Error> {
+    let value = String::deserialize(deserializer)?;
+    if !matches!(value.as_str(), "hourly" | "daily" | "weekly") {
+        return Err(serde::de::Error::custom(
+            "update-interval must be hourly, daily, or weekly",
+        ));
+    }
+    Ok(Some(value))
+}
+
 /// `[daemon]`: what the daemon reads at startup.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Deserialize, Serialize)]
 pub struct DaemonSection {
+    /// Automatically apply stable releases. Off unless explicitly enabled.
+    #[serde(default, rename = "auto-update")]
+    pub auto_update: bool,
+    /// Update cadence (hourly, daily, weekly), default daily.
+    #[serde(
+        default,
+        rename = "update-interval",
+        deserialize_with = "deserialize_update_interval",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub update_interval: Option<String>,
     /// Named default socket (`default` or a name) or an absolute path.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub socket: Option<String>,
@@ -587,6 +610,10 @@ pub struct DaemonSection {
 /// file's daemon section against the daemon's startup copy of it.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct EffectiveConfig {
+    /// Startup-only automatic update opt-in.
+    pub auto_update: bool,
+    /// Startup-only update cadence, default daily.
+    pub update_interval: String,
     /// The attach detach prefix, tmux spelling.
     pub prefix: String,
     /// The default attach mode: `render` (the pane renderer) or
@@ -655,6 +682,8 @@ pub struct EffectiveConfig {
 impl Default for EffectiveConfig {
     fn default() -> Self {
         Self {
+            auto_update: false,
+            update_interval: "daily".into(),
             prefix: "C-b".to_string(),
             mode: "render".to_string(),
             reload: "C-b C-r".to_string(),
@@ -761,7 +790,15 @@ pub struct Overrides {
 /// at [`EffectiveConfig::default`].
 #[must_use]
 pub fn resolve(file: &ConfigFile, o: &Overrides) -> EffectiveConfig {
-    let mut eff = EffectiveConfig::default();
+    let mut eff = EffectiveConfig {
+        auto_update: file.daemon.auto_update,
+        update_interval: file
+            .daemon
+            .update_interval
+            .clone()
+            .unwrap_or_else(|| "daily".into()),
+        ..EffectiveConfig::default()
+    };
     if let Some(v) = o.prefix.as_ref().or(file.client.prefix.as_ref()) {
         eff.prefix = v.clone();
     }
@@ -989,6 +1026,8 @@ pub fn render(eff: &EffectiveConfig) -> String {
             popup: None,
         },
         daemon: DaemonSection {
+            auto_update: eff.auto_update,
+            update_interval: Some(eff.update_interval.clone()),
             socket: Some(eff.socket.clone()),
             state_dir: Some(eff.state_dir.clone()),
             pane_endpoints: Some(eff.pane_endpoints),
@@ -1829,6 +1868,30 @@ mod tests {
     use super::*;
 
     #[test]
+    fn automatic_updates_are_opt_in_with_daily_default() {
+        let defaults: ConfigFile = toml::from_str("").unwrap();
+        let effective = resolve(&defaults, &Overrides::default());
+        assert!(!effective.auto_update);
+        assert_eq!(effective.update_interval, "daily");
+        for interval in ["hourly", "daily", "weekly"] {
+            let config: ConfigFile = toml::from_str(&format!(
+                "[daemon]\nauto-update = true\nupdate-interval = '{interval}'"
+            ))
+            .unwrap();
+            let effective = resolve(&config, &Overrides::default());
+            assert!(effective.auto_update);
+            assert_eq!(effective.update_interval, interval);
+            let rendered = render(&effective);
+            let roundtrip: ConfigFile = toml::from_str(&rendered).unwrap();
+            assert_eq!(
+                resolve(&roundtrip, &Overrides::default()).update_interval,
+                interval
+            );
+        }
+        assert!(toml::from_str::<ConfigFile>("[daemon]\nupdate-interval = 'bad'").is_err());
+    }
+
+    #[test]
     fn full_file_parses_every_key() {
         let file: ConfigFile = toml::from_str(
             r#"
@@ -1971,6 +2034,8 @@ remain-on-exit = true
     #[test]
     fn render_round_trips_through_the_parser() {
         let eff = EffectiveConfig {
+            auto_update: true,
+            update_interval: "weekly".into(),
             prefix: "C-a".into(),
             mode: "render".into(),
             reload: "C-a C-r".into(),

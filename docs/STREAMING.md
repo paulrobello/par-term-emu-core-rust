@@ -2,6 +2,22 @@
 
 Real-time terminal streaming over WebSocket with browser-based frontend for remote terminal access and viewing.
 
+## Binary Updates
+
+- `--check-update`: report a newer stable GitHub release or "up to date", without changing files.
+- `--self-update`: download the exact platform binary and its `<asset>.sha256` sidecar, verify SHA-256, retain `<executable>.previous`, replace, and restart.
+- `--auto-update` / `PAR_TERM_AUTO_UPDATE=true`: opt in to automatic installation at startup and while serving. Default **off**.
+- `--update-interval hourly|daily|weekly` / `PAR_TERM_UPDATE_INTERVAL`: cadence, default **daily**.
+- `--launchd-label LABEL` / `PAR_TERM_LAUNCHD_LABEL`: restart label, default `net.pardev.pardeck.streamer`.
+
+A streamer running as the configured launchd job uses `launchctl kickstart -k gui/$UID/LABEL`.
+Other invocations re-execute the installed binary with their existing arguments (one-shot update flags removed).
+This follows the streamer's existing flag/environment configuration surface, with no new config file.
+Updates need `curl` on PATH, HTTPS access to GitHub and its release CDN, and write access to the
+executable's directory. Missing checksums fail closed, including older releases that have no binary sidecars.
+Standalone PTY sessions reconnect after restart but are not persisted by the streamer. In mux mirror
+mode the mux daemon continues owning the sessions.
+
 ## Table of Contents
 - [Overview](#overview)
 - [Architecture](#architecture)

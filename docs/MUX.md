@@ -6,6 +6,35 @@ The daemon is feature-gated (Rust `mux` feature for the library, `mux-bin` for t
 
 > **Design decisions:** code comments cite D-numbered decisions (`D3.3`, `D5`, …) summarized one line each in [MUX_DECISIONS.md](MUX_DECISIONS.md); the full plan lives in the `par-agent-os` repository (see [par-mux.md](par-mux.md)).
 
+## Binary Updates
+
+`par-mux --check-update` reports the latest stable release without changing the installation.
+`par-mux --self-update` installs it and starts the new executable with
+`--socket <same socket> --restart --no-attach`. The existing stop path saves final state, then
+fresh startup restores sessions, screens, working directories, and agent resume identities.
+Pane processes respawn, rather than transferring live PTYs. Named and explicit sockets retain their target.
+The existing `par-mux update [--check] [--channel stable|preview]` uses the same checksum-required engine.
+
+Automatic installation is opt-in in the canonical config (`dirs::config_dir()/par-mux/config.toml`,
+`PAR_MUX_CONFIG` overrides it). These settings are read at daemon startup, not live-reloaded:
+
+```toml
+[daemon]
+auto-update = false
+update-interval = "daily" # hourly | daily | weekly
+```
+
+When enabled, a background worker checks at startup and at the configured interval while serving.
+The default interval is daily, including when the key is omitted. Unknown intervals are rejected.
+Updates require HTTPS access, `curl` and `tar` on PATH, and directory write access. Exact platform
+archives and `par-mux-v<version>-SHA256SUMS.txt` are fetched from this repository's GitHub release.
+A missing sidecar or digest mismatch refuses the update before touching the installed binary.
+A successful replacement leaves `<executable>.previous` beside it.
+
+An executable under `*.app/Contents/` is refused because replacement can invalidate its signature
+and TCC grant. Only the explicit `--self-update --force-self-update` bypasses this guard. Automatic
+updates never force a bundle replacement. Use the bundle's normal installation procedure instead.
+
 ## Table of Contents
 
 - [Building and Running](#building-and-running)
@@ -1229,7 +1258,7 @@ One constraint follows from the argv match: an agent launched through a STAND-IN
 
 ## Self-Update and Installers
 
-`par-mux update [--channel stable|preview] [--check]` self-updates from this repository's GitHub releases: it resolves the channel (`stable` = latest release, `preview` = newest prerelease, falling back to stable when none exists), downloads the release archive for this platform (`par-mux-v<version>-<target>.tar.gz`; zip on Windows — the release workflow's own naming), extracts it, VERIFIES the new binary reports the expected version before anything is replaced, swaps it in (the old image is kept beside it as `par-mux.previous` — a failed restart can swap back), and then restarts the daemon through `--restart`: the sessions ride the stop-and-restore handoff (D3.5 — every pane respawns with its screen, scrollback, cwd, and agent identity; D10 records why live handoff is not the contract). `--check` reports the plan and touches nothing. A release carrying no archive for the running platform, or a downloaded binary whose `--version` disagrees, refuses without touching the installation. The network rides `curl` (as the plugin installer rides `git`) — par-mux carries no HTTP client dependency; prerelease versions sort below their release (`0.64.0-rc1` < `0.64.0`), so a preview update settles onto the stable release once it ships. `--machine` refuses `update` — it manages the machine it runs on.
+`par-mux update [--channel stable|preview] [--check]` uses the shared checksum-required engine described in [Binary Updates](#binary-updates). Stable selects the latest release, while preview selects the newest prerelease and falls back to stable when none exists. The archive SHA-256 must match the exact filename's entry in the release checksum list before extraction or replacement. The old image is retained as `<executable>.previous`. Restart uses the same-socket stop-and-restore handoff (D3.5), not live PTY transfer (D10). `--check` reports only. Missing assets, missing checksums, and corrupt downloads fail closed. The network uses `curl`, with HTTPS-only redirects, timeouts, and response size limits. `--machine` refuses `update` because updates manage the machine they run on.
 
 The installer paths: `curl -fsSL https://raw.githubusercontent.com/paulrobello/par-term-emu-core-rust/main/scripts/install-par-mux.sh | sh` installs the latest release into `~/.local/bin` (override `PAR_MUX_INSTALL_DIR`), verifying the archive against the release's `SHA256SUMS` when `sha256sum` exists. The Homebrew tap flow (`brew tap paulrobello/par-mux && brew install par-mux`) is published from the formula template and steps in [`packaging/homebrew/README.md`](../packaging/homebrew/README.md) — filling its placeholders and pushing the tap is a release-cut action.
 

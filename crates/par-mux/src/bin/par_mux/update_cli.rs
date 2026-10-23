@@ -1,18 +1,51 @@
-//! The `update` subcommand handler: resolve, plan, execute — the library
-//! side (`mux::update`) owns everything testable.
-
-use std::process::ExitCode;
-
-use par_mux::mux::update::{self, Channel, RealIo, UpdateIo as _};
+//! Manual and opt-in automatic updates through the shared release engine.
 
 use super::UpdateArgs;
+use par_term_emu_core::self_update::{self, Binary, Interval};
+use std::path::Path;
+use std::process::ExitCode;
 
 pub(super) fn run_update_command(args: UpdateArgs, socket: std::path::PathBuf) -> ExitCode {
-    match run_update(args, socket) {
-        Ok(report) => {
-            print!("{report}");
-            ExitCode::SUCCESS
-        }
+    let preview = matches!(args.channel, Some(par_mux::mux::update::Channel::Preview));
+    report(apply(args.check, false, &socket, preview))
+}
+
+fn apply(check: bool, force: bool, socket: &Path, preview: bool) -> Result<(), String> {
+    let exe = std::env::current_exe().map_err(|e| e.to_string())?;
+    let outcome = self_update::update_channel(
+        Binary::Mux,
+        env!("CARGO_PKG_VERSION"),
+        &exe,
+        check,
+        force,
+        preview,
+    )?;
+    println!("{}", outcome.report);
+    if outcome.installed {
+        let args: Vec<_> = std::env::args_os().collect();
+        let state_dir = args
+            .windows(2)
+            .find(|pair| pair[0] == "--state-dir")
+            .map(|pair| std::path::PathBuf::from(&pair[1]))
+            .or_else(|| {
+                args.iter().find_map(|arg| {
+                    arg.to_str()?
+                        .strip_prefix("--state-dir=")
+                        .map(std::path::PathBuf::from)
+                })
+            });
+        self_update::restart_mux(&exe, socket, state_dir.as_deref())?;
+    }
+    Ok(())
+}
+
+pub(super) fn run_self_update(check: bool, force: bool, socket: &Path) -> ExitCode {
+    report(apply(check, force, socket, false))
+}
+
+fn report(result: Result<(), String>) -> ExitCode {
+    match result {
+        Ok(()) => ExitCode::SUCCESS,
         Err(err) => {
             eprintln!("par-mux: {err}");
             ExitCode::from(2)
@@ -20,27 +53,29 @@ pub(super) fn run_update_command(args: UpdateArgs, socket: std::path::PathBuf) -
     }
 }
 
-fn run_update(args: UpdateArgs, socket: std::path::PathBuf) -> Result<String, String> {
-    let channel = args.channel.unwrap_or(Channel::Stable);
-    let current_version = par_mux::mux::build_stamp()
-        .split('+')
-        .next()
-        .unwrap_or("0")
-        .to_string();
-    let io = RealIo;
-    let releases_url = format!(
-        "https://api.github.com/repos/{}/releases",
-        update::RELEASE_REPO
-    );
-    let listing =
-        std::env::temp_dir().join(format!("par-mux-releases-{}.json", std::process::id()));
-    io.fetch(&releases_url, &listing)?;
-    let text =
-        std::fs::read_to_string(&listing).map_err(|err| format!("{}: {err}", listing.display()))?;
-    let _ = std::fs::remove_file(&listing);
-    let releases: serde_json::Value = serde_json::from_str(&text)
-        .map_err(|err| format!("the release listing is not JSON: {err}"))?;
-    let plan = update::plan(&releases, channel, &current_version)?;
-    let self_exe = std::env::current_exe().map_err(|err| format!("current exe: {err}"))?;
-    update::execute(&plan, &io, &self_exe, &socket, args.check)
+pub(super) fn start_auto_update(socket: &Path) {
+    let config = par_mux::mux::config::load_canonical();
+    if !config.daemon.auto_update {
+        return;
+    }
+    let interval: Interval = config
+        .daemon
+        .update_interval
+        .as_deref()
+        .unwrap_or("daily")
+        .parse()
+        .expect("validated update interval");
+    let socket = socket.to_path_buf();
+    if let Err(err) = std::thread::Builder::new()
+        .name("mux-updater".into())
+        .spawn(move || loop {
+            match apply(false, false, &socket, false) {
+                Ok(()) => {}
+                Err(err) => log::warn!("par-mux auto-update: {err}"),
+            }
+            std::thread::sleep(std::time::Duration::from_secs(interval.seconds()));
+        })
+    {
+        log::warn!("par-mux: cannot start updater: {err}");
+    }
 }

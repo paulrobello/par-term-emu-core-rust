@@ -1,6 +1,6 @@
 # Print an optspec for argparse to handle cmd's options that are independent of any subcommand.
 function __fish_par_mux_global_optspecs
-    string join \n socket= state-dir= machine= stop restart foreground no-attach c/cmd= list-servers pane-endpoints expose-control-socket gen-config force install-skill skills-dir= install-agent-hooks uninstall-agent-hooks agent-hooks-status integration-status install-agent-extensions uninstall-agent-extensions heal-agent-hooks print-schema print-completions= h/help V/version
+    string join \n check-update self-update force-self-update socket= state-dir= machine= stop restart foreground no-attach c/cmd= list-servers pane-endpoints expose-control-socket gen-config force install-skill skills-dir= install-agent-hooks uninstall-agent-hooks agent-hooks-status integration-status install-agent-extensions uninstall-agent-extensions heal-agent-hooks print-schema print-completions= h/help V/version
 end
 
 function __fish_par_mux_needs_command
@@ -34,6 +34,9 @@ elvish\t''
 fish\t''
 powershell\t''
 zsh\t''"
+complete -c par-mux -n "__fish_par_mux_needs_command" -l check-update -d 'Report the latest release without changing the installation'
+complete -c par-mux -n "__fish_par_mux_needs_command" -l self-update -d 'Install a checksum-verified release and restart the same daemon'
+complete -c par-mux -n "__fish_par_mux_needs_command" -l force-self-update -d 'Permit replacing a binary inside an .app bundle (breaks signature/TCC)'
 complete -c par-mux -n "__fish_par_mux_needs_command" -l stop -d 'Stop the daemon serving this socket cleanly (final state save, `%exit` to clients) and wait for it to exit. Flags rather than subcommands: the positional NAME would otherwise be ambiguous with a session named `stop`'
 complete -c par-mux -n "__fish_par_mux_needs_command" -l restart -d 'Stop the running daemon (as --stop), then start a fresh one on the same socket — it restores the tree the stop just saved. Use after rebuilding par-mux: clients attach to whatever daemon owns the socket, so an old daemon keeps serving old code until restarted'
 complete -c par-mux -n "__fish_par_mux_needs_command" -l foreground -d 'Serve the daemon in the foreground of this process instead of the default daemonize-to-background: the debugging and supervision escape, and the shape programmatic spawners use (they own and kill the child they spawned). Not a daemon_mode member on purpose: it composes with --restart (stop, then serve here)'
@@ -170,8 +173,8 @@ complete -c par-mux -n "__fish_par_mux_using_subcommand plugin; and __fish_seen_
 complete -c par-mux -n "__fish_par_mux_using_subcommand plugin; and __fish_seen_subcommand_from help" -f -a "remove" -d 'Remove a plugin (its hooks stop after the daemon reloads)'
 complete -c par-mux -n "__fish_par_mux_using_subcommand plugin; and __fish_seen_subcommand_from help" -f -a "update" -d 'Re-fetch a plugin from its recorded source (the preview and `--trust` apply again)'
 complete -c par-mux -n "__fish_par_mux_using_subcommand plugin; and __fish_seen_subcommand_from help" -f -a "help" -d 'Print this message or the help of the given subcommand(s)'
-complete -c par-mux -n "__fish_par_mux_using_subcommand update" -l channel -d 'The release channel: `stable` (latest release, the default) or `preview` (newest prerelease)' -r -f -a "stable\t'The latest non-prerelease release'
-preview\t'The newest prerelease, falling back to stable when none exists'"
+complete -c par-mux -n "__fish_par_mux_using_subcommand update" -l channel -d 'The release channel: `stable` (latest release, the default) or `preview` (newest prerelease)' -r -f -a "stable\t'Latest non-prerelease release'
+preview\t'Newest prerelease, falling back to stable when none exists'"
 complete -c par-mux -n "__fish_par_mux_using_subcommand update" -l machine -d 'Relay this invocation to a saved machine over SSH (the machine\'s profile in `[machines.<label>]` names the ssh target; credentials stay with ssh itself). One-shot commands (`--cmd`, `status`, `ls`, `observe`, `control`, `--stop`) run non-interactively; `attach` forces passthrough under a pty — the thin client' -r
 complete -c par-mux -n "__fish_par_mux_using_subcommand update" -l check -d 'Report what would install, touch nothing'
 complete -c par-mux -n "__fish_par_mux_using_subcommand update" -s h -l help -d 'Print help (see more with \'--help\')'

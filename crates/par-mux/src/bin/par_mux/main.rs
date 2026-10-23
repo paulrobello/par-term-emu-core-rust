@@ -68,6 +68,8 @@ fn effective(cli: &Cli, include_flags: bool) -> EffectiveConfig {
     clap::ArgGroup::new("daemon_mode")
         .multiple(false)
         .args([
+            "check_update",
+            "self_update",
             "stop",
             "restart",
             "command",
@@ -86,6 +88,15 @@ fn effective(cli: &Cli, include_flags: bool) -> EffectiveConfig {
         ])
 ))]
 struct Cli {
+    /// Report the latest release without changing the installation.
+    #[arg(long, conflicts_with = "self_update")]
+    check_update: bool,
+    /// Install a checksum-verified release and restart the same daemon.
+    #[arg(long)]
+    self_update: bool,
+    /// Permit replacing a binary inside an .app bundle (breaks signature/TCC).
+    #[arg(long, requires = "self_update")]
+    force_self_update: bool,
     /// Named default socket path (par-mux::default_socket_path). Ignored if
     /// --socket is set; if absent, `$PAR_MUX_SOCKET` decides before the
     /// `default` name does.
@@ -1399,6 +1410,9 @@ fn main() -> std::process::ExitCode {
     // --pane-endpoints), then $PAR_MUX_SOCKET, then the unnamed default
     // (ENH-039). An empty value counts as unset.
     let path = resolve_cli_socket(&cli);
+    if cli.check_update || cli.self_update {
+        return update_cli::run_self_update(cli.check_update, cli.force_self_update, &path);
+    }
 
     if let Some(command) = cli.command.as_deref() {
         return run_command(&path, command);
@@ -1724,6 +1738,7 @@ fn run_daemon(cli: Cli, path: std::path::PathBuf) -> std::io::Result<std::proces
         install_signal_handlers()?;
     }
 
+    update_cli::start_auto_update(&path);
     server.run_persisting(state_path);
     // Registry entry out only AFTER the serve loop returns (the final save
     // has landed): a list-servers racing the shutdown must not see the
@@ -1990,6 +2005,27 @@ static STDERR_LOG: StderrLog = StderrLog;
 #[cfg(test)]
 mod mode_group_tests {
     use super::*;
+
+    #[test]
+    fn update_flags_require_explicit_bundle_force() {
+        assert!(
+            Cli::try_parse_from(["par-mux", "--check-update"])
+                .unwrap()
+                .check_update
+        );
+        assert!(
+            Cli::try_parse_from(["par-mux", "--self-update"])
+                .unwrap()
+                .self_update
+        );
+        assert!(
+            Cli::try_parse_from(["par-mux", "--self-update", "--force-self-update"])
+                .unwrap()
+                .force_self_update
+        );
+        assert!(Cli::try_parse_from(["par-mux", "--force-self-update"]).is_err());
+        assert!(Cli::try_parse_from(["par-mux", "--check-update", "--self-update"]).is_err());
+    }
     use clap::{CommandFactory, Parser};
 
     /// The bulk --install-agent-hooks/--uninstall-agent-hooks flag covers
