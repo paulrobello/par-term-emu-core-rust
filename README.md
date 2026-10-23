@@ -13,6 +13,24 @@ A comprehensive terminal emulator library written in Rust with Python bindings f
 
 [!["Buy Me A Coffee"](https://www.buymeacoffee.com/assets/img/custom_images/orange_img.png)](https://buymeacoffee.com/probello3)
 
+## Quick Install
+
+Checksum-verified standalone binaries from the [GitHub releases](https://github.com/paulrobello/par-term-emu-core-rust/releases). Installs both the `par-term-streamer` streaming server and the `par-mux` multiplexer into `~/.cargo/bin` (or `$HOME\.cargo\bin`).
+
+macOS / Linux:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/paulrobello/par-term-emu-core-rust/main/install.sh | bash
+```
+
+Windows (PowerShell):
+
+```powershell
+irm https://raw.githubusercontent.com/paulrobello/par-term-emu-core-rust/main/install.ps1 | iex
+```
+
+Options: `--streamer` / `--mux` (PowerShell: `-Streamer` / `-Mux`) install just one binary, `--version vX.Y.Z` / `-Version` pins a release, and `--bin-dir DIR` / `-BinDir` picks a different destination.
+
 ## What's New
 
 > **Note:** This section covers unreleased work on `main` and the last three
