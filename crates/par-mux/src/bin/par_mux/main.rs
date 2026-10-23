@@ -1653,7 +1653,12 @@ fn run_daemon(cli: Cli, path: std::path::PathBuf) -> std::io::Result<std::proces
     let restored = match par_mux::mux::persist::load_or_quarantine(&state_path) {
         par_mux::mux::persist::Loaded::Fresh => None,
         par_mux::mux::persist::Loaded::State(state) => {
-            match par_mux::mux::tree::MuxTree::from_persist_state(&state, Box::new(factory())) {
+            match par_mux::mux::tree::MuxTree::from_persist_state_with_policy(
+                &state,
+                Box::new(factory()),
+                par_mux::mux::config::daemon_remain_on_exit(),
+                &par_mux::mux::config::daemon_agent_append(),
+            ) {
                 Ok(tree) => Some(tree),
                 Err(err) => {
                     log::warn!("par-mux: state restore failed ({err}); starting fresh");

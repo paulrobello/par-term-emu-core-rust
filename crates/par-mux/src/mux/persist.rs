@@ -669,6 +669,10 @@ impl MuxTree {
             state,
             factory,
             crate::mux::config::daemon_remain_on_exit(),
+            // Test/embedder form: the resume-append table pins blank here;
+            // the daemon boots through `_with_policy` with the resolved
+            // table, so no test inherits the host's config entries.
+            &crate::mux::config::AgentAppend::default(),
         )
     }
 
@@ -682,6 +686,7 @@ impl MuxTree {
         state: &PersistState,
         factory: Box<dyn PaneFactory>,
         remain_on_exit: bool,
+        agent_append: &crate::mux::config::AgentAppend,
     ) -> Result<MuxTree, PersistError> {
         if state.format_version != FORMAT_VERSION {
             return Err(PersistError::UnsupportedVersion {
@@ -715,6 +720,7 @@ impl MuxTree {
                         window.id,
                         pane,
                         (cols, rows),
+                        agent_append,
                         &mut cwd_fallbacks,
                     )?;
                     panes.insert(PaneId(pane.id), created);
@@ -854,6 +860,7 @@ fn spawn_restored_pane(
     window_id: u32,
     pane: &PersistPane,
     (cols, rows): (u16, u16),
+    agent_append: &crate::mux::config::AgentAppend,
     cwd_fallbacks: &mut HashMap<u32, String>,
 ) -> Result<crate::mux::pane::MuxPane, PersistError> {
     // The effective command (D6.3): a resumable agent session rewrites
@@ -875,7 +882,22 @@ fn spawn_restored_pane(
         .agent_session
         .as_ref()
         .filter(|_| !pane.dead)
-        .and_then(resume_invocation);
+        .map(|agent_session| {
+            // The [daemon.agent-append] words ride along on the resume
+            // argv too: a restart-resumed claude gets the same flags an
+            // `agent-start` would have typed, deduped against the tokens
+            // the resume shape itself carries.
+            resume_invocation(agent_session).map(|argv| {
+                crate::mux::agent_resume::argv_with_agent_append(
+                    argv,
+                    &agent_session.agent,
+                    agent_append,
+                    pane.cwd.as_deref(),
+                    pane.id,
+                )
+            })
+        })
+        .and_then(|argv| argv);
     let cwd = restored_spawn_cwd(pane, cwd_fallbacks);
     let context = SpawnContext {
         session: Some((SessionId(session.id), &session.name)),
@@ -2346,9 +2368,13 @@ mod tests {
         let json = serde_json::to_string(&state).unwrap();
         let state: PersistState = serde_json::from_str(&json).unwrap();
         let factory = RecordingFactory::default();
-        let restored =
-            MuxTree::from_persist_state_with_policy(&state, Box::new(factory.clone()), true)
-                .unwrap();
+        let restored = MuxTree::from_persist_state_with_policy(
+            &state,
+            Box::new(factory.clone()),
+            true,
+            &crate::mux::config::AgentAppend::default(),
+        )
+        .unwrap();
 
         assert!(
             factory.command_for(pane_id).is_none() && factory.sizes.lock().unwrap().is_empty(),
@@ -2404,6 +2430,7 @@ mod tests {
             &state,
             Box::new(RecordingFactory::default()),
             false,
+            &crate::mux::config::AgentAppend::default(),
         )
         .unwrap();
         assert!(restored.pane(dead_id).is_none(), "the dead entry is gone");
@@ -2430,6 +2457,7 @@ mod tests {
             &state,
             Box::new(RecordingFactory::default()),
             false,
+            &crate::mux::config::AgentAppend::default(),
         )
         .unwrap();
         assert!(
@@ -2457,6 +2485,7 @@ mod tests {
             &state,
             Box::new(RecordingFactory::default()),
             false,
+            &crate::mux::config::AgentAppend::default(),
         )
         .unwrap();
         let pane = restored.pane(pane_id).expect("the last pane is kept");
@@ -2482,6 +2511,7 @@ mod tests {
             &state,
             Box::new(RecordingFactory::default()),
             false,
+            &crate::mux::config::AgentAppend::default(),
         )
         .unwrap();
         assert!(
@@ -2510,6 +2540,7 @@ mod tests {
             &state,
             Box::new(RecordingFactory::default()),
             true,
+            &crate::mux::config::AgentAppend::default(),
         )
         .unwrap();
         assert!(restored.pane(pane_id).unwrap().dead());
@@ -2526,9 +2557,13 @@ mod tests {
             .unwrap();
         let state = tree.to_persist_state();
         let factory = RecordingFactory::default();
-        let mut restored =
-            MuxTree::from_persist_state_with_policy(&state, Box::new(factory.clone()), true)
-                .unwrap();
+        let mut restored = MuxTree::from_persist_state_with_policy(
+            &state,
+            Box::new(factory.clone()),
+            true,
+            &crate::mux::config::AgentAppend::default(),
+        )
+        .unwrap();
         assert!(restored.pane(dead_id).unwrap().dead());
         assert_eq!(restored.pane(dead_id).unwrap().exit_code(), None);
         assert!(!restored.pane(live_id).unwrap().dead());
@@ -2555,6 +2590,7 @@ mod tests {
             &state,
             Box::new(RecordingFactory::default()),
             true,
+            &crate::mux::config::AgentAppend::default(),
         )
         .unwrap();
         assert!(!restored.pane(pane_id).unwrap().dead());
@@ -2596,6 +2632,7 @@ mod tests {
             &state,
             Box::new(RecordingFactory::default()),
             true,
+            &crate::mux::config::AgentAppend::default(),
         )
         .unwrap();
         assert_eq!(
@@ -2727,6 +2764,7 @@ mod tests {
             &state,
             Box::new(RecordingFactory::default()),
             true,
+            &crate::mux::config::AgentAppend::default(),
         )
         .unwrap();
         let pane = restored.pane(pane_id).unwrap();
@@ -2765,6 +2803,7 @@ mod tests {
             &state,
             Box::new(RecordingFactory::default()),
             true,
+            &crate::mux::config::AgentAppend::default(),
         )
         .unwrap();
         assert_eq!(restored.workspace(ws).unwrap().worktree, Some(link));
@@ -2778,6 +2817,7 @@ mod tests {
             &state,
             Box::new(RecordingFactory::default()),
             true,
+            &crate::mux::config::AgentAppend::default(),
         )
         .unwrap();
         assert_eq!(restored.workspace(ws).unwrap().worktree, None);
@@ -2809,6 +2849,7 @@ mod tests {
             &state,
             Box::new(RecordingFactory::default()),
             true,
+            &crate::mux::config::AgentAppend::default(),
         )
         .unwrap();
         let pane = restored.pane(pane_id).unwrap();
@@ -3847,6 +3888,36 @@ mod tests {
                 .map(String::as_str),
             Some("claude"),
             "identity still lands as metadata for the next cycle"
+        );
+    }
+
+    /// The `[daemon.agent-append]` table rides along on a table-built
+    /// resume: the restart-resumed agent gets the flags an `agent-start`
+    /// would have typed, `{name}` falls back to the pane id when no cwd
+    /// was persisted, and the pinned form keeps the host's config out.
+    #[test]
+    fn restore_appends_the_agent_append_words_onto_the_resume_argv() {
+        let (original, pane_id) =
+            tree_with_metadata(&[("agent", "claude"), ("agent_session_id", "abc-123")]);
+        let state = original.to_persist_state();
+        let factory = RecordingFactory::default();
+        let table = crate::mux::config::AgentAppend {
+            claude: "--continue --dangerously-skip-permissions".into(),
+            ..Default::default()
+        };
+        MuxTree::from_persist_state_with_policy(&state, Box::new(factory.clone()), false, &table)
+            .unwrap();
+        let invocation =
+            "'claude' '--resume' 'abc-123' '--continue' '--dangerously-skip-permissions'";
+        let expected = if cfg!(windows) {
+            invocation.to_string()
+        } else {
+            format!("{invocation}{}", SURVIVING_TAIL)
+        };
+        assert_eq!(
+            factory.command_for(pane_id).as_deref(),
+            Some(expected.as_str()),
+            "the resume argv carries the configured words, deduped and cwd-free"
         );
     }
 

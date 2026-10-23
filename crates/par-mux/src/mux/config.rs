@@ -1777,6 +1777,15 @@ pub fn daemon_remain_on_exit() -> bool {
     resolve(&load_canonical(), &Overrides::default()).remain_on_exit
 }
 
+/// The daemon's resolved `[daemon.agent-append]` from the canonical config
+/// file (file tier only — the setting has no flag or env tier). The boot
+/// restore path reads this alongside [`daemon_remain_on_exit`]: restore
+/// runs before the server exists to publish an applied copy.
+#[must_use]
+pub fn daemon_agent_append() -> AgentAppend {
+    resolve(&load_canonical(), &Overrides::default()).agent_append
+}
+
 /// Parse a `#rrggbb` hex color (the border-color config spellings).
 /// `None` for anything else — callers keep their built-in default.
 #[must_use]

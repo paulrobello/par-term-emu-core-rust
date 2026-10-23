@@ -110,6 +110,34 @@ fn id_ref(session: &PersistAgentSession) -> Option<String> {
     non_empty(session.session_id.as_deref())
 }
 
+/// Extend a resume argv with the pane agent's `[daemon.agent-append]`
+/// words: each word is one argv element (the factory spawns structured
+/// argv; [`render_argv`] does the shell quoting downstream), `{name}`
+/// expands to the persisted cwd's basename — the pane id when no cwd was
+/// persisted, mirroring `agent-start`'s fallback — and a word the argv
+/// already carries verbatim is skipped, so a resume shape that owns the
+/// same flag cannot have it doubled.
+pub(crate) fn argv_with_agent_append(
+    mut argv: Vec<String>,
+    agent: &str,
+    append: &crate::mux::config::AgentAppend,
+    persisted_cwd: Option<&str>,
+    pane_id: u32,
+) -> Vec<String> {
+    let name = persisted_cwd
+        .map(std::path::Path::new)
+        .and_then(std::path::Path::file_name)
+        .map(|base| base.to_string_lossy().into_owned())
+        .unwrap_or_else(|| pane_id.to_string());
+    for word in append.entry(agent).split_whitespace() {
+        let word = word.replace("{name}", &name);
+        if !argv.iter().any(|existing| existing == &word) {
+            argv.push(word);
+        }
+    }
+    argv
+}
+
 /// Render an argv as a POSIX shell command line — the shape the factory's
 /// `sh -c` spawn consumes (task 6.3). Every argument is single-quoted
 /// unconditionally: the argv crosses from a validated structure into a
@@ -401,5 +429,60 @@ mod tests {
                 format!("'pi' '--session' 's-1'{SURVIVING_TAIL}")
             );
         }
+    }
+
+    // --- the [daemon.agent-append] ride-along ---
+
+    #[test]
+    fn append_words_expand_name_and_skip_present_tokens() {
+        let table = crate::mux::config::AgentAppend {
+            claude: "--continue --name {name}".into(),
+            ..Default::default()
+        };
+        let argv: Vec<String> = ["claude", "--resume", "abc-123"]
+            .iter()
+            .map(|part| part.to_string())
+            .collect();
+        assert_eq!(
+            argv_with_agent_append(argv, "claude", &table, Some("/tmp/proj"), 7),
+            vec![
+                "claude".to_string(),
+                "--resume".to_string(),
+                "abc-123".to_string(),
+                "--continue".to_string(),
+                "--name".to_string(),
+                "proj".to_string(),
+            ],
+            "the words land after the resume shape, name = the cwd stem"
+        );
+        let bare = argv_with_agent_append(
+            vec!["claude".to_string(), "--continue".to_string()],
+            "claude",
+            &table,
+            None,
+            9,
+        );
+        assert_eq!(
+            bare,
+            vec![
+                "claude".to_string(),
+                "--continue".to_string(),
+                "--name".to_string(),
+                "9".to_string(),
+            ],
+            "a token the argv already carries is skipped; the rest still land"
+        );
+        let fallback =
+            argv_with_agent_append(vec!["claude".to_string()], "claude", &table, None, 9);
+        assert_eq!(
+            fallback,
+            vec![
+                "claude".to_string(),
+                "--continue".to_string(),
+                "--name".to_string(),
+                "9".to_string(),
+            ],
+            "no persisted cwd: name falls back to the pane id"
+        );
     }
 }
