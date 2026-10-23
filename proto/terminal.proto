@@ -99,7 +99,23 @@ message ServerMessage {
     AgentRoster agent_roster = 38;
     AgentStateChanged agent_state_changed = 39;
     PointerShapeChanged pointer_shape_changed = 40;
+    PaneSizeStatus pane_size_status = 41;
+    ViewerPresence viewer_presence = 42;
   }
+}
+
+// Effective pane size and componentwise constraint owners.
+message PaneSizeStatus {
+  uint32 cols = 1;
+  uint32 rows = 2;
+  optional string column_viewer = 3;
+  optional string row_viewer = 4;
+}
+
+// Full replacement viewer set, including the receiving connection.
+message ViewerPresence {
+  uint32 count = 1;
+  repeated string viewers = 2;
 }
 
 // Terminal output data (very high frequency)
@@ -404,7 +420,13 @@ message ClientMessage {
     SelectionRequest selection = 9;
     ClipboardRequest clipboard = 10;
     SnapshotRequest snapshot_request = 11;
+    ViewerIdentity viewer_identity = 12;
   }
+}
+
+// Declare web/mobile presence kind. Defaults to web until declared.
+message ViewerIdentity {
+  string kind = 1;
 }
 
 // Keyboard input from client

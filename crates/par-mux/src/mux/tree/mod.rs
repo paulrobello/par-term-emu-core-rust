@@ -498,6 +498,8 @@ pub struct MuxTree {
     /// window rule ([`ClientView`]). Never persisted: a reconnecting
     /// client re-reports through the attach handshake.
     pub(crate) client_views: HashMap<u64, ClientView>,
+    /// Control connections representing streaming mirrors, not attach viewers.
+    pub(crate) streaming_mirrors: std::collections::HashSet<u64>,
     /// Per-connection seen focus: the window each viewer shows, for the
     /// `done` -> `idle` seen rule (`hooks::seen`). Kept apart from
     /// [`Self::client_views`], whose window a late size report may move.
@@ -538,6 +540,7 @@ impl MuxTree {
             window_session: HashMap::new(),
             session_workspace: HashMap::new(),
             client_views: HashMap::new(),
+            streaming_mirrors: std::collections::HashSet::new(),
             client_focus: HashMap::new(),
             pending_observer_batches: Vec::new(),
             scrape_engine: None,

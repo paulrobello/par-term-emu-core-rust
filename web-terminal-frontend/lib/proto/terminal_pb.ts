@@ -13,7 +13,7 @@ import type { Message } from "@bufbuild/protobuf";
  * Describes the file terminal.proto.
  */
 export const file_terminal: GenFile = /*@__PURE__*/
-  fileDesc("Cg50ZXJtaW5hbC5wcm90bxIIdGVybWluYWwiKAoFQ29sb3ISCQoBchgBIAEoDRIJCgFnGAIgASgNEgkKAWIYAyABKA0ipQEKCVRoZW1lSW5mbxIMCgRuYW1lGAEgASgJEiMKCmJhY2tncm91bmQYAiABKAsyDy50ZXJtaW5hbC5Db2xvchIjCgpmb3JlZ3JvdW5kGAMgASgLMg8udGVybWluYWwuQ29sb3ISHwoGbm9ybWFsGAQgAygLMg8udGVybWluYWwuQ29sb3ISHwoGYnJpZ2h0GAUgAygLMg8udGVybWluYWwuQ29sb3IijxAKDVNlcnZlck1lc3NhZ2USIgoGb3V0cHV0GAEgASgLMhAudGVybWluYWwuT3V0cHV0SAASIgoGcmVzaXplGAIgASgLMhAudGVybWluYWwuUmVzaXplSAASIAoFdGl0bGUYAyABKAsyDy50ZXJtaW5hbC5UaXRsZUgAEigKCWNvbm5lY3RlZBgEIAEoCzITLnRlcm1pbmFsLkNvbm5lY3RlZEgAEiQKB3JlZnJlc2gYBSABKAsyES50ZXJtaW5hbC5SZWZyZXNoSAASKgoGY3Vyc29yGAYgASgLMhgudGVybWluYWwuQ3Vyc29yUG9zaXRpb25IABIeCgRiZWxsGAcgASgLMg4udGVybWluYWwuQmVsbEgAEiAKBWVycm9yGAggASgLMg8udGVybWluYWwuRXJyb3JIABImCghzaHV0ZG93bhgJIAEoCzISLnRlcm1pbmFsLlNodXRkb3duSAASHgoEcG9uZxgKIAEoCzIOLnRlcm1pbmFsLlBvbmdIABIrCgtjd2RfY2hhbmdlZBgLIAEoCzIULnRlcm1pbmFsLkN3ZENoYW5nZWRIABIzCg90cmlnZ2VyX21hdGNoZWQYDCABKAsyGC50ZXJtaW5hbC5UcmlnZ2VyTWF0Y2hlZEgAEi8KDWFjdGlvbl9ub3RpZnkYDSABKAsyFi50ZXJtaW5hbC5BY3Rpb25Ob3RpZnlIABI0ChBhY3Rpb25fbWFya19saW5lGA4gASgLMhgudGVybWluYWwuQWN0aW9uTWFya0xpbmVIABItCgxtb2RlX2NoYW5nZWQYDyABKAsyFS50ZXJtaW5hbC5Nb2RlQ2hhbmdlZEgAEjEKDmdyYXBoaWNzX2FkZGVkGBAgASgLMhcudGVybWluYWwuR3JhcGhpY3NBZGRlZEgAEjMKD2h5cGVybGlua19hZGRlZBgRIAEoCzIYLnRlcm1pbmFsLkh5cGVybGlua0FkZGVkSAASNAoQdXNlcl92YXJfY2hhbmdlZBgSIAEoCzIYLnRlcm1pbmFsLlVzZXJWYXJDaGFuZ2VkSAASPAoUcHJvZ3Jlc3NfYmFyX2NoYW5nZWQYEyABKAsyHC50ZXJtaW5hbC5Qcm9ncmVzc0JhckNoYW5nZWRIABIvCg1iYWRnZV9jaGFuZ2VkGBQgASgLMhYudGVybWluYWwuQmFkZ2VDaGFuZ2VkSAASNwoRc2VsZWN0aW9uX2NoYW5nZWQYFSABKAsyGi50ZXJtaW5hbC5TZWxlY3Rpb25DaGFuZ2VkSAASMQoOY2xpcGJvYXJkX3N5bmMYFiABKAsyFy50ZXJtaW5hbC5DbGlwYm9hcmRTeW5jSAASQgoXc2hlbGxfaW50ZWdyYXRpb25fZXZlbnQYFyABKAsyHy50ZXJtaW5hbC5TaGVsbEludGVncmF0aW9uRXZlbnRIABItCgxzeXN0ZW1fc3RhdHMYGCABKAsyFS50ZXJtaW5hbC5TeXN0ZW1TdGF0c0gAEisKC3pvbmVfb3BlbmVkGBkgASgLMhQudGVybWluYWwuWm9uZU9wZW5lZEgAEisKC3pvbmVfY2xvc2VkGBogASgLMhQudGVybWluYWwuWm9uZUNsb3NlZEgAEjYKEXpvbmVfc2Nyb2xsZWRfb3V0GBsgASgLMhkudGVybWluYWwuWm9uZVNjcm9sbGVkT3V0SAASOwoTZW52aXJvbm1lbnRfY2hhbmdlZBgcIAEoCzIcLnRlcm1pbmFsLkVudmlyb25tZW50Q2hhbmdlZEgAEkAKFnJlbW90ZV9ob3N0X3RyYW5zaXRpb24YHSABKAsyHi50ZXJtaW5hbC5SZW1vdGVIb3N0VHJhbnNpdGlvbkgAEjgKEnN1Yl9zaGVsbF9kZXRlY3RlZBgeIAEoCzIaLnRlcm1pbmFsLlN1YlNoZWxsRGV0ZWN0ZWRIABI7ChFzZW1hbnRpY19zbmFwc2hvdBgfIAEoCzIeLnRlcm1pbmFsLlNlbWFudGljU25hcHNob3REYXRhSAASPgoVZmlsZV90cmFuc2Zlcl9zdGFydGVkGCAgASgLMh0udGVybWluYWwuRmlsZVRyYW5zZmVyU3RhcnRlZEgAEkAKFmZpbGVfdHJhbnNmZXJfcHJvZ3Jlc3MYISABKAsyHi50ZXJtaW5hbC5GaWxlVHJhbnNmZXJQcm9ncmVzc0gAEkIKF2ZpbGVfdHJhbnNmZXJfY29tcGxldGVkGCIgASgLMh8udGVybWluYWwuRmlsZVRyYW5zZmVyQ29tcGxldGVkSAASPAoUZmlsZV90cmFuc2Zlcl9mYWlsZWQYIyABKAsyHC50ZXJtaW5hbC5GaWxlVHJhbnNmZXJGYWlsZWRIABI1ChB1cGxvYWRfcmVxdWVzdGVkGCQgASgLMhkudGVybWluYWwuVXBsb2FkUmVxdWVzdGVkSAASMQoOc2NyZWVuX2NsZWFyZWQYJSABKAsyFy50ZXJtaW5hbC5TY3JlZW5DbGVhcmVkSAASLQoMYWdlbnRfcm9zdGVyGCYgASgLMhUudGVybWluYWwuQWdlbnRSb3N0ZXJIABI6ChNhZ2VudF9zdGF0ZV9jaGFuZ2VkGCcgASgLMhsudGVybWluYWwuQWdlbnRTdGF0ZUNoYW5nZWRIABI+ChVwb2ludGVyX3NoYXBlX2NoYW5nZWQYKCABKAsyHS50ZXJtaW5hbC5Qb2ludGVyU2hhcGVDaGFuZ2VkSABCCQoHbWVzc2FnZSI8CgZPdXRwdXQSDAoEZGF0YRgBIAEoDBIWCgl0aW1lc3RhbXAYAiABKARIAIgBAUIMCgpfdGltZXN0YW1wIiQKBlJlc2l6ZRIMCgRjb2xzGAEgASgNEgwKBHJvd3MYAiABKA0iFgoFVGl0bGUSDQoFdGl0bGUYASABKAkiuAMKCUNvbm5lY3RlZBIMCgRjb2xzGAEgASgNEgwKBHJvd3MYAiABKA0SGwoOaW5pdGlhbF9zY3JlZW4YAyABKAxIAIgBARISCgpzZXNzaW9uX2lkGAQgASgJEicKBXRoZW1lGAUgASgLMhMudGVybWluYWwuVGhlbWVJbmZvSAGIAQESEgoFYmFkZ2UYBiABKAlIAogBARIdChBmYWludF90ZXh0X2FscGhhGAcgASgCSAOIAQESEAoDY3dkGAggASgJSASIAQESHgoRbW9kaWZ5X290aGVyX2tleXMYCSABKA1IBYgBARIWCgljbGllbnRfaWQYCiABKAlIBogBARIVCghyZWFkb25seRgLIAEo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ZRgFIAEoBEgDiAEBQgoKCF9jb21tYW5kQgwKCl9leGl0X2NvZGVCDAoKX3RpbWVzdGFtcEIOCgxfY3Vyc29yX2xpbmUisgEKCENwdVN0YXRzEh0KFW92ZXJhbGxfdXNhZ2VfcGVyY2VudBgBIAEoARIbChNwaHlzaWNhbF9jb3JlX2NvdW50GAIgASgNEh4KFnBlcl9jb3JlX3VzYWdlX3BlcmNlbnQYAyADKAESEgoFYnJhbmQYBCABKAlIAIgBARIaCg1mcmVxdWVuY3lfbWh6GAUgASgESAGIAQFCCAoGX2JyYW5kQhAKDl9mcmVxdWVuY3lfbWh6IoIBCgtNZW1vcnlTdGF0cxITCgt0b3RhbF9ieXRlcxgBIAEoBBISCgp1c2VkX2J5dGVzGAIgASgEEhcKD2F2YWlsYWJsZV9ieXRlcxgDIAEoBBIYChBzd2FwX3RvdGFsX2J5dGVzGAQgASgEEhcKD3N3YXBfdXNlZF9ieXRlcxgFIAEoBCKVAQoJRGlza1N0YXRzEgwKBG5hbWUYASABKAkSEwoLbW91bnRfcG9pbnQYAiABKAkSEwoLdG90YWxfYnl0ZXMYAyABKAQSFwoPYXZhaWxhYmxlX2J5dGVzGAQgASgEEgwKBGtpbmQYBSABKAkSEwoLZmlsZV9zeXN0ZW0YBiABKAkSFAoMaXNfcmVtb3ZhYmxlGAcgASgIIoMCChVOZXR3b3JrSW50ZXJmYWNlU3RhdHMSDAoEbmFtZRgBIAEoCRIWCg5yZWNlaXZlZF9ieXRlcxgCIAEoBBIZChF0cmFuc21pdHRlZF9ieXRlcxgDIAEoBBIcChR0b3RhbF9yZWNlaXZlZF9ieXRlcxgEIAEoBBIfChd0b3RhbF90cmFuc21pdHRlZF9ieXRlcxgFIAEoBBIYChBwYWNrZXRzX3JlY2VpdmVkGAYgASgEEhsKE3BhY2tldHNfdHJhbnNtaXR0ZWQYByABKAQSFwoPZXJyb3JzX3JlY2VpdmVkGAggASgEEhoKEmVycm9yc190cmFuc21pdHRlZBgJIAEoBCJQCgtMb2FkQXZlcmFnZRISCgpvbmVfbWludXRlGAEgASgBEhQKDGZpdmVfbWludXRlcxgCIAEoARIXCg9maWZ0ZWVuX21pbnV0ZXMYAyABKAEi+gMKC1N5c3RlbVN0YXRzEiQKA2NwdRgBIAEoCzISLnRlcm1pbmFsLkNwdVN0YXRzSACIAQESKgoGbWVtb3J5GAIgASgLMhUudGVybWluYWwuTWVtb3J5U3RhdHNIAYgBARIiCgVkaXNrcxgDIAMoCzITLnRlcm1pbmFsLkRpc2tTdGF0cxIxCghuZXR3b3JrcxgEIAMoCzIfLnRlcm1pbmFsLk5ldHdvcmtJbnRlcmZhY2VTdGF0cxIwCgxsb2FkX2F2ZXJhZ2UYBSABKAsyFS50ZXJtaW5hbC5Mb2FkQXZlcmFnZUgCiAEBEhUKCGhvc3RuYW1lGAYgASgJSAOIAQESFAoHb3NfbmFtZRgHIAEoCUgEiAEBEhcKCm9zX3ZlcnNpb24YCCABKAlIBYgBARIbCg5rZXJuZWxfdmVyc2lvbhgJIAEoCUgGiAEBEhgKC3VwdGltZV9zZWNzGAogASgESAeIAQESFgoJdGltZXN0YW1wGAsgASgESAiIAQFCBgoEX2NwdUIJCgdfbWVtb3J5Qg8KDV9sb2FkX2F2ZXJhZ2VCCwoJX2hvc3RuYW1lQgoKCF9vc19uYW1lQg0KC19vc192ZXJzaW9uQhEKD19rZXJuZWxfdmVyc2lvbkIOCgxfdXB0aW1lX3NlY3NCDAoKX3RpbWVzdGFtcCJHCgpab25lT3BlbmVkEg8KB3pvbmVfaWQYASABKAQSEQoJem9uZV90eXBlGAIgASgJEhUKDWFic19yb3dfc3RhcnQYAyABKAQiggEKClpvbmVDbG9zZWQSDwoHem9uZV9pZBgBIAEoBBIRCgl6b25lX3R5cGUYAiABKAkSFQoNYWJzX3Jvd19zdGFydBgDIAEoBBITCgthYnNfcm93X2VuZBgEIAEoBBIWCglleGl0X2NvZGUYBSABKAVIAIgBAUIMCgpfZXhpdF9jb2RlIjUKD1pvbmVTY3JvbGxlZE91dBIPCgd6b25lX2lkGAEgASgEEhEKCXpvbmVfdHlwZRgCIAEoCSJWChJFbnZpcm9ubWVudENoYW5nZWQSCwoDa2V5GAEgASgJEg0KBXZhbHVlGAIgASgJEhYKCW9sZF92YWx1ZRgDIAEoCUgAiAEBQgwKCl9vbGRfdmFsdWUipAEKFFJlbW90ZUhvc3RUcmFuc2l0aW9uEhAKCGhvc3RuYW1lGAEgASgJEhUKCHVzZXJuYW1lGAIgASgJSACIAQESGQoMb2xkX2hvc3RuYW1lGAMgASgJSAGIAQESGQoMb2xkX3VzZXJuYW1lGAQgASgJSAKIAQFCCwoJX3VzZXJuYW1lQg8KDV9vbGRfaG9zdG5hbWVCDwoNX29sZF91c2VybmFtZSJJChBTdWJTaGVsbERldGVjdGVkEg0KBWRlcHRoGAEgASgEEhcKCnNoZWxsX3R5cGUYAiABKAlIAIgBAUINCgtfc2hlbGxfdHlwZSItChRTZW1hbnRpY1NuYXBzaG90RGF0YRIVCg1zbmFwc2hvdF9qc29uGAEgASgJIkwKD1NuYXBzaG90UmVxdWVzdBINCgVzY29wZRgBIAEoCRIZCgxtYXhfY29tbWFuZHMYAiABKA1IAIgBAUIPCg1fbWF4X2NvbW1hbmRzIuwDCg1DbGllbnRNZXNzYWdlEiAKBWlucHV0GAEgASgLMg8udGVybWluYWwuSW5wdXRIABIoCgZyZXNpemUYAiABKAsyFi50ZXJtaW5hbC5DbGllbnRSZXNpemVIABIeCgRwaW5nGAMgASgLMg4udGVybWluYWwuUGluZ0gAEisKB3JlZnJlc2gYBCABKAsyGC50ZXJtaW5hbC5SZXF1ZXN0UmVmcmVzaEgAEigKCXN1YnNjcmliZRgFIAEoCzITLnRlcm1pbmFsLlN1YnNjcmliZUgAEiUKBW1vdXNlGAYgASgLMhQudGVybWluYWwuTW91c2VJbnB1dEgAEiYKBWZvY3VzGAcgASgLMhUudGVybWluYWwuRm9jdXNDaGFuZ2VIABIlCgVwYXN0ZRgIIAEoCzIULnRlcm1pbmFsLlBhc3RlSW5wdXRIABIvCglzZWxlY3Rpb24YCSABKAsyGi50ZXJtaW5hbC5TZWxlY3Rpb25SZXF1ZXN0SAASLwoJY2xpcGJvYXJkGAogASgLMhoudGVybWluYWwuQ2xpcGJvYXJkUmVxdWVzdEgAEjUKEHNuYXBzaG90X3JlcXVlc3QYCyABKAsyGS50ZXJtaW5hbC5TbmFwc2hvdFJlcXVlc3RIAEIJCgdtZXNzYWdlIhUKBUlucHV0EgwKBGRhdGEYASABKAwiKgoMQ2xpZW50UmVzaXplEgwKBGNvbHMYASABKA0SDAoEcm93cxgCIAEoDSIGCgRQaW5nIhAKDlJlcXVlc3RSZWZyZXNoIjAKCVN1YnNjcmliZRIjCgZldmVudHMYASADKA4yEy50ZXJtaW5hbC5FdmVudFR5cGUidAoKTW91c2VJbnB1dBILCgNjb2wYASABKA0SCwoDcm93GAIgASgNEg4KBmJ1dHRvbhgDIAEoDRINCgVzaGlmdBgEIAEoCBIMCgRjdHJsGAUgASgIEgsKA2FsdBgGIAEoCBISCgpldmVudF90eXBlGAcgASgJIh4KC0ZvY3VzQ2hhbmdlEg8KB2ZvY3VzZWQYASABKAgiHQoKUGFzdGVJbnB1dBIPCgdjb250ZW50GAEgASgJImgKEFNlbGVjdGlvblJlcXVlc3QSEQoJc3RhcnRfY29sGAEgASgNEhEKCXN0YXJ0X3JvdxgCIAEoDRIPCgdlbmRfY29sGAMgASgNEg8KB2VuZF9yb3cYBCABKA0SDAoEbW9kZRgFIAEoCSJnChBDbGlwYm9hcmRSZXF1ZXN0EhEKCW9wZXJhdGlvbhgBIAEoCRIUCgdjb250ZW50GAIgASgJSACIAQESEwoGdGFyZ2V0GAMgASgJSAGIAQFCCgoIX2NvbnRlbnRCCQoHX3RhcmdldCKCAQoTRmlsZVRyYW5zZmVyU3RhcnRlZBIKCgJpZBgBIAEoBBIRCglkaXJlY3Rpb24YAiABKAkSFQoIZmlsZW5hbWUYAyABKAlIAIgBARIYCgt0b3RhbF9ieXRlcxgEIAEoBEgBiAEBQgsKCV9maWxlbmFtZUIOCgxfdG90YWxfYnl0ZXMiZwoURmlsZVRyYW5zZmVyUHJvZ3Jlc3MSCgoCaWQYASABKAQSGQoRYnl0ZXNfdHJhbnNmZXJyZWQYAiABKAQSGAoLdG90YWxfYnl0ZXMYAyABKARIAIgBAUIOCgxfdG90YWxfYnl0ZXMiVQoVRmlsZVRyYW5zZmVyQ29tcGxldGVkEgoKAmlkGAEgASgEEhUKCGZpbGVuYW1lGAIgASgJSACIAQESDAoEc2l6ZRgDIAEoBEILCglfZmlsZW5hbWUiMAoSRmlsZVRyYW5zZmVyRmFpbGVkEgoKAmlkGAEgASgEEg4KBnJlYXNvbhgCIAEoCSIhCg9VcGxvYWRSZXF1ZXN0ZWQSDgoGZm9ybWF0GAEgASgJIisKDVNjcmVlbkNsZWFyZWQSGgoSaW5jbHVkZV9zY3JvbGxiYWNrGAEgASgIIpMBCgpBZ2VudEVudHJ5Eg8KB3BhbmVfaWQYASABKA0SDQoFYWdlbnQYAiABKAkSDQoFc3RhdGUYAyABKAkSDgoGc291cmNlGAQgASgJEg4KBnJlYXNvbhgFIAEoCRIRCgl3b3Jrc3BhY2UYBiABKAkSDwoHcHJvamVjdBgHIAEoCRISCgpwYW5lX2xhYmVsGAggASgJIjMKC0FnZW50Um9zdGVyEiQKBmFnZW50cxgBIAMoCzIULnRlcm1pbmFsLkFnZW50RW50cnkiSgoRQWdlbnRTdGF0ZUNoYW5nZWQSIwoFYWdlbnQYASABKAsyFC50ZXJtaW5hbC5BZ2VudEVudHJ5EhAKCHJlbGVhc2VkGAIgASgIIjMKE1BvaW50ZXJTaGFwZUNoYW5nZWQSEgoFc2hhcGUYASABKAlIAIgBAUIICgZfc2hhcGUqzwUKCUV2ZW50VHlwZRIaChZFVkVOVF9UWVBFX1VOU1BFQ0lGSUVEEAASFQoRRVZFTlRfVFlQRV9PVVRQVVQQARIVChFFVkVOVF9UWVBFX0NVUlNPUhACEhMKD0VWRU5UX1RZUEVfQkVMTBADEhQKEEVWRU5UX1RZUEVfVElUTEUQBBIVChFFVkVOVF9UWVBFX1JFU0laRRAFEhIKDkVWRU5UX1RZUEVfQ1dEEAYSFgoSRVZFTlRfVFlQRV9UUklHR0VSEAcSFQoRRVZFTlRfVFlQRV9BQ1RJT04QCBITCg9FVkVOVF9UWVBFX01PREUQCRIXChNFVkVOVF9UWVBFX0dSQVBISUNTEAoSGAoURVZFTlRfVFlQRV9IWVBFUkxJTksQCxIXChNFVkVOVF9UWVBFX1VTRVJfVkFSEAwSGwoXRVZFTlRfVFlQRV9QUk9HUkVTU19CQVIQDRIUChBFVkVOVF9UWVBFX0JBREdFEA4SGAoURVZFTlRfVFlQRV9TRUxFQ1RJT04QDxIYChRFVkVOVF9UWVBFX0NMSVBCT0FSRBAQEhQKEEVWRU5UX1RZUEVfU0hFTEwQERIbChdFVkVOVF9UWVBFX1NZU1RFTV9TVEFUUxASEhMKD0VWRU5UX1RZUEVfWk9ORRATEhoKFkVWRU5UX1RZUEVfRU5WSVJPTk1FTlQQFBIaChZFVkVOVF9UWVBFX1JFTU9URV9IT1NUEBUSGAoURVZFTlRfVFlQRV9TVUJfU0hFTEwQFhIXChNFVkVOVF9UWVBFX1NOQVBTSE9UEBcSHAoYRVZFTlRfVFlQRV9GSUxFX1RSQU5TRkVSEBgSHQoZRVZFTlRfVFlQRV9VUExPQURfUkVRVUVTVBAZEh0KGUVWRU5UX1RZUEVfU0NSRUVOX0NMRUFSRUQQGhIcChhFVkVOVF9UWVBFX1BPSU5URVJfU0hBUEUQG2IGcHJvdG8z");
+  fileDesc("Cg50ZXJtaW5hbC5wcm90bxIIdGVybWluYWwiKAoFQ29sb3ISCQoBchgBIAEoDRIJCgFnGAIgASgNEgkKAWIYAyABKA0ipQEKCVRoZW1lSW5mbxIMCgRuYW1lGAEgASgJEiMKCmJhY2tncm91bmQYAiABKAsyDy50ZXJtaW5hbC5Db2xvchIjCgpmb3JlZ3JvdW5kGAMgASgLMg8udGVybWluYWwuQ29sb3ISHwoGbm9ybWFsGAQgAygLMg8udGVybWluYWwuQ29sb3ISHwoGYnJpZ2h0GAUgAygLMg8udGVybWluYWwuQ29sb3Ii+hAKDVNlcnZlck1lc3NhZ2USIgoGb3V0cHV0GAEgASgLMhAudGVybWluYWwuT3V0cHV0SAASIgoGcmVzaXplGAIgASgLMhAudGVybWluYWwuUmVzaXplSAASIAoFdGl0bGUYAyABKAsyDy50ZXJtaW5hbC5UaXRsZUgAEigKCWNvbm5lY3RlZBgEIAEoCzITLnRlcm1pbmFsLkNvbm5lY3RlZEgAEiQKB3JlZnJlc2gYBSABKAsyES50ZXJtaW5hbC5SZWZyZXNoSAASKgoGY3Vyc29yGAYgASgLMhgudGVybWluYWwuQ3Vyc29yUG9zaXRpb25IABIeCgRiZWxsGAcgASgLMg4udGVybWluYWwuQmVsbEgAEiAKBWVycm9yGAggASgLMg8udGVybWluYWwuRXJyb3JIABImCghzaHV0ZG93bhgJIAEoCzISLnRlcm1pbmFsLlNodXRkb3duSAASHgoEcG9uZxgKIAEoCzIOLnRlcm1pbmFsLlBvbmdIABIrCgtjd2RfY2hhbmdlZBgLIAEoCzIULnRlcm1pbmFsLkN3ZENoYW5nZWRIABIzCg90cmlnZ2VyX21hdGNoZWQYDCABKAsyGC50ZXJtaW5hbC5UcmlnZ2VyTWF0Y2hlZEgAEi8KDWFjdGlvbl9ub3RpZnkYDSABKAsyFi50ZXJtaW5hbC5BY3Rpb25Ob3RpZnlIABI0ChBhY3Rpb25fbWFya19saW5lGA4gASgLMhgudGVybWluYWwuQWN0aW9uTWFya0xpbmVIABItCgxtb2RlX2NoYW5nZWQYDyABKAsyFS50ZXJtaW5hbC5Nb2RlQ2hhbmdlZEgAEjEKDmdyYXBoaWNzX2FkZGVkGBAgASgLMhcudGVybWluYWwuR3JhcGhpY3NBZGRlZEgAEjMKD2h5cGVybGlua19hZGRlZBgRIAEoCzIYLnRlcm1pbmFsLkh5cGVybGlua0FkZGVkSAASNAoQdXNlcl92YXJfY2hhbmdlZBgSIAEoCzIYLnRlcm1pbmFsLlVzZXJWYXJDaGFuZ2VkSAASPAoUcHJvZ3Jlc3NfYmFyX2NoYW5nZWQYEyABKAsyHC50ZXJtaW5hbC5Qcm9ncmVzc0JhckNoYW5nZWRIABIvCg1iYWRnZV9jaGFuZ2VkGBQgASgLMhYudGVybWluYWwuQmFkZ2VDaGFuZ2VkSAASNwoRc2VsZWN0aW9uX2NoYW5nZWQYFSABKAsyGi50ZXJtaW5hbC5TZWxlY3Rpb25DaGFuZ2VkSAASMQoOY2xpcGJvYXJkX3N5bmMYFiABKAsyFy50ZXJtaW5hbC5DbGlwYm9hcmRTeW5jSAASQgoXc2hlbGxfaW50ZWdyYXRpb25fZXZlbnQYFyABKAsyHy50ZXJtaW5hbC5TaGVsbEludGVncmF0aW9uRXZlbnRIABItCgxzeXN0ZW1fc3RhdHMYGCABKAsyFS50ZXJtaW5hbC5TeXN0ZW1TdGF0c0gAEisKC3pvbmVfb3BlbmVkGBkgASgLMhQudGVybWluYWwuWm9uZU9wZW5lZEgAEisKC3pvbmVfY2xvc2VkGBogASgLMhQudGVybWluYWwuWm9uZUNsb3NlZEgAEjYKEXpvbmVfc2Nyb2xsZWRfb3V0GBsgASgLMhkudGVybWluYWwuWm9uZVNjcm9sbGVkT3V0SAASOwoTZW52aXJvbm1lbnRfY2hhbmdlZBgcIAEoCzIcLnRlcm1pbmFsLkVudmlyb25tZW50Q2hhbmdlZEgAEkAKFnJlbW90ZV9ob3N0X3RyYW5zaXRpb24YHSABKAsyHi50ZXJtaW5hbC5SZW1vdGVIb3N0VHJhbnNpdGlvbkgAEjgKEnN1Yl9zaGVsbF9kZXRlY3RlZBgeIAEoCzIaLnRlcm1pbmFsLlN1YlNoZWxsRGV0ZWN0ZWRIABI7ChFzZW1hbnRpY19zbmFwc2hvdBgfIAEoCzIeLnRlcm1pbmFsLlNlbWFudGljU25hcHNob3REYXRhSAASPgoVZmlsZV90cmFuc2Zlcl9zdGFydGVkGCAgASgLMh0udGVybWluYWwuRmlsZVRyYW5zZmVyU3RhcnRlZEgAEkAKFmZpbGVfdHJhbnNmZXJfcHJvZ3Jlc3MYISABKAsyHi50ZXJtaW5hbC5GaWxlVHJhbnNmZXJQcm9ncmVzc0gAEkIKF2ZpbGVfdHJhbnNmZXJfY29tcGxldGVkGCIgASgLMh8udGVybWluYWwuRmlsZVRyYW5zZmVyQ29tcGxldGVkSAASPAoUZmlsZV90cmFuc2Zlcl9mYWlsZWQYIyABKAsyHC50ZXJtaW5hbC5GaWxlVHJhbnNmZXJGYWlsZWRIABI1ChB1cGxvYWRfcmVxdWVzdGVkGCQgASgLMhkudGVybWluYWwuVXBsb2FkUmVxdWVzdGVkSAASMQoOc2NyZWVuX2NsZWFyZWQYJSABKAsyFy50ZXJtaW5hbC5TY3JlZW5DbGVhcmVkSAASLQoMYWdlbnRfcm9zdGVyGCYgASgLMhUudGVybWluYWwuQWdlbnRSb3N0ZXJIABI6ChNhZ2VudF9zdGF0ZV9jaGFuZ2VkGCcgASgLMhsudGVybWluYWwuQWdlbnRTdGF0ZUNoYW5nZWRIABI+ChVwb2ludGVyX3NoYXBlX2NoYW5nZWQYKCABKAsyHS50ZXJtaW5hbC5Qb2ludGVyU2hhcGVDaGFuZ2VkSAASNAoQcGFuZV9zaXplX3N0YXR1cxgpIAEoCzIYLnRlcm1pbmFsLlBhbmVTaXplU3RhdHVzSAASMwoPdmlld2VyX3ByZXNlbmNlGCogASgLMhgudGVybWluYWwuVmlld2VyUHJlc2VuY2VIAEIJCgdtZXNzYWdlIoIBCg5QYW5lU2l6ZVN0YXR1cxIMCgRjb2xzGAEgASgNEgwKBHJvd3MYAiABKA0SGgoNY29sdW1uX3ZpZXdlchgDIAEoCUgAiAEBEhcKCnJvd192aWV3ZXIYBCABKAlIAYgBAUIQCg5fY29sdW1uX3ZpZXdlckINCgtfcm93X3ZpZXdlciIwCg5WaWV3ZXJQcmVzZW5jZRINCgVjb3VudBgBIAEoDRIPCgd2aWV3ZXJzGAIgAygJIjwKBk91dHB1dBIMCgRkYXRhGAEgASgMEhYKCXRpbWVzdGFtcBgCIAEoBEgAiAEBQgwKCl90aW1lc3RhbXAiJAoGUmVzaXplEgwKBGNvbHMYASABKA0SDAoEcm93cxgCIAEoDSIWCgVUaXRs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B2NsZWFyZWQYByABKAhCDAoKX3N0YXJ0X2NvbEIMCgpfc3RhcnRfcm93QgoKCF9lbmRfY29sQgoKCF9lbmRfcm93QgcKBV90ZXh0IlMKDUNsaXBib2FyZFN5bmMSEQoJb3BlcmF0aW9uGAEgASgJEg8KB2NvbnRlbnQYAiABKAkSEwoGdGFyZ2V0GAMgASgJSACIAQFCCQoHX3RhcmdldCLDAQoVU2hlbGxJbnRlZ3JhdGlvbkV2ZW50EhIKCmV2ZW50X3R5cGUYASABKAkSFAoHY29tbWFuZBgCIAEoCUgAiAEBEhYKCWV4aXRfY29kZRgDIAEoBUgBiAEBEhYKCXRpbWVzdGFtcBgEIAEoBEgCiAEBEhgKC2N1cnNvcl9saW5lGAUgASgESAOIAQFCCgoIX2NvbW1hbmRCDAoKX2V4aXRfY29kZUIMCgpfdGltZXN0YW1wQg4KDF9jdXJzb3JfbGluZSKyAQoIQ3B1U3RhdHMSHQoVb3ZlcmFsbF91c2FnZV9wZXJjZW50GAEgASgBEhsKE3BoeXNpY2FsX2NvcmVfY291bnQYAiABKA0SHgoWcGVyX2NvcmVfdXNhZ2VfcGVyY2VudBgDIAMoARISCgVicmFuZBgEIAEoCUgAiAEBEhoKDWZyZXF1ZW5jeV9taHoYBSABKARIAYgBAUIICgZfYnJhbmRCEAoOX2ZyZXF1ZW5jeV9taHoiggEKC01lbW9yeVN0YXRzEhMKC3RvdGFsX2J5dGVzGAEgASgEEhIKCnVzZWRfYnl0ZXMYAiABKAQSFwoPYXZhaWxhYmxlX2J5dGVzGAMgASgEEhgKEHN3YXBfdG90YWxfYnl0ZXMYBCABKAQSFwoPc3dhcF91c2VkX2J5dGVzGAUgASgEIpUBCglEaXNrU3RhdHMSDAoEbmFtZRgBIAEoCRITCgttb3VudF9wb2ludBgCIAEoCRITCgt0b3RhbF9ieXRlcxgDIAEoBBIXCg9hdmFpbGFibGVfYnl0ZXMYBCABKAQSDAoEa2luZBgFIAEoCRITCgtmaWxlX3N5c3RlbRgGIAEoCRIUCgxpc19yZW1vdmFibGUYByABKAgigwIKFU5ldHdvcmtJbnRlcmZhY2VTdGF0cxIMCgRuYW1lGAEgASgJEhYKDnJlY2VpdmVkX2J5dGVzGAIgASgEEhkKEXRyYW5zbWl0dGVkX2J5dGVzGAMgASgEEhwKFHRvdGFsX3JlY2VpdmVkX2J5dGVzGAQgASgEEh8KF3RvdGFsX3RyYW5zbWl0dGVkX2J5dGVzGAUgASgEEhgKEHBhY2tldHNfcmVjZWl2ZWQYBiABKAQSGwoTcGFja2V0c190cmFuc21pdHRlZBgHIAEoBBIXCg9lcnJvcnNfcmVjZWl2ZWQYCCABKAQSGgoSZXJyb3JzX3RyYW5zbWl0dGVkGAkgASgEIlAKC0xvYWRBdmVyYWdlEhIKCm9uZV9taW51dGUYASABKAESFAoMZml2ZV9taW51dGVzGAIgASgBEhcKD2ZpZnRlZW5fbWludXRlcxgDIAEoASL6AwoLU3lzdGVtU3RhdHMSJAoDY3B1GAEgASgLMhIudGVybWluYWwuQ3B1U3RhdHNIAIgBARIqCgZtZW1vcnkYAiABKAsyFS50ZXJtaW5hbC5NZW1vcnlTdGF0c0gBiAEBEiIKBWRpc2tzGAMgAygLMhMudGVybWluYWwuRGlza1N0YXRzEjEKCG5ldHdvcmtzGAQgAygLMh8udGVybWluYWwuTmV0d29ya0ludGVyZmFjZVN0YXRzEjAKDGxvYWRfYXZlcmFnZRgFIAEoCzIVLnRlcm1pbmFsLkxvYWRBdmVyYWdlSAKIAQESFQoIaG9zdG5hbWUYBiABKAlIA4gBARIUCgdvc19uYW1lGAcgASgJSASIAQESFwoKb3NfdmVyc2lvbhgIIAEoCUgFiAEBEhsKDmtlcm5lbF92ZXJzaW9uGAkgASgJSAaIAQESGAoLdXB0aW1lX3NlY3MYCiABKARIB4gBARIWCgl0aW1lc3RhbXAYCyABKARICIgBAUIGCgRfY3B1QgkKB19tZW1vcnlCDwoNX2xvYWRfYXZlcmFnZUILCglfaG9zdG5hbWVCCgoIX29zX25hbWVCDQoLX29zX3ZlcnNpb25CEQoPX2tlcm5lbF92ZXJzaW9uQg4KDF91cHRpbWVfc2Vjc0IMCgpfdGltZXN0YW1wIkcKClpvbmVPcGVuZWQSDwoHem9uZV9pZBgBIAEoBBIRCgl6b25lX3R5cGUYAiABKAkSFQoNYWJzX3Jvd19zdGFydBgDIAEoBCKCAQoKWm9uZUNsb3NlZBIPCgd6b25lX2lkGAEgASgEEhEKCXpvbmVfdHlwZRgCIAEoCRIVCg1hYnNfcm93X3N0YXJ0GAMgASgEEhMKC2Fic19yb3dfZW5kGAQgASgEEhYKCWV4aXRfY29kZRgFIAEoBUgAiAEBQgwKCl9leGl0X2NvZGUiNQoPWm9uZVNjcm9sbGVkT3V0Eg8KB3pvbmVfaWQYASABKAQSEQoJem9uZV90eXBlGAIgASgJIlYKEkVudmlyb25tZW50Q2hhbmdlZBILCgNrZXkYASABKAkSDQoFdmFsdWUYAiABKAkSFgoJb2xkX3ZhbHVlGAMgASgJSACIAQFCDAoKX29sZF92YWx1ZSKkAQoUUmVtb3RlSG9zdFRyYW5zaXRpb24SEAoIaG9zdG5hbWUYASABKAkSFQoIdXNlcm5hbWUYAiABKAlIAIgBARIZCgxvbGRfaG9zdG5hbWUYAyABKAlIAYgBARIZCgxvbGRfdXNlcm5hbWUYBCABKAlIAogBAUILCglfdXNlcm5hbWVCDwoNX29sZF9ob3N0bmFtZUIPCg1fb2xkX3VzZXJuYW1lIkkKEFN1YlNoZWxsRGV0ZWN0ZWQSDQoFZGVwdGgYASABKAQSFwoKc2hlbGxfdHlwZRgCIAEoCUgAiAEBQg0KC19zaGVsbF90eXBlIi0KFFNlbWFudGljU25hcHNob3REYXRhEhUKDXNuYXBzaG90X2pzb24YASABKAkiTAoPU25hcHNob3RSZXF1ZXN0Eg0KBXNjb3BlGAEgASgJEhkKDG1heF9jb21tYW5kcxgCIAEoDUgAiAEBQg8KDV9tYXhfY29tbWFuZHMioQQKDUNsaWVudE1lc3NhZ2USIAoFaW5wdXQYASABKAsyDy50ZXJtaW5hbC5JbnB1dEgAEigKBnJlc2l6ZRgCIAEoCzIWLnRlcm1pbmFsLkNsaWVudFJlc2l6ZUgAEh4KBHBpbmcYAyABKAsyDi50ZXJtaW5hbC5QaW5nSAASKwoHcmVmcmVzaBgEIAEoCzIYLnRlcm1pbmFsLlJlcXVlc3RSZWZyZXNoSAASKAoJc3Vic2NyaWJlGAUgASgLMhMudGVybWluYWwuU3Vic2NyaWJlSAASJQoFbW91c2UYBiABKAsyFC50ZXJtaW5hbC5Nb3VzZUlucHV0SAASJgoFZm9jdXMYByABKAsyFS50ZXJtaW5hbC5Gb2N1c0NoYW5nZUgAEiUKBXBhc3RlGAggASgLMhQudGVybWluYWwuUGFzdGVJbnB1dEgAEi8KCXNlbGVjdGlvbhgJIAEoCzIaLnRlcm1pbmFsLlNlbGVjdGlvblJlcXVlc3RIABIvCgljbGlwYm9hcmQYCiABKAsyGi50ZXJtaW5hbC5DbGlwYm9hcmRSZXF1ZXN0SAASNQoQc25hcHNob3RfcmVxdWVzdBgLIAEoCzIZLnRlcm1pbmFsLlNuYXBzaG90UmVxdWVzdEgAEjMKD3ZpZXdlcl9pZGVudGl0eRgMIAEoCzIYLnRlcm1pbmFsLlZpZXdlcklkZW50aXR5SABCCQoHbWVzc2FnZSIeCg5WaWV3ZXJJZGVudGl0eRIMCgRraW5kGAEgASgJIhUKBUlucHV0EgwKBGRhdGEYASABKAwiKgoMQ2xpZW50UmVzaXplEgwKBGNvbHMYASABKA0SDAoEcm93cxgCIAEoDSIGCgRQaW5nIhAKDlJlcXVlc3RSZWZyZXNoIjAKCVN1YnNjcmliZRIjCgZldmVudHMYASADKA4yEy50ZXJtaW5hbC5FdmVudFR5cGUidAoKTW91c2VJbnB1dBILCgNjb2wYASABKA0SCwoDcm93GAIgASgNEg4KBmJ1dHRvbhgDIAEoDRINCgVzaGlmdBgEIAEoCBIMCgRjdHJsGAUgASgIEgsKA2FsdBgGIAEoCBISCgpldmVudF90eXBlGAcgASgJIh4KC0ZvY3VzQ2hhbmdlEg8KB2ZvY3VzZWQYASABKAgiHQoKUGFzdGVJbnB1dBIPCgdjb250ZW50GAEgASgJImgKEFNlbGVjdGlvblJlcXVlc3QSEQoJc3RhcnRfY29sGAEgASgNEhEKCXN0YXJ0X3JvdxgCIAEoDRIPCgdlbmRfY29sGAMgASgNEg8KB2VuZF9yb3cYBCABKA0SDAoEbW9kZRgFIAEoCSJnChBDbGlwYm9hcmRSZXF1ZXN0EhEKCW9wZXJhdGlvbhgBIAEoCRIUCgdjb250ZW50GAIgASgJSACIAQESEwoGdGFyZ2V0GAMgASgJSAGIAQFCCgoIX2NvbnRlbnRCCQoHX3RhcmdldCKCAQoTRmlsZVRyYW5zZmVyU3RhcnRlZBIKCgJpZBgBIAEoBBIRCglkaXJlY3Rpb24YAiABKAkSFQoIZmlsZW5hbWUYAyABKAlIAIgBARIYCgt0b3RhbF9ieXRlcxgEIAEoBEgBiAEBQgsKCV9maWxlbmFtZUIOCgxfdG90YWxfYnl0ZXMiZwoURmlsZVRyYW5zZmVyUHJvZ3Jlc3MSCgoCaWQYASABKAQSGQoRYnl0ZXNfdHJhbnNmZXJyZWQYAiABKAQSGAoLdG90YWxfYnl0ZXMYAyABKARIAIgBAUIOCgxfdG90YWxfYnl0ZXMiVQoVRmlsZVRyYW5zZmVyQ29tcGxldGVkEgoKAmlkGAEgASgEEhUKCGZpbGVuYW1lGAIgASgJSACIAQESDAoEc2l6ZRgDIAEoBEILCglfZmlsZW5hbWUiMAoSRmlsZVRyYW5zZmVyRmFpbGVkEgoKAmlkGAEgASgEEg4KBnJlYXNvbhgCIAEoCSIhCg9VcGxvYWRSZXF1ZXN0ZWQSDgoGZm9ybWF0GAEgASgJIisKDVNjcmVlbkNsZWFyZWQSGgoSaW5jbHVkZV9zY3JvbGxiYWNrGAEgASgIIpMBCgpBZ2VudEVudHJ5Eg8KB3BhbmVfaWQYASABKA0SDQoFYWdlbnQYAiABKAkSDQoFc3RhdGUYAyABKAkSDgoGc291cmNlGAQgASgJEg4KBnJlYXNvbhgFIAEoCRIRCgl3b3Jrc3BhY2UYBiABKAkSDwoHcHJvamVjdBgHIAEoCRISCgpwYW5lX2xhYmVsGAggASgJIjMKC0FnZW50Um9zdGVyEiQKBmFnZW50cxgBIAMoCzIULnRlcm1pbmFsLkFnZW50RW50cnkiSgoRQWdlbnRTdGF0ZUNoYW5nZWQSIwoFYWdlbnQYASABKAsyFC50ZXJtaW5hbC5BZ2VudEVudHJ5EhAKCHJlbGVhc2VkGAIgASgIIjMKE1BvaW50ZXJTaGFwZUNoYW5nZWQSEgoFc2hhcGUYASABKAlIAIgBAUIICgZfc2hhcGUqzwUKCUV2ZW50VHlwZRIaChZFVkVOVF9UWVBFX1VOU1BFQ0lGSUVEEAASFQoRRVZFTlRfVFlQRV9PVVRQVVQQARIVChFFVkVOVF9UWVBFX0NVUlNPUhACEhMKD0VWRU5UX1RZUEVfQkVMTBADEhQKEEVWRU5UX1RZUEVfVElUTEUQBBIVChFFVkVOVF9UWVBFX1JFU0laRRAFEhIKDkVWRU5UX1RZUEVfQ1dEEAYSFgoSRVZFTlRfVFlQRV9UUklHR0VSEAcSFQoRRVZFTlRfVFlQRV9BQ1RJT04QCBITCg9FVkVOVF9UWVBFX01PREUQCRIXChNFVkVOVF9UWVBFX0dSQVBISUNTEAoSGAoURVZFTlRfVFlQRV9IWVBFUkxJTksQCxIXChNFVkVOVF9UWVBFX1VTRVJfVkFSEAwSGwoXRVZFTlRfVFlQRV9QUk9HUkVTU19CQVIQDRIUChBFVkVOVF9UWVBFX0JBREdFEA4SGAoURVZFTlRfVFlQRV9TRUxFQ1RJT04QDxIYChRFVkVOVF9UWVBFX0NMSVBCT0FSRBAQEhQKEEVWRU5UX1RZUEVfU0hFTEwQERIbChdFVkVOVF9UWVBFX1NZU1RFTV9TVEFUUxASEhMKD0VWRU5UX1RZUEVfWk9ORRATEhoKFkVWRU5UX1RZUEVfRU5WSVJPTk1FTlQQFBIaChZFVkVOVF9UWVBFX1JFTU9URV9IT1NUEBUSGAoURVZFTlRfVFlQRV9TVUJfU0hFTEwQFhIXChNFVkVOVF9UWVBFX1NOQVBTSE9UEBcSHAoYRVZFTlRfVFlQRV9GSUxFX1RSQU5TRkVSEBgSHQoZRVZFTlRfVFlQRV9VUExPQURfUkVRVUVTVBAZEh0KGUVWRU5UX1RZUEVfU0NSRUVOX0NMRUFSRUQQGhIcChhFVkVOVF9UWVBFX1BPSU5URVJfU0hBUEUQG2IGcHJvdG8z");
 
 /**
  * RGB color (0-255 per channel)
@@ -334,6 +334,18 @@ export type ServerMessage = Message<"terminal.ServerMessage"> & {
      */
     value: PointerShapeChanged;
     case: "pointerShapeChanged";
+  } | {
+    /**
+     * @generated from field: terminal.PaneSizeStatus pane_size_status = 41;
+     */
+    value: PaneSizeStatus;
+    case: "paneSizeStatus";
+  } | {
+    /**
+     * @generated from field: terminal.ViewerPresence viewer_presence = 42;
+     */
+    value: ViewerPresence;
+    case: "viewerPresence";
   } | { case: undefined; value?: undefined };
 };
 
@@ -343,6 +355,64 @@ export type ServerMessage = Message<"terminal.ServerMessage"> & {
  */
 export const ServerMessageSchema: GenMessage<ServerMessage> = /*@__PURE__*/
   messageDesc(file_terminal, 2);
+
+/**
+ * Effective pane size and componentwise constraint owners.
+ *
+ * @generated from message terminal.PaneSizeStatus
+ */
+export type PaneSizeStatus = Message<"terminal.PaneSizeStatus"> & {
+  /**
+   * @generated from field: uint32 cols = 1;
+   */
+  cols: number;
+
+  /**
+   * @generated from field: uint32 rows = 2;
+   */
+  rows: number;
+
+  /**
+   * @generated from field: optional string column_viewer = 3;
+   */
+  columnViewer?: string | undefined;
+
+  /**
+   * @generated from field: optional string row_viewer = 4;
+   */
+  rowViewer?: string | undefined;
+};
+
+/**
+ * Describes the message terminal.PaneSizeStatus.
+ * Use `create(PaneSizeStatusSchema)` to create a new message.
+ */
+export const PaneSizeStatusSchema: GenMessage<PaneSizeStatus> = /*@__PURE__*/
+  messageDesc(file_terminal, 3);
+
+/**
+ * Full replacement viewer set, including the receiving connection.
+ *
+ * @generated from message terminal.ViewerPresence
+ */
+export type ViewerPresence = Message<"terminal.ViewerPresence"> & {
+  /**
+   * @generated from field: uint32 count = 1;
+   */
+  count: number;
+
+  /**
+   * @generated from field: repeated string viewers = 2;
+   */
+  viewers: string[];
+};
+
+/**
+ * Describes the message terminal.ViewerPresence.
+ * Use `create(ViewerPresenceSchema)` to create a new message.
+ */
+export const ViewerPresenceSchema: GenMessage<ViewerPresence> = /*@__PURE__*/
+  messageDesc(file_terminal, 4);
 
 /**
  * Terminal output data (very high frequency)
@@ -370,7 +440,7 @@ export type Output = Message<"terminal.Output"> & {
  * Use `create(OutputSchema)` to create a new message.
  */
 export const OutputSchema: GenMessage<Output> = /*@__PURE__*/
-  messageDesc(file_terminal, 3);
+  messageDesc(file_terminal, 5);
 
 /**
  * Terminal resize notification
@@ -394,7 +464,7 @@ export type Resize = Message<"terminal.Resize"> & {
  * Use `create(ResizeSchema)` to create a new message.
  */
 export const ResizeSchema: GenMessage<Resize> = /*@__PURE__*/
-  messageDesc(file_terminal, 4);
+  messageDesc(file_terminal, 6);
 
 /**
  * Terminal title change
@@ -413,7 +483,7 @@ export type Title = Message<"terminal.Title"> & {
  * Use `create(TitleSchema)` to create a new message.
  */
 export const TitleSchema: GenMessage<Title> = /*@__PURE__*/
-  messageDesc(file_terminal, 5);
+  messageDesc(file_terminal, 7);
 
 /**
  * Initial connection handshake
@@ -503,7 +573,7 @@ export type Connected = Message<"terminal.Connected"> & {
  * Use `create(ConnectedSchema)` to create a new message.
  */
 export const ConnectedSchema: GenMessage<Connected> = /*@__PURE__*/
-  messageDesc(file_terminal, 6);
+  messageDesc(file_terminal, 8);
 
 /**
  * Full screen refresh response
@@ -534,7 +604,7 @@ export type Refresh = Message<"terminal.Refresh"> & {
  * Use `create(RefreshSchema)` to create a new message.
  */
 export const RefreshSchema: GenMessage<Refresh> = /*@__PURE__*/
-  messageDesc(file_terminal, 7);
+  messageDesc(file_terminal, 9);
 
 /**
  * Cursor position update
@@ -563,7 +633,7 @@ export type CursorPosition = Message<"terminal.CursorPosition"> & {
  * Use `create(CursorPositionSchema)` to create a new message.
  */
 export const CursorPositionSchema: GenMessage<CursorPosition> = /*@__PURE__*/
-  messageDesc(file_terminal, 8);
+  messageDesc(file_terminal, 10);
 
 /**
  * Bell/alert event
@@ -578,7 +648,7 @@ export type Bell = Message<"terminal.Bell"> & {
  * Use `create(BellSchema)` to create a new message.
  */
 export const BellSchema: GenMessage<Bell> = /*@__PURE__*/
-  messageDesc(file_terminal, 9);
+  messageDesc(file_terminal, 11);
 
 /**
  * CWD change notification (OSC 7)
@@ -617,7 +687,7 @@ export type CwdChanged = Message<"terminal.CwdChanged"> & {
  * Use `create(CwdChangedSchema)` to create a new message.
  */
 export const CwdChangedSchema: GenMessage<CwdChanged> = /*@__PURE__*/
-  messageDesc(file_terminal, 10);
+  messageDesc(file_terminal, 12);
 
 /**
  * Trigger pattern matched
@@ -666,7 +736,7 @@ export type TriggerMatched = Message<"terminal.TriggerMatched"> & {
  * Use `create(TriggerMatchedSchema)` to create a new message.
  */
 export const TriggerMatchedSchema: GenMessage<TriggerMatched> = /*@__PURE__*/
-  messageDesc(file_terminal, 11);
+  messageDesc(file_terminal, 13);
 
 /**
  * Trigger action result: notification
@@ -695,7 +765,7 @@ export type ActionNotify = Message<"terminal.ActionNotify"> & {
  * Use `create(ActionNotifySchema)` to create a new message.
  */
 export const ActionNotifySchema: GenMessage<ActionNotify> = /*@__PURE__*/
-  messageDesc(file_terminal, 12);
+  messageDesc(file_terminal, 14);
 
 /**
  * Trigger action result: mark/bookmark a line
@@ -729,7 +799,7 @@ export type ActionMarkLine = Message<"terminal.ActionMarkLine"> & {
  * Use `create(ActionMarkLineSchema)` to create a new message.
  */
 export const ActionMarkLineSchema: GenMessage<ActionMarkLine> = /*@__PURE__*/
-  messageDesc(file_terminal, 13);
+  messageDesc(file_terminal, 15);
 
 /**
  * Error notification
@@ -753,7 +823,7 @@ export type Error = Message<"terminal.Error"> & {
  * Use `create(ErrorSchema)` to create a new message.
  */
 export const ErrorSchema: GenMessage<Error> = /*@__PURE__*/
-  messageDesc(file_terminal, 14);
+  messageDesc(file_terminal, 16);
 
 /**
  * Server shutdown notification
@@ -772,7 +842,7 @@ export type Shutdown = Message<"terminal.Shutdown"> & {
  * Use `create(ShutdownSchema)` to create a new message.
  */
 export const ShutdownSchema: GenMessage<Shutdown> = /*@__PURE__*/
-  messageDesc(file_terminal, 15);
+  messageDesc(file_terminal, 17);
 
 /**
  * Keepalive pong response
@@ -787,7 +857,7 @@ export type Pong = Message<"terminal.Pong"> & {
  * Use `create(PongSchema)` to create a new message.
  */
 export const PongSchema: GenMessage<Pong> = /*@__PURE__*/
-  messageDesc(file_terminal, 16);
+  messageDesc(file_terminal, 18);
 
 /**
  * Terminal mode changed (cursor visibility, mouse tracking, etc.)
@@ -815,7 +885,7 @@ export type ModeChanged = Message<"terminal.ModeChanged"> & {
  * Use `create(ModeChangedSchema)` to create a new message.
  */
 export const ModeChangedSchema: GenMessage<ModeChanged> = /*@__PURE__*/
-  messageDesc(file_terminal, 17);
+  messageDesc(file_terminal, 19);
 
 /**
  * Graphics/image added to terminal (Sixel, iTerm2, Kitty)
@@ -843,7 +913,7 @@ export type GraphicsAdded = Message<"terminal.GraphicsAdded"> & {
  * Use `create(GraphicsAddedSchema)` to create a new message.
  */
 export const GraphicsAddedSchema: GenMessage<GraphicsAdded> = /*@__PURE__*/
-  messageDesc(file_terminal, 18);
+  messageDesc(file_terminal, 20);
 
 /**
  * Hyperlink added (OSC 8)
@@ -885,7 +955,7 @@ export type HyperlinkAdded = Message<"terminal.HyperlinkAdded"> & {
  * Use `create(HyperlinkAddedSchema)` to create a new message.
  */
 export const HyperlinkAddedSchema: GenMessage<HyperlinkAdded> = /*@__PURE__*/
-  messageDesc(file_terminal, 19);
+  messageDesc(file_terminal, 21);
 
 /**
  * User variable changed (OSC 1337 SetUserVar)
@@ -920,7 +990,7 @@ export type UserVarChanged = Message<"terminal.UserVarChanged"> & {
  * Use `create(UserVarChangedSchema)` to create a new message.
  */
 export const UserVarChangedSchema: GenMessage<UserVarChanged> = /*@__PURE__*/
-  messageDesc(file_terminal, 20);
+  messageDesc(file_terminal, 22);
 
 /**
  * Named progress bar changed (OSC 934)
@@ -969,7 +1039,7 @@ export type ProgressBarChanged = Message<"terminal.ProgressBarChanged"> & {
  * Use `create(ProgressBarChangedSchema)` to create a new message.
  */
 export const ProgressBarChangedSchema: GenMessage<ProgressBarChanged> = /*@__PURE__*/
-  messageDesc(file_terminal, 21);
+  messageDesc(file_terminal, 23);
 
 /**
  * Badge text changed (OSC 1337 SetBadgeFormat)
@@ -990,7 +1060,7 @@ export type BadgeChanged = Message<"terminal.BadgeChanged"> & {
  * Use `create(BadgeChangedSchema)` to create a new message.
  */
 export const BadgeChangedSchema: GenMessage<BadgeChanged> = /*@__PURE__*/
-  messageDesc(file_terminal, 22);
+  messageDesc(file_terminal, 24);
 
 /**
  * Selection changed
@@ -1045,7 +1115,7 @@ export type SelectionChanged = Message<"terminal.SelectionChanged"> & {
  * Use `create(SelectionChangedSchema)` to create a new message.
  */
 export const SelectionChangedSchema: GenMessage<SelectionChanged> = /*@__PURE__*/
-  messageDesc(file_terminal, 23);
+  messageDesc(file_terminal, 25);
 
 /**
  * Clipboard sync event (OSC 52)
@@ -1078,7 +1148,7 @@ export type ClipboardSync = Message<"terminal.ClipboardSync"> & {
  * Use `create(ClipboardSyncSchema)` to create a new message.
  */
 export const ClipboardSyncSchema: GenMessage<ClipboardSync> = /*@__PURE__*/
-  messageDesc(file_terminal, 24);
+  messageDesc(file_terminal, 26);
 
 /**
  * Shell integration event (FinalTerm sequences)
@@ -1125,7 +1195,7 @@ export type ShellIntegrationEvent = Message<"terminal.ShellIntegrationEvent"> & 
  * Use `create(ShellIntegrationEventSchema)` to create a new message.
  */
 export const ShellIntegrationEventSchema: GenMessage<ShellIntegrationEvent> = /*@__PURE__*/
-  messageDesc(file_terminal, 25);
+  messageDesc(file_terminal, 27);
 
 /**
  * CPU statistics
@@ -1164,7 +1234,7 @@ export type CpuStats = Message<"terminal.CpuStats"> & {
  * Use `create(CpuStatsSchema)` to create a new message.
  */
 export const CpuStatsSchema: GenMessage<CpuStats> = /*@__PURE__*/
-  messageDesc(file_terminal, 26);
+  messageDesc(file_terminal, 28);
 
 /**
  * Memory statistics
@@ -1203,7 +1273,7 @@ export type MemoryStats = Message<"terminal.MemoryStats"> & {
  * Use `create(MemoryStatsSchema)` to create a new message.
  */
 export const MemoryStatsSchema: GenMessage<MemoryStats> = /*@__PURE__*/
-  messageDesc(file_terminal, 27);
+  messageDesc(file_terminal, 29);
 
 /**
  * Individual disk statistics
@@ -1252,7 +1322,7 @@ export type DiskStats = Message<"terminal.DiskStats"> & {
  * Use `create(DiskStatsSchema)` to create a new message.
  */
 export const DiskStatsSchema: GenMessage<DiskStats> = /*@__PURE__*/
-  messageDesc(file_terminal, 28);
+  messageDesc(file_terminal, 30);
 
 /**
  * Network interface statistics
@@ -1311,7 +1381,7 @@ export type NetworkInterfaceStats = Message<"terminal.NetworkInterfaceStats"> & 
  * Use `create(NetworkInterfaceStatsSchema)` to create a new message.
  */
 export const NetworkInterfaceStatsSchema: GenMessage<NetworkInterfaceStats> = /*@__PURE__*/
-  messageDesc(file_terminal, 29);
+  messageDesc(file_terminal, 31);
 
 /**
  * System load averages
@@ -1340,7 +1410,7 @@ export type LoadAverage = Message<"terminal.LoadAverage"> & {
  * Use `create(LoadAverageSchema)` to create a new message.
  */
 export const LoadAverageSchema: GenMessage<LoadAverage> = /*@__PURE__*/
-  messageDesc(file_terminal, 30);
+  messageDesc(file_terminal, 32);
 
 /**
  * Combined system resource statistics
@@ -1409,7 +1479,7 @@ export type SystemStats = Message<"terminal.SystemStats"> & {
  * Use `create(SystemStatsSchema)` to create a new message.
  */
 export const SystemStatsSchema: GenMessage<SystemStats> = /*@__PURE__*/
-  messageDesc(file_terminal, 31);
+  messageDesc(file_terminal, 33);
 
 /**
  * Zone opened (prompt, command, or output block started)
@@ -1440,7 +1510,7 @@ export type ZoneOpened = Message<"terminal.ZoneOpened"> & {
  * Use `create(ZoneOpenedSchema)` to create a new message.
  */
 export const ZoneOpenedSchema: GenMessage<ZoneOpened> = /*@__PURE__*/
-  messageDesc(file_terminal, 32);
+  messageDesc(file_terminal, 34);
 
 /**
  * Zone closed (prompt, command, or output block ended)
@@ -1479,7 +1549,7 @@ export type ZoneClosed = Message<"terminal.ZoneClosed"> & {
  * Use `create(ZoneClosedSchema)` to create a new message.
  */
 export const ZoneClosedSchema: GenMessage<ZoneClosed> = /*@__PURE__*/
-  messageDesc(file_terminal, 33);
+  messageDesc(file_terminal, 35);
 
 /**
  * Zone evicted from scrollback
@@ -1503,7 +1573,7 @@ export type ZoneScrolledOut = Message<"terminal.ZoneScrolledOut"> & {
  * Use `create(ZoneScrolledOutSchema)` to create a new message.
  */
 export const ZoneScrolledOutSchema: GenMessage<ZoneScrolledOut> = /*@__PURE__*/
-  messageDesc(file_terminal, 34);
+  messageDesc(file_terminal, 36);
 
 /**
  * Environment variable changed
@@ -1532,7 +1602,7 @@ export type EnvironmentChanged = Message<"terminal.EnvironmentChanged"> & {
  * Use `create(EnvironmentChangedSchema)` to create a new message.
  */
 export const EnvironmentChangedSchema: GenMessage<EnvironmentChanged> = /*@__PURE__*/
-  messageDesc(file_terminal, 35);
+  messageDesc(file_terminal, 37);
 
 /**
  * Remote host transition detected
@@ -1566,7 +1636,7 @@ export type RemoteHostTransition = Message<"terminal.RemoteHostTransition"> & {
  * Use `create(RemoteHostTransitionSchema)` to create a new message.
  */
 export const RemoteHostTransitionSchema: GenMessage<RemoteHostTransition> = /*@__PURE__*/
-  messageDesc(file_terminal, 36);
+  messageDesc(file_terminal, 38);
 
 /**
  * Sub-shell detected
@@ -1590,7 +1660,7 @@ export type SubShellDetected = Message<"terminal.SubShellDetected"> & {
  * Use `create(SubShellDetectedSchema)` to create a new message.
  */
 export const SubShellDetectedSchema: GenMessage<SubShellDetected> = /*@__PURE__*/
-  messageDesc(file_terminal, 37);
+  messageDesc(file_terminal, 39);
 
 /**
  * Semantic snapshot of terminal state (JSON-encoded)
@@ -1609,7 +1679,7 @@ export type SemanticSnapshotData = Message<"terminal.SemanticSnapshotData"> & {
  * Use `create(SemanticSnapshotDataSchema)` to create a new message.
  */
 export const SemanticSnapshotDataSchema: GenMessage<SemanticSnapshotData> = /*@__PURE__*/
-  messageDesc(file_terminal, 38);
+  messageDesc(file_terminal, 40);
 
 /**
  * Request a semantic snapshot
@@ -1637,7 +1707,7 @@ export type SnapshotRequest = Message<"terminal.SnapshotRequest"> & {
  * Use `create(SnapshotRequestSchema)` to create a new message.
  */
 export const SnapshotRequestSchema: GenMessage<SnapshotRequest> = /*@__PURE__*/
-  messageDesc(file_terminal, 39);
+  messageDesc(file_terminal, 41);
 
 /**
  * @generated from message terminal.ClientMessage
@@ -1712,6 +1782,12 @@ export type ClientMessage = Message<"terminal.ClientMessage"> & {
      */
     value: SnapshotRequest;
     case: "snapshotRequest";
+  } | {
+    /**
+     * @generated from field: terminal.ViewerIdentity viewer_identity = 12;
+     */
+    value: ViewerIdentity;
+    case: "viewerIdentity";
   } | { case: undefined; value?: undefined };
 };
 
@@ -1720,7 +1796,26 @@ export type ClientMessage = Message<"terminal.ClientMessage"> & {
  * Use `create(ClientMessageSchema)` to create a new message.
  */
 export const ClientMessageSchema: GenMessage<ClientMessage> = /*@__PURE__*/
-  messageDesc(file_terminal, 40);
+  messageDesc(file_terminal, 42);
+
+/**
+ * Declare web/mobile presence kind. Defaults to web until declared.
+ *
+ * @generated from message terminal.ViewerIdentity
+ */
+export type ViewerIdentity = Message<"terminal.ViewerIdentity"> & {
+  /**
+   * @generated from field: string kind = 1;
+   */
+  kind: string;
+};
+
+/**
+ * Describes the message terminal.ViewerIdentity.
+ * Use `create(ViewerIdentitySchema)` to create a new message.
+ */
+export const ViewerIdentitySchema: GenMessage<ViewerIdentity> = /*@__PURE__*/
+  messageDesc(file_terminal, 43);
 
 /**
  * Keyboard input from client
@@ -1741,7 +1836,7 @@ export type Input = Message<"terminal.Input"> & {
  * Use `create(InputSchema)` to create a new message.
  */
 export const InputSchema: GenMessage<Input> = /*@__PURE__*/
-  messageDesc(file_terminal, 41);
+  messageDesc(file_terminal, 44);
 
 /**
  * Client requests terminal resize
@@ -1765,7 +1860,7 @@ export type ClientResize = Message<"terminal.ClientResize"> & {
  * Use `create(ClientResizeSchema)` to create a new message.
  */
 export const ClientResizeSchema: GenMessage<ClientResize> = /*@__PURE__*/
-  messageDesc(file_terminal, 42);
+  messageDesc(file_terminal, 45);
 
 /**
  * Keepalive ping request
@@ -1780,7 +1875,7 @@ export type Ping = Message<"terminal.Ping"> & {
  * Use `create(PingSchema)` to create a new message.
  */
 export const PingSchema: GenMessage<Ping> = /*@__PURE__*/
-  messageDesc(file_terminal, 43);
+  messageDesc(file_terminal, 46);
 
 /**
  * Client requests full screen refresh
@@ -1795,7 +1890,7 @@ export type RequestRefresh = Message<"terminal.RequestRefresh"> & {
  * Use `create(RequestRefreshSchema)` to create a new message.
  */
 export const RequestRefreshSchema: GenMessage<RequestRefresh> = /*@__PURE__*/
-  messageDesc(file_terminal, 44);
+  messageDesc(file_terminal, 47);
 
 /**
  * Client subscribes to specific event types
@@ -1814,7 +1909,7 @@ export type Subscribe = Message<"terminal.Subscribe"> & {
  * Use `create(SubscribeSchema)` to create a new message.
  */
 export const SubscribeSchema: GenMessage<Subscribe> = /*@__PURE__*/
-  messageDesc(file_terminal, 45);
+  messageDesc(file_terminal, 48);
 
 /**
  * Mouse input from client
@@ -1867,7 +1962,7 @@ export type MouseInput = Message<"terminal.MouseInput"> & {
  * Use `create(MouseInputSchema)` to create a new message.
  */
 export const MouseInputSchema: GenMessage<MouseInput> = /*@__PURE__*/
-  messageDesc(file_terminal, 46);
+  messageDesc(file_terminal, 49);
 
 /**
  * Focus change from client
@@ -1886,7 +1981,7 @@ export type FocusChange = Message<"terminal.FocusChange"> & {
  * Use `create(FocusChangeSchema)` to create a new message.
  */
 export const FocusChangeSchema: GenMessage<FocusChange> = /*@__PURE__*/
-  messageDesc(file_terminal, 47);
+  messageDesc(file_terminal, 50);
 
 /**
  * Paste input from client
@@ -1905,7 +2000,7 @@ export type PasteInput = Message<"terminal.PasteInput"> & {
  * Use `create(PasteInputSchema)` to create a new message.
  */
 export const PasteInputSchema: GenMessage<PasteInput> = /*@__PURE__*/
-  messageDesc(file_terminal, 48);
+  messageDesc(file_terminal, 51);
 
 /**
  * Selection request from client
@@ -1946,7 +2041,7 @@ export type SelectionRequest = Message<"terminal.SelectionRequest"> & {
  * Use `create(SelectionRequestSchema)` to create a new message.
  */
 export const SelectionRequestSchema: GenMessage<SelectionRequest> = /*@__PURE__*/
-  messageDesc(file_terminal, 49);
+  messageDesc(file_terminal, 52);
 
 /**
  * Clipboard request from client
@@ -1981,7 +2076,7 @@ export type ClipboardRequest = Message<"terminal.ClipboardRequest"> & {
  * Use `create(ClipboardRequestSchema)` to create a new message.
  */
 export const ClipboardRequestSchema: GenMessage<ClipboardRequest> = /*@__PURE__*/
-  messageDesc(file_terminal, 50);
+  messageDesc(file_terminal, 53);
 
 /**
  * File transfer started (download or upload)
@@ -2015,7 +2110,7 @@ export type FileTransferStarted = Message<"terminal.FileTransferStarted"> & {
  * Use `create(FileTransferStartedSchema)` to create a new message.
  */
 export const FileTransferStartedSchema: GenMessage<FileTransferStarted> = /*@__PURE__*/
-  messageDesc(file_terminal, 51);
+  messageDesc(file_terminal, 54);
 
 /**
  * File transfer progress update
@@ -2044,7 +2139,7 @@ export type FileTransferProgress = Message<"terminal.FileTransferProgress"> & {
  * Use `create(FileTransferProgressSchema)` to create a new message.
  */
 export const FileTransferProgressSchema: GenMessage<FileTransferProgress> = /*@__PURE__*/
-  messageDesc(file_terminal, 52);
+  messageDesc(file_terminal, 55);
 
 /**
  * File transfer completed successfully
@@ -2073,7 +2168,7 @@ export type FileTransferCompleted = Message<"terminal.FileTransferCompleted"> & 
  * Use `create(FileTransferCompletedSchema)` to create a new message.
  */
 export const FileTransferCompletedSchema: GenMessage<FileTransferCompleted> = /*@__PURE__*/
-  messageDesc(file_terminal, 53);
+  messageDesc(file_terminal, 56);
 
 /**
  * File transfer failed
@@ -2097,7 +2192,7 @@ export type FileTransferFailed = Message<"terminal.FileTransferFailed"> & {
  * Use `create(FileTransferFailedSchema)` to create a new message.
  */
 export const FileTransferFailedSchema: GenMessage<FileTransferFailed> = /*@__PURE__*/
-  messageDesc(file_terminal, 54);
+  messageDesc(file_terminal, 57);
 
 /**
  * Upload requested by terminal application
@@ -2116,7 +2211,7 @@ export type UploadRequested = Message<"terminal.UploadRequested"> & {
  * Use `create(UploadRequestedSchema)` to create a new message.
  */
 export const UploadRequestedSchema: GenMessage<UploadRequested> = /*@__PURE__*/
-  messageDesc(file_terminal, 55);
+  messageDesc(file_terminal, 58);
 
 /**
  * Screen cleared (ED 2J or ED 3J)
@@ -2137,7 +2232,7 @@ export type ScreenCleared = Message<"terminal.ScreenCleared"> & {
  * Use `create(ScreenClearedSchema)` to create a new message.
  */
 export const ScreenClearedSchema: GenMessage<ScreenCleared> = /*@__PURE__*/
-  messageDesc(file_terminal, 56);
+  messageDesc(file_terminal, 59);
 
 /**
  * One agent's roster entry, verbatim from par-mux (list-agents).
@@ -2207,7 +2302,7 @@ export type AgentEntry = Message<"terminal.AgentEntry"> & {
  * Use `create(AgentEntrySchema)` to create a new message.
  */
 export const AgentEntrySchema: GenMessage<AgentEntry> = /*@__PURE__*/
-  messageDesc(file_terminal, 57);
+  messageDesc(file_terminal, 60);
 
 /**
  * Full roster snapshot (pane-id ascending), pushed once per client connect.
@@ -2226,7 +2321,7 @@ export type AgentRoster = Message<"terminal.AgentRoster"> & {
  * Use `create(AgentRosterSchema)` to create a new message.
  */
 export const AgentRosterSchema: GenMessage<AgentRoster> = /*@__PURE__*/
-  messageDesc(file_terminal, 58);
+  messageDesc(file_terminal, 61);
 
 /**
  * One roster delta: upsert `agent`, or remove when `released` is true.
@@ -2252,7 +2347,7 @@ export type AgentStateChanged = Message<"terminal.AgentStateChanged"> & {
  * Use `create(AgentStateChangedSchema)` to create a new message.
  */
 export const AgentStateChangedSchema: GenMessage<AgentStateChanged> = /*@__PURE__*/
-  messageDesc(file_terminal, 59);
+  messageDesc(file_terminal, 62);
 
 /**
  * Pointer shape change (OSC 22)
@@ -2273,7 +2368,7 @@ export type PointerShapeChanged = Message<"terminal.PointerShapeChanged"> & {
  * Use `create(PointerShapeChangedSchema)` to create a new message.
  */
 export const PointerShapeChangedSchema: GenMessage<PointerShapeChanged> = /*@__PURE__*/
-  messageDesc(file_terminal, 60);
+  messageDesc(file_terminal, 63);
 
 /**
  * Event types for subscription

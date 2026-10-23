@@ -339,6 +339,8 @@ pub enum MuxCommand {
     PaneInfo {
         /// Target pane.
         pane: Target<PaneId>,
+        /// Register this connection as a streaming mirror, not an attach viewer.
+        mirror: bool,
     },
     /// Ask for the currently held panes' `%pane-exited` lines on demand
     /// (ENH-042). The lines go to the issuing client only; the reply body
@@ -1516,7 +1518,7 @@ const COMMANDS: &[(&str, CommandParser, &[&str])] = &[
     ("split-window", parse_split_window, &["before", "start-dir"]),
     ("select-pane", parse_select_pane, &[]),
     ("pane-title", parse_pane_title, &[]),
-    ("pane-info", parse_pane_info, &["cmd"]),
+    ("pane-info", parse_pane_info, &["cmd", "viewer-status"]),
     ("pane-exited-replay", parse_pane_exited_replay, &[]),
     ("clear-history", parse_clear_history, &[]),
     ("resize-pane", parse_resize_pane, &["zoom", "absolute"]),

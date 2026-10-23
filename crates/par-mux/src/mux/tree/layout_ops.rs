@@ -744,11 +744,48 @@ impl MuxTree {
             .or_else(|| self.client_views.get(&client_id).map(|view| view.window))
     }
 
+    /// Window-scoped viewer identities and independent minimum-size owners.
+    /// Ties use the lowest connection id so unchanged minima stay deterministic.
+    pub(crate) fn viewer_status_tokens(&self, window: WindowId) -> String {
+        let mut views: Vec<_> = self
+            .client_views
+            .iter()
+            .filter(|(_, view)| view.window == window)
+            .collect();
+        views.sort_by_key(|(id, _)| **id);
+        let col = views.iter().min_by_key(|(id, view)| (view.cols, **id));
+        let row = views.iter().min_by_key(|(id, view)| (view.rows, **id));
+        let identity = |id: u64| {
+            format!(
+                "{}:{id}",
+                if self.streaming_mirrors.contains(&id) {
+                    "stream"
+                } else {
+                    "attach"
+                }
+            )
+        };
+        let cols = col
+            .map(|(id, _)| identity(**id))
+            .unwrap_or_else(|| "-".into());
+        let rows = row
+            .map(|(id, _)| identity(**id))
+            .unwrap_or_else(|| "-".into());
+        let viewers = views
+            .iter()
+            .filter(|(id, _)| !self.streaming_mirrors.contains(id))
+            .map(|(id, _)| identity(**id))
+            .collect::<Vec<_>>()
+            .join(",");
+        format!("constraint_cols={cols} constraint_rows={rows} viewers={viewers}")
+    }
+
     /// Drop `client_id`'s sizing contribution and re-fit the window it was
     /// displaying — the disconnect path: with the constraining report gone
     /// the window may grow to the remaining viewers' minimum.
     pub fn clear_client_view(&mut self, client_id: u64) -> Vec<WindowId> {
         self.client_focus.remove(&client_id);
+        self.streaming_mirrors.remove(&client_id);
         let Some(removed) = self.client_views.remove(&client_id) else {
             return Vec::new();
         };

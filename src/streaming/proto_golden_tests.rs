@@ -334,6 +334,26 @@ fn server_fixtures() -> Vec<AppServerMessage> {
             shape: Some("ew-resize".into()),
         },
         S::PointerShapeChanged { shape: None },
+        S::PaneSizeStatus {
+            cols: 80,
+            rows: 24,
+            column_viewer: Some("attach:7".into()),
+            row_viewer: Some("stream:8".into()),
+        },
+        S::PaneSizeStatus {
+            cols: 80,
+            rows: 24,
+            column_viewer: None,
+            row_viewer: None,
+        },
+        S::ViewerPresence {
+            count: 3,
+            viewers: vec!["attach:7".into(), "web:abc".into(), "mobile:def".into()],
+        },
+        S::ViewerPresence {
+            count: 0,
+            viewers: vec![],
+        },
     ]
 }
 
@@ -344,6 +364,9 @@ fn client_fixtures() -> Vec<AppClientMessage> {
             data: "in\x03".into(),
         },
         C::Resize { cols: 90, rows: 33 },
+        C::ViewerIdentity {
+            kind: "mobile".into(),
+        },
         C::Ping,
         C::RequestRefresh,
         C::Subscribe {
@@ -665,12 +688,15 @@ fn proto_golden_fixtures_cover_every_variant() {
             S::AgentRoster { .. } => "AgentRoster",
             S::AgentStateChanged { .. } => "AgentStateChanged",
             S::PointerShapeChanged { .. } => "PointerShapeChanged",
+            S::PaneSizeStatus { .. } => "PaneSizeStatus",
+            S::ViewerPresence { .. } => "ViewerPresence",
         });
     }
-    assert_eq!(seen.len(), 40, "server fixtures miss a variant");
+    assert_eq!(seen.len(), 42, "server fixtures miss a variant");
     let mut seen = std::collections::BTreeSet::new();
     for msg in client_fixtures() {
         seen.insert(match msg {
+            C::ViewerIdentity { .. } => "ViewerIdentity",
             C::Input { .. } => "Input",
             C::Resize { .. } => "Resize",
             C::Ping => "Ping",
@@ -684,5 +710,5 @@ fn proto_golden_fixtures_cover_every_variant() {
             C::SnapshotRequest { .. } => "SnapshotRequest",
         });
     }
-    assert_eq!(seen.len(), 11, "client fixtures miss a variant");
+    assert_eq!(seen.len(), 12, "client fixtures miss a variant");
 }

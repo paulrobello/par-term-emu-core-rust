@@ -21,6 +21,35 @@ mod streaming_tests {
     // Protocol Message Constructor Tests
     // =========================================================================
 
+    #[test]
+    fn pane_status_and_presence_round_trip_json_and_protobuf() {
+        for message in [
+            ServerMessage::PaneSizeStatus {
+                cols: 80,
+                rows: 24,
+                column_viewer: Some("attach:1".into()),
+                row_viewer: Some("stream:2".into()),
+            },
+            ServerMessage::ViewerPresence {
+                count: 2,
+                viewers: vec!["attach:1".into(), "mobile:abc".into()],
+            },
+        ] {
+            let json = serde_json::to_value(&message).unwrap();
+            let from_json: ServerMessage = serde_json::from_value(json.clone()).unwrap();
+            let wire = encode_server_message(&from_json).unwrap();
+            let decoded = decode_server_message(&wire).unwrap();
+            assert_eq!(serde_json::to_value(decoded).unwrap(), json);
+        }
+        let message = ClientMessage::ViewerIdentity {
+            kind: "mobile".into(),
+        };
+        let wire = encode_client_message(&message).unwrap();
+        assert!(
+            matches!(decode_client_message(&wire).unwrap(), ClientMessage::ViewerIdentity { kind, .. } if kind == "mobile")
+        );
+    }
+
     mod protocol_constructors {
         use super::*;
 

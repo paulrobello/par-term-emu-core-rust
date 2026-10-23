@@ -161,6 +161,7 @@ pub(super) fn parse_pane_title(a: &Args<'_>) -> Result<MuxCommand, String> {
 pub(super) fn parse_pane_info(a: &Args<'_>) -> Result<MuxCommand, String> {
     Ok(MuxCommand::PaneInfo {
         pane: a.pane("-t")?,
+        mirror: a.has_flag("-M"),
     })
 }
 

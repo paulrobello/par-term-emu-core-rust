@@ -1610,7 +1610,7 @@ par-term-streamer --macro-file demo.yaml --macro-speed 1.5 --macro-loop
 
 ### Mux-Backed Sessions
 
-A streaming session can mirror a pane owned by the [par-mux daemon](MUX.md) instead of spawning its own shell. The pane keeps exactly one terminal, in the daemon; the streaming session holds a mirror fed by the daemon's screen replay and then its `%output` deltas. A mux-backed session is an ordinary session to the web and mobile frontend. The one protocol addition is agent-roster mirroring: the server streams `agent_roster` (a full snapshot on connect) and `agent_state_changed` (upsert/remove deltas) derived from the daemon's `list-agents` state.
+A streaming session can mirror a pane owned by the [par-mux daemon](MUX.md) instead of spawning its own shell. The pane keeps exactly one terminal, in the daemon; the streaming session holds a mirror fed by the daemon's screen replay and then its `%output` deltas. A mux-backed session is an ordinary session to the web and mobile frontend. Alongside pane size and viewer-presence snapshots, the server supports agent-roster mirroring: the server streams `agent_roster` (a full snapshot on connect) and `agent_state_changed` (upsert/remove deltas) derived from the daemon's `list-agents` state.
 
 ```bash
 # Build with both features, then point the server at a running daemon
@@ -1633,6 +1633,16 @@ The session id selects the pane: `pane-N` mirrors pane `%N`; any other id mirror
 | Pane closes | A pane killed (`kill-pane`, `kill-window`, `kill-session`) or missing from its window's new layout (moved away by `break-pane`/`join-pane`), a closed window, or a daemon shutdown ends the session. Closing a streaming session never kills the pane. |
 | Process exits | The pane is held (remain-on-exit): the session stays open on the frozen screen, and viewers get no exit cue. `respawn-pane` restarts the process in the same pane, and its output reaches the same session. |
 | Not applicable | `--shell`, `--command`, `--preset`, and shell restart: the daemon owns the process. |
+
+#### Pane size status and viewer presence
+
+After `connected`, mux-backed clients receive `pane_size_status` and `viewer_presence`. Both are available in JSON and protobuf and bypass event subscription filters.
+
+- `pane_size_status`: `{cols, rows, column_viewer, row_viewer}` contains the effective pane grid and the independent owners of the window's minimum column and row reports. Owners are `attach:N` or `stream:N` daemon connection identities, or null when no report remains. Equal reports use the lowest connection id. A stream identity represents the session's shared size contribution, not a particular websocket. Pane chrome and split geometry are already reflected in `cols`/`rows`.
+- `viewer_presence`: `{count, viewers}` is a full replacement set, including the receiving websocket. Entries are `attach:N`, `web:<uuid>`, or `mobile:<uuid>`. Attach clients viewing the pane's window are combined with this streaming session's websocket viewers. Mirror control connections are excluded, as are other streaming sessions/servers' websocket viewers (the daemon does not know those individual connections). No labels are supplied.
+- Websockets default to `web`. A client may send `{"type":"viewer_identity","kind":"mobile"}` (or `web`) to declare its kind. Other kinds are ignored. Join, leave, and kind changes push a new full set to remaining clients.
+
+The mirror queries `pane-info` once per second and immediately after `%client-attached`/`%client-left`. It pushes changed size/constraint or presence snapshots without reconnecting, including constraint-owner changes at an unchanged grid and viewers switching windows. The one-second reconciliation also repairs missed daemon notifications. Snapshot delivery on connect subscribes before reading the cache. `viewer_status_tracks_attach_membership_and_unchanged_grid_constraints` and `viewer_presence_composes_attach_web_mobile_and_pushes_leave` pin these contracts.
 
 The bundled web frontend handles the size policy per viewer; the pane itself keeps one size:
 

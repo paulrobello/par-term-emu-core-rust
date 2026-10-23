@@ -2011,7 +2011,7 @@ fn pane_info_reports_exit_for_held_pane() {
     let mut late = par_mux::mux::MuxClient::connect(path).expect("connect late");
     let reply = late.send("pane-info -t %0").expect("info").join("");
     assert!(
-        reply.trim_end().ends_with(" exited=3"),
+        reply.split_whitespace().any(|token| token == "exited=3"),
         "a held pane's pane-info carries its exit code: {reply:?}"
     );
     assert!(

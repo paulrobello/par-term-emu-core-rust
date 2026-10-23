@@ -90,10 +90,20 @@ S c2020b0a0965772d726573697a65
   = Ok(PointerShapeChanged { shape: Some("ew-resize") })
 S c20200
   = Ok(PointerShapeChanged { shape: None })
+S ca0218085010181a086174746163683a37220873747265616d3a38
+  = Ok(PaneSizeStatus { cols: 80, rows: 24, column_viewer: Some("attach:7"), row_viewer: Some("stream:8") })
+S ca020408501018
+  = Ok(PaneSizeStatus { cols: 80, rows: 24, column_viewer: None, row_viewer: None })
+S d20221080312086174746163683a3712077765623a616263120a6d6f62696c653a646566
+  = Ok(ViewerPresence { count: 3, viewers: ["attach:7", "web:abc", "mobile:def"] })
+S d20200
+  = Ok(ViewerPresence { count: 0, viewers: [] })
 C 0a050a03696e03
   = Ok(Input { data: "in\u{3}" })
 C 1204085a1021
   = Ok(Resize { cols: 90, rows: 33 })
+C 62080a066d6f62696c65
+  = Ok(ViewerIdentity { kind: "mobile" })
 C 1a00
   = Ok(Ping)
 C 2200

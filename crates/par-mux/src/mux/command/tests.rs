@@ -1245,7 +1245,8 @@ fn parses_pane_info_query() {
     assert_eq!(
         parse_command("pane-info -t %3").unwrap(),
         MuxCommand::PaneInfo {
-            pane: Target::Id(PaneId(3))
+            pane: Target::Id(PaneId(3)),
+            mirror: false,
         }
     );
     assert!(parse_command("pane-info").is_err());

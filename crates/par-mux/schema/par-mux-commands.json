@@ -273,12 +273,14 @@
     {
       "name": "pane-info",
       "features": [
-        "cmd"
+        "cmd",
+        "viewer-status"
       ],
       "flags": [
+        "-M",
         "-t"
       ],
-      "synopsis": "-t %N"
+      "synopsis": "-t %N [-M]"
     },
     {
       "name": "pane-title",

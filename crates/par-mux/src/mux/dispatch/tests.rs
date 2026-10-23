@@ -281,12 +281,23 @@ fn size_reports_take_the_minimum_and_wake_only_on_a_move() {
     no_layout(&two);
     no_layout(&three);
 
+    let status = run_as(1, "pane-info -t %0", &tx1);
+    assert!(status.contains("constraint_cols=attach:1"), "{status}");
+    assert!(status.contains("constraint_rows=attach:2"), "{status}");
+    assert!(status.contains("viewers=attach:1,attach:2"), "{status}");
+    let marked = run_as(2, "pane-info -t %0 -M", &tx1);
+    assert!(marked.contains("constraint_rows=stream:2"), "{marked}");
+    assert!(marked.contains("viewers=attach:1\n"), "{marked}");
+
     // The constraining client detaches (the server teardown's clearing):
     // the window grows to the remaining viewer's report.
     let resized = tree.lock().clear_client_view(2);
     assert_eq!(resized, vec![window_id], "the window grows back");
     let (_, cols, rows) = extent();
     assert_eq!((cols, rows), (100, 30));
+    let status = run_as(1, "pane-info -t %0", &tx1);
+    assert!(status.contains("constraint_rows=attach:1"), "{status}");
+    assert!(!status.contains("stream:2"), "{status}");
 }
 
 /// Target-less with no sessions at all: an error naming the absence,

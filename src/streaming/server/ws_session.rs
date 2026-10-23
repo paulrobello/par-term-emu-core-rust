@@ -79,6 +79,14 @@ impl StreamingServer {
         transport_label: &'static str,
     ) -> Result<()> {
         let client_id = client.id();
+        struct ViewerGuard(Arc<StreamSessionState>, uuid::Uuid);
+        impl Drop for ViewerGuard {
+            fn drop(&mut self) {
+                self.0.viewer_leave(self.1);
+            }
+        }
+        session.viewer_join(client_id, "web");
+        let _viewer = ViewerGuard(Arc::clone(&session), client_id);
 
         // Send initial connection message
         let connect_msg = session.build_connect_message(&client_id.to_string(), read_only);
@@ -100,6 +108,10 @@ impl StreamingServer {
 
         // Subscribe to session broadcasts
         let mut output_rx = session.broadcast_tx.subscribe();
+        if let Some(status) = session.pane_size_status() {
+            client.send(status).await?;
+        }
+        client.send(session.viewer_presence()).await?;
 
         // Roster snapshot. Ordering: the subscription above precedes the
         // snapshot read. The watcher updates its cache before it broadcasts
@@ -174,6 +186,10 @@ impl StreamingServer {
                     let msg = match output_msg {
                         Ok(msg) => msg,
                         Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => {
+                            if let Some(status) = session.pane_size_status() {
+                                client.send(status).await?;
+                            }
+                            client.send(session.viewer_presence()).await?;
                             // Dropped messages may include roster deltas: resync.
                             match self.roster_snapshot() {
                                 Some(roster) => roster,

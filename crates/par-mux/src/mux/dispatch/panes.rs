@@ -33,7 +33,7 @@ pub(super) fn route_pane_command(
         ),
         MuxCommand::SelectPane { pane, title } => cmd_select_pane(ctx, pane, title),
         MuxCommand::PaneTitle { pane } => cmd_pane_title(ctx, pane),
-        MuxCommand::PaneInfo { pane } => cmd_pane_info(ctx, pane),
+        MuxCommand::PaneInfo { pane, mirror } => cmd_pane_info(ctx, pane, mirror),
         MuxCommand::PaneExitedReplay => cmd_pane_exited_replay(ctx, issuer),
         MuxCommand::ClearHistory { pane } => cmd_clear_history(ctx, pane),
         MuxCommand::ResizePane { pane, adjustment } => cmd_resize_pane(ctx, pane, adjustment),
@@ -402,7 +402,7 @@ pub(super) fn cmd_pane_title(ctx: &Ctx<'_>, pane: Target<PaneId>) -> Outcome {
     }
 }
 
-pub(super) fn cmd_pane_info(ctx: &Ctx<'_>, pane: Target<PaneId>) -> Outcome {
+pub(super) fn cmd_pane_info(ctx: &Ctx<'_>, pane: Target<PaneId>, mirror: bool) -> Outcome {
     // Wire contract: one line, `%N @W COLSxROWS [cmd=<base64>]
     // [exited=<code|?>]` — the pane's window, its terminal's current grid
     // size, and, when knowable, the pane's foreground command name
@@ -414,8 +414,13 @@ pub(super) fn cmd_pane_info(ctx: &Ctx<'_>, pane: Target<PaneId>) -> Outcome {
     // can still render the remain-on-exit state (ARC-095). Both are
     // whitespace-free `key=value` tail tokens, so older clients keep
     // parsing the fixed prefix.
-    let (pane, window, cols, rows, child_pid, dead, exit_code) = {
-        let guard = ctx.tree.lock();
+    let (pane, window, cols, rows, child_pid, dead, exit_code, status) = {
+        let mut guard = ctx.tree.lock();
+        if mirror {
+            if let Some(id) = ctx.client_id {
+                guard.streaming_mirrors.insert(id);
+            }
+        }
         let pane = match guard.resolve_pane_target(pane) {
             Ok(id) => id,
             Err(err) => return Outcome::err(ctx, &err.to_string()),
@@ -432,6 +437,7 @@ pub(super) fn cmd_pane_info(ctx: &Ctx<'_>, pane: Target<PaneId>) -> Outcome {
             target.child_pid(),
             target.dead(),
             target.exit_code(),
+            guard.viewer_status_tokens(window),
         )
     };
     // The process table snapshot reads the whole OS process list; taking
@@ -448,7 +454,7 @@ pub(super) fn cmd_pane_info(ctx: &Ctx<'_>, pane: Target<PaneId>) -> Outcome {
         cmd,
         exited: dead.then_some(exit_code),
     };
-    Outcome::ok(ctx, &row.to_string())
+    Outcome::ok(ctx, &format!("{row} {status}"))
 }
 
 /// ENH-042: queue the held panes' `%pane-exited` lines on the issuing

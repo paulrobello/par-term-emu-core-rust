@@ -1037,6 +1037,27 @@ pub enum ServerMessage {
         released: bool,
     },
 
+    /// Effective pane grid and independent minimum-size owners.
+    #[serde(rename = "pane_size_status")]
+    PaneSizeStatus {
+        /// Effective columns.
+        cols: u16,
+        /// Effective rows.
+        rows: u16,
+        /// Column constraint owner, `attach:N` or `stream:N`.
+        column_viewer: Option<String>,
+        /// Row constraint owner, `attach:N` or `stream:N`.
+        row_viewer: Option<String>,
+    },
+    /// Full replacement pane viewer set, including the receiver.
+    #[serde(rename = "viewer_presence")]
+    ViewerPresence {
+        /// Total number of viewers.
+        count: u32,
+        /// Sorted `kind:id` entries. Kind is attach, web, or mobile.
+        viewers: Vec<String>,
+    },
+
     /// Pointer shape change (OSC 22)
     #[serde(rename = "pointer_shape_changed")]
     PointerShapeChanged {
@@ -1097,6 +1118,12 @@ pub struct AgentEntry {
 )]
 #[serde(tag = "type", rename_all = "lowercase")]
 pub enum ClientMessage {
+    /// Declare this connection's presence kind (web or mobile).
+    #[serde(rename = "viewer_identity")]
+    ViewerIdentity {
+        /// Only web and mobile are accepted.
+        kind: String,
+    },
     /// User input (keyboard)
     Input {
         /// Input data (can include escape sequences)

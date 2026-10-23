@@ -466,7 +466,7 @@ fn a_restart_restores_a_dead_pane_held_with_its_exit_code_and_screen() {
     let mut client = MuxClient::connect(path).expect("second daemon accepts");
     let info = client.send("pane-info -t %0").expect("info").join("");
     assert!(
-        info.trim_end().ends_with(" exited=3"),
+        info.split_whitespace().any(|token| token == "exited=3"),
         "the restored pane reports its persisted exit code: {info:?}"
     );
     assert!(

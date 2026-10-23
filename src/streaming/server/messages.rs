@@ -120,6 +120,9 @@ impl StreamingServer {
         }
         let mut replies = Vec::new();
         match msg {
+            crate::streaming::protocol::ClientMessage::ViewerIdentity { kind } => {
+                session.viewer_identity(client_id, &kind);
+            }
             crate::streaming::protocol::ClientMessage::Input { data } => {
                 Self::handle_input(
                     session,

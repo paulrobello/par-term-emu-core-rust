@@ -667,6 +667,8 @@ fn should_send(
         | ServerMessage::Refresh { .. }
         | ServerMessage::Error { .. }
         | ServerMessage::Shutdown { .. }
+        | ServerMessage::PaneSizeStatus { .. }
+        | ServerMessage::ViewerPresence { .. }
         | ServerMessage::AgentRoster { .. }
         | ServerMessage::AgentStateChanged { .. }
         | ServerMessage::Pong => true,

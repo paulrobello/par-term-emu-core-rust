@@ -97,6 +97,8 @@ struct MirrorLink {
     /// Output buffered until `setup_session` connects the broadcaster
     /// (`Buffering`), then the broadcaster's sender (`Live`).
     sink: Mutex<Sink>,
+    status: Mutex<Option<(ServerMessage, Vec<String>)>>,
+    session: RwLock<Option<std::sync::Weak<StreamSessionState>>>,
 }
 
 enum Sink {
@@ -271,6 +273,60 @@ fn parse_pane_info(line: &str) -> Option<(String, usize, usize)> {
     Some((window, cols.parse().ok()?, rows.parse().ok()?))
 }
 
+fn parse_viewer_status(line: &str) -> Option<(ServerMessage, Vec<String>)> {
+    let (_, cols, rows) = parse_pane_info(line)?;
+    let tokens: HashMap<_, _> = line
+        .split_whitespace()
+        .skip(3)
+        .filter_map(|token| token.split_once('='))
+        .collect();
+    let owner = |key| {
+        tokens
+            .get(key)
+            .filter(|v| **v != "-")
+            .map(|v| (*v).to_string())
+    };
+    let viewers = tokens
+        .get("viewers")?
+        .split(',')
+        .filter(|s| !s.is_empty())
+        .map(str::to_string)
+        .collect();
+    Some((
+        ServerMessage::PaneSizeStatus {
+            cols: cols as u16,
+            rows: rows as u16,
+            column_viewer: owner("constraint_cols"),
+            row_viewer: owner("constraint_rows"),
+        },
+        viewers,
+    ))
+}
+
+fn apply_viewer_status(link: &MirrorLink, line: &str) {
+    if let Some((size, viewers)) = parse_viewer_status(line) {
+        let mut status = link.status.lock();
+        *status = Some((size.clone(), viewers.clone()));
+        if let Some(session) = link
+            .session
+            .read()
+            .as_ref()
+            .and_then(std::sync::Weak::upgrade)
+        {
+            session.update_mux_status(size, viewers);
+        }
+    }
+}
+
+fn query_viewer_status(link: &MirrorLink) -> io::Result<()> {
+    let mut writer = link.writer.lock();
+    let writer = writer
+        .as_mut()
+        .ok_or_else(|| io::Error::from(io::ErrorKind::BrokenPipe))?;
+    writeln!(writer, "pane-info -t %{} -M", link.pane)?;
+    writer.flush()
+}
+
 /// The size a tmux layout string gives `pane`, as (cols, rows).
 ///
 /// A leaf is `WxH,X,Y,ID`; a container is `WxH,X,Y` followed by `{` or `[`.
@@ -385,7 +441,7 @@ impl SessionFactory for MuxSessionFactory {
         let info = command(
             &mut writer,
             &reader,
-            &format!("pane-info -t %{pane}"),
+            &format!("pane-info -t %{pane} -M"),
             timeout,
         )
         .map_err(|e| fail("pane-info", e))?;
@@ -417,6 +473,8 @@ impl SessionFactory for MuxSessionFactory {
             alive: AtomicBool::new(true),
             closed: AtomicBool::new(false),
             sink: Mutex::new(Sink::Buffering(Vec::new())),
+            status: Mutex::new(info.first().and_then(|line| parse_viewer_status(line))),
+            session: RwLock::new(None),
         });
         spawn_drain(
             Arc::clone(&link),
@@ -446,6 +504,13 @@ impl SessionFactory for MuxSessionFactory {
         let Some(link) = self.sessions.read().get(session_id).cloned() else {
             return Ok(());
         };
+        {
+            let status = link.status.lock();
+            *link.session.write() = Some(Arc::downgrade(session));
+            if let Some((size, viewers)) = &*status {
+                session.update_mux_status(size.clone(), viewers.clone());
+            }
+        }
         let sender = session.get_output_sender();
         {
             let mut sink = link.sink.lock();
@@ -531,8 +596,25 @@ fn spawn_drain(
         let mut parser = TmuxControlParser::new(true);
         let mut in_reply = false;
         let mut reply_body = Vec::new();
-        for line in reader.rx.iter() {
-            let Ok(line) = line else { break };
+        let mut next_status = Instant::now();
+        loop {
+            if link.closed.load(Ordering::Relaxed) {
+                break;
+            }
+            if Instant::now() >= next_status {
+                if query_viewer_status(&link).is_err() {
+                    break;
+                }
+                next_status = Instant::now() + Duration::from_secs(1);
+            }
+            let line = match reader
+                .rx
+                .recv_timeout(next_status.saturating_duration_since(Instant::now()))
+            {
+                Ok(Ok(line)) => line,
+                Err(RecvTimeoutError::Timeout) => continue,
+                _ => break,
+            };
             if link.closed.load(Ordering::Relaxed) {
                 break;
             }
@@ -559,6 +641,9 @@ fn spawn_drain(
                         reply_body.join(" | ")
                     );
                 } else {
+                    if line.starts_with(&format!("{pane_id} ")) {
+                        apply_viewer_status(&link, &line);
+                    }
                     reply_body.push(line);
                 }
                 continue;
@@ -605,6 +690,10 @@ fn spawn_drain(
                                 );
                             }
                         }
+                    }
+                    TmuxNotification::ClientAttached { .. }
+                    | TmuxNotification::ClientLeft { .. } => {
+                        next_status = Instant::now();
                     }
                     TmuxNotification::WindowClose { window_id } if window_id == link.window => {
                         link.alive.store(false, Ordering::Relaxed);
@@ -970,6 +1059,68 @@ mod tests {
     }
 
     #[test]
+    fn viewer_status_tracks_attach_membership_and_unchanged_grid_constraints() {
+        let rt = runtime();
+        let _entered = rt.enter();
+        let (_dir, socket, _serving, mut control, pane) = daemon();
+        control
+            .send(&format!("refresh-client -t {pane} -C 80x24"))
+            .unwrap();
+        let server = streaming(&socket);
+        let session = mirror(&server, &pane);
+        let initial = session.pane_size_status().expect("initial status");
+        let ServerMessage::PaneSizeStatus {
+            cols,
+            rows,
+            column_viewer: Some(first),
+            ..
+        } = initial
+        else {
+            panic!("status")
+        };
+        assert_eq!((cols, rows), (80, 24));
+        let mut updates = session.broadcast_tx.subscribe();
+        let mut other = MuxClient::connect(&socket).unwrap();
+        other
+            .send(&format!("refresh-client -t {pane} -C 80x24"))
+            .unwrap();
+        wait("two attach viewers", || {
+            let presence = session.viewer_presence();
+            (!matches!(presence, ServerMessage::ViewerPresence { count: 2, .. }))
+                .then(|| format!("{presence:?}"))
+        });
+        assert!(std::iter::from_fn(|| updates.try_recv().ok())
+            .any(|m| matches!(m, ServerMessage::ViewerPresence { count: 2, .. })));
+        drop(control);
+        wait("constraint owner changed without resizing", || {
+            let status = session.pane_size_status();
+            (!matches!(&status, Some(ServerMessage::PaneSizeStatus { cols: 80, rows: 24, column_viewer: Some(owner), .. }) if owner != &first))
+                .then(|| format!("{status:?}"))
+        });
+        assert!(
+            std::iter::from_fn(|| updates.try_recv().ok()).any(|m| matches!(
+                m,
+                ServerMessage::PaneSizeStatus {
+                    cols: 80,
+                    rows: 24,
+                    ..
+                }
+            ))
+        );
+        wait("one remaining attach viewer", || {
+            let presence = session.viewer_presence();
+            (!matches!(presence, ServerMessage::ViewerPresence { count: 1, .. }))
+                .then(|| format!("{presence:?}"))
+        });
+        drop(other);
+        wait("last attach viewer left", || {
+            let presence = session.viewer_presence();
+            (!matches!(presence, ServerMessage::ViewerPresence { count: 0, .. }))
+                .then(|| format!("{presence:?}"))
+        });
+    }
+
+    #[test]
     fn closing_a_resized_mirror_withdraws_its_size_claim() {
         let rt = runtime();
         let _entered = rt.enter();
@@ -990,6 +1141,32 @@ mod tests {
             let size = pane_size(&mut control, &pane);
             (size != (100, 30)).then(|| format!("pane {size:?}"))
         });
+    }
+
+    async fn next_wire_message(
+        socket: &mut tokio_tungstenite::WebSocketStream<tokio::io::DuplexStream>,
+        mut matches: impl FnMut(&ServerMessage) -> bool,
+    ) -> ServerMessage {
+        use futures_util::StreamExt;
+        tokio::time::timeout(CEILING, async {
+            loop {
+                let frame = socket.next().await.expect("open websocket").expect("frame");
+                let message = match frame {
+                    tokio_tungstenite::tungstenite::Message::Binary(bytes) => {
+                        crate::streaming::decode_server_message(&bytes).expect("protobuf")
+                    }
+                    tokio_tungstenite::tungstenite::Message::Text(text) => {
+                        serde_json::from_str(&text).expect("JSON")
+                    }
+                    _ => continue,
+                };
+                if matches(&message) {
+                    return message;
+                }
+            }
+        })
+        .await
+        .expect("wire message before deadline")
     }
 
     #[test]
@@ -1024,10 +1201,30 @@ mod tests {
         wait("websocket registered", || {
             (session.client_count() != 1).then(|| "no websocket client".to_string())
         });
+        rt.block_on(async {
+            next_wire_message(&mut phone, |m| {
+                matches!(
+                    m,
+                    ServerMessage::PaneSizeStatus {
+                        cols: 100,
+                        rows: 30,
+                        ..
+                    }
+                )
+            })
+            .await;
+            next_wire_message(&mut phone, |m| {
+                matches!(m, ServerMessage::ViewerPresence { count: 2, .. })
+            })
+            .await;
+        });
         session.resize_tx.send((40, 12)).expect("phone fit");
         wait("phone size", || {
             let size = pane_size(&mut control, &pane);
             (size != (40, 12)).then(|| format!("pane {size:?}"))
+        });
+        rt.block_on(async {
+            next_wire_message(&mut phone, |m| matches!(m, ServerMessage::PaneSizeStatus { cols: 40, rows: 12, column_viewer: Some(owner), .. } if owner.starts_with("stream:"))).await;
         });
         let (mut second_phone, second_connection) = rt.block_on(async {
             let (phone, connection) = tokio::io::duplex(65536);
@@ -1050,8 +1247,24 @@ mod tests {
             (session.client_count() != 2).then(|| "second viewer absent".to_string())
         });
         rt.block_on(async {
+            next_wire_message(&mut phone, |m| {
+                matches!(m, ServerMessage::ViewerPresence { count: 3, .. })
+            })
+            .await;
+            next_wire_message(&mut second_phone, |m| {
+                matches!(m, ServerMessage::ViewerPresence { count: 3, .. })
+            })
+            .await;
+        });
+        rt.block_on(async {
             phone.close(None).await.expect("phone closes");
             websocket.await.expect("websocket task");
+        });
+        rt.block_on(async {
+            next_wire_message(&mut second_phone, |m| {
+                matches!(m, ServerMessage::ViewerPresence { count: 2, .. })
+            })
+            .await;
         });
         assert_eq!(session.client_count(), 1);
         assert!(server.get_session(&session.id).is_some());

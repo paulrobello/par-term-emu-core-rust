@@ -125,6 +125,10 @@ pub struct StreamSessionState {
     pub(crate) resize_rx: Arc<tokio::sync::Mutex<mpsc::UnboundedReceiver<(u16, u16)>>>,
     /// Number of clients connected to this session
     pub(crate) client_count: AtomicUsize,
+    /// Presence is session-scoped and excludes mirror control connections.
+    viewers: parking_lot::Mutex<std::collections::BTreeMap<uuid::Uuid, String>>,
+    mux_viewers: parking_lot::Mutex<Vec<String>>,
+    pane_size_status: parking_lot::RwLock<Option<ServerMessage>>,
     /// When the last client disconnected (for idle timeout)
     pub(crate) last_client_disconnect: parking_lot::RwLock<Option<tokio::time::Instant>>,
     /// When this session was created (Unix epoch seconds)
@@ -169,6 +173,9 @@ impl StreamSessionState {
             resize_tx,
             resize_rx: Arc::new(tokio::sync::Mutex::new(resize_rx)),
             client_count: AtomicUsize::new(0),
+            viewers: parking_lot::Mutex::new(std::collections::BTreeMap::new()),
+            mux_viewers: parking_lot::Mutex::new(Vec::new()),
+            pane_size_status: parking_lot::RwLock::new(None),
             last_client_disconnect: parking_lot::RwLock::new(None),
             created_at,
             shutdown: Arc::new(tokio::sync::Notify::new()),
@@ -176,6 +183,61 @@ impl StreamSessionState {
             send_initial_screen,
             metrics: SessionMetrics::new(),
         }
+    }
+
+    pub(crate) fn viewer_join(&self, id: uuid::Uuid, kind: &str) {
+        self.viewers.lock().insert(id, kind.to_string());
+        let _ = self.broadcast_tx.send(self.viewer_presence());
+    }
+
+    pub(crate) fn viewer_leave(&self, id: uuid::Uuid) {
+        self.viewers.lock().remove(&id);
+        let _ = self.broadcast_tx.send(self.viewer_presence());
+    }
+
+    pub(crate) fn viewer_identity(&self, id: uuid::Uuid, kind: &str) {
+        let present = self.viewers.lock().contains_key(&id);
+        if matches!(kind, "web" | "mobile") && present {
+            self.viewer_join(id, kind);
+        }
+    }
+
+    pub(crate) fn viewer_presence(&self) -> ServerMessage {
+        let mut viewers = self.mux_viewers.lock().clone();
+        viewers.extend(
+            self.viewers
+                .lock()
+                .iter()
+                .map(|(id, kind)| format!("{kind}:{id}")),
+        );
+        viewers.sort();
+        ServerMessage::ViewerPresence {
+            count: viewers.len() as u32,
+            viewers,
+        }
+    }
+
+    pub(crate) fn update_mux_status(&self, size: ServerMessage, viewers: Vec<String>) {
+        let mut status = self.pane_size_status.write();
+        let unchanged = matches!((status.as_ref(), &size),
+            (Some(ServerMessage::PaneSizeStatus { cols: a, rows: b, column_viewer: c, row_viewer: d }),
+             ServerMessage::PaneSizeStatus { cols, rows, column_viewer, row_viewer })
+             if a == cols && b == rows && c == column_viewer && d == row_viewer);
+        if !unchanged {
+            *status = Some(size.clone());
+            let _ = self.broadcast_tx.send(size);
+        }
+        drop(status);
+        let mut previous = self.mux_viewers.lock();
+        if *previous != viewers {
+            *previous = viewers;
+            drop(previous);
+            let _ = self.broadcast_tx.send(self.viewer_presence());
+        }
+    }
+
+    pub(crate) fn pane_size_status(&self) -> Option<ServerMessage> {
+        self.pane_size_status.read().clone()
     }
 
     /// Try to add a client to this session. Returns true if successful.
@@ -814,6 +876,52 @@ impl SessionRegistry {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn viewer_presence_composes_attach_web_mobile_and_pushes_leave() {
+        let session = StreamSessionState::new(
+            "presence".into(),
+            Arc::new(RwLock::new(Terminal::new(80, 24))),
+            None,
+            true,
+        );
+        let mut rx = session.broadcast_tx.subscribe();
+        let id = uuid::Uuid::new_v4();
+        session.viewer_join(id, "web");
+        assert!(
+            matches!(rx.try_recv().unwrap(), ServerMessage::ViewerPresence { count: 1, viewers, .. } if viewers == vec![format!("web:{id}")])
+        );
+        session.viewer_identity(id, "mobile");
+        assert!(
+            matches!(rx.try_recv().unwrap(), ServerMessage::ViewerPresence { count: 1, viewers, .. } if viewers == vec![format!("mobile:{id}")])
+        );
+        session.viewer_identity(id, "attach");
+        assert!(
+            rx.try_recv().is_err(),
+            "cannot impersonate an attach viewer"
+        );
+        session.update_mux_status(
+            ServerMessage::PaneSizeStatus {
+                cols: 80,
+                rows: 24,
+                column_viewer: Some("attach:7".into()),
+                row_viewer: Some("attach:7".into()),
+            },
+            vec!["attach:7".into()],
+        );
+        assert!(matches!(
+            rx.try_recv().unwrap(),
+            ServerMessage::PaneSizeStatus { .. }
+        ));
+        assert!(matches!(
+            rx.try_recv().unwrap(),
+            ServerMessage::ViewerPresence { count: 2, .. }
+        ));
+        session.viewer_leave(id);
+        assert!(
+            matches!(rx.try_recv().unwrap(), ServerMessage::ViewerPresence { count: 1, viewers, .. } if viewers == vec!["attach:7"])
+        );
+    }
 
     #[tokio::test]
     async fn test_session_state_creation() {
