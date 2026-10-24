@@ -351,6 +351,80 @@ fn tab_wheel_scrolls_an_overflowing_strip() {
     );
 }
 
+/// The tab-strip scroll chords (prefix H / L): shift the overflowing
+/// strip's visible run without switching windows — 3 tabs per press,
+/// clamped like the wheel, a no-op when the strip fits.
+#[test]
+fn tab_strip_chords_scroll_an_overflowing_strip() {
+    let mut replies = std::collections::HashMap::new();
+    replies.insert("list-sessions".to_string(), "$0: work".to_string());
+    replies.insert(
+        "list-windows -t $0".to_string(),
+        "@0 * a\n@1 - b\n@2 - c\n@3 - d\n@4 - e\n@5 - f\n@6 - g\n@7 - h".to_string(),
+    );
+    let (rx, mut conn) = scripted_conn("tabstrip", replies.clone());
+    let mut session = WindowSession::new(24, 25);
+    session.window = "@0".to_string();
+    session.status.refresh(&mut conn, "@0", 1).expect("refresh");
+    session.draw_tab_strip();
+    while rx
+        .recv_timeout(std::time::Duration::from_millis(150))
+        .is_ok()
+    {}
+    assert!(
+        session.chrome.tab_strip.overflowing(),
+        "eight tabs overflow a 24-column strip"
+    );
+    let before = session.chrome.tab_strip.hit_test(0);
+
+    // The left chord from the active-centered run: the run is already at
+    // the leftmost tab, so the hit-test stays put (clamped).
+    session.management_chord(ManagementKey::TabStripLeft, &mut conn);
+    session.draw_tab_strip();
+    assert_eq!(
+        session.chrome.tab_strip.hit_test(0),
+        before,
+        "the left chord clamps at the first tab"
+    );
+
+    // The right chord shifts the run toward the hidden tabs; the left
+    // chord walks it back.
+    session.management_chord(ManagementKey::TabStripRight, &mut conn);
+    session.draw_tab_strip();
+    let after = session.chrome.tab_strip.hit_test(0);
+    assert_ne!(before, after, "the right chord shifted the visible run");
+    session.management_chord(ManagementKey::TabStripLeft, &mut conn);
+    session.draw_tab_strip();
+    assert_eq!(
+        session.chrome.tab_strip.hit_test(0),
+        before,
+        "the left chord walked the run back"
+    );
+
+    // A strip that fits ignores both chords.
+    let (rx2, mut conn2) = scripted_conn("tabstripfit", replies.clone());
+    let mut fits = WindowSession::new(200, 25);
+    fits.window = "@0".to_string();
+    fits.status.refresh(&mut conn2, "@0", 1).expect("refresh");
+    fits.draw_tab_strip();
+    while rx2
+        .recv_timeout(std::time::Duration::from_millis(150))
+        .is_ok()
+    {}
+    assert!(
+        !fits.chrome.tab_strip.overflowing(),
+        "eight tabs fit 200 columns"
+    );
+    let fitted = fits.chrome.tab_strip.hit_test(0);
+    fits.management_chord(ManagementKey::TabStripRight, &mut conn2);
+    fits.draw_tab_strip();
+    assert_eq!(
+        fits.chrome.tab_strip.hit_test(0),
+        fitted,
+        "a fitting strip ignores the chords"
+    );
+}
+
 /// The drag affordance, headless end-to-end: a press ON the
 /// two-pane divider column starts a PENDING drag (no focus, no
 /// forward), motion promotes it and the pump's apply_drag sends one
@@ -2570,10 +2644,10 @@ fn settings_keys_section_scrolls_to_every_row() {
     assert_eq!(state.selected, 0);
     assert_eq!(state.top, 0);
     // Down to the last row: the window follows the selection (the keys
-    // section holds every management chord plus prefix and reload — 27
-    // rows with break-pane, join-pane, the move-tab chords and
-    // notify-jump aboard).
-    session.route_stdin_bytes(&mut conn, &[b'j'; 27][..]);
+    // section holds every management chord plus prefix and reload — 29
+    // rows with break-pane, join-pane, the move-tab and tab-strip
+    // chords, and notify-jump aboard).
+    session.route_stdin_bytes(&mut conn, &[b'j'; 29][..]);
     let Modal::Settings(state) = &session.modal else {
         panic!("open")
     };
@@ -2586,7 +2660,7 @@ fn settings_keys_section_scrolls_to_every_row() {
     assert!(last_row.contains("respawn dead pane"), "{last_row}");
     assert!(last_row.trim_end().ends_with(" r"), "{last_row}");
     // Up to the first: the window snaps back.
-    session.route_stdin_bytes(&mut conn, &[b'k'; 27][..]);
+    session.route_stdin_bytes(&mut conn, &[b'k'; 29][..]);
     let Modal::Settings(state) = &session.modal else {
         panic!("open")
     };

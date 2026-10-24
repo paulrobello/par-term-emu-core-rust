@@ -173,6 +173,8 @@ impl Session {
             k if k == m.swap_next => Some(ManagementKey::SwapNext),
             k if k == m.move_window_left => Some(ManagementKey::MoveWindowLeft),
             k if k == m.move_window_right => Some(ManagementKey::MoveWindowRight),
+            k if k == m.tab_strip_left => Some(ManagementKey::TabStripLeft),
+            k if k == m.tab_strip_right => Some(ManagementKey::TabStripRight),
             k if k == m.workspace_next => Some(ManagementKey::WorkspaceNext),
             k if k == m.workspace_prev => Some(ManagementKey::WorkspacePrev),
             k if k == m.respawn => Some(ManagementKey::Respawn),

@@ -672,6 +672,12 @@ impl Session {
                         self.flash = Some("move tab: render mode only".to_string());
                         self.draw_status();
                     }
+                    // Scrolling the strip needs the render session's
+                    // strip too.
+                    Some(ManagementKey::TabStripLeft | ManagementKey::TabStripRight) => {
+                        self.flash = Some("tab strip: render mode only".to_string());
+                        self.draw_status();
+                    }
                     Some(ManagementKey::NewWindow) => self.new_window_in_session(),
                     Some(ManagementKey::SwapPrev) => self.swap_pane(-1),
                     Some(ManagementKey::SwapNext) => self.swap_pane(1),
@@ -854,6 +860,12 @@ pub(crate) enum ManagementKey {
     /// Move the shown window one tab right in its session's order
     /// (`swap-window` with the next tab).
     MoveWindowRight,
+    /// Scroll the overflowing tab strip's visible run left — toward
+    /// the earlier windows — without switching (render mode).
+    TabStripLeft,
+    /// Scroll the overflowing tab strip's visible run right — toward
+    /// the later windows — without switching (render mode).
+    TabStripRight,
     /// Select the next workspace in id order (`select-workspace -t +N`)
     /// and land the view on the workspace's session.
     WorkspaceNext,

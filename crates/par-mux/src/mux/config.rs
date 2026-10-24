@@ -164,6 +164,20 @@ pub struct ClientSection {
         skip_serializing_if = "Option::is_none"
     )]
     pub move_window_right: Option<String>,
+    /// The scroll-the-tab-strip-left chord.
+    #[serde(
+        default,
+        rename = "tab-strip-left",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub tab_strip_left: Option<String>,
+    /// The scroll-the-tab-strip-right chord.
+    #[serde(
+        default,
+        rename = "tab-strip-right",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub tab_strip_right: Option<String>,
     /// The next-workspace chord: the key matched after the prefix that
     /// selects the next workspace (id order) and lands the view on it.
     #[serde(
@@ -1010,6 +1024,8 @@ pub fn render(eff: &EffectiveConfig) -> String {
             swap_prev: None,
             move_window_left: None,
             move_window_right: None,
+            tab_strip_left: None,
+            tab_strip_right: None,
             swap_next: None,
             workspace_next: None,
             workspace_prev: None,
@@ -1354,6 +1370,14 @@ pub struct Management {
     /// Move the shown window one tab right in its session's order —
     /// `swap-window -s <shown> -t <next>` (tmux's `>`).
     pub move_window_right: u8,
+    /// Scroll the overflowing tab strip's visible run one wheel-notch
+    /// left — toward the earlier windows — without switching (render
+    /// mode).
+    pub tab_strip_left: u8,
+    /// Scroll the overflowing tab strip's visible run one wheel-notch
+    /// right — toward the later windows — without switching (render
+    /// mode).
+    pub tab_strip_right: u8,
     /// Select the next workspace in id order — `select-workspace -t +N`
     /// — and land the view on the workspace's session. Prefix `W` by
     /// default (prefix `w` is reserved for the workspace picker).
@@ -1413,6 +1437,8 @@ impl Default for Management {
             swap_next: b'}',
             move_window_left: b'<',
             move_window_right: b'>',
+            tab_strip_left: b'H',
+            tab_strip_right: b'L',
             workspace_next: b'W',
             workspace_prev: 0x17, // C-w
             help: b'?',
@@ -1497,6 +1523,8 @@ pub fn reload_client_chords(file: &ConfigFile, current: &Chords) -> Result<Chord
         swap_next: chord!(swap_next, "swap-next"),
         move_window_left: chord!(move_window_left, "move-window-left"),
         move_window_right: chord!(move_window_right, "move-window-right"),
+        tab_strip_left: chord!(tab_strip_left, "tab-strip-left"),
+        tab_strip_right: chord!(tab_strip_right, "tab-strip-right"),
         workspace_next: chord!(workspace_next, "workspace-next"),
         workspace_prev: chord!(workspace_prev, "workspace-prev"),
         help: chord!(help, "help"),
@@ -2470,6 +2498,8 @@ remain-on-exit = true
                 swap_next: b'}',
                 move_window_left: b'<',
                 move_window_right: b'>',
+                tab_strip_left: b'H',
+                tab_strip_right: b'L',
                 workspace_next: b'W',
                 workspace_prev: 0x17,
                 help: b'?',
@@ -2527,6 +2557,38 @@ remain-on-exit = true
             let err = reload_client_chords(&file, &defaults).unwrap_err();
             assert!(err.contains(key), "the error names the key: {err}");
         }
+    }
+
+    /// The tab-strip scroll chords: default H / L, rebindable with the
+    /// tmux spelling, a partial override keeping the sibling's default.
+    #[test]
+    fn tab_strip_chords_parse_and_rebind() {
+        use super::{reload_client_chords, Chords, ConfigFile};
+        let defaults = Chords::with_defaults();
+        // Defaults.
+        let file: ConfigFile = toml::from_str("[client]\n").unwrap();
+        let m = reload_client_chords(&file, &defaults).unwrap().management;
+        assert_eq!(m.tab_strip_left, b'H');
+        assert_eq!(m.tab_strip_right, b'L');
+        // A rebind parses with the tmux spelling.
+        let file: ConfigFile =
+            toml::from_str("[client]\ntab-strip-left = \"C-j\"\ntab-strip-right = \"C-l\"\n")
+                .unwrap();
+        let m = reload_client_chords(&file, &defaults).unwrap().management;
+        assert_eq!(m.tab_strip_left, 0x0a, "C-j");
+        assert_eq!(m.tab_strip_right, 0x0c, "C-l");
+        // A partial override keeps the sibling's default.
+        let file: ConfigFile = toml::from_str("[client]\ntab-strip-left = \"h\"\n").unwrap();
+        let m = reload_client_chords(&file, &defaults).unwrap().management;
+        assert_eq!(m.tab_strip_left, b'h');
+        assert_eq!(m.tab_strip_right, b'L', "unstated keeps the default");
+        // Malformed spellings error, naming the key.
+        let file: ConfigFile = toml::from_str("[client]\ntab-strip-left = \"C-]\"\n").unwrap();
+        let err = reload_client_chords(&file, &defaults).unwrap_err();
+        assert!(
+            err.contains("tab-strip-left"),
+            "the error names the key: {err}"
+        );
     }
 
     /// The reload chord resolves through the shared prefix parser: the

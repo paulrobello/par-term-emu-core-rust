@@ -429,6 +429,8 @@ impl WindowSession {
             (m.swap_next, ManagementKey::SwapNext),
             (m.move_window_left, ManagementKey::MoveWindowLeft),
             (m.move_window_right, ManagementKey::MoveWindowRight),
+            (m.tab_strip_left, ManagementKey::TabStripLeft),
+            (m.tab_strip_right, ManagementKey::TabStripRight),
             (m.workspace_next, ManagementKey::WorkspaceNext),
             (m.workspace_prev, ManagementKey::WorkspacePrev),
             (m.zoom, ManagementKey::Zoom),

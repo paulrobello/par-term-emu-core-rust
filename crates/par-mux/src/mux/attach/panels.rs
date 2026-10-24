@@ -194,6 +194,14 @@ pub(crate) fn help_rows(
                 "move tab left/right".to_string(),
             ),
             (
+                format!(
+                    "{p} {} / {}",
+                    spell_key(m.tab_strip_left),
+                    spell_key(m.tab_strip_right)
+                ),
+                "scroll tab strip left/right".to_string(),
+            ),
+            (
                 format!("{p} S-arrows"),
                 "swap with the pane in that direction".to_string(),
             ),

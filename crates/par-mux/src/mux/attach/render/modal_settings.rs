@@ -316,6 +316,16 @@ impl SettingsSection {
                     kind: SettingKind::Chord,
                 },
                 SettingSpec {
+                    key: "tab-strip-left",
+                    label: "tab strip left",
+                    kind: SettingKind::Chord,
+                },
+                SettingSpec {
+                    key: "tab-strip-right",
+                    label: "tab strip right",
+                    kind: SettingKind::Chord,
+                },
+                SettingSpec {
                     key: "swap-next",
                     label: "swap next pane",
                     kind: SettingKind::Chord,
@@ -573,6 +583,8 @@ impl SettingsValues {
             "swap-prev" => FieldVal::Text(spell_key(m.swap_prev)),
             "move-window-left" => FieldVal::Text(spell_key(m.move_window_left)),
             "move-window-right" => FieldVal::Text(spell_key(m.move_window_right)),
+            "tab-strip-left" => FieldVal::Text(spell_key(m.tab_strip_left)),
+            "tab-strip-right" => FieldVal::Text(spell_key(m.tab_strip_right)),
             "swap-next" => FieldVal::Text(spell_key(m.swap_next)),
             "workspace-next" => FieldVal::Text(spell_key(m.workspace_next)),
             "workspace-prev" => FieldVal::Text(spell_key(m.workspace_prev)),

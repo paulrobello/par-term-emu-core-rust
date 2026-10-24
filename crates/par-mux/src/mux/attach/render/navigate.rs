@@ -53,6 +53,8 @@ impl WindowSession {
             ManagementKey::SwapNext => self.chord_swap(conn, 1),
             ManagementKey::MoveWindowLeft => self.chord_move_window(conn, -1),
             ManagementKey::MoveWindowRight => self.chord_move_window(conn, 1),
+            ManagementKey::TabStripLeft => self.chord_tab_strip(-3),
+            ManagementKey::TabStripRight => self.chord_tab_strip(3),
             ManagementKey::NewWindow => self.chord_new_window(conn),
             ManagementKey::WorkspaceNext => self.switch_workspace(conn, 1),
             ManagementKey::WorkspacePrev => self.switch_workspace(conn, -1),
@@ -310,6 +312,18 @@ impl WindowSession {
             self.window, windows[neighbor_at]
         ));
         self.status_dirty = true;
+    }
+
+    /// The tab-strip scroll chords: shift the overflowing strip's
+    /// visible run toward the hidden tabs without switching windows —
+    /// the wheel's gesture on keys, 3 tabs per press like a wheel
+    /// notch, clamped like the wheel too. A strip that fits ignores
+    /// the chord, and nothing is sent to the daemon.
+    fn chord_tab_strip(&mut self, delta: isize) {
+        if self.chrome.tab_strip.overflowing() {
+            self.chrome.tab_strip.wheel(delta);
+            self.draw_tab_strip();
+        }
     }
 
     fn chord_new_window(&mut self, _conn: &mut crate::mux::attach::conn::AttachConn) {
