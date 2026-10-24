@@ -6879,8 +6879,14 @@ fn render_mode_new_window_in_another_client_reaches_this_client() {
     b_all.clear();
     a.to_child.write_all(&[0x02, b'c']).expect("prefix c");
     a.to_child.flush().ok();
-    // B's strip names A's session's two tabs (`1` and the new `0`) and
-    // its screen leaves the multi-pane view for the fresh window.
+    // The chord opens the same seeded new-tab prompt the tab strip's
+    // ` + ` opens (the seed is one past the highest window id — "@1"
+    // here, so "2"); committing the seed is what creates the tab B
+    // follows.
+    let _ = wait_for_output(&a, b" new tab ", Duration::from_secs(10));
+    a.to_child.write_all(b"\r").expect("enter commits the seed");
+    // B's strip names A's session's two tabs (`1` and the seeded `2`)
+    // and its screen leaves the multi-pane view for the fresh window.
     let end = std::time::Instant::now() + Duration::from_secs(10);
     let mut followed = false;
     while std::time::Instant::now() < end && !followed {
@@ -6889,7 +6895,7 @@ fn render_mode_new_window_in_another_client_reaches_this_client() {
         }
         let (grid, _) = reconstructed_screen(&b_all, 24, 80);
         followed =
-            grid[0].contains(" 1 ") && grid[0].contains(" 0 ") && !shows_multi(&grid.join("\n"));
+            grid[0].contains(" 1 ") && grid[0].contains(" 2 ") && !shows_multi(&grid.join("\n"));
     }
     let (grid, _) = reconstructed_screen(&b_all, 24, 80);
     assert!(

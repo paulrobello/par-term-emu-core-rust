@@ -162,13 +162,18 @@ fn swap_chords_pick_the_layout_neighbor_and_wrap() {
     assert!(drained(&rx).is_empty(), "one pane: nothing to swap");
 }
 
-/// New window: `new-window -t $0`, then select + reseed onto the id
-/// the reply names. With no known session the chord sends nothing.
+/// New window: the chord opens the same seeded new-tab prompt the
+/// tab strip's ` + ` and the tab menu's add-tab action open — the
+/// name is typed before anything is created. Nothing sends until the
+/// prompt commits (that contract is
+/// `new_window_prompt_creates_and_lands_on_the_window`); with no
+/// known session the prompt still opens and its commit cancels
+/// silently.
 #[test]
-fn new_window_chord_creates_selects_and_reseeds() {
+fn new_window_chord_opens_the_seeded_new_tab_prompt() {
     let mut replies = std::collections::HashMap::new();
-    replies.insert("new-window -t $0".to_string(), "@4".to_string());
-    reseed_replies(&mut replies, "@0 - main\n@4 * fresh", "@4", "%9");
+    replies.insert("list-sessions".to_string(), "$0: work".to_string());
+    replies.insert("list-windows -t $0".to_string(), "@0 * main".to_string());
     let (rx, mut conn, mut session) = two_pane_session(
         "neww",
         FakeScript {
@@ -176,22 +181,30 @@ fn new_window_chord_creates_selects_and_reseeds() {
             ..FakeScript::default()
         },
     );
+    session.status.refresh(&mut conn, "@0", 1).expect("refresh");
+    drained(&rx);
     chord(&mut session, &mut conn, b'c');
-    let lines = drained(&rx);
-    assert_eq!(lines[0], "new-window -t $0");
-    assert_eq!(lines[1], "switch-client -t @4");
-    assert!(
-        lines.contains(&"refresh-client -t %9 -C 80x23".to_string()),
-        "{lines:?}"
+    assert!(session.is_prompt());
+    assert_eq!(session.prompt().target, PromptTarget::NewWindow);
+    assert_eq!(
+        session.prompt().text,
+        "1",
+        "one past the highest window ordinal (@0)"
     );
-    assert_eq!(session.window, "@4");
-    assert_eq!(session.status.active_window.as_deref(), Some("@4"));
+    assert_eq!(
+        session.renderer.overlay.as_ref().map(|o| o.0),
+        Some(crate::mux::attach::PROMPT_NEW_WINDOW_OVERLAY_TITLE)
+    );
+    assert!(drained(&rx).is_empty(), "the chord itself sends nothing");
 
     let (rx, mut conn) = recording_conn("neww-none");
     let mut orphan = WindowSession::new(80, 25);
     drained(&rx);
     chord(&mut orphan, &mut conn, b'c');
-    assert!(drained(&rx).is_empty(), "no session: nothing to create in");
+    assert!(orphan.is_prompt(), "no session: the prompt still opens");
+    type_and_commit(&mut orphan, &mut conn, "x");
+    assert!(!orphan.is_prompt());
+    assert!(drained(&rx).is_empty(), "no session: the commit cancels");
 }
 
 /// Break pane (prefix !): `break-pane -s <focused>`, then the view

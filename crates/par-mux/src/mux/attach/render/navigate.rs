@@ -312,18 +312,8 @@ impl WindowSession {
         self.status_dirty = true;
     }
 
-    fn chord_new_window(&mut self, conn: &mut crate::mux::attach::conn::AttachConn) {
-        let Some(session) = self.status.session_id.clone() else {
-            return;
-        };
-        self.send_then(conn, &format!("new-window -t {session}"), |s, c, reply| {
-            if !reply.ok {
-                return;
-            }
-            if let Some(window) = reply.body.first().map(|w| w.trim().to_string()) {
-                s.land_window(c, &window);
-            }
-        });
+    fn chord_new_window(&mut self, _conn: &mut crate::mux::attach::conn::AttachConn) {
+        self.enter_prompt(PromptTarget::NewWindow);
     }
 
     /// tmux's zoom: the daemon's `resize-pane -Z` toggle. The
