@@ -365,6 +365,15 @@ pub(crate) fn layout_tabs(
             .map(|cell| cell.col + cell.width + GAP as u16)
             .unwrap_or_default()
     });
+    // The ` + ` button's three reserved columns own the row's tail: when
+    // `plus_after` clamps the button to `cols - 3`, a right `…` at or
+    // past that column falls inside the button's span — the paint writes
+    // the ` + ` over the marker and a click on the marker column hits
+    // the button. Degenerate widths reach that clamp, so the button wins
+    // the tail: such a marker is suppressed (the left marker still
+    // signals hidden tabs).
+    let right_marker =
+        right_marker.filter(|&marker| !(hostable && marker >= (cols.saturating_sub(3)) as u16));
     let plus = plus_after(&cells, right_marker, start, cols, hostable);
     TabLayout {
         cells,
@@ -728,6 +737,40 @@ mod tests {
                 assert!(cols < 4, "cols {cols}: only narrow strips drop the button");
             }
         }
+    }
+
+    /// The right `…` marker never lands inside the ` + ` button's
+    /// three-column span: swept across widths, window lists, and active
+    /// indices, a visible marker always precedes `plus` (or the layout
+    /// suppresses it — the button owns the tail; the left marker still
+    /// signals hidden tabs).
+    #[test]
+    fn right_marker_never_lands_in_the_plus_span() {
+        let long_single = vec![(
+            "@0".to_string(),
+            "an-uncommonly-long-window-name".to_string(),
+        )];
+        let twelve: Vec<(String, String)> = (0..12)
+            .map(|i| (format!("@{i}"), format!("window{i}")))
+            .collect();
+        let lists: Vec<Vec<(String, String)>> = vec![long_single, windows(), twelve];
+        let mut hits: Vec<String> = Vec::new();
+        for ws in &lists {
+            for &active in [0usize, ws.len() / 2, ws.len() - 1].iter() {
+                for cols in 0..=200usize {
+                    let layout = layout_tabs(ws, Some(ws[active].0.as_str()), cols, 0, None);
+                    if let (Some(plus), Some(marker)) = (layout.plus, layout.right_marker) {
+                        if marker >= plus {
+                            hits.push(format!(
+                                "{} tabs, active {active}, cols {cols}: marker {marker} in span",
+                                ws.len()
+                            ));
+                        }
+                    }
+                }
+            }
+        }
+        assert!(hits.is_empty(), "markers inside the button span: {hits:?}");
     }
 
     /// Stage 3: so many tabs that even budget 1 overflows — only a run
