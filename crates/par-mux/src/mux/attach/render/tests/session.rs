@@ -2009,6 +2009,152 @@ fn command_menu_detach_requests_exit() {
     assert!(session.detach_requested, "detach was requested");
 }
 
+/// The menus' keyboard cursor mirrors the picker's: the selection opens
+/// on the first action row (past a name header), Up/Down move it across
+/// the header and footer rows with wrap at the ends, and `j`/`k` are the
+/// byte spellings of the same motion.
+#[test]
+fn menu_arrows_move_the_selection_across_header_and_footer() {
+    let (_rx, mut conn, mut session) = command_menu_session("menu-keys-arrows");
+    // A TAB menu: the name header is row 0, the actions start at row 1.
+    session.open_menu(MenuTarget::Tab("@0".to_string()));
+    assert_eq!(
+        session.menu().expect("menu up").selected,
+        1,
+        "the selection opens on the first action row, past the header"
+    );
+    let key = par_term_emu_core::keyboard::TermKeyEvent::functional;
+    use par_term_emu_core::keyboard::TermKey;
+    session.route_key(&mut conn, &key(TermKey::Down, 0));
+    assert_eq!(session.menu().unwrap().selected, 2);
+    session.route_key(&mut conn, &key(TermKey::Down, 0));
+    assert_eq!(session.menu().unwrap().selected, 3);
+    session.route_key(&mut conn, &key(TermKey::Down, 0));
+    assert_eq!(
+        session.menu().unwrap().selected,
+        1,
+        "Down wraps past the footer back to rename"
+    );
+    session.route_key(&mut conn, &key(TermKey::Up, 0));
+    assert_eq!(
+        session.menu().unwrap().selected,
+        3,
+        "Up wraps over the header to add tab"
+    );
+    // `j`/`k`, the byte spelling, land on the same rows.
+    session.route_stdin_bytes(&mut conn, b"k");
+    assert_eq!(session.menu().unwrap().selected, 2);
+    session.route_stdin_bytes(&mut conn, b"j");
+    assert_eq!(session.menu().unwrap().selected, 3);
+}
+
+/// Enter dispatches the selected action through the click path: the
+/// menu closes first so the rename prompt replaces it.
+#[test]
+fn menu_enter_dispatches_the_selected_action() {
+    let (_rx, mut conn, mut session) = command_menu_session("menu-keys-enter");
+    session.open_menu(MenuTarget::Tab("@0".to_string()));
+    // The opening selection is `rename`.
+    session.route_stdin_bytes(&mut conn, b"\r");
+    assert!(session.menu().is_none(), "the menu closed");
+    assert!(session.is_prompt(), "the rename prompt replaced the menu");
+    assert_eq!(
+        session.prompt().target,
+        PromptTarget::Window("@0".to_string())
+    );
+}
+
+/// `q` and Escape still close, each through its own path (`q` rides the
+/// plain-byte run, Escape the functional-key route).
+#[test]
+fn menu_q_and_escape_still_close() {
+    let (_rx, mut conn, mut session) = command_menu_session("menu-keys-close");
+    session.route_stdin_bytes(&mut conn, b"q");
+    assert!(session.menu().is_none(), "q closed the menu");
+    session.open_menu(MenuTarget::Commands);
+    session.route_key(
+        &mut conn,
+        &par_term_emu_core::keyboard::TermKeyEvent::functional(
+            par_term_emu_core::keyboard::TermKey::Escape,
+            0,
+        ),
+    );
+    assert!(session.menu().is_none(), "Escape closed the menu");
+}
+
+/// Mouse motion and the arrow keys write the same selection index, and
+/// the one highlight paints the selected row's own label.
+#[test]
+fn menu_hover_and_keys_share_one_selection() {
+    let (_rx, mut conn, mut session) = command_menu_session("menu-keys-hover");
+    // No-button motion over the `reload config` row (row 2).
+    hover_menu_row(&mut session, &mut conn, 2);
+    assert_eq!(
+        session.menu().expect("menu up").selected,
+        2,
+        "the hover wrote the selection"
+    );
+    session.route_key(
+        &mut conn,
+        &par_term_emu_core::keyboard::TermKeyEvent::functional(
+            par_term_emu_core::keyboard::TermKey::Down,
+            0,
+        ),
+    );
+    assert_eq!(
+        session.menu().unwrap().selected,
+        3,
+        "the arrow moved relative to the hover"
+    );
+    assert_eq!(
+        session.renderer.overlay_highlights,
+        vec![(
+            3,
+            0,
+            crate::mux::attach::text_input::display_width(" detach ")
+        )],
+        "one reversed label highlight, on the selected row"
+    );
+}
+
+/// The keyboard selection paints exactly what a click acts on: the
+/// highlight sits on the selected row, the row's cells still map to it
+/// through `overlay_row_at`, and a click there dispatches what the
+/// highlight painted.
+#[test]
+fn menu_keyboard_selection_paints_the_clickable_row() {
+    let (_rx, mut conn, mut session) = command_menu_session("menu-keys-click");
+    session.open_menu(MenuTarget::Tab("@0".to_string()));
+    let key = par_term_emu_core::keyboard::TermKeyEvent::functional;
+    use par_term_emu_core::keyboard::TermKey;
+    session.route_key(&mut conn, &key(TermKey::Down, 0));
+    session.route_key(&mut conn, &key(TermKey::Down, 0));
+    assert_eq!(session.menu().unwrap().selected, 3);
+    assert_eq!(
+        session.renderer.overlay_highlights,
+        vec![(
+            3,
+            0,
+            crate::mux::attach::text_input::display_width(" add tab ")
+        )],
+        "the highlight paints the selected label"
+    );
+    // A click on the painted row dispatches what the highlight painted.
+    click_menu_row(&mut session, &mut conn, 3);
+    assert!(session.is_prompt(), "add tab opened its prompt");
+    assert_eq!(session.prompt().target, PromptTarget::NewWindow);
+}
+
+/// The footer names the keyboard controls the menu now takes.
+#[test]
+fn menu_footer_names_the_keyboard_controls() {
+    let (rows, _) = compose_menu_panel(&MenuTarget::Commands, None, false);
+    assert_eq!(rows.last().expect("footer row").text, MENU_FOOTER);
+    assert!(MENU_FOOTER.contains("navigate arrows/j/k"), "{MENU_FOOTER}");
+    assert!(MENU_FOOTER.contains("enter/click"), "{MENU_FOOTER}");
+    assert!(MENU_FOOTER.contains("close esc/q"), "{MENU_FOOTER}");
+}
+
 /// The command menu's `settings` row opens the settings dialog: herdr's
 /// tabbed panel. Tab switches sections, `j` moves the selection, Enter
 /// writes the chosen key into the config file — keeping the user's

@@ -1524,7 +1524,7 @@ fn modal_hides_cursor_per_variant() {
     let menu = Modal::Menu(MenuState {
         target: MenuTarget::Commands,
         actions: Vec::new(),
-        hover: None,
+        selected: 0,
     });
     assert!(!Modal::None.hides_cursor());
     assert!(!Modal::Scroll.hides_cursor());
@@ -1808,6 +1808,26 @@ fn click_menu_row(
         conn,
         SgrMouse {
             cb: 0,
+            col: (x0 + 4) as u16,
+            row: (y0 + 3 + r) as u16,
+            release: false,
+        },
+    );
+}
+
+/// No-button motion over open-menu panel row `r` at its raw host cell
+/// (the same cell `click_menu_row` presses): the hover-selection write.
+fn hover_menu_row(
+    session: &mut WindowSession,
+    conn: &mut crate::mux::attach::conn::AttachConn,
+    r: usize,
+) {
+    use crate::mux::attach::input::SgrMouse;
+    let (x0, y0, _, _) = session.renderer.overlay_geometry().expect("menu up");
+    session.route_mouse(
+        conn,
+        SgrMouse {
+            cb: 35,
             col: (x0 + 4) as u16,
             row: (y0 + 3 + r) as u16,
             release: false,

@@ -12,7 +12,7 @@ use crate::mux::ipc::SessionRow;
 use par_term_emu_core::keyboard::TermKeyEvent;
 
 /// The context menus' footer controls line.
-pub(super) const MENU_FOOTER: &str = " action click · close esc/q ";
+pub(super) const MENU_FOOTER: &str = " navigate arrows/j/k · action enter/click · close esc/q ";
 /// The context menus' overlay title (the target's name rides the panel's
 /// accent header row).
 pub(super) const MENU_TITLE: &str = " menu ";
@@ -129,22 +129,29 @@ impl WindowSession {
     pub(super) fn open_menu(&mut self, target: MenuTarget) {
         let name = self.menu_name(&target);
         let armed = self.group_close_armed(&target);
-        let (rows, actions) = compose_menu_panel(&target, name.as_deref(), armed);
+        let (_rows, actions) = compose_menu_panel(&target, name.as_deref(), armed);
+        // The keyboard cursor opens on the first action row (past the
+        // name header a tab/workspace menu carries), highlighted like a
+        // hover.
+        let selected = actions
+            .iter()
+            .position(|action| action.is_some())
+            .unwrap_or(0);
         self.open_modal(Modal::Menu(MenuState {
             target,
             actions,
-            hover: None,
+            selected,
         }));
-        self.renderer.set_overlay(Some((MENU_TITLE, rows, None)));
+        self.repaint_menu();
     }
     /// One no-button motion while the menu is up, at window-relative
-    /// `(x, y)`: the action row under the pointer becomes the hovered
-    /// row (its label span reversed — the same subtle highlight the
-    /// settings dialog's selection uses); a motion off the panel or
-    /// onto the header/footer clears it. No-op when the hover did not
-    /// move rows.
+    /// `(x, y)`: the action row under the pointer becomes the selected
+    /// row — the same index the arrow keys move, so one reversed-label
+    /// highlight serves hover and keyboard. A motion off the panel or
+    /// onto the header/footer leaves the selection where it was. No-op
+    /// when the selection did not move rows.
     pub(super) fn menu_hover(&mut self, x: u16, y: u16) {
-        let hover = match &self.modal {
+        let row = match &self.modal {
             Modal::Menu(state) => self.renderer.overlay_row_at(x, y).filter(|&row| {
                 state
                     .actions
@@ -153,43 +160,72 @@ impl WindowSession {
             }),
             _ => return,
         };
+        let Some(row) = row else {
+            return;
+        };
         if let Modal::Menu(state) = &mut self.modal {
-            if state.hover == hover {
+            if state.selected == row {
                 return;
             }
-            state.hover = hover;
+            state.selected = row;
         }
         self.repaint_menu();
     }
-    /// Recompose the open menu's overlay rows with the current hover
-    /// highlight. The highlight spans the hovered row's own label, not
-    /// the panel width — the subtle cue, distinct from a selection.
+    /// Recompose the open menu's overlay rows with the current selection
+    /// highlight. The highlight spans the selected row's own label, not
+    /// the panel width — the subtle cue, one visual language for the
+    /// pointer's hover and the keyboard's cursor.
     pub(super) fn repaint_menu(&mut self) {
         // The label follows the click mapping fixed at open, not the
         // clock, so a row that still dispatches `close group` says so.
-        let (target, hover, armed) = match &self.modal {
+        let (target, selected, armed) = match &self.modal {
             Modal::Menu(state) => (
                 state.target.clone(),
-                state.hover,
+                state.selected,
                 state.actions.contains(&Some(MenuAction::CloseGroup)),
             ),
             _ => return,
         };
         let name = self.menu_name(&target);
         let (rows, _actions) = compose_menu_panel(&target, name.as_deref(), armed);
-        let highlights = match hover.and_then(|row| {
-            rows.get(row).map(|label| {
-                (
-                    row,
-                    crate::mux::attach::text_input::display_width(&label.text),
-                )
-            })
-        }) {
-            Some((row, len)) => vec![(row, 0, len)],
-            None => Vec::new(),
+        let on_action = matches!(
+            self.modal,
+            Modal::Menu(ref state) if matches!(state.actions.get(selected), Some(Some(_)))
+        );
+        let highlights = match rows.get(selected) {
+            Some(label) if on_action => vec![(
+                selected,
+                0,
+                crate::mux::attach::text_input::display_width(&label.text),
+            )],
+            _ => Vec::new(),
         };
         self.renderer.set_overlay(Some((MENU_TITLE, rows, None)));
         self.renderer.set_overlay_highlights(highlights);
+    }
+    /// Move the menu's selection by `delta` action rows (the cursor
+    /// wraps, the picker's convention) and re-compose. The header and
+    /// footer rows are not stops: the index jumps them.
+    pub(super) fn menu_move(&mut self, delta: isize) {
+        let Modal::Menu(state) = &mut self.modal else {
+            return;
+        };
+        let rows: Vec<usize> = state
+            .actions
+            .iter()
+            .enumerate()
+            .filter_map(|(row, action)| action.is_some().then_some(row))
+            .collect();
+        let count = rows.len();
+        if count == 0 {
+            return;
+        }
+        let at = rows
+            .iter()
+            .position(|&row| row == state.selected)
+            .unwrap_or(0);
+        state.selected = rows[(at as isize + delta).rem_euclid(count as isize) as usize];
+        self.repaint_menu();
     }
     /// Dismiss the menu: the next frame's pane repaint restores the
     /// covered cells.
@@ -199,21 +235,53 @@ impl WindowSession {
         }
         self.renderer.set_overlay(None);
     }
-    /// One key while the menu is up: Escape closes, everything else is
-    /// consumed (a modal owns the keyboard).
-    pub(super) fn menu_key(&mut self, ev: &TermKeyEvent) {
+    /// One key while the menu is up: Escape closes, Up/Down move the
+    /// selection (wrapping, skipping the header and footer), Enter
+    /// dispatches the selected action through [`Self::menu_click`], and
+    /// everything else is consumed (a modal owns the keyboard).
+    pub(super) fn menu_key(
+        &mut self,
+        conn: &mut crate::mux::attach::conn::AttachConn,
+        ev: &TermKeyEvent,
+    ) {
         use par_term_emu_core::keyboard::TermKey;
-        if ev.key() == TermKey::Escape {
-            self.leave_menu();
+        match (ev.key(), ev.modifiers) {
+            (TermKey::Escape, _) => self.leave_menu(),
+            (TermKey::Up, 0) => self.menu_move(-1),
+            (TermKey::Down, 0) => self.menu_move(1),
+            // A CSI-u Enter (kitty keyboard protocol) rides the key
+            // route; the plain CR byte lands in `menu_byte`.
+            (TermKey::Enter, 0) => self.menu_enter(conn),
+            _ => {}
         }
     }
-    /// One plain byte while the menu is up: `q`/Escape close, the rest
-    /// consumed.
-    pub(super) fn menu_byte(&mut self, byte: u8) -> bool {
-        if byte == b'q' || byte == 0x1b {
-            self.leave_menu();
+    /// One plain byte while the menu is up: `j`/`k` move the selection,
+    /// Enter (CR) dispatches the selected action, `q`/Escape close, the
+    /// rest consumed.
+    pub(super) fn menu_byte(
+        &mut self,
+        conn: &mut crate::mux::attach::conn::AttachConn,
+        byte: u8,
+    ) -> bool {
+        match byte {
+            b'q' | 0x1b => self.leave_menu(),
+            b'j' => self.menu_move(1),
+            b'k' => self.menu_move(-1),
+            b'\r' => self.menu_enter(conn),
+            _ => {}
         }
         matches!(self.modal, Modal::Menu(_))
+    }
+    /// Dispatch the selected action through the click path: `menu_click`
+    /// reads the action off the open state's row mapping, closes the
+    /// menu first (spends any armed group-close offer), and the action's
+    /// own overlay (a rename prompt, the settings dialog) replaces it.
+    fn menu_enter(&mut self, conn: &mut crate::mux::attach::conn::AttachConn) {
+        let Modal::Menu(state) = &self.modal else {
+            return;
+        };
+        let row = state.selected;
+        self.menu_click(conn, row);
     }
     /// One press click while the menu is up, at overlay row `row` (the
     /// `overlay_row_at` mapping): an action row dispatches, the header

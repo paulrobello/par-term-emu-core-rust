@@ -1226,10 +1226,13 @@ fn menu_rows_open_their_prompts_and_q_or_escape_close() {
     session.menu_click(&mut conn, 9);
     settle(&mut session, &mut conn);
     assert!(session.menu().is_some(), "an off-panel row is consumed");
-    assert!(session.menu_byte(b'x'), "other bytes leave it up");
-    session.menu_key(&TermKeyEvent::functional(TermKey::Down, 0));
+    assert!(
+        session.menu_byte(&mut conn, b'x'),
+        "other bytes leave it up"
+    );
+    session.menu_key(&mut conn, &TermKeyEvent::functional(TermKey::Down, 0));
     assert!(session.menu().is_some());
-    session.menu_key(&TermKeyEvent::functional(TermKey::Escape, 0));
+    session.menu_key(&mut conn, &TermKeyEvent::functional(TermKey::Escape, 0));
     assert!(session.menu().is_none());
     session.open_menu(MenuTarget::Commands);
     session.route_plain(b"aq", &mut conn);
@@ -2063,10 +2066,10 @@ fn open_menu_swallows_non_press_pointer_events() {
     assert_eq!(session.renderer.focused(), Some(1), "no click-through");
 }
 
-/// The menu's subtle hover cue: a no-button motion over an action row
-/// reverses that row's label span on the next frame (the settings
-/// dialog's selection mechanism), a motion off the panel clears it,
-/// and the footer never highlights.
+/// The menus' selection highlight: a no-button motion over an action
+/// row reverses that row's label span on the next frame (the settings
+/// dialog's selection mechanism) — the same selection index the arrow
+/// keys move — and the footer never highlights.
 #[test]
 fn menu_hover_highlights_the_row_under_the_pointer() {
     use ratatui::style::Modifier as RtModifier;
@@ -2076,7 +2079,7 @@ fn menu_hover_highlights_the_row_under_the_pointer() {
     // Panel row 1 (" keybinds ") paints at host row y0+3; SGR rows are
     // 1-based.
     session.route_mouse(&mut conn, sgr(35, (x0 + 4) as u16, (y0 + 4) as u16, false));
-    assert_eq!(session.menu().unwrap().hover, Some(1), "the row is hovered");
+    assert_eq!(session.menu().unwrap().selected, 1, "the row is selected");
     let mut sink = RecordingSink::default();
     session.frame(&mut sink);
     let reversed = sink
@@ -2087,7 +2090,7 @@ fn menu_hover_highlights_the_row_under_the_pointer() {
         .count();
     assert!(
         reversed > 0,
-        "the hovered row paints reversed: {:?}",
+        "the selected row paints reversed: {:?}",
         sink.cells
     );
     // The footer row (the last one) never highlights, nor the header.
@@ -2097,17 +2100,22 @@ fn menu_hover_highlights_the_row_under_the_pointer() {
         .filter(|row| row.1 as usize != y0 + 3)
         .all(|(_, _, cell)| !cell.modifier.contains(RtModifier::REVERSED));
     assert!(footer_off, "no other row carries the highlight");
-    // A motion off the panel clears the hover (and the span).
+    // A motion off the panel leaves the selection where it was (the
+    // keyboard cursor never empties), so the highlight persists.
     session.route_mouse(&mut conn, sgr(35, 2, 2, false));
-    assert_eq!(session.menu().unwrap().hover, None, "off the panel clears");
-    let mut sink = RecordingSink::default();
-    session.frame(&mut sink);
-    assert!(
-        sink.cells
-            .iter()
-            .all(|(_, _, cell)| !cell.modifier.contains(RtModifier::REVERSED)),
-        "the highlight repaints away: {:?}",
-        sink.cells
+    assert_eq!(
+        session.menu().unwrap().selected,
+        1,
+        "off the panel the selection stays"
+    );
+    assert_eq!(
+        session.renderer.overlay_highlights,
+        vec![(
+            1,
+            0,
+            crate::mux::attach::text_input::display_width(" keybinds ")
+        )],
+        "the highlight persists"
     );
     assert!(drained(&rx).is_empty(), "hover sends nothing");
 }

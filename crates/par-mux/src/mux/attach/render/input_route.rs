@@ -370,7 +370,7 @@ impl WindowSession {
                     return true;
                 }
                 Modal::Prompt(_) => |s, conn, byte| s.prompt_byte(conn, byte),
-                Modal::Menu(_) => |s, _, byte| s.menu_byte(byte),
+                Modal::Menu(_) => |s, conn, byte| s.menu_byte(conn, byte),
                 Modal::Help(_) => |s, _, byte| s.help_byte(byte),
                 Modal::Settings(_) => |s, conn, byte| s.settings_byte(conn, byte),
                 Modal::Picker(_) => |s, conn, byte| s.picker_byte(conn, byte),
@@ -468,7 +468,7 @@ impl WindowSession {
         match &self.modal {
             Modal::Scroll => return self.scroll_mode_input(conn, ev),
             Modal::Prompt(_) => return self.prompt_key(conn, ev),
-            Modal::Menu(_) => return self.menu_key(ev),
+            Modal::Menu(_) => return self.menu_key(conn, ev),
             Modal::Help(_) => return self.help_key(ev),
             Modal::Settings(_) => return self.settings_key(ev, conn),
             Modal::Picker(_) => return self.picker_key(conn, ev),
@@ -603,9 +603,10 @@ impl WindowSession {
             "mouse cb={} col={} row={} release={}",
             mouse.cb, mouse.col, mouse.row, mouse.release
         ));
-        // The menu's hover highlight rides no-button motion (any-event
-        // tracking): the row under the pointer lights up; a motion off
-        // the panel or onto the header/footer clears it.
+        // The menu's selection rides no-button motion (any-event
+        // tracking): the row under the pointer becomes the selected row
+        // — the same index the arrow keys move; motion off the panel
+        // leaves the selection where it was.
         if matches!(self.modal, Modal::Menu(_))
             && mouse.is_motion()
             && !mouse.release

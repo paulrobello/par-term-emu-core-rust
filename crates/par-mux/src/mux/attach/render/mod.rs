@@ -1085,13 +1085,13 @@ const GROUP_CLOSE_WINDOW: std::time::Duration = std::time::Duration::from_secs(1
 /// The open menu's state: its target plus the action dispatched per
 /// overlay row (the parallel mapping `compose_menu_panel` returns; row
 /// `None` entries — the header and the footer — consume the click) and
-/// the action row the pointer currently hovers (the subtle highlight
-/// no-button motion drives).
+/// the selected action row — the pointer's hover and the arrow keys
+/// write the same index, so one reversed-label highlight serves both.
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct MenuState {
     target: MenuTarget,
     actions: Vec<Option<MenuAction>>,
-    hover: Option<usize>,
+    selected: usize,
 }
 
 /// The modal that owns input. At most one is up; opening one assigns
