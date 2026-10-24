@@ -737,7 +737,19 @@ fn adopt_pane_labels_the_pane_and_classifies_at_once() {
     let reply = f.run("adopt-pane -t %0 claude");
     let (lines, ok) = body(&reply);
     assert!(ok, "{reply}");
-    assert_eq!(lines, vec!["%0 claude idle scrape"]);
+    assert_eq!(
+        lines,
+        vec!["%0 claude idle scrape"],
+        "the classifier read title {:?}; screen {:?}",
+        f.tree.lock().pane(PANE).unwrap().terminal().read().title(),
+        f.tree
+            .lock()
+            .pane(PANE)
+            .unwrap()
+            .terminal()
+            .read()
+            .content(),
+    );
     assert_eq!(f.metadata("agent").as_deref(), Some("claude"));
     assert_eq!(f.metadata("agent_state_source").as_deref(), Some("scrape"));
     let roster = f.run("list-agents");
