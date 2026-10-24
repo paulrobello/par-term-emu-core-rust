@@ -935,6 +935,62 @@ mod tests {
         assert!(session.created_at > 0);
     }
 
+    /// Card 01a16c40: the documented `Output.timestamp` contract. The field
+    /// is reserved but never populated, so every `output` frame the live
+    /// broadcaster emits carries no timestamp — standalone PTY sessions and
+    /// mux-backed pane mirrors both feed this loop, and JSON consumers see
+    /// the key omitted outright. Pinning the loop means wiring a clock into
+    /// the broadcast path cannot drift in silently.
+    #[tokio::test]
+    async fn output_broadcaster_frames_carry_no_timestamp() {
+        let terminal = Arc::new(RwLock::new(Terminal::new(80, 24)));
+        let session = Arc::new(StreamSessionState::new(
+            "ts".to_string(),
+            terminal,
+            None,
+            true,
+        ));
+        let mut rx = session.broadcast_tx.subscribe();
+        let tx = session.get_output_sender();
+        let broadcaster_session = Arc::clone(&session);
+        let broadcaster =
+            tokio::spawn(async move { broadcaster_session.output_broadcaster_loop().await });
+
+        tx.send("hello ".to_string()).await.expect("queued");
+        tx.send("world".to_string()).await.expect("queued");
+        // The 16 ms batch window flushes both chunks as one frame.
+        tokio::time::sleep(Duration::from_millis(80)).await;
+
+        let mut saw_output = false;
+        while let Ok(msg) = rx.try_recv() {
+            if let ServerMessage::Output {
+                ref data,
+                timestamp,
+            } = msg
+            {
+                saw_output = true;
+                assert_eq!(data.as_str(), "hello world");
+                assert!(
+                    timestamp.is_none(),
+                    "live output frames never carry a timestamp"
+                );
+                assert!(
+                    !serde_json::to_string(&msg)
+                        .expect("serializable")
+                        .contains("timestamp"),
+                    "JSON omits the absent field"
+                );
+            }
+        }
+        assert!(
+            saw_output,
+            "the batch-window flush produced an output frame"
+        );
+
+        session.shutdown("done".to_string());
+        broadcaster.await.expect("broadcaster task");
+    }
+
     /// Card 01a0efb2: `initial_screen` carries the terminal's scrollback,
     /// not just the live screen, so a late joiner sees history. The payload
     /// must replay into a fresh same-size terminal with the history in its

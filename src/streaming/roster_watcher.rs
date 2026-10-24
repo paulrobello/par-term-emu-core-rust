@@ -548,6 +548,74 @@ mod tests {
         assert!(entries(watcher.snapshot()).is_empty());
     }
 
+    /// Card 01a16c40: the documented delta-enrichment contract. Warm cache:
+    /// a state push for a pane the watcher fetched keeps the fetched
+    /// `pane_label` AND `project` on the delta (the wire push itself is
+    /// identity-only). Cold cache: a pane first seen via a state push
+    /// between full snapshots sends the push's bare (empty) label/project on
+    /// its first delta; the next full refetch fills the cache.
+    #[test]
+    fn state_deltas_enrich_from_the_cache_and_first_seen_panes_send_bare() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = serve(
+            dir.path(),
+            vec![Conn {
+                list_agents_body: "3 zed idle hook host_telemetry=eyJwcm9qZWN0Ijp7InNhbXBsZWRfYXRfdW5peF9tcyI6MSwidmFsdWUiOiJwYXJkZWNrIn19\n",
+                list_panes_body: "%3 zed\n",
+                pane_titles: &[],
+                then_send: &[
+                    "%agent-state-changed %3 zed working source=hook",
+                    "%agent-state-changed %9 fresh working source=hook",
+                ],
+                hold: true,
+            }],
+        );
+        let (on_message, rx) = collect();
+        // Alive until scope end, so pushes keep flowing during the asserts.
+        let watcher = RosterWatcher::spawn(path, on_message);
+        assert_eq!(entries(next(&rx)), vec![(3, "idle".to_string())]);
+
+        // Warm cache: the delta keeps the fetched label AND the attributed
+        // project even though the push carried neither.
+        match next(&rx) {
+            ServerMessage::AgentStateChanged { agent, released } => {
+                assert!(!released);
+                assert_eq!((agent.pane_id, agent.state.as_str()), (3, "working"));
+                assert_eq!(agent.pane_label, "zed");
+                assert_eq!(agent.project, "pardeck");
+            }
+            other => panic!("expected warm-cache delta, got {other:?}"),
+        }
+        // Cold cache: pane %9's first appearance rides a bare push — empty
+        // label/project until the next full snapshot refills the cache.
+        match next(&rx) {
+            ServerMessage::AgentStateChanged { agent, released } => {
+                assert!(!released);
+                assert_eq!((agent.pane_id, agent.state.as_str()), (9, "working"));
+                assert_eq!(
+                    agent.pane_label, "",
+                    "a first-seen pane's delta carries the push's bare label"
+                );
+                assert_eq!(agent.project, "", "...and its bare project");
+            }
+            other => panic!("expected cold-cache delta, got {other:?}"),
+        }
+        let ServerMessage::AgentRoster { agents } = watcher.snapshot() else {
+            panic!("snapshot is a roster");
+        };
+        assert_eq!(agents.len(), 2, "both panes ride the cache snapshot");
+        let three = agents.iter().find(|a| a.pane_id == 3).unwrap();
+        assert_eq!(
+            (three.pane_label.as_str(), three.project.as_str()),
+            ("zed", "pardeck")
+        );
+        let nine = agents.iter().find(|a| a.pane_id == 9).unwrap();
+        assert_eq!(
+            nine.pane_label, "",
+            "the cold pane stays bare in the snapshot until a refetch"
+        );
+    }
+
     #[test]
     fn flap_grows_the_backoff_and_stability_resets_it() {
         // A short-lived connection is a flap: the delay grows past the
