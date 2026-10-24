@@ -305,20 +305,16 @@ fn cmd_restart_and_stop_keep_working_inside_a_pane() {
         run.stderr
     );
 
-    // --restart stops the old daemon and serves again from this process,
-    // exempt from the guard like tmux's kill-server.
-    let replacement = OwnedDaemon {
-        child: Command::new(env!("CARGO_BIN_EXE_par-mux"))
-            .arg("--socket")
-            .arg(fixture.socket())
-            .arg("--state-dir")
-            .arg(fixture.state_dir())
-            .env("PAR_MUX_ENV", "1")
-            .stdout(Stdio::null())
-            .stderr(Stdio::null())
-            .spawn()
-            .expect("--restart spawns"),
-    };
+    // --restart stops the old daemon and serves a fresh one from the
+    // saved tree, exempt from the guard like tmux's kill-server. The
+    // restarted daemon is detached, so the trailing --stop reaps it.
+    let restarted = par_mux_env(&["--socket", &socket, "--restart"], inside);
+    assert_eq!(
+        restarted.code,
+        Some(0),
+        "--restart works inside a pane: {:?}",
+        restarted.stderr
+    );
     wait_listening(fixture.socket());
     let version = par_mux_env(&["--socket", &socket, "--cmd", "version"], inside);
     assert_eq!(
@@ -341,7 +337,6 @@ fn cmd_restart_and_stop_keep_working_inside_a_pane() {
         run.stderr
     );
     wait_not_listening(fixture.socket());
-    drop(replacement);
     drop(daemon);
 }
 
