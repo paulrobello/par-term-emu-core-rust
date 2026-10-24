@@ -931,6 +931,19 @@ fn spawn_restored_pane(
     };
     if let Some(agent_session) = &pane.agent_session {
         restore_agent_claim(&mut created, agent_session);
+    } else if !pane.dead {
+        // A scrape-tier claim (adopt-pane, or an agent-start whose agent
+        // never reported identity) saves no agent_session, so nothing
+        // above restored its label. Re-derive it from what the pane
+        // respawns as, under the same gate `adopt-pane` applies — a label
+        // the tick cannot classify would sit on the pane inertly — and
+        // the 1s tick writes the state and broadcasts from here.
+        if let Some(kind) = agent_of_invocation(
+            &crate::mux::scrape::ScrapeEngine::bundled(),
+            pane.spawn_command.as_deref(),
+        ) {
+            created.set_metadata("agent", &kind);
+        }
     }
     if let Some(title) = &pane.user_title {
         created.set_user_title(title);
@@ -949,6 +962,26 @@ fn spawn_restored_pane(
         }
     }
     Ok(created)
+}
+
+/// The agent kind a restored pane's invocation names, when the scrape
+/// engine covers it. Reads only the first whitespace token's basename —
+/// the persisted `spawn_command` is a shell-parsed string, and a fuller
+/// parse would second-guess quoting for no roster gain. `None` leaves the
+/// pane unlabeled: a plain shell, an editor editing `claude.md`, anything
+/// the tier cannot classify stays off the roster exactly as a
+/// hand-launched pane does until `adopt-pane` names it. Restore runs
+/// before the server assigns the tree its engine, so tests and callers
+/// pass the bundled set (what the daemon's engine degrades to without
+/// `agent-patterns` overrides).
+fn agent_of_invocation(
+    engine: &crate::mux::scrape::ScrapeEngine,
+    invocation: Option<&str>,
+) -> Option<String> {
+    let first = invocation?.split_whitespace().next()?;
+    let lowered = first.rsplit(['/', '\\']).next()?.to_ascii_lowercase();
+    let program = lowered.strip_suffix(".exe").unwrap_or(&lowered);
+    engine.set_for(program).map(|_| program.to_string())
 }
 
 /// The persisted cwd re-lands the pane where it left off. A directory
@@ -3726,6 +3759,111 @@ mod tests {
         assert!(
             pane.seq_by_source.is_empty(),
             "sequence stamps are volatile — the restarted agent's first report is never stale"
+        );
+    }
+
+    /// The classifier behind the scrape-tier restore door (its unit
+    /// cases): a bare, PATH'd, Windows-wrapped, or case-mismatched agent
+    /// invocation classifies; a shell, an editor editing `claude.md`, a
+    /// quoted nested command, and no command at all do not.
+    #[test]
+    fn agent_of_invocation_names_the_bundled_agents_by_first_token() {
+        let engine = crate::mux::scrape::ScrapeEngine::bundled();
+        for kind in [
+            "claude", "codex", "grok", "muse", "droid", "copilot", "cursor", "kimi", "qwen",
+        ] {
+            assert_eq!(
+                agent_of_invocation(&engine, Some(kind)),
+                Some(kind.to_string()),
+                "a bare `{kind}` invocation classifies"
+            );
+        }
+        assert_eq!(
+            agent_of_invocation(&engine, Some("/usr/local/bin/claude")),
+            Some("claude".to_string()),
+            "a PATH'd invocation classifies by basename"
+        );
+        assert_eq!(
+            agent_of_invocation(&engine, Some("claude.exe --resume x")),
+            Some("claude".to_string()),
+            "the Windows wrapper suffix strips before the lookup"
+        );
+        assert_eq!(
+            agent_of_invocation(&engine, Some("Claude")),
+            Some("claude".to_string()),
+            "the lookup is case-insensitive"
+        );
+        for invocation in [
+            Some("bash"),
+            Some("vim claude.md"),
+            Some("sh -c 'claude'"),
+            Some(""),
+            None,
+        ] {
+            assert_eq!(
+                agent_of_invocation(&engine, invocation),
+                None,
+                "{invocation:?} must not classify"
+            );
+        }
+    }
+
+    /// A scrape-tier claim saves no identity, so the round trip must still
+    /// bring the LABEL back: restore re-derives the agent kind from the
+    /// pane's respawn command under the adopt-pane gate, and the 1s tick
+    /// rewrites the scraped state from there.
+    #[test]
+    fn an_adopted_pane_relabels_from_its_spawn_command_at_restore() {
+        let (tree, pane_id) = tree_with_metadata(&[
+            ("agent", "claude"),
+            ("agent_state", "blocked"),
+            ("agent_state_source", "scrape"),
+        ]);
+        let mut state = tree.to_persist_state();
+        let pane_state = &mut state.sessions[0].windows[0].panes[0];
+        pane_state.spawn_command = Some("/opt/homebrew/bin/claude".to_string());
+        assert!(
+            pane_state.agent_session.is_none(),
+            "control: a scrape claim saves no identity, so nothing else can restore the label"
+        );
+
+        let factory = RecordingFactory::default();
+        let restored = MuxTree::from_persist_state(&state, Box::new(factory.clone())).unwrap();
+        let pane = restored.pane(pane_id).expect("restored pane");
+        assert_eq!(
+            pane.metadata().get("agent").map(String::as_str),
+            Some("claude"),
+            "restore re-derives the label from the spawn command"
+        );
+        assert!(
+            !pane.metadata().contains_key("agent_state"),
+            "the label is restored WITHOUT state — the 1s tick rewrites it"
+        );
+    }
+
+    /// The gate is real: a shell invocation stays unlabeled, so a plain
+    /// shell pane restored after a restart is exactly as absent from the
+    /// roster as it was before this door existed.
+    #[test]
+    fn a_shell_invocation_stays_unlabeled_at_restore() {
+        let (tree, pane_id) = tree_with_metadata(&[
+            ("agent", "claude"),
+            ("agent_state", "blocked"),
+            ("agent_state_source", "scrape"),
+        ]);
+        let mut state = tree.to_persist_state();
+        state.sessions[0].windows[0].panes[0].spawn_command = Some("bash -l".to_string());
+
+        let factory = RecordingFactory::default();
+        let restored = MuxTree::from_persist_state(&state, Box::new(factory.clone())).unwrap();
+        assert!(
+            restored
+                .pane(pane_id)
+                .expect("restored pane")
+                .metadata()
+                .get("agent")
+                .is_none(),
+            "a shell invocation never re-derives an agent label"
         );
     }
 

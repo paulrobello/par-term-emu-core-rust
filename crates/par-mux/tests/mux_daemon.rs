@@ -10,7 +10,9 @@ compile_error!("this test drives the par-mux binary: build it with --features mu
 
 mod common;
 
-use common::{command, pane_ids, wait_for, wait_listening, MuxFixture};
+use common::{
+    command, pane_ids, rerun_isolated, wait_for, wait_listening, MuxFixture, REEXEC_MARKER,
+};
 use interprocess::TryClone as _;
 use par_mux::mux::{connect_local_stream, prepare_socket_path, MuxClient, MuxServer};
 use std::io::BufReader;
@@ -1428,6 +1430,21 @@ fn the_auto_spawned_daemon_runs_in_its_own_session() {
     use par_mux::mux::MuxClient;
 
     let fixture = MuxFixture::new("setsid");
+    // The auto-spawn runs from THIS process: inside a par-mux pane the
+    // inherited PAR_MUX_ENV trips the nested-daemon refusal before the
+    // spawn is even attempted. The pane marker is cleared in an isolated
+    // re-run of this test, never in this process (QA-196).
+    if std::env::var_os(REEXEC_MARKER).is_none() {
+        assert!(
+            rerun_isolated(
+                "the_auto_spawned_daemon_runs_in_its_own_session",
+                &[],
+                &["PAR_MUX_ENV"],
+            ),
+            "the isolated re-run passes"
+        );
+        return;
+    }
     let mut client =
         MuxClient::connect_or_spawn_at(fixture.socket()).expect("the daemon spawns and serves");
     let daemon = client

@@ -4411,6 +4411,7 @@ fn agent_state_push_notifies_selected_transitions_only() {
     let (_rx, mut conn) = fake_daemon("snapnotify", snapshot_script());
     let mut session = snapshot_session();
     session.notify.delivery = NotifyDelivery::Terminal;
+    session.notify.host_is_kitty = false;
     session.notify.states = vec!["blocked".to_string(), "idle".to_string()];
     session.refresh_status_facts(&mut conn).expect("seed");
     assert!(
@@ -4465,6 +4466,7 @@ fn done_notifies_and_the_seen_flip_does_not() {
     let (_rx, mut conn) = fake_daemon("snapdone", snapshot_script());
     let mut session = snapshot_session();
     session.notify.delivery = NotifyDelivery::Terminal;
+    session.notify.host_is_kitty = false;
     session.notify.states = crate::mux::config::Chords::with_defaults().notify_states;
     assert_eq!(session.notify.states, vec!["blocked", "done"]);
     session.refresh_status_facts(&mut conn).expect("seed");
@@ -4661,6 +4663,7 @@ fn adhoc_notification_delivers_through_the_channel_without_a_target() {
     let (rx, mut conn) = fake_daemon("snapadhoc", snapshot_script());
     let mut session = snapshot_session();
     session.notify.delivery = NotifyDelivery::Terminal;
+    session.notify.host_is_kitty = false;
     session.notify.states = Vec::new();
     session.refresh_status_facts(&mut conn).expect("seed");
     drained(&rx);
@@ -4722,6 +4725,7 @@ fn adhoc_notifications_are_rate_limited_to_one_per_second() {
     let (rx, mut conn) = fake_daemon("snaprate", snapshot_script());
     let mut session = snapshot_session();
     session.notify.delivery = NotifyDelivery::Terminal;
+    session.notify.host_is_kitty = false;
     session.refresh_status_facts(&mut conn).expect("seed");
     drained(&rx);
     session.handle_event(TmuxNotification::Notification {
@@ -4743,6 +4747,47 @@ fn adhoc_notifications_are_rate_limited_to_one_per_second() {
     assert_eq!(
         session.chrome.flash_text(),
         Some("notification rate-limited (1/s)")
+    );
+}
+
+/// The terminal delivery's wire shapes are pinned per host, not per
+/// environment: under a kitty host the escape is kitty's chunked OSC 99
+/// (title chunk, then body chunk), elsewhere plain OSC 9 with the title
+/// leading. The four OSC 9 assertions above set the resolved flag
+/// explicitly for the same reason — whatever terminal launched
+/// `cargo test` must not choose which assertions hold.
+#[test]
+fn terminal_delivery_shapes_are_pinned_per_host_not_per_environment() {
+    use super::super::notify::NotifyDelivery;
+    let (_rx, _conn) = fake_daemon("snapkitty", snapshot_script());
+    let mut session = snapshot_session();
+    session.notify.delivery = NotifyDelivery::Terminal;
+
+    session.notify.host_is_kitty = true;
+    session.handle_event(TmuxNotification::Notification {
+        title: "build failed".to_string(),
+        body: "3 errors".to_string(),
+    });
+    let mut sink = RecordingSink::default();
+    session.frame(&mut sink);
+    assert_eq!(
+        String::from_utf8(sink.raw.clone()).unwrap(),
+        "\x1b]99;i=1:d=0;build failed\x1b\\\x1b]99;i=1:p=body;3 errors\x1b\\",
+        "under kitty the delivery is chunked OSC 99, title then body"
+    );
+
+    session.notify.host_is_kitty = false;
+    session.notify.last_adhoc_at = None;
+    session.handle_event(TmuxNotification::Notification {
+        title: "build failed".to_string(),
+        body: "3 errors".to_string(),
+    });
+    let mut sink = RecordingSink::default();
+    session.frame(&mut sink);
+    assert_eq!(
+        String::from_utf8(sink.raw.clone()).unwrap(),
+        "\x1b]9;build failed: 3 errors\x07",
+        "off kitty the delivery is plain OSC 9, the title leading"
     );
 }
 

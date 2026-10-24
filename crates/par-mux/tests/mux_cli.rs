@@ -285,6 +285,9 @@ fn the_named_form_reaches_the_daemon_on_the_named_default_socket() {
     let socket = par_mux::mux::default_socket_path(&name);
     let state_dir = fixture.state_dir();
     let daemon = Command::new(env!("CARGO_BIN_EXE_par-mux"))
+        // The pane env contract marks a nested daemon — a gate run from
+        // inside a par-mux pane must behave like CI.
+        .env_remove("PAR_MUX_ENV")
         .arg(&name)
         .arg("--state-dir")
         .arg(&state_dir)
@@ -621,6 +624,9 @@ fn explicit_socket_and_name_beat_the_env_default() {
     );
     let named_socket = par_mux::mux::default_socket_path(&name);
     let daemon = Command::new(env!("CARGO_BIN_EXE_par-mux"))
+        // The pane env contract marks a nested daemon — a gate run from
+        // inside a par-mux pane must behave like CI.
+        .env_remove("PAR_MUX_ENV")
         .arg(&name)
         .arg("--state-dir")
         .arg(fixture.state_dir())

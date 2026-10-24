@@ -5461,8 +5461,16 @@ fn render_mode_background_agent_state_notifies_the_host() {
         .next()
         .expect("the background pane")
         .to_string();
-    let (mut host, stderr) =
-        spawn_attach_with_config(&fixture, &["-t", &shown], "render", "[client]\n");
+    // The pin is for the OSC 9 arm: the spawn pins a non-kitty host, so
+    // the suite's expectation holds whatever terminal launched it (a
+    // kitty host delivers the same notification as chunked OSC 99).
+    let (mut host, stderr) = spawn_attach_with_env(
+        &fixture,
+        &["-t", &shown],
+        "render",
+        "[client]\n",
+        &[("TERM_PROGRAM", "iTerm.app")],
+    );
     expect_output(
         &host,
         b"\x1b[?1002h",
@@ -5800,8 +5808,16 @@ fn render_mode_agent_in_a_left_workspace_notifies_the_host() {
     std::thread::sleep(Duration::from_millis(300));
     let pane_main = session_first_pane(&mut client, "$0");
     let pane_lab = session_first_pane(&mut client, "$2");
-    let (mut host, stderr) =
-        spawn_attach_with_config(&fixture, &["-t", &pane_lab], "render", "[client]\n");
+    // The pin is for the OSC 9 arm: the spawn pins a non-kitty host, so
+    // the suite's expectation holds whatever terminal launched it (a
+    // kitty host delivers the same notification as chunked OSC 99).
+    let (mut host, stderr) = spawn_attach_with_env(
+        &fixture,
+        &["-t", &pane_lab],
+        "render",
+        "[client]\n",
+        &[("TERM_PROGRAM", "iTerm.app")],
+    );
     expect_output(
         &host,
         b"\x1b[?1002h",

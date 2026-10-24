@@ -105,6 +105,12 @@ impl MuxFixture {
         &self.socket
     }
 
+    /// The fixture temp dir itself, for files a test stages beside the
+    /// socket (a fake agent binary named for its kind, for one).
+    pub fn dir(&self) -> &Path {
+        self.dir.path()
+    }
+
     /// The `--state-dir` a spawned daemon persists under — inside the
     /// fixture, so the platform state dir is never touched.
     pub fn state_dir(&self) -> PathBuf {

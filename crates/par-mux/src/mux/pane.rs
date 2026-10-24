@@ -806,6 +806,10 @@ pub struct ShellPaneFactory {
     /// pane can opt back into full control. Independently granted per
     /// session by `PAR_MUX_CONTROL=1` in the session's environment.
     pub expose_control_socket: bool,
+    /// The pane command when the client gave none; unset spawns the
+    /// user's shell. Tests pin a quiet child (`sleep`) so the spawned
+    /// shell's own startup output cannot race synthetic pane writes.
+    pub default_command: Option<String>,
 }
 
 impl ShellPaneFactory {
@@ -965,7 +969,7 @@ impl PaneFactory for ShellPaneFactory {
         let pane_socket = endpoint.as_ref().map(|e| e.socket_path_string());
         let mut session = self.configured_session(id, cols, rows, context, pane_socket.as_deref());
 
-        match command {
+        match command.or(self.default_command.as_deref()) {
             Some(cmd) => {
                 let shell = PtySession::get_default_shell();
                 // POSIX shells take `-c <cmd>`; cmd.exe takes `/C <cmd>` —
@@ -983,7 +987,9 @@ impl PaneFactory for ShellPaneFactory {
         Ok(Self::finish_pane(
             id,
             session,
-            command.map(str::to_string),
+            command
+                .or(self.default_command.as_deref())
+                .map(str::to_string),
             endpoint,
         ))
     }

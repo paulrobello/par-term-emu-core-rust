@@ -24,6 +24,7 @@ use base64::Engine as _;
 use common::{sigterm_clean, spawn_daemon, wait_listening, MuxFixture};
 use std::io::{BufRead, BufReader, Write};
 use std::net::Shutdown;
+use std::os::unix::fs::PermissionsExt as _;
 use std::os::unix::net::UnixStream;
 use std::time::{Duration, Instant};
 
@@ -317,6 +318,79 @@ fn a_restart_resumes_the_agent_session_rather_than_starting_fresh() {
         saved2.contains("par-mux:fx:resume"),
         "the post-restart hook report (same id, start_source=resume) was accepted: {saved2}"
     );
+}
+
+/// A restart keeps the SCRAPE door too: a pane adopted onto the roster by
+/// `adopt-pane` (agent label + scraped state, no hook-reported identity —
+/// the save carries no agent_session) must come back labeled, because
+/// restore re-derives the agent kind from what the pane respawns as. A
+/// build that only restores identity-carrying claims drops adopted panes
+/// off the roster at the first restart and keeps this test red.
+#[test]
+fn a_restart_relabels_an_adopted_pane_from_its_invocation() {
+    let fixture = MuxFixture::new("adopt-restart");
+    let path = fixture.socket();
+    // Restore classifies the spawn command's FIRST token, so the fixture
+    // must be invoked as the agent itself: a copy named for the agent in
+    // the fixture dir, executable, shebang'd.
+    let fake_bin = fixture.dir().join("claude");
+    std::fs::copy(
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("tests/assets/par-mux-scrape-agent.sh"),
+        &fake_bin,
+    )
+    .expect("copy the scrape fixture");
+    std::fs::set_permissions(&fake_bin, std::fs::Permissions::from_mode(0o755))
+        .expect("make the fixture executable");
+
+    // First daemon: the fixture's screen matches claude's blocked rule,
+    // so adopt-pane labels the pane through the scrape tier — no hook
+    // ever reports, no session identity exists.
+    let mut first = spawn_daemon(&fixture);
+    wait_listening(path);
+    let mut control = Control::connect(path);
+    control.command(&format!("new-session -s agents -- {}", fake_bin.display()));
+    let pane = control
+        .body_lines("list-panes")
+        .first()
+        .expect("new-session created a pane")
+        .clone();
+    control.command(&format!("adopt-pane -t {pane} claude"));
+
+    let row = format!("{pane} claude blocked scrape ws=+0");
+    common::wait_daemon(
+        path,
+        "list-agents",
+        |text| text.contains(&row),
+        Duration::from_secs(10),
+        "the adopted pane joined the roster before the restart",
+    );
+
+    drop(control.0.shutdown(Shutdown::Both));
+    sigterm_clean(&mut first);
+
+    // Second daemon: restore re-labels from the respawned command and the
+    // 1s tick rewrites the scraped state — the pane is off the roster for
+    // at most one tick.
+    let mut second = spawn_daemon(&fixture);
+    wait_listening(path);
+    let mut control = Control::connect(path);
+    common::wait_daemon(
+        path,
+        "list-agents",
+        |text| text.contains(&row),
+        Duration::from_secs(15),
+        "the restored pane rejoined the roster via its invocation",
+    );
+    let roster = control.body_lines("list-agents");
+    assert_eq!(
+        roster,
+        vec![row],
+        "the restored pane is re-labeled from its invocation and back on the roster"
+    );
+
+    drop(control.0.shutdown(Shutdown::Both));
+    sigterm_clean(&mut second);
 }
 
 /// One hook report over its own one-line connection — the send-one-JSON,

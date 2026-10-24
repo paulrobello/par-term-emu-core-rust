@@ -248,7 +248,7 @@ impl WindowSession {
                 self.notify.outbox.push(0x07);
             }
             NotifyDelivery::Terminal => {
-                let bytes = terminal_notification("par-mux", &body, host_is_kitty());
+                let bytes = terminal_notification("par-mux", &body, self.notify.host_is_kitty);
                 self.notify.outbox.extend_from_slice(&bytes);
             }
             NotifyDelivery::System => system_notification("par-mux", &body),
@@ -321,7 +321,7 @@ impl WindowSession {
                 self.notify.outbox.push(0x07);
             }
             NotifyDelivery::Terminal => {
-                let bytes = terminal_notification(title, body, host_is_kitty());
+                let bytes = terminal_notification(title, body, self.notify.host_is_kitty);
                 self.notify.outbox.extend_from_slice(&bytes);
             }
             NotifyDelivery::System => system_notification(title, body),
@@ -343,6 +343,13 @@ const JUMP_TARGET_CAP: usize = 8;
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(super) struct NotifyState {
     pub delivery: NotifyDelivery,
+    /// Whether the host that launched this attach is really kitty — the
+    /// detection resolved once at launch, not per delivery: the wire
+    /// shape is a property of the session, and the render tests pin each
+    /// shape by setting the field instead of inheriting whatever
+    /// terminal ran `cargo test` (kitty there turned every OSC 9
+    /// assertion into an OSC 99 delivery).
+    pub host_is_kitty: bool,
     /// The agent states that notify (config `notify-states`).
     pub states: Vec<String>,
     /// Terminal escapes the next frame writes to the host.
@@ -376,6 +383,7 @@ impl Default for NotifyState {
     fn default() -> Self {
         Self {
             delivery: NotifyDelivery::Off,
+            host_is_kitty: host_is_kitty(),
             states: Vec::new(),
             outbox: Vec::new(),
             toast_until: None,

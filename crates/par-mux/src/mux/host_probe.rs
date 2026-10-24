@@ -1149,6 +1149,12 @@ mod tests {
         std::fs::write(repo.path().join(".git/config"), config).unwrap();
         let mut tree = MuxTree::new(Box::new(ShellPaneFactory {
             cwd: Some(repo.path().to_path_buf()),
+            // The synthetic OSC 7 must survive the test: the user's shell
+            // reports its own cwd the moment it starts (shell-integration
+            // prompt), so the pane child is a quiet `sleep` — the probe
+            // still reads its kernel cwd, and no output ever races the
+            // write below.
+            default_command: Some("sleep 120".to_string()),
             ..ShellPaneFactory::default()
         }));
         let session = tree
