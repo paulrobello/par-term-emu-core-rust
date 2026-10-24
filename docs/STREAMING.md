@@ -1622,9 +1622,11 @@ par-mux --cmd 'new-session -s work'          # if the daemon has no session yet
 # The daemon's socket path: see MUX.md "Socket and State Paths" (par-mux logs it at startup)
 par-term-streamer --mux-socket /path/to/par-mux-default.sock --enable-http
 # Browse to http://127.0.0.1:8099/?session=pane-3 to view pane %3
+# — or ?session=workspace-active to follow whatever pane the daemon's
+# active workspace shows (re-resolved on every desktop switch-workspace)
 ```
 
-The session id selects the pane: `pane-N` mirrors pane `%N`; any other id mirrors the daemon's first pane (`list-panes`). From Rust, build the server with `MuxSessionFactory::new(socket, MuxPaneSelector::FromSessionId)` (or `MuxPaneSelector::Pane(n)` for a fixed pane) through `StreamingServer::with_factory`; it needs the `streaming` and `mux` features together.
+The session id selects the pane: `pane-N` mirrors pane `%N`; `workspace-active` follows the daemon's active workspace; any other id mirrors the daemon's first pane (`list-panes`). From Rust, build the server with `MuxSessionFactory::new(socket, MuxPaneSelector::FromSessionId)` (or `MuxPaneSelector::Pane(n)` for a fixed pane) through `StreamingServer::with_factory`; it needs the `streaming` and `mux` features together.
 
 | Concern | Behavior |
 |---------|----------|
@@ -1633,6 +1635,7 @@ The session id selects the pane: `pane-N` mirrors pane `%N`; any other id mirror
 | Terminal queries | The daemon's pane answers them; the mirror's own replies are discarded so nothing is answered twice. |
 | Size | The mirror starts at the pane's current size (`pane-info`), never the viewer's, so opening a viewer never resizes the pane. A viewer's `Resize` message becomes `refresh-client -t %N -C WxH`, the streaming session connection's sizing contribution under the daemon's smallest-attached-client rule. Viewers sharing one session share that contribution. The mirror follows the pane's layout changes and sends viewers a `resize`. |
 | Several viewers | Each streaming session has its own daemon connection; two viewers of one pane both stay live. When the last websocket viewing a session disconnects, the mirror connection closes and withdraws its size contribution immediately, without waiting for the idle timeout. Remaining daemon viewers determine the pane's size. Reconnecting creates a fresh mirror at that size. |
+| Workspace follows | A `workspace-active` mirror re-resolves the daemon's active workspace's active pane on every `%workspaces-changed` broadcast and re-seeds the attached viewers in place — reset + fresh screen replay on the SAME streaming session, no reconnect; input and size contributions follow the new pane. `pane-N` and fixed-pane sessions never follow. |
 | Pane closes | A pane killed (`kill-pane`, `kill-window`, `kill-session`) or missing from its window's new layout (moved away by `break-pane`/`join-pane`), a closed window, or a daemon shutdown ends the session. Closing a streaming session never kills the pane. |
 | Process exits | The pane is held (remain-on-exit): the session stays open on the frozen screen, and viewers get no exit cue. `respawn-pane` restarts the process in the same pane, and its output reaches the same session. |
 | Not applicable | `--shell`, `--command`, `--preset`, and shell restart: the daemon owns the process. |

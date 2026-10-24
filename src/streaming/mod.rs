@@ -105,7 +105,7 @@ pub use session::{SessionInfo, SessionRegistry, StreamSessionState};
 pub use server::{ConnectionParams, SessionFactory, SessionFactoryResult, StreamingServer};
 
 #[cfg(all(feature = "streaming", feature = "mux"))]
-pub use mux_factory::{MuxPaneSelector, MuxSessionFactory};
+pub use mux_factory::{MuxPaneSelector, MuxSessionFactory, ACTIVE_WORKSPACE_SESSION_ID};
 
 #[cfg(all(feature = "streaming", feature = "mux"))]
 pub use roster_watcher::{OnMessage, RosterWatcher};

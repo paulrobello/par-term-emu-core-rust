@@ -56,13 +56,21 @@ const MUX_REPLY_TIMEOUT: Duration = Duration::from_secs(10);
 /// as it did when the drain read the socket directly.
 const MUX_LINE_BACKLOG: usize = 256;
 
+/// The session id that makes a [`MuxPaneSelector::FromSessionId`] mirror
+/// follow the daemon's active workspace: each `%workspaces-changed` the
+/// daemon broadcasts re-resolves the mirror to the active workspace's
+/// active pane and re-seeds the viewers in place, no reconnect.
+pub const ACTIVE_WORKSPACE_SESSION_ID: &str = "workspace-active";
+
 /// Which daemon pane a streaming session mirrors.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum MuxPaneSelector {
     /// The same pane for every session.
     Pane(u32),
-    /// Parse the streaming session id: `pane-N` mirrors pane N; any other id
-    /// falls back to the daemon's first pane (`list-panes`).
+    /// Parse the streaming session id: `pane-N` mirrors pane N;
+    /// [`ACTIVE_WORKSPACE_SESSION_ID`] follows the daemon's active
+    /// workspace; any other id falls back to the daemon's first pane
+    /// (`list-panes`).
     FromSessionId,
 }
 
@@ -85,9 +93,16 @@ pub struct MuxSessionFactory {
 
 /// One streaming session's link to its pane.
 struct MirrorLink {
-    pane: u32,
+    /// The pane this mirror serves. `workspace-active` mirrors retarget it
+    /// when the daemon's active workspace moves; input and size
+    /// contributions read it at call time so they follow.
+    pane: Mutex<u32>,
     /// The pane's window (`@W`), which its layout changes and close name.
-    window: String,
+    /// Retargeted together with `pane` so the pair stays consistent.
+    window: Mutex<String>,
+    /// Set at creation: only [`ACTIVE_WORKSPACE_SESSION_ID`] mirrors
+    /// re-resolve on `%workspaces-changed`; `pane-N` mirrors stay pinned.
+    follows_active: bool,
     terminal: Arc<RwLock<Terminal>>,
     writer: Arc<Mutex<Option<LocalStream>>>,
     /// False once the daemon connection closed or the pane went away.
@@ -99,6 +114,23 @@ struct MirrorLink {
     sink: Mutex<Sink>,
     status: Mutex<Option<(ServerMessage, Vec<String>)>>,
     session: RwLock<Option<std::sync::Weak<StreamSessionState>>>,
+}
+
+impl MirrorLink {
+    fn pane(&self) -> u32 {
+        *self.pane.lock()
+    }
+
+    fn window(&self) -> String {
+        self.window.lock().clone()
+    }
+
+    /// Move the mirror to a new pane, window pair. The drain thread is the
+    /// only writer, so the pair is never observed half-applied.
+    fn set_target(&self, pane: u32, window: String) {
+        *self.pane.lock() = pane;
+        *self.window.lock() = window;
+    }
 }
 
 enum Sink {
@@ -166,6 +198,12 @@ impl MuxSessionFactory {
                 {
                     return Ok(n);
                 }
+                if session_id == ACTIVE_WORKSPACE_SESSION_ID {
+                    let (session, pane) =
+                        query_active_workspace_pane(writer, reader, self.reply_timeout)?;
+                    debug_log_active_workspace(&session, pane);
+                    return Ok(pane);
+                }
                 let body = command(writer, reader, "list-panes", self.reply_timeout)?;
                 body.iter()
                     .find_map(|l| l.trim().strip_prefix('%').and_then(|n| n.parse().ok()))
@@ -173,6 +211,56 @@ impl MuxSessionFactory {
             }
         }
     }
+}
+
+/// Issue `switch-client` bare (the daemon answers the active workspace's
+/// active session) and `list-panes -t $N` (its active window's panes, the
+/// active one marked `*`), and pair the two into the pane to mirror. Both
+/// commands are read-only daemon queries.
+fn query_active_workspace_pane(
+    writer: &mut LocalStream,
+    reader: &MuxLines,
+    timeout: Duration,
+) -> io::Result<(String, u32)> {
+    let session = command(writer, reader, "switch-client", timeout)?;
+    let session = active_session_from_reply(&session)
+        .ok_or_else(|| io::Error::other("the daemon has no active workspace session"))?;
+    let panes = command(writer, reader, &format!("list-panes -t {session}"), timeout)?;
+    let pane = active_pane_from_listing(&panes).ok_or_else(|| {
+        io::Error::other(format!("the active session {session} has no active pane"))
+    })?;
+    Ok((session, pane))
+}
+
+/// The `$N` of a bare `switch-client` reply, `None` when the daemon has no
+/// active session (an empty reply body).
+fn active_session_from_reply(reply: &[String]) -> Option<String> {
+    reply
+        .first()
+        .map(|l| l.trim())
+        .filter(|l| l.starts_with('$'))
+        .map(str::to_string)
+}
+
+/// The `*`-marked pane of a `list-panes -t <session>` reply (`%N leaf
+/// marker` rows).
+fn active_pane_from_listing(reply: &[String]) -> Option<u32> {
+    reply.iter().find_map(
+        |line| match line.split_whitespace().collect::<Vec<_>>().as_slice() {
+            [pane, _leaf, "*"] => pane.strip_prefix('%').and_then(|n| n.parse().ok()),
+            _ => None,
+        },
+    )
+}
+
+/// Why a workspace-active mirror resolved where it did: one log line per
+/// resolution, so a phone showing the "wrong" pane is diagnosable from the
+/// streamer log alone.
+fn debug_log_active_workspace(session: &str, pane: u32) {
+    crate::debug_error!(
+        "STREAMING",
+        "workspace-active mirror resolves to session {session} pane %{pane}"
+    )
 }
 
 /// The daemon connection's lines, read in order by one thread.
@@ -323,7 +411,7 @@ fn query_viewer_status(link: &MirrorLink) -> io::Result<()> {
     let writer = writer
         .as_mut()
         .ok_or_else(|| io::Error::from(io::ErrorKind::BrokenPipe))?;
-    writeln!(writer, "pane-info -t %{} -M", link.pane)?;
+    writeln!(writer, "pane-info -t %{} -M", link.pane())?;
     writer.flush()
 }
 
@@ -385,20 +473,24 @@ fn send_keys_line_reference(pane: u32, chunk: &[u8]) -> String {
 }
 
 /// A `Write` that turns bytes into `send-keys -t %N -H <hex>` commands.
-/// Hex bypasses the command grammar's quoting entirely.
+/// Hex bypasses the command grammar's quoting entirely. The pane is read
+/// at write time so a `workspace-active` mirror's input follows its
+/// retarget; one write() call stays on one pane even across a mid-paste
+/// switch.
 struct SendKeysWriter {
-    pane: u32,
+    link: Arc<MirrorLink>,
     stream: Arc<Mutex<Option<LocalStream>>>,
 }
 
 impl Write for SendKeysWriter {
     fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
+        let pane = self.link.pane();
         let mut guard = self.stream.lock();
         let stream = guard
             .as_mut()
             .ok_or_else(|| io::Error::from(io::ErrorKind::BrokenPipe))?;
         for chunk in buf.chunks(INPUT_CHUNK) {
-            writeln!(stream, "{}", send_keys_line(self.pane, chunk))?;
+            writeln!(stream, "{}", send_keys_line(pane, chunk))?;
         }
         stream.flush()?;
         Ok(buf.len())
@@ -466,8 +558,9 @@ impl SessionFactory for MuxSessionFactory {
 
         let writer = Arc::new(Mutex::new(Some(writer)));
         let link = Arc::new(MirrorLink {
-            pane,
-            window,
+            follows_active: session_id == ACTIVE_WORKSPACE_SESSION_ID,
+            pane: Mutex::new(pane),
+            window: Mutex::new(window),
             terminal: Arc::clone(&terminal),
             writer: Arc::clone(&writer),
             alive: AtomicBool::new(true),
@@ -480,6 +573,7 @@ impl SessionFactory for MuxSessionFactory {
             Arc::clone(&link),
             reader,
             session_id.to_string(),
+            self.socket.clone(),
             self.streaming_server.read().clone(),
         );
         self.sessions
@@ -487,7 +581,7 @@ impl SessionFactory for MuxSessionFactory {
             .insert(session_id.to_string(), Arc::clone(&link));
 
         let input: Box<dyn Write + Send> = Box::new(SendKeysWriter {
-            pane,
+            link: Arc::clone(&link),
             stream: writer,
         });
         Ok(SessionFactoryResult {
@@ -524,16 +618,19 @@ impl SessionFactory for MuxSessionFactory {
 
         // A viewer's resize is a deliberate request for the pane's size
         // (the daemon re-fits to the smallest-viewer minimum); the mirror
-        // follows via %layout-change.
+        // follows via %layout-change. The pane is read per request so a
+        // workspace-active mirror's size contributions follow its
+        // retarget.
         let resize_rx = session.get_resize_receiver();
         let writer = Arc::clone(&link.writer);
-        let pane = link.pane;
+        let link_for_resize = Arc::clone(&link);
         tokio::spawn(async move {
             let mut rx = resize_rx.lock().await;
             while let Some((cols, rows)) = rx.recv().await {
                 // The writer mutex is shared with the input path and the
                 // socket write can block on the daemon: both stay off the
                 // runtime worker.
+                let pane = link_for_resize.pane();
                 let writer = Arc::clone(&writer);
                 let sent = tokio::task::spawn_blocking(move || {
                     let mut guard = writer.lock();
@@ -589,10 +686,10 @@ fn spawn_drain(
     link: Arc<MirrorLink>,
     reader: MuxLines,
     session_id: String,
+    socket: PathBuf,
     server: Option<std::sync::Weak<StreamingServer>>,
 ) {
     std::thread::spawn(move || {
-        let pane_id = format!("%{}", link.pane);
         let mut parser = TmuxControlParser::new(true);
         let mut in_reply = false;
         let mut reply_body = Vec::new();
@@ -601,6 +698,11 @@ fn spawn_drain(
             if link.closed.load(Ordering::Relaxed) {
                 break;
             }
+            // The reply scan's pane filter is a pass-level snapshot; the
+            // notification arms below read the link live so a retarget that
+            // happens mid-batch takes effect for the remaining lines.
+            let pane_num = link.pane();
+            let pane_id = format!("%{pane_num}");
             if Instant::now() >= next_status {
                 if query_viewer_status(&link).is_err() {
                     break;
@@ -637,7 +739,7 @@ fn spawn_drain(
                     crate::debug_error!(
                         "STREAMING",
                         "mux daemon rejected a command for pane %{}: {}",
-                        link.pane,
+                        link.pane(),
                         reply_body.join(" | ")
                     );
                 } else {
@@ -652,7 +754,14 @@ fn spawn_drain(
             framed.push(b'\n');
             for notification in parser.parse(&framed) {
                 match notification {
-                    TmuxNotification::Output { pane_id: id, data } if id == pane_id => {
+                    // The pane filter reads the link live, not the pass's
+                    // snapshot: a batch can carry `%workspaces-changed`
+                    // followed by more `%output`, and lines for the OLD
+                    // pane must not survive the retarget that happened
+                    // mid-batch.
+                    TmuxNotification::Output { pane_id: id, data }
+                        if id == format!("%{}", link.pane()) =>
+                    {
                         let dispatch_batch = {
                             let mut term = link.terminal.write();
                             let batch = term.process_deferred(&data);
@@ -666,8 +775,8 @@ fn spawn_drain(
                         window_id,
                         window_layout,
                         ..
-                    } if window_id == link.window => {
-                        let Some((cols, rows)) = pane_size_in_layout(&window_layout, link.pane)
+                    } if window_id == link.window() => {
+                        let Some((cols, rows)) = pane_size_in_layout(&window_layout, link.pane())
                         else {
                             // The window's new layout no longer holds the
                             // pane: it was killed or reaped.
@@ -695,7 +804,21 @@ fn spawn_drain(
                     | TmuxNotification::ClientLeft { .. } => {
                         next_status = Instant::now();
                     }
-                    TmuxNotification::WindowClose { window_id } if window_id == link.window => {
+                    // A desktop switch-workspace (or any roster move)
+                    // re-resolves the followed pane; pinned (`pane-N`)
+                    // mirrors never enter this arm. Re-resolution is
+                    // idempotent — a rename or add resolves to the same
+                    // pane and applies nothing.
+                    TmuxNotification::WorkspacesChanged if link.follows_active => {
+                        follow_active_workspace(
+                            &link,
+                            &session_id,
+                            &socket,
+                            MUX_REPLY_TIMEOUT,
+                            &server,
+                        );
+                    }
+                    TmuxNotification::WindowClose { window_id } if window_id == link.window() => {
                         link.alive.store(false, Ordering::Relaxed);
                     }
                     TmuxNotification::Exit => {
@@ -715,6 +838,142 @@ fn spawn_drain(
             }
         }
     });
+}
+
+/// A resolved active-workspace pane, everything the re-seed needs.
+struct WorkspaceTarget {
+    session: String,
+    pane: u32,
+    window: String,
+    cols: usize,
+    rows: usize,
+    /// The `pane-info -M` reply line, re-parsed into the viewer-status
+    /// snapshot the viewers of the new pane start from.
+    status_line: String,
+    /// The `refresh-client -t %NEW` replay, line-per-line as the daemon
+    /// sent it.
+    seed: Vec<String>,
+}
+
+/// Re-resolve the daemon's active workspace pane and, when it moved,
+/// re-seed the mirror IN PLACE — same streaming session, no reconnect
+/// (card 01a16ab7): reset the mirror terminal, replay the new pane's
+/// screen, and push a fresh screen-restore sequence to the attached
+/// viewers as an `Output` frame.
+///
+/// Resolution runs over a short-lived daemon connection: the resolution
+/// commands must not interleave with the mirror connection's own
+/// status-query reply blocks, where a reply block read here could be
+/// misattributed. The drain being briefly blocked IS the ordering
+/// guarantee: everything it applies before the retarget belongs to the
+/// old pane, and after the seed everything it applies is filtered to the
+/// new pane id.
+fn follow_active_workspace(
+    link: &Arc<MirrorLink>,
+    session_id: &str,
+    socket: &std::path::Path,
+    timeout: Duration,
+    server: &Option<std::sync::Weak<StreamingServer>>,
+) {
+    if link.closed.load(Ordering::Relaxed) {
+        return;
+    }
+    match resolve_workspace_target(socket, link, timeout) {
+        Ok(Some(target)) => apply_workspace_target(link, session_id, server, target),
+        Ok(None) => {}
+        Err(err) => {
+            crate::debug_error!("STREAMING", "workspace-active re-resolution failed: {err}")
+        }
+    }
+}
+
+/// Resolve the daemon's active workspace pane over its own short-lived
+/// connection, with everything the re-seed needs, or `None` when the
+/// followed pane is already the active one. Errors leave the current pane
+/// mirrored: the next `%workspaces-changed` retries.
+fn resolve_workspace_target(
+    socket: &std::path::Path,
+    link: &MirrorLink,
+    timeout: Duration,
+) -> io::Result<Option<WorkspaceTarget>> {
+    let stream = connect_local_stream(socket)?;
+    let mut writer = stream.try_clone()?;
+    let reader = MuxLines::spawn(stream)?;
+    let (session, pane) = query_active_workspace_pane(&mut writer, &reader, timeout)?;
+    if pane == link.pane() {
+        return Ok(None);
+    }
+    let info = command(
+        &mut writer,
+        &reader,
+        &format!("pane-info -t %{pane} -M"),
+        timeout,
+    )?;
+    let (window, cols, rows) = info
+        .first()
+        .and_then(|l| parse_pane_info(l))
+        .ok_or_else(|| io::Error::other(format!("bad pane-info reply {info:?}")))?;
+    let status_line = info.first().cloned().unwrap_or_default();
+    let seed = command(
+        &mut writer,
+        &reader,
+        &format!("refresh-client -t %{pane}"),
+        timeout,
+    )?;
+    Ok(Some(WorkspaceTarget {
+        session,
+        pane,
+        window,
+        cols,
+        rows,
+        status_line,
+        seed,
+    }))
+}
+
+/// Swap the mirror to the new pane: retarget, reset the terminal, replay
+/// the seed, refresh the viewer-status snapshot, then redraw the viewers
+/// in place with the same screen-restore sequence a fresh connect would
+/// carry.
+fn apply_workspace_target(
+    link: &Arc<MirrorLink>,
+    session_id: &str,
+    server: &Option<std::sync::Weak<StreamingServer>>,
+    target: WorkspaceTarget,
+) {
+    if link.closed.load(Ordering::Relaxed) {
+        return;
+    }
+    debug_log_active_workspace(&target.session, target.pane);
+    link.set_target(target.pane, target.window.clone());
+    let mut batches = Vec::new();
+    let mut resized = false;
+    {
+        let mut term = link.terminal.write();
+        term.reset();
+        if term.size() != (target.cols, target.rows) {
+            resized = true;
+            batches.push(term.resize_deferred(target.cols, target.rows));
+        }
+        batches.push(term.process_deferred(target.seed.join("\n").as_bytes()));
+        term.drain_responses();
+    }
+    for batch in batches {
+        batch.deliver();
+    }
+    if !target.status_line.is_empty() {
+        apply_viewer_status(link, &target.status_line);
+    }
+    let restore = link.terminal.read().export_screen_restore_sequence();
+    if resized {
+        if let Some(server) = server.as_ref().and_then(std::sync::Weak::upgrade) {
+            server.send_to_session(
+                session_id,
+                ServerMessage::resize(target.cols as u16, target.rows as u16),
+            );
+        }
+    }
+    forward(link, restore.as_bytes());
 }
 
 /// Hand pane output to the session broadcaster, or buffer it until
@@ -975,6 +1234,143 @@ mod tests {
             .join("");
         let (_, cols, rows) = parse_pane_info(&info).expect("pane-info reply");
         (cols, rows)
+    }
+
+    /// Wait until `marker` shows in the DAEMON's capture of `pane`.
+    fn wait_pane(control: &mut MuxClient, pane: &str, marker: &str) {
+        wait(marker, || {
+            let text = control
+                .send(&format!("capture-pane -t {pane}"))
+                .expect("capture")
+                .join("\n");
+            (!has_line(&text, marker)).then_some(text)
+        });
+    }
+
+    /// Open the streaming session with an explicit id (the
+    /// `workspace-active` tests use the follow mode's id directly).
+    fn mirror_session(server: &Arc<StreamingServer>, session_id: &str) -> Arc<StreamSessionState> {
+        let params = ConnectionParams {
+            session_id: session_id.to_string(),
+            readonly: false,
+            preset: None,
+        };
+        server.resolve_session(&params).expect("mux-backed session")
+    }
+
+    #[test]
+    fn active_workspace_resolution_parses_the_daemon_replies() {
+        // Bare `switch-client` answers the active workspace's active
+        // session, or an empty body when there is none.
+        assert_eq!(
+            active_session_from_reply(&["$5".to_string()]),
+            Some("$5".to_string())
+        );
+        assert_eq!(active_session_from_reply(&[]), None);
+        assert_eq!(active_session_from_reply(&["".to_string()]), None);
+        assert_eq!(
+            active_session_from_reply(&["%0 @1 80x24".to_string()]),
+            None
+        );
+        // `list-panes -t $N` rows are `%N leaf marker`; only `*` counts.
+        assert_eq!(
+            active_pane_from_listing(&["%7 0 *".to_string(), "%8 1 -".to_string()]),
+            Some(7)
+        );
+        assert_eq!(
+            active_pane_from_listing(&["%8 1 -".to_string(), "%7 0 *".to_string()]),
+            Some(7)
+        );
+        assert_eq!(active_pane_from_listing(&["%8 1 -".to_string()]), None);
+        assert_eq!(active_pane_from_listing(&[]), None);
+    }
+
+    /// Card 01a16ab7 criterion 3: with a mirror following the daemon's
+    /// active workspace, a desktop `select-workspace` mid-mirror moves the
+    /// viewer to the new workspace's pane — same streaming session, no
+    /// reconnect, and the input path follows with it.
+    #[test]
+    fn a_workspace_active_mirror_follows_a_desktop_workspace_switch() {
+        let rt = runtime();
+        let _entered = rt.enter();
+        let (_dir, socket, _serving, mut control, pane0) = daemon();
+
+        // A second workspace; `new-workspace` selects it, so switch back
+        // to `main` before the viewer attaches.
+        control
+            .send("new-workspace -n second")
+            .expect("new-workspace");
+        let second_pane = control
+            .send("list-panes -F '#{pane_id} #{session_name}'")
+            .expect("list-panes")
+            .into_iter()
+            .find(|l| l.trim().ends_with("second"))
+            .and_then(|l| {
+                l.split_whitespace()
+                    .next()
+                    .and_then(|p| p.trim_start_matches('%').parse::<u32>().ok())
+            })
+            .expect("the second workspace's pane");
+        let pane1 = format!("%{second_pane}");
+        control
+            .send("select-workspace -t main")
+            .expect("back to main");
+
+        // Seed each pane's screen with its workspace marker.
+        control
+            .send(&format!("send-keys -t {pane0} 'echo WS1-MARKER' Enter"))
+            .expect("send-keys");
+        wait_pane(&mut control, &pane0, "WS1-MARKER");
+        control
+            .send(&format!("send-keys -t {pane1} 'echo WS2-MARKER' Enter"))
+            .expect("send-keys");
+        wait_pane(&mut control, &pane1, "WS2-MARKER");
+
+        // Criterion 1: `workspace-active` resolves the ACTIVE workspace's
+        // pane (main's), seeded from it, with nothing of workspace two.
+        let server = streaming(&socket);
+        let session = mirror_session(&server, ACTIVE_WORKSPACE_SESSION_ID);
+        let seeded = session.terminal.read().content();
+        assert!(
+            has_line(&seeded, "WS1-MARKER"),
+            "the mirror seeds from the active workspace's pane:\n{seeded}"
+        );
+        assert!(
+            !has_line(&seeded, "WS2-MARKER"),
+            "the other workspace must not leak into the fresh mirror:\n{seeded}"
+        );
+        let registered = server
+            .get_session(ACTIVE_WORKSPACE_SESSION_ID)
+            .expect("session registered");
+
+        // Criteria 2+3: the desktop switches workspaces; the SAME session
+        // re-seeds to the new workspace's pane without a reconnect.
+        control.send("select-workspace -t second").expect("switch");
+        wait_mirror(&session, "WS2-MARKER");
+        let switched = session.terminal.read().content();
+        assert!(
+            !has_line(&switched, "WS1-MARKER"),
+            "the re-seed reset the mirror; old pane content must be gone:\n{switched}"
+        );
+        let after = server
+            .get_session(ACTIVE_WORKSPACE_SESSION_ID)
+            .expect("session still registered after the switch");
+        assert!(
+            Arc::ptr_eq(&registered, &after),
+            "the switch must not close or recreate the streaming session"
+        );
+
+        // Input follows: typed lines now reach the new workspace's pane.
+        type_line(&session, "echo FOLLOW-INPUT");
+        wait_pane(&mut control, &pane1, "FOLLOW-INPUT");
+        let old = control
+            .send(&format!("capture-pane -t {pane0}"))
+            .expect("capture")
+            .join("\n");
+        assert!(
+            !has_line(&old, "FOLLOW-INPUT"),
+            "post-switch input must reach the new pane only:\n{old}"
+        );
     }
 
     #[test]
