@@ -2182,6 +2182,137 @@ fn render_mode_arrow_keys_reencode_per_the_panes_decckm() {
     host.killer.kill().ok();
 }
 
+/// The report that only Backspace worked for claude panes: forward
+/// delete must reach the pane as `ESC [ 3 ~`. The pane's `cat -v`
+/// prints the received spelling — the pane is the authority.
+#[cfg(unix)]
+#[test]
+fn render_mode_forward_delete_reaches_the_pane() {
+    let (fixture, _daemon, mut client) = fixture_with_session("fwdel");
+    let pane = client
+        .send("list-panes")
+        .expect("list-panes")
+        .join("")
+        .split_whitespace()
+        .next()
+        .expect("a pane")
+        .to_string();
+
+    // The pane: print the marker, then echo every received byte
+    // visibly (`cat -v` shows ESC as `^[`).
+    client
+        .send(&format!(
+            "send-keys -t {pane} -l 'printf \"DEL%sREADY\\n\" -; cat -v'"
+        ))
+        .expect("start key reader");
+    client
+        .send(&format!("send-keys -t {pane} Enter"))
+        .expect("enter");
+    let deadline = Instant::now() + Duration::from_secs(15);
+    loop {
+        let body = client
+            .send(&format!("capture-pane -t {pane}"))
+            .expect("capture")
+            .join("\n");
+        if body.contains("DEL-READY") {
+            break;
+        }
+        assert!(
+            Instant::now() < deadline,
+            "the pane never ran the marker printf: {body:?}"
+        );
+        std::thread::sleep(Duration::from_millis(100));
+    }
+
+    let (mut host, stderr) = spawn_attach_render(&fixture, &["-t", &pane]);
+    let deadline = Instant::now() + common::CEILING;
+    let mut painted: Vec<u8> = Vec::new();
+    while !plain_text(&painted).contains("DEL-READY") {
+        assert!(
+            Instant::now() < deadline,
+            "the render client never painted the pane's marker: {:?}\nstderr: {}",
+            plain_text(&painted),
+            stderr.lock().unwrap()
+        );
+        painted.extend(wait_for_output(&host, b"", Duration::from_millis(100)));
+    }
+    // The two spellings a host terminal sends for forward delete: the
+    // xterm tilde form and the kitty-protocol CSI-u form.
+    host.to_child.write_all(b"\x1b[3~").expect("tilde delete");
+    host.to_child
+        .write_all(b"\x1b[57427u")
+        .expect("csi-u delete");
+    host.to_child.flush().ok();
+
+    let deadline = Instant::now() + Duration::from_secs(10);
+    let body = loop {
+        let body = client
+            .send(&format!("capture-pane -t {pane}"))
+            .expect("capture")
+            .join("\n");
+        if body.contains("^[[3~") || Instant::now() >= deadline {
+            break body;
+        }
+        std::thread::sleep(Duration::from_millis(100));
+    };
+    assert!(
+        body.contains("^[[3~"),
+        "the pane must receive forward delete as ESC [ 3 ~: {body:?}\nstderr: {}",
+        stderr.lock().unwrap()
+    );
+
+    // The claude scenario: the pane app pushes the kitty keyboard
+    // flags (disambiguate), so the pane's tracked state now turns the
+    // same host spelling into the kitty CSI-u form on the wire.
+    // `cat -v` owns the pane's stdin, so interrupt it first to get the
+    // shell back before typing the printf.
+    client
+        .send(&format!("send-keys -t {pane} C-c"))
+        .expect("stop cat");
+    client
+        .send(&format!(
+            "send-keys -t {pane} -l 'printf \"\\033[>1uKITTY%sON\\n\" -; cat -v'"
+        ))
+        .expect("push kitty flags");
+    client
+        .send(&format!("send-keys -t {pane} Enter"))
+        .expect("enter");
+    let deadline = Instant::now() + Duration::from_secs(15);
+    loop {
+        let body = client
+            .send(&format!("capture-pane -t {pane}"))
+            .expect("capture")
+            .join("\n");
+        if body.contains("KITTY-ON") {
+            break;
+        }
+        assert!(
+            Instant::now() < deadline,
+            "the pane never pushed the kitty flags: {body:?}"
+        );
+        std::thread::sleep(Duration::from_millis(100));
+    }
+    host.to_child.write_all(b"\x1b[3~").expect("delete again");
+    host.to_child.flush().ok();
+    let deadline = Instant::now() + Duration::from_secs(10);
+    let body = loop {
+        let body = client
+            .send(&format!("capture-pane -t {pane}"))
+            .expect("capture")
+            .join("\n");
+        if body.contains("57427") || Instant::now() >= deadline {
+            break body;
+        }
+        std::thread::sleep(Duration::from_millis(100));
+    };
+    assert!(
+        body.contains("^[[57427u"),
+        "under pushed kitty flags the pane must receive the CSI-u delete: {body:?}\nstderr: {}",
+        stderr.lock().unwrap()
+    );
+    host.killer.kill().ok();
+}
+
 /// Acceptance criterion 3 (render mode, PTY level): the wheel scrolls the
 /// CLIENT's scrollback when the pane does not own mouse mode — the
 /// renderer repaints the pane rect from its scrollback, and the pane
