@@ -52,7 +52,7 @@ keywords = [
     "true-color",
 ]
 dependencies = [
-    "pillow>=12.3.0",
+    "pillow>=13.0.0",
 ]
 
 [project.license]
@@ -68,7 +68,7 @@ Discussions = "https://github.com/paulrobello/par-term-emu-core-rust/discussions
 [project.optional-dependencies]
 # Image processing for sixel examples and screenshot features
 image = [
-    "pillow>=12.3.0",
+    "pillow>=13.0.0",
 ]
 
 [tool.maturin]
@@ -107,15 +107,15 @@ typeCheckingMode = "basic"
 [dependency-groups]
 dev = [
     "maturin>=1.15.0",
-    "pre-commit>=4.6.2",
+    "pre-commit>=4.7.0",
     "pyright>=1.1.414",
     "pytest>=9.1.1",
     "pytest-asyncio>=1.4.0",
     "pytest-cov>=7.1.0",
     "pytest-timeout>=2.4.0",
     "rich>=15.0.0",
-    "ruff>=0.17.0",
-    "websockets>=17.2",
+    "ruff>=0.17.2",
+    "websockets>=17.3",
 ]
 
 [tool.coverage.run]
