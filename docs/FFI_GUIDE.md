@@ -311,7 +311,7 @@ uint32_t send_ctrl_left(Terminal *term) {
 }
 ```
 
-- `TermKeyEvent.key` is a `TERM_KEY_*` constant. Functional-key values **are** the kitty protocol functional codes (e.g. `TERM_KEY_LEFT` is 57428) — do not renumber or remap them.
+- `TermKeyEvent.key` is a `TERM_KEY_*` constant. These are stable FFI key ids, not wire codes — do not renumber or remap them. The bytes on the wire come from the encoder: under the kitty keyboard protocol the spec's functional-key table keeps the legacy tilde/letter forms (Delete is `CSI 3 ~`, not a PUA code — 57426+ belong to keypad/media keys).
 - For `TERM_KEY_CHAR`, set `codepoint` to the Unicode scalar: the typed form for plain text, the base form for Ctrl/Alt combinations.
 - Any `uint16_t` key value is accepted; values that are not a `TERM_KEY_*` constant encode to zero bytes.
 - `modifiers` is a bitfield of `TERM_MOD_SHIFT`, `TERM_MOD_ALT`, `TERM_MOD_CTRL`, `TERM_MOD_SUPER`, `TERM_MOD_HYPER`, `TERM_MOD_META` (kitty protocol order), plus the side-info bit `TERM_MOD_ALT_RIGHT`.

@@ -97,9 +97,11 @@ impl Default for KeyEncodeOptions {
     }
 }
 
-/// The key pressed. Discriminants double as the kitty protocol functional
-/// key codes (`57426` = Insert … `57376..57387` = F1..F12), so the kitty
-/// encoder can cast straight through; do not renumber.
+/// The key pressed. The discriminants are internal and FFI key IDs only —
+/// they never reach the wire (the kitty encoder emits the spec's functional
+/// table forms; only Escape 27 / Enter 13 / Tab 9 / Backspace 127 coincide
+/// with their `CSI number u` table codes). Do not renumber: the C FFI and
+/// frontends pin these values.
 #[repr(u16)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum TermKey {
@@ -480,46 +482,92 @@ fn push_tilde_key(n: u8, m: u8, out: &mut Vec<u8>) {
 }
 
 /// Kitty keyboard protocol level-1 (disambiguate) encoding.
+///
+/// The spec's functional-key table is authoritative for the wire forms: a
+/// `CSI number u` spelling exists only for Escape (27), Enter (13), Tab (9)
+/// and Backspace (127); every other functional key keeps its legacy table
+/// form in all kitty levels — tilde numbers for Insert/Delete/PageUp/
+/// PageDown and F3/F5..F12, `CSI <letter>` (or `CSI 1;{mods}<letter>`) for
+/// the cursor group and F1/F2/F4. There are no PUA key codes for these keys
+/// on the wire: 57426..57435 are KP_DELETE/KP_BEGIN and the media keys, and
+/// 57376..57387 are F13..F24. The PUA cast this encoder used before made a
+/// real Claude Code pane ignore forward delete entirely.
 fn encode_kitty(ev: &TermKeyEvent, out: &mut Vec<u8>) {
-    // Kitty key codes are Unicode scalar values (up to U+10FFFF), so they
-    // are u32; a u16 truncated astral codepoints (ARC-098). An unknown key
-    // or a Char that is not a scalar value has no encoding, matching the
-    // legacy regime's empty output for Unknown.
-    let codepoint: u32 = match ev.key() {
-        TermKey::Unknown => return,
-        TermKey::Char => match char::from_u32(ev.codepoint) {
-            Some(c) => c as u32,
-            None => return,
-        },
-        // TermKey discriminants ARE the kitty functional codes.
-        functional => functional as u32,
-    };
-
-    // Text keys without Ctrl/Alt/Super-class modifiers stay plain text so
-    // typing (and IME) is unaffected — that includes Shift, and ALT_RIGHT
-    // is side info rather than a modifier.
-    if matches!(ev.key(), TermKey::Char) && ev.text_like() {
-        encode_legacy(ev, false, 0, &KeyEncodeOptions::default(), out);
-        return;
-    }
-
-    // Arrows/Home/End keep their unambiguous legacy CSI <final> form under
-    // level 1 when unmodified; everything else goes CSI u.
-    if ev.modifiers == 0 {
-        if let Some(final_byte) = cursor_group_final(ev.key()) {
-            out.push(0x1b);
-            out.push(b'[');
-            out.push(final_byte);
-            return;
+    match ev.key() {
+        TermKey::Unknown => {}
+        TermKey::Char => {
+            // Kitty key codes are Unicode scalar values (up to U+10FFFF),
+            // so they are u32; a u16 truncated astral codepoints (ARC-098).
+            // A Char that is not a scalar value has no encoding, matching
+            // the legacy regime's empty output for Unknown.
+            let c = match char::from_u32(ev.codepoint) {
+                Some(c) => c,
+                None => return,
+            };
+            // Text keys without Ctrl/Alt/Super-class modifiers stay plain
+            // text so typing (and IME) is unaffected — that includes Shift,
+            // and ALT_RIGHT is side info rather than a modifier.
+            if ev.text_like() {
+                encode_legacy(ev, false, 0, &KeyEncodeOptions::default(), out);
+                return;
+            }
+            push_csi_u(c as u32, ev.xterm_mod(), out);
         }
+        // The four keys whose table entry is a `CSI number u` spelling.
+        TermKey::Escape | TermKey::Enter | TermKey::Tab | TermKey::Backspace => {
+            push_csi_u(ev.key() as u32, ev.xterm_mod(), out);
+        }
+        // The rest keep their table forms (the modifier parameter follows
+        // the kitty bit order — Super/Hyper/Meta report, unlike legacy).
+        key => encode_kitty_functional(key, ev.xterm_mod(), out),
     }
+}
 
-    // Kitty omits the modifier field when no modifier is set.
-    let m = ev.xterm_mod();
+/// `CSI number u`, or `CSI number;{mods} u` when a modifier is held — the
+/// kitty protocol omits the modifier parameter when it is the default 1.
+fn push_csi_u(number: u32, m: u8, out: &mut Vec<u8>) {
     if m == 1 {
-        out.extend_from_slice(format!("\x1b[{}u", codepoint).as_bytes());
+        out.extend_from_slice(format!("\x1b[{number}u").as_bytes());
     } else {
-        out.extend_from_slice(format!("\x1b[{};{}u", codepoint, m).as_bytes());
+        out.extend_from_slice(format!("\x1b[{number};{m}u").as_bytes());
+    }
+}
+
+/// `CSI <letter>` unmodified, `CSI 1;{mods}<letter>` otherwise — the spec's
+/// second disambiguate form; the leading 1 is the default and is omitted.
+fn push_csi_letter(final_byte: u8, m: u8, out: &mut Vec<u8>) {
+    if m == 1 {
+        out.push(0x1b);
+        out.push(b'[');
+        out.push(final_byte);
+    } else {
+        out.extend_from_slice(format!("\x1b[1;{m}{}", final_byte as char).as_bytes());
+    }
+}
+
+/// The functional-key table forms under kitty level 1: the same tilde
+/// numbers and CSI letters the legacy encoder uses, plus F3 on its tilde
+/// spelling (the spec dropped `CSI R` — it collides with the Cursor
+/// Position Report).
+fn encode_kitty_functional(key: TermKey, m: u8, out: &mut Vec<u8>) {
+    if let Some(final_byte) = cursor_group_final(key) {
+        push_csi_letter(final_byte, m, out);
+    } else if let Some((_, n)) = F_TILDE.iter().find(|(k, _)| *k == key) {
+        push_tilde_key(*n, m, out);
+    } else {
+        match key {
+            TermKey::Insert => push_tilde_key(2, m, out),
+            TermKey::Delete => push_tilde_key(3, m, out),
+            TermKey::PageUp => push_tilde_key(5, m, out),
+            TermKey::PageDown => push_tilde_key(6, m, out),
+            TermKey::F1 => push_csi_letter(b'P', m, out),
+            TermKey::F2 => push_csi_letter(b'Q', m, out),
+            TermKey::F4 => push_csi_letter(b'S', m, out),
+            TermKey::F3 => push_tilde_key(13, m, out),
+            // Unreachable: every TermKey is handled by the arms above (an
+            // Unknown event never gets here — encode_kitty returns first).
+            _ => {}
+        }
     }
 }
 
@@ -712,21 +760,138 @@ mod tests {
             enc(&TermKeyEvent::functional(TermKey::Backspace, 0), &t),
             b"\x1b[127u"
         );
-        // Arrows unmodified stay CSI <final>.
+        // Arrows unmodified stay CSI <final>; with modifiers they take the
+        // `CSI 1;{mods} <final>` form — the spec's second disambiguate form,
+        // not the PUA `CSI 57430u` spelling (57428+ are media keys).
         assert_eq!(
             enc(&TermKeyEvent::functional(TermKey::Up, 0), &t),
             b"\x1b[A"
         );
         assert_eq!(
             enc(&TermKeyEvent::functional(TermKey::Up, modifiers::CTRL), &t),
-            b"\x1b[57430;5u"
+            b"\x1b[1;5A"
         );
         assert_eq!(
             enc(
                 &TermKeyEvent::functional(TermKey::PageDown, modifiers::SHIFT),
                 &t
             ),
-            b"\x1b[57433;2u"
+            b"\x1b[6;2~"
+        );
+    }
+
+    /// The functional-key table forms survive into kitty disambiguate mode:
+    /// Delete reaches apps as `CSI 3 ~` (a real Claude Code pane ignored
+    /// `CSI 57427u` outright — 57426..57435 are KP_DELETE/KP_BEGIN/media
+    /// per spec, not Insert..End), F1..F4 keep `CSI P/Q/S`, F3 keeps its
+    /// tilde form (the spec dropped `CSI R` over the CPR conflict), and
+    /// F5..F12 keep their `CSI n ~` numbers.
+    #[test]
+    fn kitty_functional_keys_keep_table_forms() {
+        let mut t = legacy();
+        t.set_keyboard_flags(0x1);
+        // The reported bug: forward delete.
+        assert_eq!(
+            enc(&TermKeyEvent::functional(TermKey::Delete, 0), &t),
+            b"\x1b[3~"
+        );
+        assert_eq!(
+            enc(
+                &TermKeyEvent::functional(TermKey::Delete, modifiers::CTRL),
+                &t
+            ),
+            b"\x1b[3;5~"
+        );
+        // Insert/PageUp/PageDown — the other tilde-group keys.
+        assert_eq!(
+            enc(&TermKeyEvent::functional(TermKey::Insert, 0), &t),
+            b"\x1b[2~"
+        );
+        assert_eq!(
+            enc(
+                &TermKeyEvent::functional(TermKey::Insert, modifiers::SHIFT),
+                &t
+            ),
+            b"\x1b[2;2~"
+        );
+        assert_eq!(
+            enc(&TermKeyEvent::functional(TermKey::PageUp, 0), &t),
+            b"\x1b[5~"
+        );
+        assert_eq!(
+            enc(&TermKeyEvent::functional(TermKey::PageDown, 0), &t),
+            b"\x1b[6~"
+        );
+        // F1..F4 letter forms; F3 uses the tilde spelling (no CSI R).
+        assert_eq!(
+            enc(&TermKeyEvent::functional(TermKey::F1, 0), &t),
+            b"\x1b[P"
+        );
+        assert_eq!(
+            enc(&TermKeyEvent::functional(TermKey::F1, modifiers::CTRL), &t),
+            b"\x1b[1;5P"
+        );
+        assert_eq!(
+            enc(&TermKeyEvent::functional(TermKey::F2, 0), &t),
+            b"\x1b[Q"
+        );
+        assert_eq!(
+            enc(&TermKeyEvent::functional(TermKey::F4, 0), &t),
+            b"\x1b[S"
+        );
+        assert_eq!(
+            enc(&TermKeyEvent::functional(TermKey::F4, modifiers::ALT), &t),
+            b"\x1b[1;3S"
+        );
+        assert_eq!(
+            enc(&TermKeyEvent::functional(TermKey::F3, 0), &t),
+            b"\x1b[13~"
+        );
+        assert_eq!(
+            enc(&TermKeyEvent::functional(TermKey::F3, modifiers::SHIFT), &t),
+            b"\x1b[13;2~"
+        );
+        // F5..F12 tilde forms with their legacy numbers.
+        assert_eq!(
+            enc(&TermKeyEvent::functional(TermKey::F5, 0), &t),
+            b"\x1b[15~"
+        );
+        assert_eq!(
+            enc(&TermKeyEvent::functional(TermKey::F10, 0), &t),
+            b"\x1b[21~"
+        );
+        assert_eq!(
+            enc(&TermKeyEvent::functional(TermKey::F12, modifiers::CTRL), &t),
+            b"\x1b[24;5~"
+        );
+        // Home/End join the cursor group: letter form, `CSI 1;{mods}` when
+        // modified.
+        assert_eq!(
+            enc(&TermKeyEvent::functional(TermKey::Home, 0), &t),
+            b"\x1b[H"
+        );
+        assert_eq!(
+            enc(&TermKeyEvent::functional(TermKey::End, 0), &t),
+            b"\x1b[F"
+        );
+        assert_eq!(
+            enc(
+                &TermKeyEvent::functional(TermKey::Home, modifiers::CTRL),
+                &t
+            ),
+            b"\x1b[1;5H"
+        );
+        assert_eq!(
+            enc(&TermKeyEvent::functional(TermKey::End, modifiers::ALT), &t),
+            b"\x1b[1;3F"
+        );
+        // Shift+Enter stays the CSI-u spelling apps use for soft newlines.
+        assert_eq!(
+            enc(
+                &TermKeyEvent::functional(TermKey::Enter, modifiers::SHIFT),
+                &t
+            ),
+            b"\x1b[13;2u"
         );
     }
 
@@ -1389,10 +1554,12 @@ mod tests {
         assert_eq!(enc(&TermKeyEvent::functional(TermKey::Enter, 0), &t), b"\r");
     }
 
-    /// ENH-028 criterion: kitty level 1 stays byte-identical, and the new
-    /// option modes must not leak into the kitty branch (the kitty protocol
-    /// reports the true codepoint + modifiers and lets the application
-    /// decode Alt itself).
+    /// ENH-028 criterion: the option modes must not leak into the kitty
+    /// branch (the kitty protocol reports the true codepoint + modifiers
+    /// and lets the application decode Alt itself). Functional keys follow
+    /// the spec's table forms — `CSI 1;5A`, not the PUA `CSI 57430u`
+    /// spelling, which real Claude Code ignores (see
+    /// [`kitty_functional_keys_keep_table_forms`]).
     #[test]
     fn conformance_kitty_unchanged() {
         let mut t = Terminal::new(80, 24);
@@ -1434,7 +1601,7 @@ mod tests {
                 &t,
                 &any
             ),
-            b"\x1b[57430;5u"
+            b"\x1b[1;5A"
         );
     }
 

@@ -17,7 +17,7 @@ impl PyTerminal {
     /// Args:
     ///     key: Key code — a ``TERM_KEY_*``-style value: 1 for a character
     ///         key, or a functional-key code (9 Tab, 13 Enter, 27 Escape,
-    ///         127 Backspace, 57428 Left … 57437 End, 57376..57387 F1..F12).
+    ///         127 Backspace, 57428 Left … 57435 End, 57376..57387 F1..F12).
     ///     modifiers: Bitfield — shift=1, alt=2, ctrl=4, super=8, hyper=16,
     ///         meta=32, plus the side-info bit alt_right=64 (the held Alt
     ///         key is the right one, selecting ``right_option``).

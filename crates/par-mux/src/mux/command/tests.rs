@@ -504,10 +504,12 @@ fn send_keys_byte_class_names_ignore_terminal_modes() {
     assert_eq!(encoded_on(line, &term), raw);
     term.process(b"\x1b[>1u");
     assert_eq!(encoded_on(line, &term), raw);
-    // A navigation key does follow the kitty flags.
+    // A navigation key does follow the kitty flags — with the spec's
+    // functional-key table form (`CSI 15 ~`, not the PUA `CSI 57380u`
+    // spelling; 57376+ are F13+ per spec, which apps like claude ignore).
     assert_eq!(
         encoded_on("send-keys -t %3 F5", &term),
-        b"\x1b[57380u".to_vec()
+        b"\x1b[15~".to_vec()
     );
 }
 

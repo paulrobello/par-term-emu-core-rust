@@ -2262,16 +2262,19 @@ fn render_mode_forward_delete_reaches_the_pane() {
     );
 
     // The claude scenario: the pane app pushes the kitty keyboard
-    // flags (disambiguate), so the pane's tracked state now turns the
-    // same host spelling into the kitty CSI-u form on the wire.
-    // `cat -v` owns the pane's stdin, so interrupt it first to get the
-    // shell back before typing the printf.
+    // flags (disambiguate). The spec's functional-key table keeps the
+    // tilde spelling in kitty mode too (57426..57435 are KP/media codes,
+    // and a real Claude Code pane ignores `CSI 57427u` outright), so the
+    // pane must still receive `ESC [ 3 ~`. The printf first clears the
+    // screen so stage 1's output cannot satisfy the later capture, making
+    // the assertion non-vacuous. `cat -v` owns the pane's stdin, so
+    // interrupt it first to get the shell back before typing the printf.
     client
         .send(&format!("send-keys -t {pane} C-c"))
         .expect("stop cat");
     client
         .send(&format!(
-            "send-keys -t {pane} -l 'printf \"\\033[>1uKITTY%sON\\n\" -; cat -v'"
+            "send-keys -t {pane} -l 'printf \"\\033[2J\\033[H\\033[>1uKITTY%sON\\n\" -; cat -v'"
         ))
         .expect("push kitty flags");
     client
@@ -2300,14 +2303,21 @@ fn render_mode_forward_delete_reaches_the_pane() {
             .send(&format!("capture-pane -t {pane}"))
             .expect("capture")
             .join("\n");
-        if body.contains("57427") || Instant::now() >= deadline {
+        if body.contains("^[[3~") || Instant::now() >= deadline {
             break body;
         }
         std::thread::sleep(Duration::from_millis(100));
     };
     assert!(
-        body.contains("^[[57427u"),
-        "under pushed kitty flags the pane must receive the CSI-u delete: {body:?}\nstderr: {}",
+        body.contains("^[[3~"),
+        "under pushed kitty flags the pane must still receive the tilde delete \
+         per the spec's functional-key table: {body:?}\nstderr: {}",
+        stderr.lock().unwrap()
+    );
+    assert!(
+        !body.contains("57427"),
+        "the PUA spelling CSI 57427u must never reach the pane (it is KP_BEGIN, \
+         not Delete, and real Claude Code ignores it): {body:?}\nstderr: {}",
         stderr.lock().unwrap()
     );
     host.killer.kill().ok();

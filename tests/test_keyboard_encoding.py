@@ -8,7 +8,8 @@ bytes for the same event.
 import pytest
 from par_term_emu_core_rust import Terminal
 
-# Key codes (TERM_KEY_* values; functional codes ARE the kitty codes).
+# Key codes (TERM_KEY_* values — stable API ids, not kitty wire codes: the
+# encoder maps them to the spec's functional table forms per mode).
 CHAR = 1
 TAB = 9
 ENTER = 13
@@ -101,6 +102,14 @@ def test_kitty_disambiguate_mode(term):
     assert term.encode_key(CHAR, CTRL, ord("a")) == b"\x1b[97;5u"
     # Option modes must not leak into kitty — Alt reports as a modifier.
     assert term.encode_key(CHAR, ALT, ord("a"), left_option=META) == b"\x1b[97;3u"
+    # Functional keys keep the spec's table forms under kitty: forward
+    # delete reaches apps as CSI 3 ~ (a real Claude Code pane ignores the
+    # PUA spelling CSI 57427u, which is KP_BEGIN per spec, not Delete).
+    assert term.encode_key(57427, 0) == b"\x1b[3~"
+    assert term.encode_key(57427, CTRL) == b"\x1b[3;5~"
+    assert term.encode_key(UP, CTRL) == b"\x1b[1;5A"
+    assert term.encode_key(F1, 0) == b"\x1b[P"
+    assert term.encode_key(F5, 0) == b"\x1b[15~"
 
 
 def test_unknown_key_encodes_to_nothing(term):
