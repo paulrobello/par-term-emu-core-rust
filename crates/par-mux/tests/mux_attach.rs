@@ -6118,27 +6118,48 @@ fn render_mode_plus_click_works_with_the_panel_up() {
         .expect("a pane")
         .to_string();
     let (mut host, stderr) = spawn_attach_render(&fixture, &["-t", &pane_a]);
-    expect_output(
+    let mut all = expect_output(
         &host,
         b"\x1b[?1002h",
         Duration::from_secs(10),
         "render client up (mouse reporting enabled)",
     );
-
     // Panel up (the manual-pass reporter's state): the top row stays a
-    // tab-strip row and the + keeps its reservation.
+    // tab-strip row and the + follows the last visible tab. Discover
+    // its painted column instead of hardcoding it.
     host.to_child.write_all(&[0x02, b's']).expect("prefix s");
     host.to_child.flush().ok();
-    expect_output(
+    // output settle: keep EVERY window's bytes — the channel is
+    // consumed once, so a discarded return drops that span's paints
+    // from the replay.
+    all.extend(expect_output(
         &host,
         b"sidebar on",
         Duration::from_secs(10),
         "side panel toggled on",
+    ));
+    let drain = wait_for_output(&host, b"\x00-never", Duration::from_millis(400));
+    all.extend_from_slice(&drain);
+    screen_stable(
+        &host,
+        &mut all,
+        Duration::from_millis(400),
+        Duration::from_secs(10),
     );
-    // output settle: collect the trailing redraw burst before draining
-    std::thread::sleep(Duration::from_millis(600));
-    let press: &[u8] = b"\x1b[<0;79;1M";
-    host.to_child.write_all(press).expect("plus press");
+    let (grid, _) = reconstructed_screen(&all, 24, 80);
+    let row0 = grid.first().expect("a strip row");
+    if !row0.contains('+') {
+        panic!(
+            "the + paints with the panel up; screen:\n{}",
+            grid.join("\n")
+        );
+    }
+    let byte = row0.find('+').expect("the + paints on row0");
+    let col = row0[..byte].chars().count() + 1; // 1-based host column
+    let press = format!("\x1b[<0;{col};1M");
+    host.to_child
+        .write_all(press.as_bytes())
+        .expect("plus press");
     host.to_child.flush().ok();
     let mut flash = wait_for_output(&host, b" new tab ", Duration::from_secs(10));
     flash.extend(wait_for_output(
@@ -6168,7 +6189,7 @@ fn render_mode_plus_click_works_on_a_wide_host() {
         .expect("a pane")
         .to_string();
     let (mut host, stderr) = spawn_attach_render(&fixture, &["-t", &pane_a]);
-    expect_output(
+    let mut all = expect_output(
         &host,
         b"\x1b[?1002h",
         Duration::from_secs(10),
@@ -6176,8 +6197,9 @@ fn render_mode_plus_click_works_on_a_wide_host() {
     );
 
     // A live terminal is much wider than the harness's 80 columns: the
-    // manual-pass report could not click the + there. Widen the host and
-    // click the reserved slot at the new right edge.
+    // manual-pass report could not click the + there. Widen the host,
+    // let the repaint settle, and click the discovered + — it follows
+    // the last tab, so the resize keeps it reachable at any width.
     host.master
         .resize(PtySize {
             rows: 24,
@@ -6186,10 +6208,23 @@ fn render_mode_plus_click_works_on_a_wide_host() {
             pixel_height: 0,
         })
         .expect("resize");
-    // output settle: collect the trailing redraw burst before draining
-    std::thread::sleep(Duration::from_millis(600));
-    let press: &[u8] = b"\x1b[<0;199;1M";
-    host.to_child.write_all(press).expect("plus press");
+    // output settle: the resize repaint burst, then discover
+    let drain = wait_for_output(&host, b"\x00-never", Duration::from_millis(400));
+    all.extend_from_slice(&drain);
+    screen_stable(
+        &host,
+        &mut all,
+        Duration::from_millis(400),
+        Duration::from_secs(10),
+    );
+    let (grid, _) = reconstructed_screen(&all, 24, 200);
+    let row0 = grid.first().expect("a strip row");
+    let byte = row0.find('+').expect("the + paints on the wide host");
+    let col = row0[..byte].chars().count() + 1; // 1-based host column
+    let press = format!("\x1b[<0;{col};1M");
+    host.to_child
+        .write_all(press.as_bytes())
+        .expect("plus press");
     host.to_child.flush().ok();
     let mut flash = wait_for_output(&host, b" new tab ", Duration::from_secs(10));
     flash.extend(wait_for_output(
@@ -6222,18 +6257,25 @@ fn render_mode_plus_click_prompts_and_creates_a_window() {
         .expect("a pane")
         .to_string();
     let (mut host, stderr) = spawn_attach_render(&fixture, &["-t", &pane_a]);
-    expect_output(
+    // The ` + ` button follows the last tab: discover its painted
+    // column on the strip row instead of hardcoding the old right-edge
+    // reservation.
+    let mut all = expect_output(
         &host,
         b"\x1b[?1002h",
         Duration::from_secs(10),
         "render client up (mouse reporting enabled)",
     );
-
-    // The ` + ` button owns the strip's reserved right edge: on an
-    // 80-col host the reservation spans strip cols 77..79 and the `+`
-    // paints at 78 — the click is a 1-based host col 79.
-    let press: &[u8] = b"\x1b[<0;79;1M";
-    host.to_child.write_all(press).expect("plus press");
+    let shown = screen_until(&host, &mut all, Duration::from_secs(10), |s| {
+        s.lines().next().is_some_and(|row| row.contains('+'))
+    });
+    let row0 = shown.lines().next().expect("a strip row");
+    let byte = row0.find('+').expect("the + paints on the strip row");
+    let col = row0[..byte].chars().count() + 1; // 1-based host column
+    let press = format!("\x1b[<0;{col};1M");
+    host.to_child
+        .write_all(press.as_bytes())
+        .expect("plus press");
     host.to_child.flush().ok();
     let mut flash = wait_for_output(&host, b" new tab ", Duration::from_secs(10));
     flash.extend(wait_for_output(
@@ -6269,7 +6311,9 @@ fn render_mode_plus_click_prompts_and_creates_a_window() {
     // saving), Enter: the window exists and the view lands on it. The
     // reopen's overlay flush races the esc restore window, so settle
     // instead of waiting on the title needle.
-    host.to_child.write_all(press).expect("plus press");
+    host.to_child
+        .write_all(press.as_bytes())
+        .expect("plus press");
     host.to_child.flush().ok();
     // input spacing
     std::thread::sleep(Duration::from_millis(300));

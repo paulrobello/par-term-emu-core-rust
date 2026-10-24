@@ -9,9 +9,11 @@
 //! bright blue with dark bold text, the inactive blocks a lighter navy
 //! with muted text, all on a dark navy bar (the `BAR_BG` palette) — into
 //! a one-row buffer and diffs it, so a window churn flushes only the
-//! changed cells. A ` + ` button owns the strip's last three columns
-//! whenever the strip can hold tabs at all (the reservation narrows the
-//! tab area); a click on it opens the new-tab prompt. The window list comes from the same queried state the
+//! changed cells. A ` + ` button sits immediately after the last
+//! visible tab (or right `…` marker) — one blank column before its
+//! glyph — inside a three-column reservation capping the row's tail
+//! whenever the strip can hold tabs at all; a click on it opens the
+//! new-tab prompt. The window list comes from the same queried state the
 //! status bar uses ([`super::status::StatusState::windows`]), so the
 //! strip refreshes with the status re-query over the `%sessions-changed`
 //! family: a window add, close, or rename repaints the strip.
@@ -86,9 +88,9 @@ pub(crate) struct TabLayout {
     pub left_marker: Option<u16>,
     /// The column of a trailing `…` (tabs hidden on the right).
     pub right_marker: Option<u16>,
-    /// The column where the ` + ` button's three-column reservation
-    /// starts (the strip's right edge), when the strip is wide enough to
-    /// hold tabs plus the button.
+    /// The column the ` + ` button starts on: the blank column right
+    /// after the last visible tab or right `…` marker (the glyph paints
+    /// at `plus + 1`), when the strip can host the three-column button.
     pub plus: Option<u16>,
     /// The queried window count (the wheel's clamp bound — the visible
     /// run hides how many tabs exist).
@@ -102,9 +104,12 @@ pub(crate) struct TabStrip {
     buffer: Buffer,
     prev: Buffer,
     layout: TabLayout,
-    /// The overflowing strip's visible-run start (the wheel's offset);
-    /// 0 keeps the active-centered auto run.
-    scroll: usize,
+    /// The overflowing strip's visible-run seed (the wheel's offset);
+    /// `None` keeps the active-centered auto run, `Some(i)` a run
+    /// seeded at window `i` — wheeling from the auto run moves to a
+    /// real offset in BOTH directions (a plain `usize` could not: 0
+    /// meant both "auto" and "leftmost").
+    scroll: Option<usize>,
     /// The color theme (config `theme`); `None` = the measured herdr
     /// constants above.
     pub(crate) palette: Option<crate::mux::theme::Palette>,
@@ -185,24 +190,31 @@ fn place(texts: &[String], widths: &[usize], start: u16, budget: usize) -> Optio
 /// list, window order; `active` is the active window id) into `cols`
 /// columns. `lead` is the columns the strip's LEFT segment occupies —
 /// the side panel's title when the panel is up, 0 when it is down: the
-/// tabs lay out from it onward and the ` + ` stays pinned at the
-/// strip's right edge, so a click maps the RAW host column straight
-/// through (the panel-up geometry stays coherent).
+/// tabs lay out from it onward. `scroll` is the wheel offset: `None`
+/// keeps the auto run (the active-centered stage-3 run), `Some(i)`
+/// seeds the run at window `i`.
+///
+/// The ` + ` button reserves the row's last three columns: the tab
+/// stages lay out between the lead segment and that reservation, and
+/// the button starts on the column right after the last visible tab
+/// (or right `…` marker) — its own leading pad is the one blank column
+/// between them — so it never runs past the line at any width.
 ///
 /// Each tab is a block `PAD` columns wider than its name on both sides,
 /// blocks `GAP` columns apart. Stage 1: full names, left to right, when
-/// they all fit. Stage 2: the
-/// widest shared name budget that fits — names at or under the budget
-/// render whole, longer ones truncate and ellipsize. Stage 3: budget 1
-/// still overflows, so only a contiguous run of tabs containing the
-/// active one is visible, with a `…` marker at each edge where tabs
-/// stay hidden (each marker budgets its column plus a `GAP` up front).
+/// they all fit. Stage 2: the widest shared name budget that fits —
+/// names at or under the budget render whole, longer ones truncate and
+/// ellipsize. Stage 3: budget 1 still overflows, so only a contiguous
+/// run of tabs is visible, with a `…` marker at each edge where tabs
+/// stay hidden (each marker budgets its column plus a `GAP` up front);
+/// the run contains the active tab in the auto run, or the
+/// scrolled-to tab when `scroll` is set.
 pub(crate) fn layout_tabs(
     windows: &[(String, String)],
     active: Option<&str>,
     cols: usize,
     lead: u16,
-    scroll: usize,
+    scroll: Option<usize>,
 ) -> TabLayout {
     if windows.is_empty() {
         return TabLayout::default();
@@ -213,16 +225,15 @@ pub(crate) fn layout_tabs(
         .unwrap_or(0);
     let lead = (lead as usize).min(cols);
 
-    // The ` + ` button reserves the strip's last three columns; the tab
-    // stages lay out between the lead segment and the reservation. A
+    // The button's three columns cap the tab area at the row's tail; a
     // strip narrower than the button plus one tab column cannot host
-    // the reservation.
-    let plus_col = u16::try_from(cols.saturating_sub(3))
-        .ok()
-        .filter(|_| cols >= 4 && lead + 3 < cols);
-    let tab_cols = plus_col.map_or(cols.saturating_sub(lead), |p| {
-        (p as usize).saturating_sub(lead)
-    });
+    // the reservation (the narrow-strip rule).
+    let hostable = cols >= 4 && lead + 3 < cols;
+    let tab_cols = if hostable {
+        cols - 3 - lead
+    } else {
+        cols.saturating_sub(lead)
+    };
     let start = lead as u16;
 
     let texts_widths = |budget: Option<usize>| -> (Vec<String>, Vec<usize>) {
@@ -241,10 +252,10 @@ pub(crate) fn layout_tabs(
     let (texts, widths) = texts_widths(None);
     if let Some(cells) = place(&texts, &widths, start, tab_cols) {
         return TabLayout {
+            plus: plus_after(&cells, None, start, cols, hostable),
             cells,
             left_marker: None,
             right_marker: None,
-            plus: plus_col,
             total: windows.len(),
         };
     }
@@ -260,34 +271,30 @@ pub(crate) fn layout_tabs(
         let (texts, widths) = texts_widths(Some(budget));
         if let Some(cells) = place(&texts, &widths, start, tab_cols) {
             return TabLayout {
+                plus: plus_after(&cells, None, start, cols, hostable),
                 cells,
                 left_marker: None,
                 right_marker: None,
-                plus: plus_col,
                 total: windows.len(),
             };
         }
     }
 
-    // Stage 3. A wheel offset seeds the run at the scrolled-to window
-    // (the active-centered auto run only serves scroll 0 — the audit's
-    // R6: an overflowing strip scrolls to reach its hidden tabs).
+    // Stage 3. The run seeds at the wheel offset when set; `None` is
+    // the active-centered auto run (an overflowing strip scrolls to
+    // reach its hidden tabs — the audit's R6).
     let (texts, widths) = texts_widths(Some(1));
     // `total` is the run's span (blocks plus the gaps between them): a
     // candidate adds its block and one gap, each hidden-edge marker its
     // column and one gap.
     let marker_cols = 1 + GAP;
-    let seed = if scroll > 0 {
-        scroll.min(windows.len() - 1)
-    } else {
-        active_index
-    };
+    let seed = scroll.unwrap_or(active_index).min(windows.len() - 1);
     let mut run: Vec<usize> = vec![seed];
     let mut total = widths[seed];
     // A scrolled run grows RIGHTWARD first (the user wheeled toward the
     // later windows — filling left would crawl back over what they
     // scrolled past); the auto run keeps its left-first growth.
-    let left_first = scroll == 0;
+    let left_first = scroll.is_none();
     loop {
         let first = run[0];
         let last = *run.last().expect("non-empty by construction");
@@ -358,13 +365,39 @@ pub(crate) fn layout_tabs(
             .map(|cell| cell.col + cell.width + GAP as u16)
             .unwrap_or_default()
     });
+    let plus = plus_after(&cells, right_marker, start, cols, hostable);
     TabLayout {
         cells,
         left_marker: left_hidden.then_some(start),
         right_marker,
-        plus: plus_col,
+        plus,
         total: windows.len(),
     }
+}
+
+/// The ` + ` button's start column: the blank column right after the
+/// last painted thing — the run's last block, or the right `…` marker —
+/// clamped to the reserved tail (blocks never reach it, so the clamp
+/// only binds defensively). `None` when the strip cannot host the
+/// three-column button.
+fn plus_after(
+    cells: &[TabCell],
+    right_marker: Option<u16>,
+    start: u16,
+    cols: usize,
+    hostable: bool,
+) -> Option<u16> {
+    if !hostable {
+        return None;
+    }
+    let base = cells
+        .last()
+        .map(|cell| cell.col + cell.width)
+        .into_iter()
+        .chain(right_marker.map(|marker| marker + 1))
+        .max()
+        .unwrap_or(start);
+    Some(base.min((cols - 3) as u16))
 }
 
 impl TabStrip {
@@ -377,26 +410,33 @@ impl TabStrip {
             buffer: Buffer::empty(area),
             prev: Buffer::empty(area),
             layout: TabLayout::default(),
-            scroll: 0,
+            scroll: None,
             palette: None,
         }
     }
 
     /// Wheel the overflowing strip's visible run by `delta` tabs
-    /// (positive = toward the later windows). A no-op repaint when the
-    /// strip fits or the offset cannot move.
+    /// (positive = toward the later windows). The offset becomes the
+    /// current run's first visible window moved by `delta`, clamped to
+    /// the window list, so wheeling from the auto run moves the run in
+    /// both directions. A no-op when the strip fits or the offset
+    /// cannot move.
     pub(crate) fn wheel(&mut self, delta: isize) {
+        let Some(first) = self.layout.cells.first() else {
+            return;
+        };
         let max = self.layout.total.saturating_sub(1) as isize;
-        let next = (self.scroll as isize + delta).clamp(0, max.max(0)) as usize;
+        let next = Some((first.window_index as isize + delta).clamp(0, max.max(0)) as usize);
         if next != self.scroll {
             self.scroll = next;
             self.invalidate();
         }
     }
 
-    /// Forget the scroll offset (a re-seed lands a fresh window list).
+    /// Forget the scroll offset (the auto run re-centers on the active
+    /// tab; a re-seed lands a fresh window list).
     pub(crate) fn reset_scroll(&mut self) {
-        self.scroll = 0;
+        self.scroll = None;
     }
 
     /// Whether the layout hid tabs at either edge (the wheel's domain).
@@ -429,8 +469,8 @@ impl TabStrip {
     /// `lead` is the side
     /// panel's title when the panel is up — `(title, width)`: the title
     /// paints in the first `width` columns (accent — the panel's
-    /// header, per the mock), the tabs lay out from it onward, and the
-    /// ` + ` stays pinned at the strip's right edge. Every tab is a solid
+    /// header, per the mock) and the tabs lay out from it onward, the
+    /// ` + ` following the last visible tab. Every tab is a solid
     /// block (pads included): the active one bright blue with dark bold
     /// text, the inactive ones lighter navy with muted text. The edge
     /// markers and the ` + ` paint muted on the bar.
@@ -478,8 +518,9 @@ impl TabStrip {
             cell.set_symbol(&ELLIPSIS.to_string());
             cell.set_style(muted);
         }
-        // The ` + ` button in its reserved right-edge slot, muted on the
-        // bar.
+        // The ` + ` button right after the last visible tab, muted on
+        // the bar (its leading pad is the blank column before the
+        // glyph).
         if let Some(plus) = layout.plus {
             let cell = &mut self.buffer[(plus + 1, 0)];
             cell.set_symbol("+");
@@ -581,7 +622,7 @@ mod tests {
     #[test]
     fn short_names_place_every_tab_in_order() {
         let ws = windows();
-        let layout = layout_tabs(&ws, Some("@1"), 80, 0, 0);
+        let layout = layout_tabs(&ws, Some("@1"), 80, 0, None);
         assert_eq!(layout.cells.len(), 3);
         assert_eq!(layout.left_marker, None);
         assert_eq!(layout.right_marker, None);
@@ -593,7 +634,11 @@ mod tests {
         assert_eq!(layout.cells[1].width, 7, "'  vim  ' = 7 cols");
         assert_eq!(layout.cells[2].col, 17, "one gap column after vim");
         assert_eq!(layout.cells[2].width, 9, "'  build  ' = 9 cols");
-        assert_eq!(layout.plus, Some(77), "the plus reserves the right edge");
+        assert_eq!(
+            layout.plus,
+            Some(26),
+            "the blank column after the last block"
+        );
     }
 
     /// SEC-212: a bidi override in a window name is dropped before
@@ -602,8 +647,8 @@ mod tests {
     fn spoofing_format_chars_do_not_widen_a_tab() {
         let clean = vec![("@0".to_string(), "abc".to_string())];
         let spoofed = vec![("@0".to_string(), "\u{202E}abc".to_string())];
-        let a = layout_tabs(&clean, Some("@0"), 80, 0, 0);
-        let b = layout_tabs(&spoofed, Some("@0"), 80, 0, 0);
+        let a = layout_tabs(&clean, Some("@0"), 80, 0, None);
+        let b = layout_tabs(&spoofed, Some("@0"), 80, 0, None);
         assert_eq!(b.cells[0].text, "abc");
         assert_eq!(b.cells[0].width, a.cells[0].width);
     }
@@ -620,7 +665,7 @@ mod tests {
         // block is b + 1 (ellipsis) + 4 (pads) wide, two blocks plus one
         // gap: budget 6 overflows (11 + 1 + 11 = 23 > 21), budget 5 fits
         // exactly ('  devel…  ' = '  docum…  ' = 10, 10 + 1 + 10 = 21).
-        let layout = layout_tabs(&ws, Some("@0"), 24, 0, 0);
+        let layout = layout_tabs(&ws, Some("@0"), 24, 0, None);
         assert_eq!(layout.cells.len(), 2);
         assert_eq!(layout.cells[0].text, "devel\u{2026}");
         assert_eq!(layout.cells[1].text, "docum\u{2026}");
@@ -630,6 +675,59 @@ mod tests {
         assert_eq!(layout.left_marker, None);
         assert_eq!(layout.right_marker, None);
         assert_eq!(layout.plus, Some(21));
+    }
+
+    /// The ` + ` never goes past the line: the reservation caps the tab
+    /// area, so a tab that would fill the whole row truncates beside the
+    /// button, and the button starts right after the last block — at
+    /// most at the reservation edge, where the three columns just reach
+    /// the line's end.
+    #[test]
+    fn plus_clamps_to_the_line_when_tabs_fill_it() {
+        // One tab whose name is wider than the row: the reservation
+        // truncates it so the button fits — the boundary case, the
+        // button exactly at the row's tail.
+        let big = vec![("@0".to_string(), "x".repeat(80).to_string())];
+        let layout = layout_tabs(&big, Some("@0"), 80, 0, None);
+        let plus = layout.plus.expect("an 80-col strip hosts the button");
+        assert!(plus + 3 <= 80, "the button stays on the row");
+        let last = layout.cells.last().expect("the tab is visible");
+        assert_eq!(
+            last.col + last.width,
+            plus,
+            "the button follows the block with one blank column"
+        );
+        assert_eq!(plus, 77, "the block fills the area up to the reservation");
+
+        // Across every width the button stays on the row, never
+        // overlaps a block or a marker, and a strip that cannot host
+        // the three-column button carries none.
+        let ws: Vec<(String, String)> = (0..12)
+            .map(|i| (format!("@{i}"), format!("window{i}")))
+            .collect();
+        for cols in 0..=80usize {
+            let layout = layout_tabs(&ws, Some("@6"), cols, 0, None);
+            if let Some(plus) = layout.plus {
+                assert!(
+                    plus as usize + 3 <= cols,
+                    "cols {cols}: the button stays on the row"
+                );
+                let last = layout.cells.last().expect("stage 3 keeps a run");
+                if last.col + last.width <= (cols - 3) as u16 {
+                    assert!(
+                        last.col + last.width <= plus,
+                        "cols {cols}: the button never overlaps the last block"
+                    );
+                    if let Some(marker) = layout.right_marker {
+                        if (marker as usize) < cols - 3 {
+                            assert!(marker < plus, "cols {cols}: the marker precedes the button");
+                        }
+                    }
+                }
+            } else {
+                assert!(cols < 4, "cols {cols}: only narrow strips drop the button");
+            }
+        }
     }
 
     /// Stage 3: so many tabs that even budget 1 overflows — only a run
@@ -646,7 +744,7 @@ mod tests {
         // hidden-edge marker costs its column plus a gap (2), so a run
         // of k blocks needs 7k - 1 + 4 <= 27: k = 3, the active tab and
         // the two on its left (the run grows leftward first).
-        let layout = layout_tabs(&ws, Some("@7"), 30, 0, 0);
+        let layout = layout_tabs(&ws, Some("@7"), 30, 0, None);
         let visible: Vec<usize> = layout.cells.iter().map(|c| c.window_index).collect();
         assert_eq!(visible, vec![5, 6, 7], "contiguous run with the active");
         assert_eq!(layout.left_marker, Some(0), "tabs hide on the left");
@@ -661,7 +759,7 @@ mod tests {
             Some(23),
             "tabs hide on the right: one gap after the last block (16 + 6)"
         );
-        assert_eq!(layout.plus, Some(27));
+        assert_eq!(layout.plus, Some(24), "the blank column after the marker");
     }
 
     /// The active tab stays visible even at the very end of the window
@@ -671,7 +769,7 @@ mod tests {
         let ws: Vec<(String, String)> = (0..12)
             .map(|i| (format!("@{i}"), format!("w{i}")))
             .collect();
-        let layout = layout_tabs(&ws, Some("@11"), 30, 0, 0);
+        let layout = layout_tabs(&ws, Some("@11"), 30, 0, None);
         let visible: Vec<usize> = layout.cells.iter().map(|c| c.window_index).collect();
         assert!(visible.contains(&11));
         assert_eq!(
@@ -683,12 +781,88 @@ mod tests {
         assert_eq!(layout.right_marker, None);
     }
 
+    /// Wheeling the overflowing strip moves the visible run in BOTH
+    /// directions from the auto run, and an explicit scroll of 0 seeds
+    /// the list's head — not the auto run (the scroll-0 ambiguity: a
+    /// plain offset could never leave the auto run leftward). The run
+    /// clamps at both edges, and `reset_scroll` returns to the auto run.
+    #[test]
+    fn wheel_scrolls_both_directions_from_the_auto_run() {
+        let ws: Vec<(String, String)> = (0..12)
+            .map(|i| (format!("@{i}"), format!("window{i}")))
+            .collect();
+        let visible = |strip: &TabStrip| -> Vec<usize> {
+            strip.layout.cells.iter().map(|c| c.window_index).collect()
+        };
+        let mut strip = TabStrip::new(30);
+        strip.paint(&ws, Some("@7"), None);
+        assert_eq!(
+            visible(&strip),
+            vec![5, 6, 7],
+            "the auto run centers the active"
+        );
+
+        strip.wheel(-3);
+        strip.paint(&ws, Some("@7"), None);
+        assert_eq!(
+            visible(&strip),
+            vec![2, 3, 4],
+            "wheel-up reveals earlier tabs"
+        );
+
+        strip.wheel(-3);
+        strip.paint(&ws, Some("@7"), None);
+        assert_eq!(
+            visible(&strip),
+            vec![0, 1, 2],
+            "the run reaches the list head"
+        );
+
+        strip.wheel(-3);
+        strip.paint(&ws, Some("@7"), None);
+        assert_eq!(visible(&strip), vec![0, 1, 2], "clamped at the head");
+
+        strip.wheel(30);
+        strip.paint(&ws, Some("@7"), None);
+        assert_eq!(
+            *visible(&strip).last().expect("non-empty"),
+            11,
+            "wheel-down reaches the list tail"
+        );
+
+        // Explicit scroll 0 seeds the head run; None is the auto run.
+        let head = layout_tabs(&ws, Some("@7"), 30, 0, Some(0));
+        assert_eq!(
+            head.cells
+                .iter()
+                .map(|c| c.window_index)
+                .collect::<Vec<_>>(),
+            vec![0, 1, 2]
+        );
+        let auto = layout_tabs(&ws, Some("@7"), 30, 0, None);
+        assert_eq!(
+            auto.cells
+                .iter()
+                .map(|c| c.window_index)
+                .collect::<Vec<_>>(),
+            vec![5, 6, 7]
+        );
+
+        strip.reset_scroll();
+        strip.paint(&ws, Some("@7"), None);
+        assert_eq!(
+            visible(&strip),
+            vec![5, 6, 7],
+            "reset returns to the auto run"
+        );
+    }
+
     /// Hit-testing maps each block's columns (pads included) to its
     /// window index; gap and beyond-the-tabs columns hit nothing.
     #[test]
     fn hit_test_maps_columns_to_windows() {
         let ws = windows();
-        let layout = layout_tabs(&ws, Some("@1"), 80, 0, 0);
+        let layout = layout_tabs(&ws, Some("@1"), 80, 0, None);
         let mut strip = TabStrip::new(80);
         strip.layout = layout;
         assert_eq!(strip.hit_test(0), Some(0), "the left pad owns the block");
@@ -733,7 +907,7 @@ mod tests {
             ("@0".to_string(), "日本語".to_string()),
             ("@1".to_string(), "vim".to_string()),
         ];
-        let layout = layout_tabs(&ws, Some("@0"), 80, 0, 0);
+        let layout = layout_tabs(&ws, Some("@0"), 80, 0, None);
         assert_eq!(layout.cells[0].width, 6 + 2 * PAD as u16);
         assert_eq!(layout.cells[1].col, layout.cells[0].width + GAP as u16);
         let mut strip = TabStrip::new(80);
@@ -844,13 +1018,25 @@ mod tests {
             (0..40).collect::<Vec<u16>>(),
             "every column repaints after invalidate"
         );
-        // The stale second/third tab columns arrive as blank bar cells.
+        // The stale second/third tab columns arrive as blank bar cells —
+        // except the button's span, which legitimately follows the one
+        // remaining tab now (its ` + ` paints where tab two was).
+        let mut plus_glyph = None;
         for (x, _, cell) in &diff {
             if (8..26).contains(x) {
+                if x == &9 {
+                    plus_glyph = Some(cell.symbol().to_string());
+                    continue;
+                }
                 assert_eq!(cell.symbol(), " ", "stale col {x} erases to blank");
                 assert_eq!(cell.bg, BAR_BG, "stale col {x} erases to the bar");
             }
         }
+        assert_eq!(
+            plus_glyph.as_deref(),
+            Some("+"),
+            "the button paints after the single remaining tab"
+        );
         // And the repaint re-baselines: an identical paint diffs empty.
         strip.paint(&windows()[..1], Some("@0"), None);
         assert!(strip.diff().is_empty());
@@ -870,7 +1056,7 @@ mod tests {
     #[test]
     fn degenerate_width_keeps_the_active_tab() {
         let ws = windows();
-        let layout = layout_tabs(&ws, Some("@2"), 6, 0, 0);
+        let layout = layout_tabs(&ws, Some("@2"), 6, 0, None);
         let visible: Vec<usize> = layout.cells.iter().map(|c| c.window_index).collect();
         assert!(visible.contains(&2), "active visible even tiny");
     }
@@ -925,27 +1111,32 @@ mod tests {
         assert_eq!(tab_text("@3", "notes", None), "notes");
     }
 
-    /// The ` + ` button owns the strip's reserved right-edge slot: a
-    /// muted `+` paints at its middle column on the bar, its three
-    /// columns hit the button, and the tabs are laid out beside the
-    /// reservation (a strip too narrow for the button plus a tab carries
-    /// none).
+    /// The ` + ` button follows the last tab: a muted `+` paints one
+    /// blank column after the last block on the bar, its three columns
+    /// hit the button, and the tabs lay out beside the button's
+    /// three-column reservation (a strip too narrow for the button plus
+    /// a tab carries none).
     #[test]
     fn plus_button_lays_out_paints_and_hits() {
         // '  main  ' = 8, '  vim  ' = 7, '  build  ' = 9 plus two gaps →
-        // 26 used, the plus reservation at 37..40 of the 40-col strip.
-        let layout = layout_tabs(&windows(), Some("@0"), 40, 0, 0);
-        assert_eq!(layout.plus, Some(37), "the plus reserves the right edge");
+        // 26 used, the button 26..29 of the 40-col strip.
+        let layout = layout_tabs(&windows(), Some("@0"), 40, 0, None);
+        assert_eq!(layout.plus, Some(26), "the button follows the last tab");
         let mut strip = TabStrip::new(40);
         strip.layout = layout.clone();
-        assert!(strip.plus_hit(37));
-        assert!(strip.plus_hit(38));
-        assert!(strip.plus_hit(39));
-        assert!(!strip.plus_hit(36), "the last tab column is not the plus");
+        assert!(strip.plus_hit(26));
+        assert!(strip.plus_hit(27));
+        assert!(strip.plus_hit(28));
+        assert!(!strip.plus_hit(25), "the last tab column is not the plus");
         strip.paint(&windows(), Some("@0"), None);
-        assert_eq!(strip.buffer[(38, 0)].symbol(), "+");
-        assert_eq!(strip.buffer[(38, 0)].fg, MUTED_FG, "the plus paints muted");
-        for col in 37..40u16 {
+        assert_eq!(
+            strip.buffer[(26, 0)].symbol(),
+            " ",
+            "the leading pad blanks"
+        );
+        assert_eq!(strip.buffer[(27, 0)].symbol(), "+");
+        assert_eq!(strip.buffer[(27, 0)].fg, MUTED_FG, "the plus paints muted");
+        for col in 26..29u16 {
             assert_eq!(
                 strip.buffer[(col, 0)].bg,
                 BAR_BG,
@@ -954,24 +1145,24 @@ mod tests {
         }
         // Degenerate: a strip narrower than the button plus one tab
         // column cannot host the reservation.
-        let tiny = layout_tabs(&windows(), Some("@0"), 3, 0, 0);
+        let tiny = layout_tabs(&windows(), Some("@0"), 3, 0, None);
         assert_eq!(tiny.plus, None, "the plus needs 3 spare columns");
     }
 
     /// The lead segment (the side panel's title when the panel is up):
-    /// the tabs lay out FROM the lead columns onward, the ` + ` stays
-    /// pinned at the strip's right edge, and a click maps the RAW host
-    /// column straight through — lead columns hit nothing, the first
-    /// tab starts at the lead width, the plus hits at the right edge.
-    /// This is the plus-defect fix's unit half.
+    /// the tabs lay out FROM the lead columns onward and the ` + `
+    /// follows the last tab, so a click maps the RAW host column
+    /// straight through — lead columns hit nothing, the first tab
+    /// starts at the lead width, and the plus hits right after the
+    /// last block.
     #[test]
-    fn lead_segment_offsets_the_tabs_and_keeps_the_plus_pinned() {
+    fn lead_segment_offsets_the_tabs_and_the_plus_follows() {
         // '  main  ' = 8, '  vim  ' = 7, '  build  ' = 9 one gap apart →
-        // blocks at 20..28, 29..36, 37..46 of the 80-col strip, plus
-        // reservation 77..80.
+        // blocks at 20..28, 29..36, 37..46 of the 80-col strip, the
+        // button 46..49.
         let ws = windows();
-        let layout = layout_tabs(&ws, Some("@1"), 80, 20, 0);
-        assert_eq!(layout.plus, Some(77), "the plus stays pinned right");
+        let layout = layout_tabs(&ws, Some("@1"), 80, 20, None);
+        assert_eq!(layout.plus, Some(46), "the button follows the last tab");
         assert_eq!(layout.cells[0].col, 20, "tabs start at the lead width");
         assert_eq!(layout.cells[0].text, "main");
         let mut strip = TabStrip::new(80);
@@ -982,7 +1173,9 @@ mod tests {
         assert_eq!(strip.hit_test(27), Some(0));
         assert_eq!(strip.hit_test(28), None, "the gap hits nothing");
         assert_eq!(strip.hit_test(29), Some(1));
-        assert!(strip.plus_hit(78), "the plus hits at the raw right edge");
+        assert!(strip.plus_hit(46));
+        assert!(strip.plus_hit(48), "the plus hits through its right pad");
+        assert!(!strip.plus_hit(45), "the last tab column is not the plus");
         assert!(!strip.plus_hit(10), "the lead column is not the plus");
     }
 
