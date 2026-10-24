@@ -36,16 +36,32 @@ impl Fixture {
     /// A tree with one live shell pane and `eff` as the daemon's applied
     /// settings copy (what `Ctx.config` hands the dispatch).
     fn with_config(eff: crate::mux::config::EffectiveConfig) -> Self {
-        let f = Self {
+        let f = Self::bare(eff);
+        let reply = f.run("new-session -s agents");
+        assert!(reply.contains("%end"), "{reply}");
+        f
+    }
+
+    /// [`Self::with_config`] whose pane runs a silent `sleep` instead of a
+    /// shell — for the adopt tests: they paint the title they classify
+    /// themselves, and a shell's startup output (some hosts' prompt
+    /// scripts set an OSC title of their own) must not land after it; the
+    /// adopt classification reads the emulator once, synchronously.
+    fn quiet() -> Self {
+        let f = Self::bare(crate::mux::config::EffectiveConfig::default());
+        let reply = f.run("new-session -s agents -- sleep 300");
+        assert!(reply.contains("%end"), "{reply}");
+        f
+    }
+
+    fn bare(eff: crate::mux::config::EffectiveConfig) -> Self {
+        Self {
             tree: Arc::new(Mutex::new(MuxTree::new(Box::new(
                 ShellPaneFactory::default(),
             )))),
             clients: Arc::new(Mutex::new(Vec::new())),
             config: Some(Arc::new(Mutex::new(eff))),
-        };
-        let reply = f.run("new-session -s agents");
-        assert!(reply.contains("%end"), "{reply}");
-        f
+        }
     }
 
     fn run(&self, line: &str) -> String {
@@ -728,7 +744,7 @@ fn agent_activity_counts_only_working_and_blocked_entries() {
 /// yields the roster row with no scrape tick and no hook report.
 #[test]
 fn adopt_pane_labels_the_pane_and_classifies_at_once() {
-    let f = Fixture::new();
+    let f = Fixture::quiet();
     let terminal = f.tree.lock().pane(PANE).unwrap().terminal();
     let title = String::from("\x1b]2;\u{2733} ready\x07");
     terminal.write().process(title.as_bytes());
@@ -760,7 +776,7 @@ fn adopt_pane_labels_the_pane_and_classifies_at_once() {
 /// refused; adoption never overwrites another reporter's claim.
 #[test]
 fn adopt_pane_refuses_a_pane_that_already_hosts_an_agent() {
-    let f = Fixture::new();
+    let f = Fixture::quiet();
     f.report("claude", "idle", 1);
 
     let reply = f.run("adopt-pane -t %0 claude");
@@ -773,7 +789,7 @@ fn adopt_pane_refuses_a_pane_that_already_hosts_an_agent() {
 /// the adopted pane's row populated between states.
 #[test]
 fn adopt_pane_refuses_kinds_without_scrape_patterns() {
-    let f = Fixture::new();
+    let f = Fixture::quiet();
 
     let reply = f.run("adopt-pane -t %0 zeta-agent");
     let (_, ok) = body(&reply);
@@ -786,7 +802,7 @@ fn adopt_pane_refuses_kinds_without_scrape_patterns() {
 /// tick's rules or fallback find one, never a guessed idle.
 #[test]
 fn adopt_pane_without_a_matching_rule_reports_unknown_and_no_roster_row() {
-    let f = Fixture::new();
+    let f = Fixture::quiet();
 
     let reply = f.run("adopt-pane -t %0 claude");
     let (lines, ok) = body(&reply);
