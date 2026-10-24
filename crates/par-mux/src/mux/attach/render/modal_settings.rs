@@ -307,12 +307,12 @@ impl SettingsSection {
                 },
                 SettingSpec {
                     key: "move-window-left",
-                    label: "swap prev pane",
+                    label: "move tab left",
                     kind: SettingKind::Chord,
                 },
                 SettingSpec {
                     key: "move-window-right",
-                    label: "swap prev pane",
+                    label: "move tab right",
                     kind: SettingKind::Chord,
                 },
                 SettingSpec {
