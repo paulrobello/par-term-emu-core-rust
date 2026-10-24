@@ -72,16 +72,34 @@ pub(super) fn parse_send_keys(a: &Args<'_>) -> Result<MuxCommand, String> {
         .trim_start()
         .strip_prefix(a.name)
         .expect("the command name prefixes the trimmed line");
-    let (target_value, payload_raw) =
-        split_after_flag(rest, "-t").ok_or_else(|| format!("{} requires -t", a.name))?;
-    // The raw-line split takes one whitespace-delimited token, so a
-    // send-keys target is a typed id or a SINGLE-WORD name — a spaced name
-    // cannot survive next to the free-text payload, and quoting it would
-    // eat into the payload's own quoting.
-    let pane: Target<PaneId> =
-        Target::parse(target_value).map_err(|_| format!("invalid pane target: {target_value}"))?;
-    let keys = parse_send_keys_payload(payload_raw)?;
-    Ok(MuxCommand::SendKeys { pane, keys })
+    // The first word that IS `-t` (raw bytes, as in the flag scanners: a
+    // quoted `'-t'` is a payload word) anchors the split. Its value is
+    // one shell word under the shared quoting grammar, so a quoted `%0`
+    // parses exactly like `pane-info`'s target and a quoted spaced name
+    // rides whole — while the payload stays the RAW remainder after that
+    // word, its quoting intact for the payload's own grammar.
+    let mut pos = a.line.len() - rest.len();
+    while let Some((start, end, _)) = next_shell_word(a.line, pos) {
+        if &a.line[start..end] != "-t" {
+            pos = end;
+            continue;
+        }
+        let (vstart, vend, unquoted) =
+            next_shell_word(a.line, end).ok_or_else(|| format!("{} requires -t", a.name))?;
+        // Only a value that opens a quote is unquoted (the `quoted_flag`
+        // rule): a bare token keeps its flat bytes.
+        let raw = &a.line[vstart..vend];
+        let target_value = if raw.starts_with(['\'', '"']) {
+            unquoted
+        } else {
+            raw.to_string()
+        };
+        let pane: Target<PaneId> = Target::parse(&target_value)
+            .map_err(|_| format!("invalid pane target: {target_value}"))?;
+        let keys = parse_send_keys_payload(&a.line[vend..])?;
+        return Ok(MuxCommand::SendKeys { pane, keys });
+    }
+    Err(format!("{} requires -t", a.name))
 }
 
 /// The split arrangement `split-window` and `join-pane` share: `-h` puts
@@ -261,8 +279,11 @@ pub(super) fn parse_join_pane(a: &Args<'_>) -> Result<MuxCommand, String> {
 
 /// `respawn-pane [-k] [-c dir] -t target [--] [command]`: flags lead, in
 /// any order, and stop at the first command word; the command is the raw
-/// rest of the line (SEC-126). Never reads flags through the [`Args`]
-/// helpers, which scan the whole line and so see into the command.
+/// rest of the line (SEC-126), a lone quoted word unquoted
+/// ([`unquote_lone_quoted_word`], the same tail contract the create
+/// commands' start commands follow). Never reads flags through the
+/// [`Args`] helpers, which scan the whole line and so see into the
+/// command.
 pub(super) fn parse_respawn_pane(a: &Args<'_>) -> Result<MuxCommand, String> {
     use LeadingFlag::{Bare, Valued};
     let lead = split_leading_flags(a.line, a.name, &[Valued("-t"), Valued("-c"), Bare("-k")])?;
@@ -276,7 +297,7 @@ pub(super) fn parse_respawn_pane(a: &Args<'_>) -> Result<MuxCommand, String> {
         Some("") => return Err(format!("{}: -c requires a non-empty directory", a.name)),
         other => other.map(str::to_string),
     };
-    let command = (!lead.tail.is_empty()).then(|| lead.tail.to_string());
+    let command = (!lead.tail.is_empty()).then(|| unquote_lone_quoted_word(lead.tail));
     Ok(MuxCommand::RespawnPane {
         pane,
         kill: lead.has("-k"),

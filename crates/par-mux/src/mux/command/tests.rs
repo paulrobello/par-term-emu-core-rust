@@ -3462,3 +3462,77 @@ fn leading_flags_read_a_quoted_flag_word_as_the_tail() {
         }
     );
 }
+
+/// A quoted pane target parses exactly like the bare form on `send-keys`,
+/// the way every other `-t` verb (`pane-info` here) already reads it —
+/// quoting a `%N` id used to leave the quotes in the token and refuse the
+/// target (kanban 01a1699e, probe 1).
+#[test]
+fn send_keys_parses_a_quoted_target_like_pane_info() {
+    let bare = parse_command("send-keys -t %0 -l 'make check'").unwrap();
+    let quoted = parse_command("send-keys -t '%0' -l 'make check'").unwrap();
+    assert_eq!(bare, quoted, "quoting a pane target must not change it");
+    let double = parse_command("send-keys -t \"%0\" --enter -l x").unwrap();
+    assert_eq!(
+        double,
+        parse_command("send-keys -t %0 --enter -l x").unwrap(),
+        "double quotes group the same"
+    );
+    // A quoted spaced name rides whole, as on every other verb.
+    match parse_command("send-keys -t 'my pane' -l hello").unwrap() {
+        MuxCommand::SendKeys { pane, .. } => {
+            assert_eq!(pane, Target::Name("my pane".into()));
+        }
+        other => panic!("not a send-keys: {other:?}"),
+    }
+    // The reference verb: pane-info accepts the quoted id.
+    match parse_command("pane-info -t '%0'").unwrap() {
+        MuxCommand::PaneInfo { pane, .. } => assert_eq!(pane, Target::Id(PaneId(0))),
+        other => panic!("not a pane-info: {other:?}"),
+    }
+}
+
+/// A start tail that is exactly one quoted word groups like tmux's argv:
+/// the quotes come off before `sh -c`, so `split-window -t %0 'sleep 60'`
+/// runs `sleep 60` instead of one unrunnable `'sleep 60'` word (kanban
+/// 01a1699e, probe 2). Anything else keeps the raw tail — quoting inside
+/// it is the pane shell's business.
+#[test]
+fn quoted_start_tail_groups_like_tmux() {
+    for line in [
+        "split-window -t %0 'sleep 60'",
+        "split-window -t %0 -- 'sleep 60'",
+        "split-window -t %0 \"sleep 60\"",
+        "split-window -t %0 -h 'sleep 60'",
+    ] {
+        match parse_command(line).unwrap_or_else(|e| panic!("{line}: {e}")) {
+            MuxCommand::SplitWindow { command, .. } => {
+                assert_eq!(command.as_deref(), Some("sleep 60"), "{line}");
+            }
+            other => panic!("{line}: not a split-window: {other:?}"),
+        }
+    }
+    // The tail is not one quoted word: the raw text rides, quotes inside
+    // it included.
+    match parse_command("split-window -t %0 echo 'hi there'").unwrap() {
+        MuxCommand::SplitWindow { command, .. } => {
+            assert_eq!(command.as_deref(), Some("echo 'hi there'"));
+        }
+        other => panic!("not a split-window: {other:?}"),
+    }
+    // The sibling surfaces that share the tail contract.
+    for (line, expected) in [
+        ("new-session -s logs -- 'tail -f x'", "tail -f x"),
+        ("new-window -n logs 'tail -f x'", "tail -f x"),
+        ("respawn-pane -t %0 'echo hi'", "echo hi"),
+    ] {
+        match parse_command(line).unwrap_or_else(|e| panic!("{line}: {e}")) {
+            MuxCommand::NewSession { command, .. }
+            | MuxCommand::NewWindow { command, .. }
+            | MuxCommand::RespawnPane { command, .. } => {
+                assert_eq!(command.as_deref(), Some(expected), "{line}");
+            }
+            other => panic!("{line}: unexpected command: {other:?}"),
+        }
+    }
+}

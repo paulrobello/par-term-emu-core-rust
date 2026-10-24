@@ -10,11 +10,51 @@ compile_error!("this test drives the par-mux binary: build it with --features mu
 
 mod common;
 
-use common::{command, pane_ids, wait_listening, MuxFixture};
+use common::{command, pane_ids, wait_for, wait_listening, MuxFixture};
 use interprocess::TryClone as _;
 use par_mux::mux::{connect_local_stream, prepare_socket_path, MuxClient, MuxServer};
 use std::io::BufReader;
 use std::time::{Duration, Instant};
+
+/// The card's probe 2 (kanban 01a1699e), end to end: a fully quoted start
+/// tail used to ride its quotes into `sh -c` and fuse into one unrunnable
+/// word — the pane died instantly and auto-remove could cascade the tree
+/// empty. The parser now strips that one level, so the quoted tail runs
+/// as a shell line, exactly like tmux's shell-split argv, and the pane
+/// stays alive on its trailing `sleep`.
+#[test]
+fn quoted_split_start_tail_runs_as_a_shell_line() {
+    let fixture = MuxFixture::new("skgt");
+    let path = fixture.socket();
+    let server = MuxServer::bind(path).expect("bind");
+    std::thread::spawn(move || server.run());
+    wait_listening(path);
+
+    let stream = connect_local_stream(path).expect("connect");
+    let mut writer = stream.try_clone().expect("clone");
+    let mut reader = BufReader::new(stream);
+    command(&mut writer, &mut reader, "new-session -s skgt");
+
+    let reply = command(
+        &mut writer,
+        &mut reader,
+        "split-window -t %0 'echo QG-MARK; sleep 60'",
+    );
+    let pane = pane_ids(&reply.join(""))
+        .into_iter()
+        .next()
+        .expect("split-window names the new pane");
+    let screen = wait_for(
+        &mut writer,
+        &mut reader,
+        &format!("capture-pane -t {pane}"),
+        "QG-MARK",
+    );
+    assert!(
+        screen.contains("QG-MARK"),
+        "the quoted tail must run as a shell line in pane {pane}: {screen}"
+    );
+}
 
 #[test]
 fn panes_survive_every_client_disconnecting() {

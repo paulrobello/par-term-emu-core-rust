@@ -1106,6 +1106,10 @@ impl<'a> Args<'a> {
     /// positional form): the RAW remainder of the line from the first
     /// word that is neither a flag nor a flag's value, quoting and
     /// whitespace intact — the same contract `respawn-pane`'s tail has.
+    /// A tail that is exactly one quoted shell word carries that one
+    /// level of quotes stripped ([`unquote_lone_quoted_word`]), so
+    /// `'sleep 60'` runs `sleep 60` the way tmux's shell-split argv
+    /// would; anything else rides raw.
     /// Words in `value_flags` consume their following word; words in
     /// `reject_flags` fail loudly (a flag this daemon ignores must not be
     /// silently dropped), each with its pointer text appended. Everything after a bare `--` is the command
@@ -1140,7 +1144,10 @@ impl<'a> Args<'a> {
                 let flags = self
                     .bounded(flags_end.unwrap_or(start))
                     .with_value_flags(value_flags);
-                return Ok(((!tail.is_empty()).then(|| tail.to_string()), flags));
+                return Ok((
+                    (!tail.is_empty()).then(|| unquote_lone_quoted_word(tail)),
+                    flags,
+                ));
             }
             if let Some((rejected, pointer)) = reject_flags.iter().find(|(flag, _)| *flag == word) {
                 return Err(format!(
@@ -1213,50 +1220,6 @@ impl<'a> Args<'a> {
         }
         Ok(Some(dims))
     }
-}
-
-/// Split `rest` at its first whitespace-separated `flag` occurrence, into the
-/// flag's value and the raw remainder following that value.
-///
-/// The remainder is a raw slice, not a joined token list: send-keys payloads
-/// carry quoting that pre-splitting would destroy. The flag must precede the
-/// payload — every sender par-mux targets puts `-t` first, and the bounded
-/// grammar here documents that rather than papering over it.
-fn split_after_flag<'a>(rest: &'a str, flag: &str) -> Option<(&'a str, &'a str)> {
-    let bytes = rest.as_bytes();
-    let flag = flag.as_bytes();
-    let mut i = 0;
-    while i < bytes.len() {
-        while i < bytes.len() && bytes[i].is_ascii_whitespace() {
-            i += 1;
-        }
-        let start = i;
-        while i < bytes.len() && !bytes[i].is_ascii_whitespace() {
-            i += 1;
-        }
-        if start == i {
-            break;
-        }
-        if &bytes[start..i] == flag {
-            let mut j = i;
-            while j < bytes.len() && bytes[j].is_ascii_whitespace() {
-                j += 1;
-            }
-            let value_start = j;
-            while j < bytes.len() && !bytes[j].is_ascii_whitespace() {
-                j += 1;
-            }
-            if value_start == j {
-                return None;
-            }
-            let mut k = j;
-            while k < bytes.len() && bytes[k].is_ascii_whitespace() {
-                k += 1;
-            }
-            return Some((&rest[value_start..j], &rest[k..]));
-        }
-    }
-    None
 }
 
 /// One flag a command accepts ahead of its free-text tail (SEC-126).
@@ -1339,6 +1302,20 @@ fn next_shell_word(s: &str, from: usize) -> Option<(usize, usize, String)> {
         }
     }
     Some((start, end, word))
+}
+
+/// A raw tail that is exactly one quoted shell word, with that one level
+/// of quotes stripped (`'sleep 60'` → `sleep 60`); any other tail keeps
+/// its raw bytes. This is the grouping rule `agent-prompt`'s text and
+/// `show-notification`'s title already apply, shared with the create
+/// commands' start tails and `respawn-pane`'s command so quoting a tail
+/// groups it like tmux's argv instead of riding the quotes into `sh -c`
+/// as one unrunnable word.
+fn unquote_lone_quoted_word(tail: &str) -> String {
+    match next_shell_word(tail, 0) {
+        Some((0, end, word)) if end == tail.len() && tail.starts_with(['\'', '"']) => word,
+        _ => tail.to_string(),
+    }
 }
 
 /// Split `line` into the flags that lead it and the raw text after them

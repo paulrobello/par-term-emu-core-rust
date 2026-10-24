@@ -191,12 +191,7 @@ pub const NOTIFICATION_BODY_MAX: usize = 240;
 pub(super) fn parse_show_notification(a: &Args<'_>) -> Result<MuxCommand, String> {
     use LeadingFlag::Valued;
     let lead = split_leading_flags(a.line, a.name, &[Valued("-b")])?;
-    let raw = match next_shell_word(lead.tail, 0) {
-        Some((0, end, word)) if end == lead.tail.len() && lead.tail.starts_with(['\'', '"']) => {
-            word
-        }
-        _ => lead.tail.to_string(),
-    };
+    let raw = unquote_lone_quoted_word(lead.tail);
     let clean = |text: &str, max: usize| -> String {
         text.chars()
             .map(|c| if c.is_control() { ' ' } else { c })

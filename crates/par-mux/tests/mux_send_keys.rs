@@ -155,3 +155,35 @@ fn quoted_literal_run_keeps_its_space_like_tmux() {
         "the quoted run should execute `echo LEFT`, printing LEFT: {output}"
     );
 }
+
+/// The card's probe 1 (kanban 01a1699e), end to end: a quoted pane target
+/// used to leave the quotes in the token, parse as a bogus name, and be
+/// refused while `pane-info -t '%0'` was accepted. The quoted spelling
+/// now drives the pane exactly like the bare form, on `send-keys` and on
+/// the capturing query alike.
+#[cfg(unix)]
+#[test]
+fn quoted_pane_target_drives_the_pane_like_the_bare_form() {
+    let fixture = MuxFixture::new("skqt");
+    let path = fixture.socket();
+    let server = MuxServer::bind(path).expect("bind");
+    thread::spawn(move || server.run());
+    common::wait_listening(path);
+
+    let stream = connect_local_stream(path).expect("connect");
+    let mut writer = stream.try_clone().expect("clone");
+    let mut reader = BufReader::new(stream);
+    command(&mut writer, &mut reader, "new-session -s skqt");
+
+    command(
+        &mut writer,
+        &mut reader,
+        "send-keys -t '%0' -l 'echo QK-MARK'",
+    );
+    command(&mut writer, &mut reader, "send-keys -t '%0' Enter");
+    let screen = wait_for(&mut writer, &mut reader, "capture-pane -t '%0'", "QK-MARK");
+    assert!(
+        screen.contains("QK-MARK"),
+        "the quoted target must drive the pane: {screen}"
+    );
+}

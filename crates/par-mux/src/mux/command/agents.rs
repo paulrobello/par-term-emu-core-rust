@@ -122,12 +122,7 @@ pub(super) fn parse_agent_prompt(a: &Args<'_>) -> Result<MuxCommand, String> {
             states
         }
     };
-    let text = match next_shell_word(lead.tail, 0) {
-        Some((0, end, word)) if end == lead.tail.len() && lead.tail.starts_with(['\'', '"']) => {
-            word
-        }
-        _ => lead.tail.to_string(),
-    };
+    let text = unquote_lone_quoted_word(lead.tail);
     if text.trim().is_empty() {
         return Err(format!("{} requires prompt text", a.name));
     }
