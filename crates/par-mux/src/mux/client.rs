@@ -20,6 +20,11 @@ use std::time::{Duration, Instant};
 
 /// How long `send` waits for a reply block before giving up.
 const REPLY_TIMEOUT: Duration = Duration::from_secs(10);
+
+/// How often the client reader wakes to notice a dropped handle. Mirrors the
+/// daemon-side eviction poll: after [`MuxClient::drop`], the connection
+/// closes within about one of these plus the daemon's own EOF poll.
+const CLIENT_READER_POLL: Duration = Duration::from_millis(200);
 /// Per-line byte budget for the client reader. A healthy daemon's longest
 /// line is a `show-buffer` body under the daemon's own 1 MiB input budget
 /// (a `%output` line is at most ~64 KiB), so 4x that never trips; a broken
@@ -53,6 +58,10 @@ pub struct MuxClient {
     /// was reading, not yet handed to the caller.
     completed: VecDeque<(u64, Reply)>,
     next_token: u64,
+    /// Set by [`Drop for MuxClient`]; the reader thread checks it on every
+    /// wake so the handle dropping closes the connection instead of leaving
+    /// it to whichever daemon push arrives next.
+    closed: Arc<AtomicBool>,
 }
 
 /// Who a not-yet-arrived reply block belongs to.
@@ -226,12 +235,22 @@ impl MuxClient {
     }
 
     fn from_stream(stream: LocalStream) -> io::Result<Self> {
+        use interprocess::local_socket::traits::Stream as _;
+
         let writer = stream.try_clone()?;
         let (reply_tx, reply_rx) = channel::<Reply>();
         let (notification_tx, notifications_rx) = channel::<TmuxNotification>();
         let discard_notifications = Arc::new(AtomicBool::new(false));
         let discard = Arc::clone(&discard_notifications);
-        std::thread::spawn(move || reader_loop(stream, reply_tx, notification_tx, &discard));
+        // Best-effort: named pipes (Windows) reject I/O timeouts, so there
+        // the reader still needs a push to observe the flag — the same
+        // graceful degradation the daemon's connection threads accept.
+        let _ = stream.set_recv_timeout(Some(CLIENT_READER_POLL));
+        let closed = Arc::new(AtomicBool::new(false));
+        let reader_closed = Arc::clone(&closed);
+        std::thread::spawn(move || {
+            reader_loop(stream, reply_tx, notification_tx, &discard, reader_closed)
+        });
         Ok(Self {
             writer,
             reply_rx,
@@ -241,6 +260,7 @@ impl MuxClient {
             owed: VecDeque::new(),
             completed: VecDeque::new(),
             next_token: 0,
+            closed,
         })
     }
 
@@ -392,19 +412,37 @@ pub struct Reply {
     pub ok: bool,
 }
 
+impl Drop for MuxClient {
+    fn drop(&mut self) {
+        // The reader thread holds the stream this handle was built from, so
+        // closing the writer alone would leave the daemon connection open
+        // until some push happened to wake the reader into forwarding to a
+        // dead channel. Flag it instead: with a recv timeout set (Unix), the
+        // reader wakes within [`CLIENT_READER_POLL`], drops the stream, and
+        // the daemon sees EOF. Named pipes (Windows) reject recv timeouts,
+        // so there the close still waits for the next push — the flag makes
+        // that push terminal rather than ignored.
+        self.closed.store(true, Ordering::Relaxed);
+    }
+}
+
 /// Split one connection's byte stream into reply blocks and notifications.
 fn reader_loop(
     stream: LocalStream,
     reply_tx: Sender<Reply>,
     notification_tx: Sender<TmuxNotification>,
     discard: &AtomicBool,
+    closed: Arc<AtomicBool>,
 ) {
     let mut reader = BufReader::new(stream);
     let mut parser = TmuxControlParser::new(true);
     // The open reply block: its command number and body so far.
     let mut open: Option<(u32, Vec<String>)> = None;
     loop {
-        let line = match read_daemon_line(&mut reader, MAX_REPLY_LINE_BYTES) {
+        if closed.load(Ordering::Relaxed) {
+            break;
+        }
+        let line = match read_daemon_line(&mut reader, MAX_REPLY_LINE_BYTES, &closed) {
             DaemonLine::Line(line) => line,
             DaemonLine::Oversize => {
                 log::warn!(
@@ -487,16 +525,21 @@ enum DaemonLine {
 /// read wakes, so a healthy sender's pause never loses a partial line, and
 /// an unterminated stream trips the budget without a newline — the
 /// property `Lines` lacks (it grows one `String` without limit).
-fn read_daemon_line<R: BufRead>(reader: &mut R, max: usize) -> DaemonLine {
+fn read_daemon_line<R: BufRead>(reader: &mut R, max: usize, closed: &AtomicBool) -> DaemonLine {
     let mut buf = Vec::new();
     loop {
+        // A poll wake re-enters here before the next fill, so a Drop while
+        // parked in the read ends this line read promptly.
+        if closed.load(Ordering::Relaxed) {
+            return DaemonLine::Closed;
+        }
         match fill_line_bounded(reader, &mut buf, max) {
             Ok(LineFill::Complete) => break,
             Ok(LineFill::Eof) if buf.is_empty() => return DaemonLine::Closed,
             Ok(LineFill::Eof) => break,
             Ok(LineFill::Oversize) => return DaemonLine::Oversize,
-            // No recv timeout is set on the client stream today; if one is
-            // ever added, a wake must keep `buf` (Lines would drop it).
+            // The stream carries CLIENT_READER_POLL so Drop closes the
+            // connection; a wake must keep `buf` (Lines would drop it).
             Err(err) if is_poll_wake(&err) => continue,
             Err(_) => return DaemonLine::Closed,
         }
@@ -1175,35 +1218,54 @@ mod tests {
     /// and reads an unterminated final line before EOF.
     #[test]
     fn read_daemon_line_strips_lf_and_crlf() {
+        let open = std::sync::atomic::AtomicBool::new(false);
         let mut reader = io::Cursor::new(b"a\nb\r\nc".to_vec());
         assert_eq!(
-            read_daemon_line(&mut reader, 16),
+            read_daemon_line(&mut reader, 16, &open),
             DaemonLine::Line("a".into())
         );
         assert_eq!(
-            read_daemon_line(&mut reader, 16),
+            read_daemon_line(&mut reader, 16, &open),
             DaemonLine::Line("b".into())
         );
         assert_eq!(
-            read_daemon_line(&mut reader, 16),
+            read_daemon_line(&mut reader, 16, &open),
             DaemonLine::Line("c".into())
         );
-        assert_eq!(read_daemon_line(&mut reader, 16), DaemonLine::Closed);
+        assert_eq!(read_daemon_line(&mut reader, 16, &open), DaemonLine::Closed);
+    }
+
+    /// A dropped handle's flag ends the line read even while data sits
+    /// unread — the Drop-closes-connection contract half that keeps the
+    /// daemon-side reap bounded.
+    #[test]
+    fn read_daemon_line_aborts_when_the_handle_is_dropped() {
+        let closed = std::sync::atomic::AtomicBool::new(true);
+        let mut reader = io::Cursor::new(b"data\n".to_vec());
+        assert_eq!(
+            read_daemon_line(&mut reader, 16, &closed),
+            DaemonLine::Closed
+        );
     }
 
     /// The budget trips mid-line without a newline — the property `Lines`
     /// lacks: it would grow one `String` forever.
     #[test]
     fn read_daemon_line_trips_the_budget_without_a_newline() {
+        let open = std::sync::atomic::AtomicBool::new(false);
         let mut reader = io::Cursor::new(vec![b'x'; 300]);
-        assert_eq!(read_daemon_line(&mut reader, 100), DaemonLine::Oversize);
+        assert_eq!(
+            read_daemon_line(&mut reader, 100, &open),
+            DaemonLine::Oversize
+        );
     }
 
     /// Non-UTF-8 closes the connection, matching `Lines`' InvalidData break.
     #[test]
     fn read_daemon_line_closes_on_non_utf8() {
+        let open = std::sync::atomic::AtomicBool::new(false);
         let mut reader = io::Cursor::new(b"\xff\n".to_vec());
-        assert_eq!(read_daemon_line(&mut reader, 16), DaemonLine::Closed);
+        assert_eq!(read_daemon_line(&mut reader, 16, &open), DaemonLine::Closed);
     }
 
     /// An unterminated daemon line past the budget ends the reader while

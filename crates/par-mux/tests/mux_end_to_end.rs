@@ -437,6 +437,58 @@ fn a_new_panes_first_output_is_pushed_even_when_wiring_lags() {
     }
 }
 
+/// A dropped `MuxClient` must close its connection: the daemon withdraws
+/// the client's viewer claim without waiting for an unrelated daemon push
+/// to wake the client's reader thread into noticing the drop.
+#[test]
+fn a_dropped_mux_client_withdraws_its_viewer_claim() {
+    use par_mux::mux::MuxClient;
+
+    let (_dir, path) = socket_path("drop-reap");
+    let _handle = spawn_server(&path);
+
+    let mut control = MuxClient::connect(&path).expect("control connects");
+    // A quiet pane: no output, so no `%output` pushes — the withdrawal
+    // below can only happen through the drop closing the connection, not
+    // through a push waking the dropped client's reader.
+    control
+        .send("new-session -s reap 'sleep 300'")
+        .expect("new-session");
+    control
+        .send("refresh-client -t %0 -C 80x24")
+        .expect("control claims a size");
+
+    let viewer_line = |client: &mut MuxClient| -> String {
+        client
+            .send("pane-info -t %0")
+            .expect("pane-info replies")
+            .into_iter()
+            .find(|l| l.contains("viewers="))
+            .expect("the viewer-status token line")
+    };
+    let before = viewer_line(&mut control);
+    assert!(
+        before.contains("viewers=attach:"),
+        "the refresh-client claim registers as a viewer: {before}"
+    );
+
+    drop(control);
+
+    let mut probe = MuxClient::connect(&path).expect("probe connects");
+    let deadline = Instant::now() + Duration::from_secs(5);
+    loop {
+        let line = viewer_line(&mut probe);
+        if !line.contains("viewers=attach:") {
+            break;
+        }
+        assert!(
+            Instant::now() < deadline,
+            "the dropped client's viewer claim lingered: {line}"
+        );
+        std::thread::sleep(Duration::from_millis(100));
+    }
+}
+
 /// Wait until the server's socket accepts a connection.
 #[cfg(unix)]
 fn wait_for_socket(path: &std::path::Path) {

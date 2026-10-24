@@ -1395,7 +1395,7 @@ sections; the numbers live here.
 
 | Constant | Value | Location | Bounds |
 |----------|-------|----------|--------|
-| `MAX_REPLY_LINE_BYTES` | 4 MiB | `crates/par-mux/src/mux/client.rs:28` | Bytes accumulated from one daemon reply or notification line before the client closes the connection. |
+| `MAX_REPLY_LINE_BYTES` | 4 MiB | `crates/par-mux/src/mux/client.rs:33` | Bytes accumulated from one daemon reply or notification line before the client closes the connection. |
 | `NOTIFICATION_TITLE_MAX` | 80 | `crates/par-mux/src/mux/command/buffers.rs:181` | Characters of a `show-notification` title (herdr's 80); longer is truncated. |
 | `NOTIFICATION_BODY_MAX` | 240 | `crates/par-mux/src/mux/command/buffers.rs:184` | Characters of a `show-notification` body (herdr's 240); longer is truncated. |
 | `MAX_CLIENT_COLS` | 1,000 | `crates/par-mux/src/mux/command/mod.rs:853` | Columns a par-mux client may report for a window grid (`refresh-client -C`). |

@@ -10,9 +10,9 @@ compile_error!("this test drives the par-mux binary: build it with --features mu
 
 mod common;
 
-use common::{
-    command, pane_ids, rerun_isolated, wait_for, wait_listening, MuxFixture, REEXEC_MARKER,
-};
+use common::{command, pane_ids, wait_for, wait_listening, MuxFixture};
+#[cfg(unix)]
+use common::{rerun_isolated, REEXEC_MARKER};
 use interprocess::TryClone as _;
 use par_mux::mux::{connect_local_stream, prepare_socket_path, MuxClient, MuxServer};
 use std::io::BufReader;
