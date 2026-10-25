@@ -4193,7 +4193,10 @@ fn toast_renders_the_blocked_reason_line() {
 /// notification queue. The refresh must not consume the transition: the
 /// push drained after it still toasts and rings the bell. The fake daemon
 /// writes the push ahead of the snapshot reply — the wire order — and the
-/// pump's own steps run in their own order (6 refresh, 9 drain).
+/// pump's own steps run in their own order (6 refresh, 9 drain). The
+/// refresh now writes its snapshot without waiting (the async status
+/// path); `settle` runs the reply's continuation, the same dispatch the
+/// pump's step 1b performs, before the drain.
 #[test]
 fn a_refresh_that_already_saw_the_new_state_still_lets_its_push_toast() {
     use super::super::notify::NotifyDelivery;
@@ -4229,6 +4232,7 @@ fn a_refresh_that_already_saw_the_new_state_still_lets_its_push_toast() {
 
     session.status_dirty = true;
     assert_eq!(session.refresh_status(&mut conn), EventOutcome::Continue);
+    settle(&mut session, &mut conn);
     assert_eq!(
         session.status.agents()[0].state,
         "blocked",
@@ -4245,6 +4249,129 @@ fn a_refresh_that_already_saw_the_new_state_still_lets_its_push_toast() {
     assert_eq!(toast.title, "claude blocked");
     assert_eq!(toast.pane, Some(1));
     assert_eq!(session.notify.outbox, vec![0x07], "and rings the bell");
+}
+
+/// The fully async status path: the pump's snapshot writes without
+/// waiting — a late reply parks no input — and the reply applies as a
+/// continuation on the dispatch tick, committing the same facts the
+/// sync refresh committed.
+#[test]
+fn status_snapshot_issues_without_blocking_and_applies_on_dispatch() {
+    let mut script = snapshot_script();
+    script.delays.insert(
+        "client-snapshot -t @0".to_string(),
+        std::time::Duration::from_millis(500),
+    );
+    let (rx, mut conn) = fake_daemon("asyncsnap", script);
+    let mut session = snapshot_session();
+    drained(&rx);
+
+    session.status_dirty = true;
+    let started = std::time::Instant::now();
+    assert_eq!(session.refresh_status(&mut conn), EventOutcome::Continue);
+    assert!(
+        started.elapsed() < std::time::Duration::from_millis(200),
+        "the snapshot writes without waiting: {:?}",
+        started.elapsed()
+    );
+    assert!(!session.status_dirty, "the issue consumed the dirty mark");
+    assert!(
+        session.status_snapshot_inflight.is_some(),
+        "the reply is owed: one snapshot in flight"
+    );
+    wait_recorded(&rx, "client-snapshot");
+    assert!(
+        drained(&rx).is_empty(),
+        "one snapshot on the wire, nothing else"
+    );
+
+    settle(&mut session, &mut conn);
+    assert_eq!(
+        session.status.agents().len(),
+        2,
+        "the reply's roster committed"
+    );
+    assert!(
+        session.status_snapshot_inflight.is_none(),
+        "the application releases the in-flight slot"
+    );
+    assert!(
+        session.pending_cmds.is_empty(),
+        "the reply drained exactly once"
+    );
+}
+
+/// The nothing-left-to-show `End` rides the continuation: the `%error`
+/// snapshot reply lands `SessionGone`, the landing resolves nothing,
+/// and the continuation raises the pump-visible `status_end` that the
+/// status step checks on that tick.
+#[test]
+fn status_snapshot_end_lands_through_the_continuation() {
+    let mut script = snapshot_script();
+    script.failing.insert("client-snapshot -t @0".to_string());
+    let (rx, mut conn) = fake_daemon("asyncend", script);
+    let mut session = snapshot_session();
+    drained(&rx);
+
+    session.status_dirty = true;
+    assert_eq!(session.refresh_status(&mut conn), EventOutcome::Continue);
+    assert!(!session.status_end, "nothing ends before the reply");
+    settle(&mut session, &mut conn);
+    assert!(
+        session.status_end,
+        "the SessionGone landing found nothing left to show"
+    );
+}
+
+/// The storm rule survives the async path: a snapshot still owed past
+/// the status bound is abandoned in place — the stale bar stands, no
+/// re-issue queues behind the wedged reply, and the late reply (still
+/// token-aligned) applies when dispatched.
+#[test]
+fn status_snapshot_timeout_abandons_without_re_issuing() {
+    let mut script = snapshot_script();
+    script.delays.insert(
+        "client-snapshot -t @0".to_string(),
+        std::time::Duration::from_millis(900),
+    );
+    let (rx, mut conn) = fake_daemon("asyncstorm", script);
+    let mut session = snapshot_session();
+    drained(&rx);
+
+    session.status_dirty = true;
+    assert_eq!(session.refresh_status(&mut conn), EventOutcome::Continue);
+    wait_recorded(&rx, "client-snapshot");
+
+    // Mid-flight dirty mark: nothing re-issues while the reply is owed,
+    // and the mark survives for a re-issue once the reply applies.
+    std::thread::sleep(std::time::Duration::from_millis(200));
+    session.status_dirty = true;
+    assert_eq!(session.refresh_status(&mut conn), EventOutcome::Continue);
+    assert!(
+        session.status_dirty,
+        "the mid-flight mark survives for the post-reply re-issue"
+    );
+    assert!(drained(&rx).is_empty(), "no re-issue while in flight");
+
+    // Past the bound: the abandon clears the in-flight slot and the
+    // dirty mark — nothing re-queues behind the wedged reply (the
+    // storm rule; the next poll tick or event re-queries).
+    std::thread::sleep(std::time::Duration::from_millis(400));
+    assert_eq!(session.refresh_status(&mut conn), EventOutcome::Continue);
+    assert!(
+        !session.status_dirty,
+        "the abandon leaves the re-query to the next poll or event"
+    );
+    assert!(drained(&rx).is_empty(), "no re-issue after the abandon");
+
+    // The late reply is still owed its continuation: it applies when
+    // dispatched (tokens keep the reply stream aligned).
+    settle(&mut session, &mut conn);
+    assert_eq!(
+        session.status.agents().len(),
+        2,
+        "the late reply applies once it lands"
+    );
 }
 
 /// The seed script for the mid-seed toast tests: `@0` holds pane `%9`

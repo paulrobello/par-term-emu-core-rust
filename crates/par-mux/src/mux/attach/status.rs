@@ -24,6 +24,7 @@
 
 use super::conn::AttachConn;
 use super::spell_key;
+use crate::mux::client::Reply;
 use crate::mux::ipc::{AgentRow, GitStatusRow, WindowRow, WorktreeRow};
 use ratatui::buffer::{Buffer, Cell as RtCell};
 use ratatui::layout::Rect as RtRect;
@@ -306,6 +307,22 @@ impl StatusState {
             }
             Err(_) => return Err(StatusError::Query),
         };
+        self.apply_snapshot_reply(&reply, focused)
+            .map(|workspaces| RefreshRows {
+                workspaces: Some(workspaces),
+            })
+    }
+
+    /// The snapshot refresh's reply half, shared by the sync round trip
+    /// and the pump continuation (the async status path): classify the
+    /// reply — `SessionGone` for an `%error` (the window lost its
+    /// session), `Query` for a malformed body — commit the facts, and
+    /// hand back the workspace roster for the side panel.
+    pub(crate) fn apply_snapshot_reply(
+        &mut self,
+        reply: &Reply,
+        focused: u32,
+    ) -> Result<Vec<(String, String, bool)>, StatusError> {
         if !reply.ok {
             return Err(StatusError::SessionGone);
         }
@@ -316,9 +333,7 @@ impl StatusState {
             .find(|(pane, _)| *pane == focused)
             .map(|(_, title)| title.clone())
             .unwrap_or_default();
-        Ok(RefreshRows {
-            workspaces: Some(workspaces),
-        })
+        Ok(workspaces)
     }
 
     /// Assign every `Some` field of `facts`, in the refresh's current

@@ -16,6 +16,7 @@ use crate::mux::attach::layout::PaneRect;
 use crate::mux::attach::status;
 use crate::mux::attach::targets::{cascade_landing, session_active_window};
 use crate::mux::attach::{layout, HelpRow};
+use crate::mux::client::Reply;
 use crate::mux::layout::PaneChrome;
 use par_term_emu_core::cursor::CursorStyle;
 use par_term_emu_core::mouse::MouseMode;
@@ -834,6 +835,14 @@ struct WindowSession {
     /// Whether the status state is stale and needs a re-query before the
     /// next paint (the throttled re-query on agent/sessions churn).
     status_dirty: bool,
+    /// A `client-snapshot` refresh written and not yet applied or
+    /// abandoned, since the pump tick that wrote it (the async status
+    /// path, [`Self::refresh_status_async`]).
+    status_snapshot_inflight: Option<std::time::Instant>,
+    /// The nothing-left-to-show `End` raised by the snapshot reply's
+    /// continuation (the reply cannot end the view through a return
+    /// value any more); the pump's status step checks it.
+    status_end: bool,
     /// The modal that owns the keyboard (and, for most, the pointer), if
     /// any: see [`Modal`]. One field, so two open modals are
     /// unrepresentable.
@@ -1257,6 +1266,8 @@ impl WindowSession {
             status: status::StatusState::default(),
             chrome: ChromeRows::new(cols),
             status_dirty: true,
+            status_snapshot_inflight: None,
+            status_end: false,
             modal: Modal::None,
             prefix: chords.prefix,
             reload_key: chords.reload,
@@ -1402,8 +1413,13 @@ impl WindowSession {
             //     contract): the shown window gone lands on the session's
             //     active window, the session gone on its workspace's
             //     landing session, the workspace gone on the daemon's
-            //     active workspace. Only nothing left to show ends it.
-            if self.status_dirty && self.refresh_status(conn) == EventOutcome::End {
+            //     active workspace. Only nothing left to show ends it —
+            //     through the return value on the legacy path, through
+            //     `status_end` on the async path (the snapshot reply's
+            //     continuation raises it on the tick the reply arrives).
+            if self.status_end
+                || (self.status_dirty && self.refresh_status(conn) == EventOutcome::End)
+            {
                 return Ok(());
             }
 
@@ -1648,8 +1664,17 @@ impl WindowSession {
     /// The pump's throttled status step: re-query the bar's facts, reuse
     /// the reply rows for the side panel and pane titles, and repaint the
     /// bar and the strip. A gone session lands up the tree
-    /// ([`cascade_landing`]); `End` only when nothing is left to show.
+    /// ([`cascade_landing`]); `End` only when nothing is left to show —
+    /// as the return value on the legacy per-fact path, through the
+    /// snapshot continuation's `status_end` on the async path.
     fn refresh_status(&mut self, conn: &mut crate::mux::attach::conn::AttachConn) -> EventOutcome {
+        if conn.has_command_feature("client-snapshot", "v1") {
+            // The snapshot is written without waiting (ENH-049): the pump
+            // keeps reading stdin while the reply is owed, and the reply
+            // applies as a continuation ([`Self::apply_status_snapshot`]).
+            self.refresh_status_async(conn);
+            return EventOutcome::Continue;
+        }
         self.status_dirty = false;
         match self.refresh_status_facts(conn) {
             Ok(()) => {}
@@ -1681,6 +1706,84 @@ impl WindowSession {
         // add/close/rename refreshes it here.
         self.draw_tab_strip();
         EventOutcome::Continue
+    }
+
+    /// The async status refresh's issue half: write `client-snapshot`
+    /// through [`Self::send_then`] and return — the pump keeps reading
+    /// stdin while the reply is owed. One snapshot in flight at a time;
+    /// a dirty mark landing mid-flight stays set, and the reply's
+    /// application re-issues on a later tick. A reply still owed past
+    /// [`status::STATUS_TIMEOUT`] is abandoned in place (the async
+    /// TimedOut): the stale bar stands and nothing re-issues now — the
+    /// next poll tick or event re-queries (the storm rule).
+    fn refresh_status_async(&mut self, conn: &mut crate::mux::attach::conn::AttachConn) {
+        if let Some(since) = self.status_snapshot_inflight {
+            if since.elapsed() >= status::STATUS_TIMEOUT {
+                self.status_snapshot_inflight = None;
+                self.status_dirty = false;
+            }
+            return;
+        }
+        self.status_dirty = false;
+        self.status_snapshot_inflight = Some(std::time::Instant::now());
+        let window = self.window.clone();
+        self.send_then(
+            conn,
+            &format!("client-snapshot -t {window}"),
+            move |s, c, reply| {
+                s.apply_status_snapshot(c, reply, window);
+            },
+        );
+    }
+
+    /// The status snapshot's reply continuation (runs on the pump tick
+    /// the reply arrives, [`Self::dispatch_replies`]): apply the facts,
+    /// refresh the chrome that rides them, and land up the tree on the
+    /// SessionGone contract. `status_end` carries the nothing-left-
+    /// to-show `End` to the pump's status step, which cannot get it as
+    /// a return value any more.
+    fn apply_status_snapshot(
+        &mut self,
+        conn: &mut crate::mux::attach::conn::AttachConn,
+        reply: Reply,
+        window: String,
+    ) {
+        self.status_snapshot_inflight = None;
+        // A reply for a window the view already left is stale: the
+        // switch's reseed re-queries (the nav_current rule).
+        if self.window != window {
+            return;
+        }
+        let focused = self.renderer.focused().unwrap_or(0);
+        match self.status.apply_snapshot_reply(&reply, focused) {
+            Ok(workspaces) => {
+                self.seed_transitions();
+                if self.sidebar.is_on() {
+                    self.install_panel_sections(&workspaces);
+                }
+                // The snapshot carried every pane title: query-free.
+                let _ = self.refresh_pane_titles(conn);
+            }
+            Err(status::StatusError::SessionGone) => {
+                let session = self.status.session_id.clone();
+                let workspace = self.status.session_workspace.clone();
+                match cascade_landing(conn, session.as_deref(), workspace.as_deref()) {
+                    // The reseed refreshes the status itself.
+                    Ok(Some(window)) if window != self.window => {
+                        self.reseed_window(conn, &window);
+                    }
+                    // A failed landing retries on the next poll tick or
+                    // event, not immediately (the same storm rule).
+                    Err(_) => {}
+                    _ => self.status_end = true,
+                }
+            }
+            // Stale state survives; the next mark retries.
+            Err(status::StatusError::Query) => {}
+            Err(status::StatusError::TimedOut) => {} // not produced by the reply half
+        }
+        self.draw_status_row();
+        self.draw_tab_strip();
     }
 
     /// The flash's frame tick at `now` (injected so tests drive the
