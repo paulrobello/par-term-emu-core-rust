@@ -150,6 +150,7 @@ message Connected {
   optional string client_id = 10;         // Unique client identifier
   optional bool readonly = 11;            // Whether this connection is read-only
   optional string pointer_shape = 12;     // Requested pointer shape (OSC 22); absent = client's own pointer
+  repeated InlineImage graphics = 13;     // Frames already on screen, replayed for a late joiner
 }
 
 // Full screen refresh response
@@ -241,6 +242,8 @@ message InlineImage {
   uint32 width = 4;                 // Pixel width
   uint32 height = 5;                // Pixel height
   bytes data = 6;                   // Encoded image bytes (<= 8 MiB)
+  uint32 col = 7;                   // Cell column of the image's top-left corner
+  uint32 row = 8;                   // Cell row of the image's top-left corner
 }
 
 // Hyperlink added (OSC 8)

@@ -6,10 +6,10 @@ S 1205088401102b
   = Ok(Resize { cols: 132, rows: 43 })
 S 1a0b0a097469746c6520e29c93
   = Ok(Title { title: "title ✓" })
-S 22d5010864101e1a0673637265656e2204736573732a9f010a0c676f6c64656e2d7468656d6512060801100218031a0908fa0110fb0118fc012204100a181422060801100b181522060802100c181622060803100d181722060804100e181822060805100f1819220608061010181a220608071011181b2a060864106e18782a060865106f18792a0608661070187a2a0608671071187b2a0608681072187c2a0608691073187d2a06086a1074187e2a06086b1075187f320562616467653d0000803e42042f746d70480252036369645801620474657874
-  = Ok(Connected { cols: 100, rows: 30, initial_screen: Some("screen"), session_id: "sess", theme: Some(ThemeInfo { name: "golden-theme", background: (1, 2, 3), foreground: (250, 251, 252), normal: [(0, 10, 20), (1, 11, 21), (2, 12, 22), (3, 13, 23), (4, 14, 24), (5, 15, 25), (6, 16, 26), (7, 17, 27)], bright: [(100, 110, 120), (101, 111, 121), (102, 112, 122), (103, 113, 123), (104, 114, 124), (105, 115, 125), (106, 116, 126), (107, 117, 127)] }), badge: Some("badge"), faint_text_alpha: Some(0.25), cwd: Some("/tmp"), modify_other_keys: Some(2), client_id: Some("cid"), readonly: Some(true), pointer_shape: Some("text") })
+S 22ef010864101e1a0673637265656e2204736573732a9f010a0c676f6c64656e2d7468656d6512060801100218031a0908fa0110fb0118fc012204100a181422060801100b181522060802100c181622060803100d181722060804100e181822060805100f1819220608061010181a220608071011181b2a060864106e18782a060865106f18792a0608661070187a2a0608671071187b2a0608681072187c2a0608691073187d2a06086a1074187e2a06086b1075187f320562616467653d0000803e42042f746d704802520363696458016204746578746a18080710031a047267626120042802320401020304380c4022
+  = Ok(Connected { cols: 100, rows: 30, initial_screen: Some("screen"), session_id: "sess", theme: Some(ThemeInfo { name: "golden-theme", background: (1, 2, 3), foreground: (250, 251, 252), normal: [(0, 10, 20), (1, 11, 21), (2, 12, 22), (3, 13, 23), (4, 14, 24), (5, 15, 25), (6, 16, 26), (7, 17, 27)], bright: [(100, 110, 120), (101, 111, 121), (102, 112, 122), (103, 113, 123), (104, 114, 124), (105, 115, 125), (106, 116, 126), (107, 117, 127)] }), badge: Some("badge"), faint_text_alpha: Some(0.25), cwd: Some("/tmp"), modify_other_keys: Some(2), client_id: Some("cid"), readonly: Some(true), pointer_shape: Some("text"), graphics: [InlineImageFrame { image_id: 7, pane_id: Some(3), format: "rgba", width: 4, height: 2, data: [1, 2, 3, 4], col: 12, row: 34 }] })
 S 220408011002
-  = Ok(Connected { cols: 1, rows: 2, initial_screen: None, session_id: "", theme: None, badge: None, faint_text_alpha: None, cwd: None, modify_other_keys: None, client_id: None, readonly: None, pointer_shape: None })
+  = Ok(Connected { cols: 1, rows: 2, initial_screen: None, session_id: "", theme: None, badge: None, faint_text_alpha: None, cwd: None, modify_other_keys: None, client_id: None, readonly: None, pointer_shape: None, graphics: [] })
 S 2a0d080710081a0772656672657368
   = Ok(Refresh { cols: 7, rows: 8, screen_content: "refresh" })
 S 3206080310041801
@@ -98,10 +98,10 @@ S d20221080312086174746163683a3712077765623a616263120a6d6f62696c653a646566
   = Ok(ViewerPresence { count: 3, viewers: ["attach:7", "web:abc", "mobile:def"] })
 S d20200
   = Ok(ViewerPresence { count: 0, viewers: [] })
-S da0215080710031a03706e6720800528e0033204010203ff
-  = Ok(InlineImage { image_id: 7, pane_id: Some(3), format: "png", width: 640, height: 480, data: [1, 2, 3, 255] })
+S da0219080710031a03706e6720800528e0033204010203ff380c4022
+  = Ok(InlineImage { image_id: 7, pane_id: Some(3), format: "png", width: 640, height: 480, data: [1, 2, 3, 255], col: 12, row: 34 })
 S da0200
-  = Ok(InlineImage { image_id: 0, pane_id: None, format: "", width: 0, height: 0, data: [] })
+  = Ok(InlineImage { image_id: 0, pane_id: None, format: "", width: 0, height: 0, data: [], col: 0, row: 0 })
 C 0a050a03696e03
   = Ok(Input { data: "in\u{3}" })
 C 1204085a1021
@@ -133,7 +133,7 @@ LS output invalid utf8
 LS resize truncates u16
   = Ok(Resize { cols: 1, rows: 4464 })
 LS connected wide theme truncates channels
-  = Ok(Connected { cols: 4464, rows: 0, initial_screen: Some("�a"), session_id: "s", theme: Some(ThemeInfo { name: "w", background: (0, 1, 255), foreground: (1, 2, 3), normal: [(44, 0, 0), (45, 0, 0), (46, 0, 0), (47, 0, 0), (48, 0, 0), (49, 0, 0), (50, 0, 0), (51, 0, 0)], bright: [(0, 0, 144), (0, 0, 145), (0, 0, 146), (0, 0, 147), (0, 0, 148), (0, 0, 149), (0, 0, 150), (0, 0, 151)] }), badge: None, faint_text_alpha: None, cwd: None, modify_other_keys: None, client_id: None, readonly: None, pointer_shape: None })
+  = Ok(Connected { cols: 4464, rows: 0, initial_screen: Some("�a"), session_id: "s", theme: Some(ThemeInfo { name: "w", background: (0, 1, 255), foreground: (1, 2, 3), normal: [(44, 0, 0), (45, 0, 0), (46, 0, 0), (47, 0, 0), (48, 0, 0), (49, 0, 0), (50, 0, 0), (51, 0, 0)], bright: [(0, 0, 144), (0, 0, 145), (0, 0, 146), (0, 0, 147), (0, 0, 148), (0, 0, 149), (0, 0, 150), (0, 0, 151)] }), badge: None, faint_text_alpha: None, cwd: None, modify_other_keys: None, client_id: None, readonly: None, pointer_shape: None, graphics: [] })
 LS connected theme missing background
   = Err(InvalidMessage("Missing background color"))
 LS connected theme missing foreground
@@ -155,6 +155,8 @@ LS agent state missing agent
 LS agent state pane zero default entry
   = Ok(AgentStateChanged { agent: AgentEntry { pane_id: 0, agent: "", state: "", source: "", reason: "", workspace: "", project: "", pane_label: "" }, released: false })
 LS inline image payload over cap
+  = Err(InvalidMessage("InlineImage payload exceeds 8388608 byte limit"))
+LS connected graphic payload over cap
   = Err(InvalidMessage("InlineImage payload exceeds 8388608 byte limit"))
 LC empty client oneof
   = Err(InvalidMessage("Empty client message"))

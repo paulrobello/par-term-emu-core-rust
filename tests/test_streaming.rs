@@ -61,10 +61,12 @@ mod streaming_tests {
             640,
             480,
             vec![1, 2, 3, 0xff],
+            12,
+            34,
         );
         assert!(matches!(
             &message,
-            ServerMessage::InlineImage { image_id: 7, pane_id: Some(3), format, width: 640, height: 480, .. }
+            ServerMessage::InlineImage { image_id: 7, pane_id: Some(3), format, width: 640, height: 480, col: 12, row: 34, .. }
                 if format == "png"
         ));
 
@@ -76,11 +78,13 @@ mod streaming_tests {
 
         assert!(matches!(
             &decoded,
-            ServerMessage::InlineImage { image_id, pane_id, data, width, height, .. }
+            ServerMessage::InlineImage { image_id, pane_id, data, width, height, col, row, .. }
                 if *image_id == 7
                     && *pane_id == Some(3)
                     && *width == 640
                     && *height == 480
+                    && *col == 12
+                    && *row == 34
                     && data == &vec![1, 2, 3, 0xff]
         ));
 
@@ -91,6 +95,8 @@ mod streaming_tests {
             1,
             1,
             vec![0u8; MAX_INLINE_IMAGE_BYTES + 1],
+            0,
+            0,
         );
         let err = encode_server_message(&oversized).unwrap_err();
         assert!(err.to_string().contains("8388608"));
@@ -1617,6 +1623,33 @@ mod streaming_tests {
             match session.build_connect_message("client-1", false) {
                 ServerMessage::Connected { pointer_shape, .. } => {
                     assert!(pointer_shape.is_none());
+                }
+                other => panic!("expected Connected, got {other:?}"),
+            }
+        }
+
+        /// A late joiner's `Connected` replays the frames already on screen,
+        /// each carrying its stored cell position.
+        #[test]
+        fn test_connect_message_replays_existing_graphics_with_positions() {
+            let mut term = Terminal::new(80, 24);
+            // A 2x2 kitty image placed away from the origin: CUP to cell
+            // (5, 3) 0-indexed, then the image decodes at the cursor.
+            term.process(b"\x1b[4;6H\x1b_Ga=T,f=24,s=2,v=2;AAAAAAAAAAAAAAAA\x1b\\");
+            assert_eq!(term.all_graphics().len(), 1, "the image decoded");
+            let session = create_session_with_terminal(term);
+            match session.build_connect_message("client-1", false) {
+                ServerMessage::Connected { graphics, .. } => {
+                    assert_eq!(graphics.len(), 1, "the store's graphic replays");
+                    let frame = &graphics[0];
+                    assert_eq!(frame.format, "rgba");
+                    assert_eq!((frame.width, frame.height), (2, 2));
+                    assert_eq!(
+                        (frame.col, frame.row),
+                        (5, 3),
+                        "the frame carries placement"
+                    );
+                    assert_eq!(frame.data.len(), 16);
                 }
                 other => panic!("expected Connected, got {other:?}"),
             }

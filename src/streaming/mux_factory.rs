@@ -1508,6 +1508,8 @@ mod tests {
             format,
             width,
             height,
+            col,
+            row,
             data,
         } = &frames[0]
         else {
@@ -1518,6 +1520,17 @@ mod tests {
         assert_eq!((*width, *height), (2, 2));
         assert_eq!(data.len(), 16, "2x2 RGB decoded to RGBA");
         assert!(*image_id > 0);
+        let terminal = session.terminal.read();
+        let stored = terminal
+            .all_graphics()
+            .iter()
+            .find(|g| g.id == *image_id)
+            .expect("the mirror store holds the graphic");
+        assert_eq!(
+            stored.position,
+            (*col as usize, *row as usize),
+            "the frame carries the graphic's placement"
+        );
         assert!(announces >= 1, "the cheap announce rides along");
 
         // Sent once: a bounded quiet window after the first frame sees no

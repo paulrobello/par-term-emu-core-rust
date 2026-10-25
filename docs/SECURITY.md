@@ -1456,8 +1456,8 @@ sections; the numbers live here.
 | `MAX_PASTE_PAYLOAD_BYTES` | 256 KiB | `src/streaming/server/mod.rs:57` | Bytes accepted in one Paste message payload from a streaming client. |
 | `MAX_COLS` | 1,000 | `src/streaming/server/mod.rs:92` | Columns a streaming client may request for its terminal. |
 | `MAX_ROWS` | 500 | `src/streaming/server/mod.rs:95` | Rows a streaming client may request for its terminal. |
-| `INPUT_QUEUE_MESSAGES` | 256 | `src/streaming/session.rs:26` | Client input chunks queued per session pending write to the PTY. |
-| `MAX_QUEUED_INPUT_BYTES` | 4 MiB | `src/streaming/session.rs:35` | Client input bytes queued per session pending write to the PTY. |
+| `INPUT_QUEUE_MESSAGES` | 256 | `src/streaming/session.rs:27` | Client input chunks queued per session pending write to the PTY. |
+| `MAX_QUEUED_INPUT_BYTES` | 4 MiB | `src/streaming/session.rs:36` | Client input bytes queued per session pending write to the PTY. |
 
 <!-- caps-table:end -->
 

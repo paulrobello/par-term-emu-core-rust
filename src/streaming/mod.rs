@@ -102,7 +102,9 @@ pub use client::Client;
 pub use config::{ApiAuthConfig, HttpBasicAuthConfig, PasswordConfig, StreamingConfig, TlsConfig};
 
 #[cfg(feature = "streaming")]
-pub use inline_image::{apply_inline_image, event_messages, inline_image_frame};
+pub use inline_image::{
+    apply_inline_image, event_messages, inline_image_frame, inline_image_frame_struct,
+};
 
 #[cfg(feature = "streaming")]
 pub use session::{SessionInfo, SessionRegistry, StreamSessionState};

@@ -19,10 +19,10 @@ export const INLINE_IMAGE_FORMAT = 'rgba';
  * this renderer does not render (wrong format, zero pixel extent, or a
  * payload shorter than the declared pixels).
  *
- * The sequence has no cell position: the addon draws at the terminal's
- * current cursor. In the live stream a frame arrives immediately after the
- * image's own bytes, so the cursor sits right below the image — the same
- * placement a locally decoded image gets.
+ * The frame carries the cell position the graphics store holds, so the
+ * sequence saves the cursor, moves it to the frame's cell (VT rows/cols are
+ * 1-indexed), draws, and restores: the addon draws at the current cursor,
+ * and the save/restore pair leaves the live cursor where the stream had it.
  */
 export function inlineImageSequence(frame: InlineImage): string | null {
   const expected = frame.width * frame.height * 4;
@@ -55,7 +55,11 @@ export function inlineImageSequence(frame: InlineImage): string | null {
   const imageData = ctx.createImageData(frame.width, frame.height);
   imageData.data.set(frame.data.subarray(0, expected));
   ctx.putImageData(imageData, 0, 0);
-  return canvasToItermSequence(canvas);
+  return (
+    `\x1b7\x1b[${frame.row + 1};${frame.col + 1}H` +
+    canvasToItermSequence(canvas) +
+    '\x1b8'
+  );
 }
 
 /**

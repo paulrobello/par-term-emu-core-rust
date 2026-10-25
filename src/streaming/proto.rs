@@ -993,6 +993,7 @@ mod tests {
             client_id: None,
             readonly: None,
             pointer_shape: None,
+            graphics: Vec::new(),
         };
         let encoded = encode_server_message(&msg).unwrap();
         let decoded = decode_server_message(&encoded).unwrap();
@@ -1301,6 +1302,7 @@ mod tests {
             client_id,
             readonly,
             pointer_shape,
+            graphics,
         } = decoded
         else {
             panic!("Wrong message type");
@@ -1313,6 +1315,10 @@ mod tests {
         assert_eq!(badge, Some("my badge".to_string()));
         assert_eq!(faint_text_alpha, Some(0.5));
         assert_eq!(cwd, Some("/home/user".to_string()));
+        assert!(
+            graphics.is_empty(),
+            "the builder defaults to no replayed frames"
+        );
         assert_eq!(modify_other_keys, Some(2));
         assert_eq!(client_id, Some("client-42".to_string()));
         assert_eq!(readonly, Some(true));

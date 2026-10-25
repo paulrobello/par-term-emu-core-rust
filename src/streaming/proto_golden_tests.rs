@@ -11,7 +11,7 @@
 
 use super::*;
 use crate::streaming::protocol::{
-    CpuStats, DiskStats, LoadAverage, MemoryStats, NetworkInterfaceStats,
+    CpuStats, DiskStats, InlineImageFrame, LoadAverage, MemoryStats, NetworkInterfaceStats,
 };
 use std::fmt::Write as _;
 
@@ -77,12 +77,23 @@ fn server_fixtures() -> Vec<AppServerMessage> {
             client_id: Some("cid".into()),
             readonly: Some(true),
             pointer_shape: Some("text".into()),
+            graphics: vec![InlineImageFrame {
+                image_id: 7,
+                pane_id: Some(3),
+                format: "rgba".into(),
+                width: 4,
+                height: 2,
+                data: vec![1, 2, 3, 4],
+                col: 12,
+                row: 34,
+            }],
         },
         S::Connected {
             cols: 1,
             rows: 2,
             initial_screen: None,
             session_id: String::new(),
+            graphics: vec![],
             theme: None,
             badge: None,
             faint_text_alpha: None,
@@ -361,6 +372,8 @@ fn server_fixtures() -> Vec<AppServerMessage> {
             width: 640,
             height: 480,
             data: vec![1, 2, 3, 0xff],
+            col: 12,
+            row: 34,
         },
         S::InlineImage {
             image_id: 0,
@@ -369,6 +382,8 @@ fn server_fixtures() -> Vec<AppServerMessage> {
             width: 0,
             height: 0,
             data: vec![],
+            col: 0,
+            row: 0,
         },
     ]
 }
@@ -566,7 +581,36 @@ fn lossy_server_inputs() -> Vec<(&'static str, pb::ServerMessage)> {
                 format: "rgba".into(),
                 width: 1,
                 height: 1,
+                col: 0,
+                row: 0,
                 data: vec![0u8; crate::streaming::protocol::MAX_INLINE_IMAGE_BYTES + 1],
+            })),
+        ),
+        (
+            "connected graphic payload over cap",
+            wrap(M::Connected(pb::Connected {
+                cols: 80,
+                rows: 24,
+                initial_screen: None,
+                session_id: "sess".into(),
+                theme: None,
+                badge: None,
+                faint_text_alpha: None,
+                cwd: None,
+                modify_other_keys: None,
+                client_id: None,
+                readonly: None,
+                pointer_shape: None,
+                graphics: vec![pb::InlineImage {
+                    image_id: 1,
+                    pane_id: None,
+                    format: "rgba".into(),
+                    width: 1,
+                    height: 1,
+                    col: 0,
+                    row: 0,
+                    data: vec![0u8; crate::streaming::protocol::MAX_INLINE_IMAGE_BYTES + 1],
+                }],
             })),
         ),
     ]

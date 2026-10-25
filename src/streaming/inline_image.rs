@@ -11,22 +11,35 @@
 //! would reject it anyway, and blocking the event pump is never right.
 
 use crate::streaming::protocol::{
-    terminal_event_to_server_message, ServerMessage, MAX_INLINE_IMAGE_BYTES,
+    terminal_event_to_server_message, InlineImageFrame, ServerMessage, MAX_INLINE_IMAGE_BYTES,
 };
 use crate::terminal::{Terminal, TerminalEvent};
 use parking_lot::RwLock;
 use std::sync::Arc;
 
-/// Build the [`ServerMessage::InlineImage`] frame for a stored graphic, or
-/// `None` when the id is unknown or the payload would not fit the wire cap
-/// (logged, never truncated). Store pixels are RGBA by construction —
-/// sixel and kitty decode to RGBA and the iTerm2 path stores its decoder
-/// output — so the frame's format tag is always `"rgba"`.
+/// Build the [`ServerMessage::InlineImage`] frame for a stored graphic —
+/// the event-pump form of [`inline_image_frame_struct`].
 pub fn inline_image_frame(
     term: &Terminal,
     image_id: u64,
     pane_id: Option<u32>,
 ) -> Option<ServerMessage> {
+    Some(ServerMessage::from(inline_image_frame_struct(
+        term, image_id, pane_id,
+    )?))
+}
+
+/// [`InlineImageFrame`] form of [`inline_image_frame`] — the shape
+/// `Connected.graphics` replays to a late joiner. Returns `None` when the id
+/// is unknown or the payload would not fit the wire cap (logged, never
+/// truncated). Store pixels are RGBA by construction — sixel and kitty
+/// decode to RGBA and the iTerm2 path stores its decoder output — so the
+/// frame's format tag is always `"rgba"`.
+pub fn inline_image_frame_struct(
+    term: &Terminal,
+    image_id: u64,
+    pane_id: Option<u32>,
+) -> Option<InlineImageFrame> {
     let graphic = term.all_graphics().iter().find(|g| g.id == image_id)?;
     if graphic.pixels.len() > MAX_INLINE_IMAGE_BYTES {
         crate::debug_error!(
@@ -42,16 +55,21 @@ pub fn inline_image_frame(
     }
     let width = u32::try_from(graphic.width).ok()?;
     let height = u32::try_from(graphic.height).ok()?;
-    // One copy per event, never per subscriber: the broadcaster hands the
-    // finished message to each matched client by reference.
-    Some(ServerMessage::inline_image(
+    let (col, row) = graphic.position;
+    let col = u32::try_from(col).unwrap_or(0);
+    let row = u32::try_from(row).unwrap_or(0);
+    Some(InlineImageFrame {
         image_id,
         pane_id,
-        "rgba".to_string(),
+        format: "rgba".to_string(),
         width,
         height,
-        graphic.pixels.as_ref().clone(),
-    ))
+        // One copy per event, never per subscriber: the broadcaster hands
+        // the finished frame to each matched client by reference.
+        data: graphic.pixels.as_ref().clone(),
+        col,
+        row,
+    })
 }
 
 /// Convert one terminal event into the server messages it streams, with
@@ -90,6 +108,8 @@ pub fn apply_inline_image(term: &mut Terminal, message: &ServerMessage) -> Optio
         format,
         width,
         height,
+        col,
+        row,
         data,
         ..
     } = message
@@ -107,11 +127,13 @@ pub fn apply_inline_image(term: &mut Terminal, message: &ServerMessage) -> Optio
     }
     let width = usize::try_from(*width).ok()?;
     let height = usize::try_from(*height).ok()?;
+    let col = usize::try_from(*col).unwrap_or(0);
+    let row = usize::try_from(*row).unwrap_or(0);
     term.graphics_store_mut().remove_graphic(*image_id);
     let mut graphic = crate::graphics::TerminalGraphic::new(
         *image_id,
         crate::graphics::GraphicProtocol::ITermInline,
-        (0, 0),
+        (col, row),
         width,
         height,
         data.clone(),
@@ -149,6 +171,7 @@ mod tests {
         let id = next_graphic_id();
         let mut graphic = make_graphic(id, 4, 2);
         graphic.set_cell_dimensions(8, 16);
+        graphic.position = (3, 4);
         term.graphics_store_mut().add_graphic(graphic);
 
         let frame = inline_image_frame(&term, id, None).expect("stored id fetches a frame");
@@ -158,6 +181,8 @@ mod tests {
             format,
             width,
             height,
+            col,
+            row,
             data,
         } = frame
         else {
@@ -167,6 +192,7 @@ mod tests {
         assert_eq!(pane_id, None);
         assert_eq!(format, "rgba");
         assert_eq!((width, height), (4, 2));
+        assert_eq!((col, row), (3, 4), "the frame carries the stored placement");
         assert_eq!(data, vec![7u8; 4 * 2 * 4]);
 
         // An unknown id fetches nothing rather than fabricating a frame.
@@ -233,6 +259,8 @@ mod tests {
             2,
             2,
             vec![9u8; 2 * 2 * 4],
+            5,
+            6,
         );
         let store_id = apply_inline_image(&mut term, &message).expect("rgba frame ingests");
         assert_eq!(store_id, 42, "the frame's own id becomes the store id");
@@ -242,16 +270,36 @@ mod tests {
             .find(|g| g.id == 42)
             .expect("the placement is in the store");
         assert_eq!((stored.width, stored.height), (2, 2));
+        assert_eq!(stored.position, (5, 6), "the frame's cell places the image");
         assert_eq!(stored.pixels.as_ref(), &vec![9u8; 16]);
 
         // A re-sent frame with the same id replaces instead of stacking.
-        let replacement =
-            ServerMessage::inline_image(42, Some(1), "rgba".to_string(), 3, 1, vec![1u8; 3 * 4]);
+        let replacement = ServerMessage::inline_image(
+            42,
+            Some(1),
+            "rgba".to_string(),
+            3,
+            1,
+            vec![1u8; 3 * 4],
+            0,
+            2,
+        );
         apply_inline_image(&mut term, &replacement).expect("re-ingest");
         assert_eq!(term.all_graphics().iter().filter(|g| g.id == 42).count(), 1);
+        let moved = term
+            .all_graphics()
+            .iter()
+            .find(|g| g.id == 42)
+            .expect("the replacement is in the store");
+        assert_eq!(
+            moved.position,
+            (0, 2),
+            "a re-sent frame re-places the image"
+        );
 
         // A non-rgba frame is refused, not half-applied.
-        let png = ServerMessage::inline_image(43, None, "png".to_string(), 1, 1, vec![0u8; 4]);
+        let png =
+            ServerMessage::inline_image(43, None, "png".to_string(), 1, 1, vec![0u8; 4], 0, 0);
         assert!(apply_inline_image(&mut term, &png).is_none());
         assert!(!term.all_graphics().iter().any(|g| g.id == 43));
 

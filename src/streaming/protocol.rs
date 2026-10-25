@@ -501,6 +501,17 @@ pub enum ServerMessage {
             pydict(encode_skip)
         )]
         pointer_shape: Option<String>,
+        /// Frames already on screen, replayed so a late joiner sees the
+        /// graphics too
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        #[cfg_attr(
+            all(
+                any(feature = "python", feature = "python-test"),
+                feature = "streaming"
+            ),
+            pydict(nested)
+        )]
+        graphics: Vec<InlineImageFrame>,
     },
 
     /// Screen refresh response (full screen content)
@@ -1103,7 +1114,68 @@ pub enum ServerMessage {
             proto(with = "crate::streaming::proto::wire::inline_image_data")
         )]
         data: Vec<u8>,
+        /// Cell column of the image's top-left corner
+        col: u32,
+        /// Cell row of the image's top-left corner
+        row: u32,
     },
+}
+
+/// One replayed inline-image frame: the payload of `Connected.graphics`, a
+/// late joiner's seed of the frames already on screen. Same shape as the
+/// [`ServerMessage::InlineImage`] variant — it maps the same wire message —
+/// so `Connected` carries a list of frames without nesting full server
+/// messages.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[cfg_attr(
+    all(
+        any(feature = "python", feature = "python-test"),
+        feature = "streaming"
+    ),
+    derive(par_term_emu_derive::PyDictConvert)
+)]
+#[cfg_attr(feature = "streaming", derive(par_term_emu_derive::ProtoConvert))]
+#[cfg_attr(
+    feature = "streaming",
+    proto(wire = "crate::streaming::proto::pb::InlineImage")
+)]
+pub struct InlineImageFrame {
+    /// Terminal graphic id, for replace/delete tracking
+    pub image_id: u64,
+    /// par-mux pane the image belongs to; `None` = the streamed terminal itself
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub pane_id: Option<u32>,
+    /// Payload format tag (`"rgba"`, `"png"`, `"jpeg"`, …)
+    pub format: String,
+    /// Pixel width
+    pub width: u32,
+    /// Pixel height
+    pub height: u32,
+    /// Encoded image bytes; at most [`MAX_INLINE_IMAGE_BYTES`]
+    #[cfg_attr(
+        feature = "streaming",
+        proto(with = "crate::streaming::proto::wire::inline_image_data")
+    )]
+    pub data: Vec<u8>,
+    /// Cell column of the image's top-left corner
+    pub col: u32,
+    /// Cell row of the image's top-left corner
+    pub row: u32,
+}
+
+impl From<InlineImageFrame> for ServerMessage {
+    fn from(frame: InlineImageFrame) -> Self {
+        Self::InlineImage {
+            image_id: frame.image_id,
+            pane_id: frame.pane_id,
+            format: frame.format,
+            width: frame.width,
+            height: frame.height,
+            data: frame.data,
+            col: frame.col,
+            row: frame.row,
+        }
+    }
 }
 
 /// One par-mux agent roster entry, verbatim from `list-agents`.
@@ -1466,6 +1538,8 @@ pub struct ConnectedBuilder {
     pub readonly: Option<bool>,
     /// Optional pointer shape requested via OSC 22
     pub pointer_shape: Option<String>,
+    /// Frames already on screen, replayed for a late joiner
+    pub graphics: Vec<InlineImageFrame>,
 }
 
 impl ConnectedBuilder {
@@ -1541,6 +1615,12 @@ impl ConnectedBuilder {
         self
     }
 
+    /// Set the replayed inline-image frames
+    pub fn graphics(mut self, graphics: Vec<InlineImageFrame>) -> Self {
+        self.graphics = graphics;
+        self
+    }
+
     /// Finish and produce the `Connected` message
     pub fn build(self) -> ServerMessage {
         ServerMessage::Connected {
@@ -1556,6 +1636,7 @@ impl ConnectedBuilder {
             client_id: self.client_id,
             readonly: self.readonly,
             pointer_shape: self.pointer_shape,
+            graphics: self.graphics,
         }
     }
 }
@@ -1867,6 +1948,10 @@ impl ServerMessage {
     /// `data` must be at most [`MAX_INLINE_IMAGE_BYTES`]; oversize payloads
     /// are rejected at the wire boundaries (`encode_server_message` and the
     /// wire decode), never truncated.
+    #[allow(
+        clippy::too_many_arguments,
+        reason = "public API, one argument per `InlineImage` field; a parameter struct would break embedders"
+    )]
     pub fn inline_image(
         image_id: u64,
         pane_id: Option<u32>,
@@ -1874,6 +1959,8 @@ impl ServerMessage {
         width: u32,
         height: u32,
         data: Vec<u8>,
+        col: u32,
+        row: u32,
     ) -> Self {
         Self::InlineImage {
             image_id,
@@ -1882,6 +1969,8 @@ impl ServerMessage {
             width,
             height,
             data,
+            col,
+            row,
         }
     }
 

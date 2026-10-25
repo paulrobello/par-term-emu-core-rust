@@ -5,12 +5,12 @@
  */
 
 import { describe, it, expect, vi, afterEach } from 'vitest';
-import { create } from '@bufbuild/protobuf';
+import { create, type MessageInitShape } from '@bufbuild/protobuf';
 import { InlineImageSchema, type InlineImage } from '@/lib/proto/terminal_pb';
 import { inlineImageSequence } from '@/lib/inline-image';
 
 /** A 2x2 RGBA frame with a distinctive byte pattern. */
-function makeFrame(overrides: Partial<InlineImage> = {}): InlineImage {
+function makeFrame(overrides: MessageInitShape<typeof InlineImageSchema> = {}): InlineImage {
   return create(InlineImageSchema, {
     imageId: 42n,
     paneId: 7,
@@ -74,13 +74,21 @@ describe('inlineImageSequence', () => {
     stubCanvas();
     const seq = inlineImageSequence(makeFrame());
     expect(seq).toBeTruthy();
-    expect(seq?.startsWith('\x1b]1337;File=')).toBe(true);
-    expect(seq?.endsWith(':cG5nLXB5dGhvbg==\x07')).toBe(true);
+    expect(seq?.startsWith('\x1b7\x1b[1;1H\x1b]1337;File=')).toBe(true);
+    expect(seq?.endsWith(':cG5nLXB5dGhvbg==\x07\x1b8')).toBe(true);
     expect(seq).toContain('inline=1');
     expect(seq).toContain('width=2px;height=2px');
     expect(drawn?.width).toBe(2);
     expect(drawn?.height).toBe(2);
     expect(Array.from(drawn?.pixels ?? [])).toEqual([1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16]);
+  });
+
+  it('places the image at the frame cell and restores the cursor', () => {
+    stubCanvas();
+    const seq = inlineImageSequence(makeFrame({ col: 5, row: 3 }));
+    expect(seq).toBeTruthy();
+    expect(seq?.startsWith('\x1b7\x1b[4;6H\x1b]1337;File=')).toBe(true);
+    expect(seq?.endsWith('\x07\x1b8')).toBe(true);
   });
 
   it('refuses a non-rgba frame', () => {

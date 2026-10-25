@@ -8,7 +8,8 @@
 
 use crate::mouse::{MouseEncoding, MouseMode};
 use crate::streaming::error::{Result, StreamingError};
-use crate::streaming::protocol::{ServerMessage, ThemeInfo};
+use crate::streaming::inline_image_frame_struct;
+use crate::streaming::protocol::{InlineImageFrame, ServerMessage, ThemeInfo};
 use crate::terminal::Terminal;
 use parking_lot::{Mutex, RwLock};
 use std::collections::HashMap;
@@ -282,6 +283,12 @@ impl StreamSessionState {
     /// replays history above the live screen (card 01a0efb2). The mux-backed
     /// factory seeds its mirrors from `refresh-client`, which carries the
     /// same shape, so a mux-pane session hands over its whole history too.
+    ///
+    /// Graphics already on screen replay through `Connected.graphics`: every
+    /// store graphic becomes a cap-checked frame (oversize logged and
+    /// skipped) carrying its cell position, so a late joiner renders the
+    /// images it missed. Replayed frames tag no pane — they belong to this
+    /// session's own terminal.
     pub fn build_connect_message(&self, client_id: &str, readonly: bool) -> ServerMessage {
         let terminal = self.terminal.write();
         let (cols, rows) = terminal.size();
@@ -297,6 +304,12 @@ impl StreamSessionState {
         let cwd = terminal.current_directory().map(|s| s.to_string());
         let mok_mode = Some(terminal.modify_other_keys_mode() as u32);
 
+        let graphics: Vec<InlineImageFrame> = terminal
+            .all_graphics()
+            .iter()
+            .filter_map(|g| inline_image_frame_struct(&terminal, g.id, None))
+            .collect();
+
         ServerMessage::connected_builder(cols as u16, rows as u16, self.id.clone())
             .initial_screen(initial_screen)
             .theme(self.theme.clone())
@@ -307,6 +320,7 @@ impl StreamSessionState {
             .client_id(Some(client_id.to_string()))
             .readonly(Some(readonly))
             .pointer_shape(terminal.pointer_shape().map(str::to_string))
+            .graphics(graphics)
             .build()
     }
 

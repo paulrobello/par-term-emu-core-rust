@@ -20,6 +20,7 @@ import {
 import { TerminalConnection } from '@/lib/terminal-connection';
 import { cursorForPointerShape } from '@/lib/pointer-shape';
 import { inlineImageSequence } from '@/lib/inline-image';
+import type { InlineImage } from '@/lib/proto/terminal_pb';
 import {
   clamp,
   clampPan,
@@ -166,6 +167,10 @@ export default function Terminal({ wsUrl, fontSize, onStatusChange, onThemeChang
   // Tracks characters we've echoed locally before server confirmation
   // so we can filter them from server output to avoid double display
   const pendingEchoRef = useRef<string[]>([]);
+  // Late-joiner replay: Connected seeds the frames already on screen; they
+  // render once the post-connect screen restore lands, then the stash is
+  // cleared so resize-triggered refreshes never re-draw them.
+  const pendingGraphicsRef = useRef<InlineImage[]>([]);
   const localEchoEnabledRef = useRef<boolean>(true);
 
   // Reconnect/backoff and heartbeat/stale-pong state live inside
@@ -970,6 +975,9 @@ export default function Terminal({ wsUrl, fontSize, onStatusChange, onThemeChang
           // Apply the OSC 22 pointer shape the session already carries
           applyCursor(connected.pointerShape ?? null);
 
+          // Stash the late-joiner graphic replay for the screen restore
+          pendingGraphicsRef.current = connected.graphics;
+
           // A fresh connection starts fit-to-width and unpanned on a phone.
           connectedOnceRef.current = true;
           zoomFontRef.current = null;
@@ -1044,6 +1052,15 @@ export default function Terminal({ wsUrl, fontSize, onStatusChange, onThemeChang
           if (refresh.screenContent && snapshotLength > 0) {
             const content = sharedDecoder.decode(refresh.screenContent);
             term.write(content);
+          }
+          // Late-joiner graphic replay renders after the screen restore (it
+          // resets the terminal); one render only, then the stash clears so
+          // resize-triggered refreshes never re-draw the frames.
+          const pending = pendingGraphicsRef.current;
+          pendingGraphicsRef.current = [];
+          for (const frame of pending) {
+            const seq = inlineImageSequence(frame);
+            if (seq) term.write(seq);
           }
           // Scroll to bottom to ensure cursor is visible
           term.scrollToBottom();

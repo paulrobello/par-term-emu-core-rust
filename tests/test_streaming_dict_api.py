@@ -79,6 +79,30 @@ SERVER_CASES = [
     ("resize", {"cols": 132, "rows": 43}, {"cols": 132, "rows": 43}),
     ("title", {"title": "My Title"}, {"title": "My Title"}),
     ("title", {}, {"title": ""}),
+    (
+        "inline_image",
+        {
+            "image_id": 7,
+            "pane_id": 3,
+            "format": "rgba",
+            "width": 4,
+            "height": 2,
+            "data": b"\x01\x02\x03\x04",
+            "col": 12,
+            "row": 34,
+        },
+        {
+            "image_id": 7,
+            "pane_id": 3,
+            "format": "rgba",
+            "width": 4,
+            "height": 2,
+            # kwargs bytes decode to the payload; the dict emits bytes.
+            "data": b"\x01\x02\x03\x04",
+            "col": 12,
+            "row": 34,
+        },
+    ),
     ("bell", {}, {}),
     ("pong", {}, {}),
     (
