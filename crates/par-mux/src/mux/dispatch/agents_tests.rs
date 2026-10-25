@@ -661,6 +661,19 @@ fn agent_prompt_refuses_unclaimed_and_blocked_panes() {
     );
 }
 
+/// Refusals: a question-state agent, beside the blocked case above.
+#[test]
+fn agent_prompt_refuses_question_panes() {
+    let f = Fixture::new();
+    f.report("testagent", "question", 1);
+    let (lines, ok) = body(&f.run("agent-prompt -t %0 hi"));
+    assert!(!ok);
+    assert_eq!(
+        lines,
+        vec!["agent-prompt: testagent on %0 is asking a question and requires interactive input"]
+    );
+}
+
 /// AC3: a hook-authoritative pane explains as `hook` with its reporter and
 /// says the scrape tier is skipped; a scraped pane names the stored rule,
 /// the rule matching the live screen, and the bundled pattern file.
