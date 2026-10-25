@@ -3031,6 +3031,107 @@ fn render_mode_side_panel_carries_the_agent_roster() {
     host.killer.kill().ok();
 }
 
+/// Card 01a1714212 (roster on reconnect): a fresh render client paints the
+/// full agent roster from its seed's snapshot — no new hook report or
+/// state push in between. The agent is a scrape-tier fixture invoked as
+/// `claude` (the bundled blocked rule matches its screen), so the roster
+/// row outlives the reconnect window without a liveness sweep to race.
+/// The first attach watches the row arrive; the second attach, spawned
+/// after the first is killed and with nothing reported meanwhile, must
+/// show the same row on its own first status refresh.
+#[cfg(unix)]
+#[test]
+fn render_mode_side_panel_reconnect_shows_the_roster_without_a_new_report() {
+    let (fixture, _daemon, mut client) = fixture_with_session("reconnroster");
+    let fake_bin = fixture.dir().join("claude");
+    std::fs::copy(
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("tests/assets/par-mux-scrape-agent.sh"),
+        &fake_bin,
+    )
+    .expect("copy the scrape fixture");
+    std::fs::set_permissions(
+        &fake_bin,
+        std::os::unix::fs::PermissionsExt::from_mode(0o755),
+    )
+    .expect("make the fixture executable");
+
+    // The agent owns its own workspace's pane, so the shown view carries
+    // the agents section for it. list-panes defaults to the active
+    // session, so snapshot the fixture's shell pane first and pick the
+    // new pane by exclusion.
+    let shell_pane = client
+        .send("list-panes")
+        .expect("list-panes")
+        .join("\n")
+        .split_whitespace()
+        .next()
+        .expect("a pane")
+        .to_string();
+    client
+        .send(&format!("new-session -s agents -- {}", fake_bin.display()))
+        .expect("agent session");
+    let pane = client
+        .send("list-panes")
+        .expect("list-panes")
+        .join("\n")
+        .split_whitespace()
+        .find(|p| *p != shell_pane)
+        .expect("the agent session's pane")
+        .to_string();
+    client
+        .send(&format!("adopt-pane -t {pane} claude"))
+        .expect("adopt the agent pane");
+
+    let row = format!("{pane} claude blocked scrape ws=+");
+    let deadline = Instant::now() + Duration::from_secs(10);
+    loop {
+        let roster = client.send("list-agents").expect("list-agents").join("");
+        if roster.contains(&row) || Instant::now() >= deadline {
+            assert!(
+                roster.contains(&row),
+                "the scrape fixture never joined the roster: {roster} \
+                 ;; panes: {:?} ;; sessions: {:?} ;; screen: {:?}",
+                client.send("list-panes").unwrap_or_default(),
+                client.send("list-sessions").unwrap_or_default(),
+                client
+                    .send(&format!("capture-pane -t {pane}"))
+                    .unwrap_or_default()
+            );
+            break;
+        }
+        std::thread::sleep(Duration::from_millis(200));
+    }
+
+    // First attach: the row lands (seed snapshot or the state push).
+    let config = "[client]\nsidebar-on-launch = true\n";
+    let (mut first, stderr) = spawn_attach_with_config(&fixture, &["-t", &pane], "render", config);
+    let mut all = Vec::new();
+    assert!(
+        panel_ever_contains(&first, &mut all, 19, "claude", Duration::from_secs(10)),
+        "the first attach never painted the roster row; stderr: {}",
+        stderr.lock().unwrap()
+    );
+    first.killer.kill().ok();
+
+    // Nothing reports in between — the daemon's roster still carries the
+    // row from the scrape, and the fresh client must paint it from its
+    // seed's snapshot alone.
+    let roster = client.send("list-agents").expect("list-agents").join("");
+    assert!(
+        roster.contains(&row),
+        "the roster row vanished while no client was attached: {roster}"
+    );
+    let (mut second, stderr) = spawn_attach_with_config(&fixture, &["-t", &pane], "render", config);
+    let mut all = Vec::new();
+    assert!(
+        panel_ever_contains(&second, &mut all, 19, "claude", Duration::from_secs(10)),
+        "the reconnecting attach never painted the roster row; stderr: {}",
+        stderr.lock().unwrap()
+    );
+    second.killer.kill().ok();
+}
+
 /// Acceptance criterion (render mode, PTY level): a host resize re-fits
 /// the whole client. Resizing the harness master PTY (the host terminal's
 /// SIGWINCH shape) makes the pump report the new grid (content height,
