@@ -855,6 +855,8 @@ The protocol is defined in `proto/terminal.proto`. Messages use Protocol Buffers
 | `agent_state_changed` | `agent?: AgentEntry`, `released: bool` | Roster delta: upsert `agent`, or remove it when `released` is `true` |
 | `pointer_shape_changed` | `shape?: string` | Pointer shape changed (OSC 22); absent = the client's own pointer applies |
 | `inline_image` | `image_id: uint64`, `pane_id?: uint32`, `format: string`, `width: uint32`, `height: uint32`, `data: bytes`, `col: uint32`, `row: uint32` | One image frame a pane app placed (OSC 1337, Sixel, or Kitty), placed at its stored cell; subscription-gated under the Graphics event. See [Inline Images](#inline-images) |
+| `upload_started` | `upload_id: uint64` | A client upload began staging daemon-side; `upload_id` keys the matching `upload_finished` |
+| `upload_finished` | `upload_id: uint64`, `path?: string`, `error?: string` | An upload settled: committed (`path` = the bracket-pasted file), or failed/aborted (`error`; a failed commit leaves the file in place and names it in the message). Sent to the uploading session only |
 
 `AgentEntry` fields: `pane_id` (par-mux pane `%N`), `agent`, `state`, `source` (`hook` or `scrape`), `reason` (decoded blocked reason, empty when none), `workspace` (par-mux workspace id from the roster row's `ws=` token, empty when unknown), `project` (host-probe-attributed project from the roster row's `host_telemetry` token, empty when unattributed), and `pane_label` (the pane's effective title from the watcher's one bounded `list-panes -F '#{pane_id} #{pane_title}'` query, refreshed by `%pane-title-changed` pushes, empty when none is set). Both roster messages are always sent — event subscriptions do not filter them. State-change deltas carry a full entry per pane, enriched from the watcher's cache: a pane the watcher has already fetched keeps its last known `project` and `pane_label` on every upsert, because the wire push itself is identity-only. The one cold-cache case is a pane first seen via a state push between full snapshots — its first delta carries the push's bare (empty) label and project until the next full `agent_roster` snapshot refills the cache (any telemetry push or watcher reconnect triggers a refetch). A watcher that (re)connects always sends a fresh full snapshot before it streams any delta, so a restarted watcher never sends stale cached labels. Clients therefore do not need to special-case upserts to preserve cached title/project values. Enrichment behavior is pinned by `state_deltas_enrich_from_the_cache_and_first_seen_panes_send_bare`.
 
@@ -866,7 +868,9 @@ The protocol is defined in `proto/terminal.proto`. Messages use Protocol Buffers
 
 Rendering is the client's call: the web frontend re-materializes an `rgba` frame as the iTerm2 sequence the xterm ImageAddon already decodes, and a Rust/Python mirror can ingest the frame into its own emulator's graphics machinery (`streaming::apply_inline_image`).
 
-**Inline images are output-only over the streaming path.** The streamer never accepts image data for pane input, and the mux daemon never injects escape sequences into pane input: an OSC 1337 `File=` sequence written into a pane would be indistinguishable from the pane's own app sending an image, and every pane app would need to opt in to receive one. If input support is ever wanted, the shape is a control verb (for example `par-mux paste-image`) that materializes the image to a temp file and bracket-pastes the file path — never an injected escape sequence.
+The connect handshake's replay is bounded: NEWEST graphics seed first — the ones likeliest still on screen — and the walk stops at the first frame that would bust either bound, `MAX_CONNECT_REPLAY_FRAMES` (24) or `MAX_CONNECT_REPLAY_BYTES` (8 MiB aggregate frame payload, never more than the single-frame cap); the skipped tail is logged, never truncated. The values live in SECURITY.md's [caps table](SECURITY.md#resource-limits-reference).
+
+**Inline images are output-only over the streaming path; input is the upload pipeline.** The streamer never accepts image data for pane input, and the mux daemon never injects escape sequences carrying bytes into pane input: an OSC 1337 `File=` sequence written into a pane would be indistinguishable from the pane's own app sending an image, and every pane app would need to opt in to receive one. The input half is the control-verb pipeline documented in [MUX.md — Client uploads](MUX.md#client-uploads): a client sends `upload_begin`/`upload_chunk`/`upload_commit`/`upload_abort` (chunk payload capped at `MAX_UPLOAD_CHUNK_BYTES`, 64 KiB, at both wire boundaries), the daemon stages the bytes in bounded spool storage, and commit materializes the file and bracket-pastes its PATH into the session's pane — never an injected escape sequence.
 
 ### Client Messages (ClientMessage oneof)
 
@@ -883,6 +887,10 @@ Rendering is the client's call: the web frontend re-materializes an `rgba` frame
 | `selection` | `start_col: uint32`, `start_row: uint32`, `end_col: uint32`, `end_row: uint32`, `mode: string` | Selection request (chars/line/block/word/clear) |
 | `clipboard` | `operation: string`, `content?: string`, `target?: string` | Clipboard get/set request |
 | `snapshot_request` | `scope: string`, `max_commands?: uint32` | Request a semantic snapshot (scope: "visible", "recent", "full") |
+| `upload_begin` | `filename: string`, `total_bytes: uint64` | Begin a chunked upload into the session's pane (mux-backed sessions); replies `upload_started`/`upload_finished`. See [MUX.md — Client uploads](MUX.md#client-uploads) |
+| `upload_chunk` | `data: bytes` | One chunk (≤ `MAX_UPLOAD_CHUNK_BYTES`, 64 KiB); a rejected chunk aborts the upload daemon-side |
+| `upload_commit` | (none) | Seal the staged file and bracket-paste its PATH into the pane; replies `upload_finished` with the path |
+| `upload_abort` | (none) | Abandon the staged upload (spool file deleted); replies `upload_finished` with `error: "aborted"` |
 
 > **Note: protobuf names vs serde-JSON tags.** The tables above use the
 > protobuf field/message names. The Rust types in `src/streaming/protocol.rs`

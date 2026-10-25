@@ -326,6 +326,15 @@ pub struct LoadAverage {
 /// cap: Image bytes accepted in one InlineImage streaming frame.
 pub const MAX_INLINE_IMAGE_BYTES: usize = 8 * 1024 * 1024;
 
+/// One `upload_chunk` frame's payload cap — one daemon-side staged chunk
+/// (the daemon's own staging cap matches; see MUX.md "Client uploads").
+/// Enforced at both wire boundaries by `proto::wire::upload_chunk_data`
+/// and again by the server's handler, so an upload chunk can never enter
+/// or leave the streaming wire unbounded.
+///
+/// cap: Bytes accepted in one UploadChunk message payload from a streaming client.
+pub const MAX_UPLOAD_CHUNK_BYTES: usize = 64 * 1024;
+
 /// Messages sent from server to client
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[cfg_attr(
@@ -1119,6 +1128,29 @@ pub enum ServerMessage {
         /// Cell row of the image's top-left corner
         row: u32,
     },
+
+    /// A client upload began staging daemon-side; `upload_id` keys the
+    /// matching `upload_finished`. Sent only to the uploading session.
+    #[serde(rename = "upload_started")]
+    UploadStarted {
+        /// The daemon-side upload id (the `upload-begin` reply)
+        upload_id: u64,
+    },
+
+    /// An upload settled: committed (`path` set — the bracket-pasted
+    /// file), or failed/aborted (`error` set; a failed commit leaves the
+    /// materialized file in place and names it in the message).
+    #[serde(rename = "upload_finished")]
+    UploadFinished {
+        /// The daemon-side upload id (`0` when none was created)
+        upload_id: u64,
+        /// The materialized absolute path on a commit
+        #[serde(skip_serializing_if = "Option::is_none")]
+        path: Option<String>,
+        /// The failure or abort reason
+        #[serde(skip_serializing_if = "Option::is_none")]
+        error: Option<String>,
+    },
 }
 
 /// One replayed inline-image frame: the payload of `Connected.graphics`, a
@@ -1388,6 +1420,43 @@ pub enum ClientMessage {
         #[serde(skip_serializing_if = "Option::is_none")]
         max_commands: Option<u32>,
     },
+
+    /// Begin a chunked upload into this session's pane (mux-backed
+    /// sessions; see MUX.md "Client uploads"): the server opens bounded
+    /// daemon-side staging and reports the outcome through
+    /// `upload_started` / `upload_finished`. A rejected chunk aborts the
+    /// upload daemon-side.
+    #[serde(rename = "upload_begin")]
+    UploadBegin {
+        /// The file's bare name (a path prefix is stripped daemon-side)
+        filename: String,
+        /// The byte total the chunks must land exactly
+        total_bytes: u64,
+    },
+
+    /// Append one chunk to this session's in-progress upload. The bytes
+    /// ride the protobuf `bytes` field; the payload is capped at
+    /// [`MAX_UPLOAD_CHUNK_BYTES`] at the wire boundary.
+    #[serde(rename = "upload_chunk")]
+    UploadChunk {
+        /// The chunk bytes; at most [`MAX_UPLOAD_CHUNK_BYTES`]
+        #[cfg_attr(
+            feature = "streaming",
+            proto(with = "crate::streaming::proto::wire::upload_chunk_data")
+        )]
+        data: Vec<u8>,
+    },
+
+    /// Seal this session's staged upload and bracket-paste the
+    /// materialized file's PATH into the pane (the documented input
+    /// semantic: the bytes themselves never enter pane input).
+    #[serde(rename = "upload_commit")]
+    UploadCommit,
+
+    /// Abandon this session's in-progress upload; its spool file is
+    /// deleted daemon-side.
+    #[serde(rename = "upload_abort")]
+    UploadAbort,
 }
 
 /// The kind of a [`ClientMessage::Mouse`] event.

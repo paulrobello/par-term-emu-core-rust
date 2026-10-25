@@ -62,6 +62,10 @@ pub(super) fn reap_dead_panes(
     // No published config (an embedded `run()` server) keeps the library's
     // historical held-dead behavior; the daemon binary always publishes one,
     // and ITS default (the product default) is auto-remove.
+    // The idle tick also sweeps expired upload staging (uploads.rs: every
+    // verb sweeps too; this tick is what eventually deletes an abandoned
+    // upload whose client never sent another verb).
+    crate::mux::uploads::sweep_expired();
     let remain_on_exit = config
         .map(|config| config.lock().remain_on_exit)
         .unwrap_or(true);

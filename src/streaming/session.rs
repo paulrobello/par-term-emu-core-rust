@@ -36,6 +36,17 @@ const INPUT_QUEUE_MESSAGES: usize = 256;
 /// cap: Client input bytes queued per session pending write to the PTY.
 const MAX_QUEUED_INPUT_BYTES: usize = 4 * 1024 * 1024;
 
+/// Graphics frames the connect handshake's `Connected.graphics` replay may
+/// seed, NEWEST first (the ones likeliest still on screen).
+/// cap: Graphics frames replayed to one client in the connect handshake.
+const MAX_CONNECT_REPLAY_FRAMES: usize = 24;
+/// Aggregate frame payload the connect handshake's `Connected.graphics`
+/// replay may carry; never exceeds the 8 MiB single-frame
+/// ([`MAX_INLINE_IMAGE_BYTES`]) wire cap. A frame that would push the
+/// aggregate past this stops the replay.
+/// cap: Aggregate replay payload bytes carried in one connect handshake.
+const MAX_CONNECT_REPLAY_BYTES: usize = 8 * 1024 * 1024;
+
 /// How often an idle input drain thread wakes to notice a dropped session.
 const DRAIN_IDLE_WAKE: Duration = Duration::from_millis(250);
 /// How long the input drain waits for the PTY writer mutex before logging
@@ -288,7 +299,11 @@ impl StreamSessionState {
     /// store graphic becomes a cap-checked frame (oversize logged and
     /// skipped) carrying its cell position, so a late joiner renders the
     /// images it missed. Replayed frames tag no pane — they belong to this
-    /// session's own terminal.
+    /// session's own terminal. The replay itself is bounded twice over
+    /// (SECURITY.md's caps table): NEWEST graphics seed first — the ones
+    /// likeliest still on screen — and the walk stops at the first frame
+    /// that would bust the frame count or the aggregate byte budget; the
+    /// skipped tail is logged, never truncated.
     pub fn build_connect_message(&self, client_id: &str, readonly: bool) -> ServerMessage {
         let terminal = self.terminal.write();
         let (cols, rows) = terminal.size();
@@ -304,11 +319,30 @@ impl StreamSessionState {
         let cwd = terminal.current_directory().map(|s| s.to_string());
         let mok_mode = Some(terminal.modify_other_keys_mode() as u32);
 
-        let graphics: Vec<InlineImageFrame> = terminal
-            .all_graphics()
-            .iter()
-            .filter_map(|g| inline_image_frame_struct(&terminal, g.id, None))
-            .collect();
+        let store = terminal.all_graphics();
+        let mut graphics: Vec<InlineImageFrame> = Vec::new();
+        let mut replay_bytes = 0usize;
+        for graphic in store.iter().rev() {
+            if graphics.len() >= MAX_CONNECT_REPLAY_FRAMES {
+                break;
+            }
+            let Some(frame) = inline_image_frame_struct(&terminal, graphic.id, None) else {
+                continue;
+            };
+            if replay_bytes + frame.data.len() > MAX_CONNECT_REPLAY_BYTES {
+                break;
+            }
+            replay_bytes += frame.data.len();
+            graphics.push(frame);
+        }
+        let skipped = store.len() - graphics.len();
+        if skipped > 0 {
+            crate::debug_error!(
+                "STREAMING",
+                "connect replay capped: {skipped} of {} graphic(s) skipped (frames <= {MAX_CONNECT_REPLAY_FRAMES}, bytes <= {MAX_CONNECT_REPLAY_BYTES})",
+                store.len()
+            );
+        }
 
         ServerMessage::connected_builder(cols as u16, rows as u16, self.id.clone())
             .initial_screen(initial_screen)

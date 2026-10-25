@@ -315,6 +315,82 @@ async fn input_without_pty_writer_is_counted_and_dropped() {
     );
 }
 
+/// Upload messages on a session without a mux factory have nowhere to
+/// stage: every verb is refused synchronously with an `upload_finished`
+/// error, and a read-only viewer is refused before the pipe lookup.
+#[tokio::test]
+async fn upload_messages_without_a_mux_pipe_are_refused_inline() {
+    use crate::streaming::protocol::ClientMessage;
+
+    let terminal = Arc::new(RwLock::new(Terminal::new(80, 24)));
+    let server = Arc::new(StreamingServer::new(terminal, "127.0.0.1:0".to_string()));
+    let session = server.get_session("default").expect("default session");
+
+    let dispatch = |read_only: bool, msg: ClientMessage| {
+        server.handle_client_message(
+            &session,
+            super::ConnCtx {
+                transport_label: "ws-test",
+                client_id: uuid::Uuid::new_v4(),
+                read_only,
+            },
+            &mut None,
+            &mut None,
+            msg,
+        )
+    };
+
+    let refused = |msg: ClientMessage| match dispatch(false, msg).as_slice() {
+        [ServerMessage::UploadFinished {
+            upload_id: 0,
+            path: None,
+            error: Some(reason),
+        }] => reason.clone(),
+        other => panic!("expected one upload_finished refusal, got {other:?}"),
+    };
+
+    assert!(
+        refused(ClientMessage::UploadBegin {
+            filename: "x.png".into(),
+            total_bytes: 5,
+        })
+        .contains("mux-backed"),
+        "no-pipe begin must refuse with the mux reason"
+    );
+    assert!(
+        refused(ClientMessage::UploadChunk {
+            data: b"xy".to_vec()
+        })
+        .contains("mux-backed"),
+        "no-pipe chunk must refuse with the mux reason"
+    );
+    assert!(
+        refused(ClientMessage::UploadCommit).contains("mux-backed"),
+        "no-pipe commit must refuse with the mux reason"
+    );
+    assert!(
+        refused(ClientMessage::UploadAbort).contains("mux-backed"),
+        "no-pipe abort must refuse with the mux reason"
+    );
+
+    // A read-only viewer is refused before the pipe lookup.
+    match dispatch(
+        true,
+        ClientMessage::UploadBegin {
+            filename: "x.png".into(),
+            total_bytes: 5,
+        },
+    )
+    .as_slice()
+    {
+        [ServerMessage::UploadFinished {
+            error: Some(reason),
+            ..
+        }] => assert!(reason.contains("read-only")),
+        other => panic!("expected the read-only refusal, got {other:?}"),
+    }
+}
+
 // =========================================================================
 // Terminal Size Validation Tests
 // =========================================================================

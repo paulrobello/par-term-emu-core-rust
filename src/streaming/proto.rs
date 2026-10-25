@@ -15,7 +15,7 @@ use crate::streaming::error::{Result, StreamingError};
 use crate::streaming::protocol::{
     AgentEntry as AppAgentEntry, ClientMessage as AppClientMessage, EventType as AppEventType,
     MouseEventType, ServerMessage as AppServerMessage, ThemeInfo as AppThemeInfo,
-    MAX_INLINE_IMAGE_BYTES,
+    MAX_INLINE_IMAGE_BYTES, MAX_UPLOAD_CHUNK_BYTES,
 };
 use flate2::read::ZlibDecoder;
 use flate2::write::ZlibEncoder;
@@ -389,6 +389,7 @@ impl FromWire<String> for MouseEventType {
 pub(crate) mod wire {
     use super::{
         pb, AppAgentEntry, FromWire, Result, StreamingError, ToWire, MAX_INLINE_IMAGE_BYTES,
+        MAX_UPLOAD_CHUNK_BYTES,
     };
 
     /// Progress percent: `u8` in the app; the decode clamps to 100.
@@ -452,6 +453,27 @@ pub(crate) mod wire {
                 return Err(StreamingError::InvalidMessage(format!(
                     "InlineImage payload exceeds {} byte limit",
                     MAX_INLINE_IMAGE_BYTES
+                )));
+            }
+            Ok(w)
+        }
+    }
+
+    /// `UploadChunk.data`: one staged chunk's bytes, capped at the
+    /// streaming chunk cap (64 KiB; the daemon's staging cap matches) so
+    /// an upload can never enter the app unbounded.
+    pub(crate) mod upload_chunk_data {
+        use super::{Result, StreamingError, MAX_UPLOAD_CHUNK_BYTES};
+
+        pub(crate) fn to_wire(v: &[u8]) -> Vec<u8> {
+            v.to_owned()
+        }
+
+        pub(crate) fn from_wire(w: Vec<u8>) -> Result<Vec<u8>> {
+            if w.len() > MAX_UPLOAD_CHUNK_BYTES {
+                return Err(StreamingError::InvalidMessage(format!(
+                    "UploadChunk payload exceeds {} byte limit",
+                    MAX_UPLOAD_CHUNK_BYTES
                 )));
             }
             Ok(w)

@@ -520,6 +520,36 @@
       "synopsis": "[-t <session|window|pane>]"
     },
     {
+      "name": "upload-abort",
+      "features": [],
+      "flags": [],
+      "synopsis": "<id>"
+    },
+    {
+      "name": "upload-begin",
+      "features": [],
+      "flags": [],
+      "synopsis": "<filename> <total-bytes>"
+    },
+    {
+      "name": "upload-chunk",
+      "features": [
+        "base64"
+      ],
+      "flags": [],
+      "synopsis": "<id> <base64>"
+    },
+    {
+      "name": "upload-commit",
+      "features": [
+        "targeted"
+      ],
+      "flags": [
+        "-t"
+      ],
+      "synopsis": "-t <pane> <id>"
+    },
+    {
       "name": "version",
       "features": [],
       "flags": [],

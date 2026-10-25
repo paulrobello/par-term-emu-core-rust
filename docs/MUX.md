@@ -45,6 +45,7 @@ updates never force a bundle replacement. Use the bundle's normal installation p
 - [Socket and State Paths](#socket-and-state-paths)
 - [Protocol Overview](#protocol-overview)
 - [Command Reference](#command-reference)
+- [Client uploads](#client-uploads)
 - [Git worktree workspaces](#git-worktree-workspaces)
 - [Raw pane streams](#raw-pane-streams)
 - [Notifications](#notifications)
@@ -991,6 +992,10 @@ Ids always win over names: a value starting with the target kind's own sigil is 
 | `set-environment` | `-t <session> NAME VALUE` or `-t <session> -u NAME` | empty | — |
 | `show-buffer` | — | The buffer content | — |
 | `paste-buffer` | `-t <pane>` | empty | — |
+| `upload-begin` | `<filename> <total-bytes>` | The upload id (one decimal number) the other upload verbs key on; `%error` on a hostile name, an over-cap total, or the concurrent-upload cap | — |
+| `upload-chunk` | `<id> <base64>` | empty; `%error` — and the upload aborted, its spool file deleted — on an over-cap chunk, an over-cap total, the chunk-count cap, or an unknown/expired id | — |
+| `upload-commit` | `-t <pane> <id>` | The materialized file's absolute path, bracket-pasted into the pane (the pane's own bracketed-paste markers frame it when it has bracketed paste on); `%error` naming where the file remains on an unknown pane or an incomplete upload | — |
+| `upload-abort` | `<id>` | empty | — |
 | `version` | — | The daemon's build stamp, one line: `<crate version>+<git sha[-dirty]>` (a `src-<16hex>` content digest when built outside a repository, e.g. from a crates.io tarball) | — |
 | `show-notification` | `[-b body] [--] <title>` (the title is the rest of the line; `--` before a title that starts with `-`) | empty | `%notification` to every client (see [Ad-hoc notifications](#ad-hoc-notifications)) |
 | `reload-config` | — | One line per `[daemon]` setting: `unchanged: <name>` or `restart-required: <name>` (live `applied: daemon.remain-on-exit`/`applied: daemon.exit-empty` when the file flips either), diffing the re-read config file against the daemon's applied settings (see [Configuration file](#configuration-file)) | `%config-changed` to every client when the file re-read succeeded (an `%error` reply broadcasts nothing) |
@@ -1065,6 +1070,48 @@ Details worth knowing:
   ```
   `workspace` rows list every workspace in id order, `*` marking the daemon's active one. `session` rows list every session in `list-sessions` order (workspace order, then session order), `*` marking the session that owns `<window>`, `+W` its workspace. `window` rows are the owning session's windows in window order, `*` marking its active window. `pane` rows are the panes of `<window>` in layout order, each title the pane's effective title (`pane-title`'s value) with every `\r` and `\n` replaced by a space so one title stays one row; an empty title is the bare `pane %N`. `agent` rows are exactly the `list-agents` rows, `agent `-prefixed, sorted by pane id. `worktree` rows are exactly the `list-worktrees` rows, `worktree `-prefixed, id order (the side panel's worktree grouping); none when no workspace is worktree-backed. In every row but `agent` and `worktree` the name or title is the rest of the line, so spaces survive. A window target that does not resolve gets the resolver's `no such window …` error; a window no session owns gets `no session owns <window>`. **Version rule:** `snapshot 1` is the format version. A client ignores unknown row kinds and unknown trailing `key=value` tokens; a daemon only appends new row kinds and never changes an existing row's positional fields without bumping the version. **Client contract:** send `client-snapshot` only when `list-commands` advertises the `v1` feature token on its row (`client-snapshot v1`); otherwise fall back to the individual `list-workspaces`/`list-sessions`/`list-windows`/`pane-title`/`list-agents` queries. It is a query: it never triggers a state save.
 - **Pane titles (`select-pane -T`)** set a user title on the pane; `-T ''` clears it (quoting is what makes an empty value expressible). Precedence is a deliberate divergence from tmux: a user title is **sticky** — the pane program's OSC 0/2 title never overwrites it — while with no user title the pane reports the program's live OSC title. The effective title (user when set, else OSC) is what `pane-title -t %N` replies — an empty reply body means neither is set; a broadcast carries only the *user* title's changes, so a client composing a display title falls back to its own OSC tracking on the empty form. Setting the same title again is a no-op and broadcasts nothing.
+
+## Client uploads
+
+A client sends a file into a pane with four control verbs — `upload-begin`,
+`upload-chunk`, `upload-commit`, `upload-abort` — the control-verb half of
+the input semantic documented in
+[STREAMING.md](STREAMING.md#inline-images): the daemon never injects an
+escape sequence carrying the bytes into pane input. Instead the commit
+materializes the assembled bytes as a file and bracket-pastes that file's
+PATH into the target pane, framed by the pane's own `ESC[200~`/`ESC[201~`
+markers when the pane has bracketed paste on (DECSET 2004) — a TUI
+receiving it sees one paste, never a keystroke stream — and by nothing
+when it does not. The pane app reads the file it is pointed at.
+
+The flow: `upload-begin 'photo.png' 123456` replies an upload id;
+`upload-chunk <id> <base64>` appends chunks in order (one standard-alphabet
+base64 token each, the byte-exact escape hatch for binary payloads on the
+line-framed control wire); `upload-commit -t %N <id>` seals the file,
+replies the materialized absolute path, and pastes it; `upload-abort <id>`
+drops the staging slot and deletes the file. Any rejected chunk aborts the
+upload and invalidates the id, so a client cannot hold a half-broken
+staging slot.
+
+Staging is bounded (see SECURITY.md's [Resource Limits
+Reference](SECURITY.md#resource-limits-reference)): 64 KiB per chunk, 100
+MiB total per upload, 4,096 chunks per upload, 8 uploads staged
+concurrently, and two timeouts — an upload that receives no chunk for 30
+seconds, or that is still open 10 minutes after `upload-begin`, is
+abandoned and its spool file deleted (the sweep runs inside every upload
+verb and on the daemon's reap tick). Filenames are sanitized to bare
+names: a path prefix is stripped, control characters and `<>:"|?*\\` are
+refused, and a name that survives a daemon restart collides into a `-N`
+suffix rather than failing.
+
+Files materialize under `$TMPDIR/par-mux-uploads/` (mode 0700, files
+0600 — same-uid only, like the control socket). A **committed** file is
+left in place for the pane app to read and is never deleted by the daemon:
+its lifetime is the pane app's (or the user's) to end, and OS temp
+cleanup is the backstop. **Aborted, expired, and refused-incomplete**
+uploads are deleted at once. The staging state itself is never persisted —
+a daemon restart drops in-flight uploads, and their spool files are
+deleted by the next sweep.
 
 ## Git worktree workspaces
 

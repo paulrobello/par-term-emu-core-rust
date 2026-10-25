@@ -102,6 +102,8 @@ message ServerMessage {
     PaneSizeStatus pane_size_status = 41;
     ViewerPresence viewer_presence = 42;
     InlineImage inline_image = 43;
+    UploadStarted upload_started = 44;
+    UploadFinished upload_finished = 45;
   }
 }
 
@@ -438,12 +440,37 @@ message ClientMessage {
     ClipboardRequest clipboard = 10;
     SnapshotRequest snapshot_request = 11;
     ViewerIdentity viewer_identity = 12;
+    UploadBegin upload_begin = 13;
+    UploadChunk upload_chunk = 14;
+    UploadCommit upload_commit = 15;
+    UploadAbort upload_abort = 16;
   }
 }
 
 // Declare web/mobile presence kind. Defaults to web until declared.
 message ViewerIdentity {
   string kind = 1;
+}
+
+// Begin a chunked client upload into the session's pane (mux-backed
+// sessions; docs/MUX.md "Client uploads"). Replies upload_started /
+// upload_finished.
+message UploadBegin {
+  string filename = 1;  // bare file name; path prefixes are stripped daemon-side
+  uint64 total_bytes = 2;  // the byte total the chunks must land exactly
+}
+
+// One chunk of the session's in-progress upload
+message UploadChunk {
+  bytes data = 1;  // at most the streaming chunk cap
+}
+
+// Seal the staged upload and bracket-paste the materialized path into the pane
+message UploadCommit {
+}
+
+// Abandon the session's in-progress upload
+message UploadAbort {
 }
 
 // Keyboard input from client
@@ -503,6 +530,20 @@ message ClipboardRequest {
   string operation = 1;                // "set", "get"
   optional string content = 2;         // Content for "set" operations
   optional string target = 3;          // "clipboard", "primary", "select"
+}
+
+// A client upload began staging daemon-side (upload_id keys the matching
+// upload_finished)
+message UploadStarted {
+  uint64 upload_id = 1;
+}
+
+// An upload settled: committed (path set), failed or aborted (error set;
+// a failed commit leaves the materialized file in place and says where)
+message UploadFinished {
+  uint64 upload_id = 1;
+  optional string path = 2;
+  optional string error = 3;
 }
 
 // File transfer started (download or upload)

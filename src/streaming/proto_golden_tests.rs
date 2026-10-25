@@ -53,6 +53,17 @@ fn server_fixtures() -> Vec<AppServerMessage> {
             data: "out\x1b[1mput".into(),
             timestamp: Some(11),
         },
+        S::UploadStarted { upload_id: 7 },
+        S::UploadFinished {
+            upload_id: 7,
+            path: Some("/tmp/par-mux-uploads/upload-000007-photo.png".into()),
+            error: None,
+        },
+        S::UploadFinished {
+            upload_id: 7,
+            path: None,
+            error: Some("aborted".into()),
+        },
         S::Output {
             data: String::new(),
             timestamp: None,
@@ -423,6 +434,15 @@ fn client_fixtures() -> Vec<AppClientMessage> {
             end_row: 4,
             mode: "line".into(),
         },
+        C::UploadBegin {
+            filename: "photo.png".into(),
+            total_bytes: 123456,
+        },
+        C::UploadChunk {
+            data: b"chunk".to_vec(),
+        },
+        C::UploadCommit,
+        C::UploadAbort,
         C::ClipboardRequest {
             operation: "get".into(),
             content: Some("x".into()),
@@ -762,9 +782,11 @@ fn proto_golden_fixtures_cover_every_variant() {
             S::PaneSizeStatus { .. } => "PaneSizeStatus",
             S::ViewerPresence { .. } => "ViewerPresence",
             S::InlineImage { .. } => "InlineImage",
+            S::UploadStarted { .. } => "UploadStarted",
+            S::UploadFinished { .. } => "UploadFinished",
         });
     }
-    assert_eq!(seen.len(), 43, "server fixtures miss a variant");
+    assert_eq!(seen.len(), 45, "server fixtures miss a variant");
     let mut seen = std::collections::BTreeSet::new();
     for msg in client_fixtures() {
         seen.insert(match msg {
@@ -780,7 +802,11 @@ fn proto_golden_fixtures_cover_every_variant() {
             C::SelectionRequest { .. } => "SelectionRequest",
             C::ClipboardRequest { .. } => "ClipboardRequest",
             C::SnapshotRequest { .. } => "SnapshotRequest",
+            C::UploadBegin { .. } => "UploadBegin",
+            C::UploadChunk { .. } => "UploadChunk",
+            C::UploadCommit => "UploadCommit",
+            C::UploadAbort => "UploadAbort",
         });
     }
-    assert_eq!(seen.len(), 12, "client fixtures miss a variant");
+    assert_eq!(seen.len(), 16, "client fixtures miss a variant");
 }

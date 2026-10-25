@@ -1654,6 +1654,76 @@ mod streaming_tests {
                 other => panic!("expected Connected, got {other:?}"),
             }
         }
+
+        /// The connect replay is bounded: NEWEST graphics seed first and
+        /// the frame cap (24) stops the walk of a 30-image store — the
+        /// seven oldest are skipped and logged.
+        #[test]
+        fn connect_replay_is_bounded_and_seeds_newest_graphics_first() {
+            let mut term = Terminal::new(80, 24);
+            for id in 101..131u32 {
+                term.process(
+                    format!("\x1b[4;6H\x1b_Ga=T,f=24,s=2,v=2,i={id};AAAAAAAAAAAAAAAA\x1b\\")
+                        .as_bytes(),
+                );
+            }
+            assert_eq!(term.all_graphics().len(), 30);
+            // The store's placement counter is process-global (parallel
+            // tests in the same binary shift it), so the ordering assertion
+            // is relative: snapshot the ids, then expect the replay to be
+            // the NEWEST 24 of them, newest first.
+            let store_ids: Vec<u64> = term.all_graphics().iter().map(|g| g.id).collect();
+            let session = create_session_with_terminal(term);
+            match session.build_connect_message("client-1", false) {
+                ServerMessage::Connected { graphics, .. } => {
+                    assert_eq!(graphics.len(), 24, "the frame cap stops the replay");
+                    let ids: Vec<u64> = graphics.iter().map(|f| f.image_id).collect();
+                    let mut newest_first = store_ids[store_ids.len() - 24..].to_vec();
+                    newest_first.reverse();
+                    assert_eq!(ids, newest_first, "newest graphics seed first");
+                }
+                other => panic!("expected Connected, got {other:?}"),
+            }
+        }
+
+        /// The byte budget stops the replay mid-store: twelve fabricated
+        /// 512x512 RGBA store graphics (a 1 MiB payload each) — eight fit
+        /// the 8 MiB aggregate budget exactly, the ninth would bust it,
+        /// and the four-oldest tail is skipped. Real placements cannot
+        /// build this store on a 24-row screen (tall images leave the
+        /// placement store), so the bound is tested against the store the
+        /// replay actually reads, through the public mutable store.
+        #[test]
+        fn connect_replay_byte_budget_stops_mid_store() {
+            let mut term = Terminal::new(80, 24);
+            {
+                let store = term.graphics_store_mut().all_graphics_mut();
+                for id in 1..=12u64 {
+                    store.push(par_term_emu_core_rust::graphics::TerminalGraphic::new(
+                        id,
+                        par_term_emu_core_rust::graphics::GraphicProtocol::Kitty,
+                        (0, 0),
+                        512,
+                        512,
+                        vec![0u8; 1_048_576],
+                    ));
+                }
+            }
+            assert_eq!(term.all_graphics().len(), 12);
+            let session = create_session_with_terminal(term);
+            match session.build_connect_message("client-1", false) {
+                ServerMessage::Connected { graphics, .. } => {
+                    assert_eq!(graphics.len(), 8, "the byte budget stops the replay");
+                    assert_eq!(graphics[0].image_id, 12, "newest first");
+                    let total: usize = graphics.iter().map(|f| f.data.len()).sum();
+                    assert!(
+                        total <= 8 * 1024 * 1024,
+                        "the aggregate payload respects the budget: {total}"
+                    );
+                }
+                other => panic!("expected Connected, got {other:?}"),
+            }
+        }
     }
 
     mod system_stats_tests {

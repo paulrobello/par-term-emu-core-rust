@@ -49,6 +49,7 @@ pub mod tree;
 /// The self-update tier (mux-bin: clap's Channel rides it).
 #[cfg(feature = "mux-bin")]
 pub mod update;
+pub mod uploads;
 pub mod win_resume;
 pub(crate) mod worktree;
 

@@ -1,5 +1,11 @@
 S 0a0e0a0a6f75741b5b316d707574100b
   = Ok(Output { data: "out\u{1b}[1mput", timestamp: Some(11) })
+S e202020807
+  = Ok(UploadStarted { upload_id: 7 })
+S ea02300807122c2f746d702f7061722d6d75782d75706c6f6164732f75706c6f61642d3030303030372d70686f746f2e706e67
+  = Ok(UploadFinished { upload_id: 7, path: Some("/tmp/par-mux-uploads/upload-000007-photo.png"), error: None })
+S ea020b08071a0761626f72746564
+  = Ok(UploadFinished { upload_id: 7, path: None, error: Some("aborted") })
 S 0a00
   = Ok(Output { data: "", timestamp: None })
 S 1205088401102b
@@ -122,6 +128,14 @@ C 42070a057061737465
   = Ok(Paste { content: "paste" })
 C 4a0e08011002180320042a046c696e65
   = Ok(SelectionRequest { start_col: 1, start_row: 2, end_col: 3, end_row: 4, mode: "line" })
+C 6a0f0a0970686f746f2e706e6710c0c407
+  = Ok(UploadBegin { filename: "photo.png", total_bytes: 123456 })
+C 72070a056368756e6b
+  = Ok(UploadChunk { data: [99, 104, 117, 110, 107] })
+C 7a00
+  = Ok(UploadCommit)
+C 820100
+  = Ok(UploadAbort)
 C 52080a03676574120178
   = Ok(ClipboardRequest { operation: "get", content: Some("x"), target: None })
 C 5a080a0466756c6c1009

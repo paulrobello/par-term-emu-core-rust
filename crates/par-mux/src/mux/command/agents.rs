@@ -31,7 +31,7 @@ fn parse_timeout(name: &str, raw: Option<&str>) -> Result<Option<u64>, String> {
     .transpose()
 }
 
-fn pane_flag(name: &str, raw: Option<&str>) -> Result<Target<PaneId>, String> {
+pub(super) fn pane_flag(name: &str, raw: Option<&str>) -> Result<Target<PaneId>, String> {
     match raw {
         None => Err(format!("{name} requires -t")),
         Some("") => Err(format!("{name}: -t requires a non-empty name")),

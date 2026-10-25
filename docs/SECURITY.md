@@ -1398,9 +1398,9 @@ sections; the numbers live here.
 | `MAX_REPLY_LINE_BYTES` | 4 MiB | `crates/par-mux/src/mux/client.rs:33` | Bytes accumulated from one daemon reply or notification line before the client closes the connection. |
 | `NOTIFICATION_TITLE_MAX` | 80 | `crates/par-mux/src/mux/command/buffers.rs:181` | Characters of a `show-notification` title (herdr's 80); longer is truncated. |
 | `NOTIFICATION_BODY_MAX` | 240 | `crates/par-mux/src/mux/command/buffers.rs:184` | Characters of a `show-notification` body (herdr's 240); longer is truncated. |
-| `MAX_CLIENT_COLS` | 1,000 | `crates/par-mux/src/mux/command/mod.rs:853` | Columns a par-mux client may report for a window grid (`refresh-client -C`). |
-| `MAX_CLIENT_ROWS` | 500 | `crates/par-mux/src/mux/command/mod.rs:855` | Rows a par-mux client may report for a window grid (`refresh-client -C`). |
-| `MAX_CELL_PIXELS` | 512 | `crates/par-mux/src/mux/command/mod.rs:857` | Pixels per cell axis a par-mux client may report (`refresh-client -p`). |
+| `MAX_CLIENT_COLS` | 1,000 | `crates/par-mux/src/mux/command/mod.rs:893` | Columns a par-mux client may report for a window grid (`refresh-client -C`). |
+| `MAX_CLIENT_ROWS` | 500 | `crates/par-mux/src/mux/command/mod.rs:895` | Rows a par-mux client may report for a window grid (`refresh-client -C`). |
+| `MAX_CELL_PIXELS` | 512 | `crates/par-mux/src/mux/command/mod.rs:897` | Pixels per cell axis a par-mux client may report (`refresh-client -p`). |
 | `MAX_FOREGROUND_NAME_LEN` | 128 | `crates/par-mux/src/mux/foreground.rs:42` | Bytes of a pane's foreground command name served by pane-info. |
 | `MAX_REPORT_VALUE_LEN` | 4,096 | `crates/par-mux/src/mux/hooks/mod.rs:95` | Bytes accepted for one hook or agent report value sent from a pane. |
 | `MAX_GIT_BRANCH_LEN` | 128 | `crates/par-mux/src/mux/host_probe.rs:174` | Bytes of git branch name the host probe serves for one pane cwd. |
@@ -1413,6 +1413,11 @@ sections; the numbers live here.
 | `CLIENT_QUEUE_DEPTH` | 4,096 | `crates/par-mux/src/mux/server/mod.rs:83` | Broadcast lines queued per control-socket client before the daemon evicts it. |
 | `CLIENT_QUEUE_AGGREGATE_DEPTH` | `CLIENT_QUEUE_DEPTH * 2` | `crates/par-mux/src/mux/server/mod.rs:95` | Broadcast lines queued across all control-socket clients before the daemon evicts the deepest queue. |
 | `MAX_CONTROL_LINE_BYTES` | 1 MiB | `crates/par-mux/src/mux/server/mod.rs:104` | Bytes accumulated from one control-socket client line before the daemon closes it. |
+| `MAX_UPLOAD_CHUNK_BYTES` | 64 KiB | `crates/par-mux/src/mux/uploads.rs:31` | Base64-decoded bytes accepted for one `upload-chunk`. |
+| `MAX_UPLOAD_TOTAL_BYTES` | 100 MiB | `crates/par-mux/src/mux/uploads.rs:34` | Total bytes one upload may stage. |
+| `MAX_UPLOAD_CHUNKS` | 4,096 | `crates/par-mux/src/mux/uploads.rs:37` | Chunks one upload may accept (bounds a tiny-chunk flood below the |
+| `MAX_CONCURRENT_UPLOADS` | 8 | `crates/par-mux/src/mux/uploads.rs:41` | Uploads staged concurrently daemon-wide. |
+| `MAX_UPLOAD_NAME_BYTES` | 200 | `crates/par-mux/src/mux/uploads.rs:44` | Bytes of one `upload-begin` filename (a bare file name, never a |
 | `MAX_BADGE_FORMAT_LENGTH` | 4 KiB | `crates/par-term-emu-core/src/badge.rs:189` | Badge format bytes accepted from one OSC 1337 SetBadgeFormat payload. |
 | `MAX_IMAGE_DATA_SIZE` | 100 MiB | `crates/par-term-emu-core/src/graphics/iterm.rs:17` | Base64 image bytes accepted from one iTerm2 inline-image sequence. |
 | `MAX_FILE_SIZE` | 100 MiB | `crates/par-term-emu-core/src/graphics/kitty/decode.rs:155` | Bytes read from one kitty file medium named by an escape payload. |
@@ -1450,14 +1455,17 @@ sections; the numbers live here.
 | `MAX_SIDECAR_BYTES` | 1 KiB | `src/bin/streaming_server/frontend_download.rs:67` | Bytes accepted from a `.sha256` checksum sidecar response (SEC-203). |
 | `MAX_DECOMPRESSED_SIZE` | 9 MiB | `src/streaming/proto.rs:48` | Decompressed bytes accepted from one zlib-compressed streaming frame. |
 | `MAX_INLINE_IMAGE_BYTES` | 8 MiB | `src/streaming/protocol.rs:326` | Image bytes accepted in one InlineImage streaming frame. |
+| `MAX_UPLOAD_CHUNK_BYTES` | 64 KiB | `src/streaming/protocol.rs:335` | Bytes accepted in one UploadChunk message payload from a streaming client. |
 | `WS_MAX_MESSAGE_SIZE` | 16 MiB | `src/streaming/server/mod.rs:45` | Bytes accepted in one inbound WebSocket message from a streaming client. |
 | `WS_MAX_FRAME_SIZE` | 16 MiB | `src/streaming/server/mod.rs:47` | Bytes accepted in one inbound WebSocket frame from a streaming client. |
 | `MAX_INPUT_PAYLOAD_BYTES` | 64 KiB | `src/streaming/server/mod.rs:53` | Bytes accepted in one Input message payload from a streaming client. |
 | `MAX_PASTE_PAYLOAD_BYTES` | 256 KiB | `src/streaming/server/mod.rs:57` | Bytes accepted in one Paste message payload from a streaming client. |
-| `MAX_COLS` | 1,000 | `src/streaming/server/mod.rs:92` | Columns a streaming client may request for its terminal. |
-| `MAX_ROWS` | 500 | `src/streaming/server/mod.rs:95` | Rows a streaming client may request for its terminal. |
+| `MAX_COLS` | 1,000 | `src/streaming/server/mod.rs:95` | Columns a streaming client may request for its terminal. |
+| `MAX_ROWS` | 500 | `src/streaming/server/mod.rs:98` | Rows a streaming client may request for its terminal. |
 | `INPUT_QUEUE_MESSAGES` | 256 | `src/streaming/session.rs:27` | Client input chunks queued per session pending write to the PTY. |
 | `MAX_QUEUED_INPUT_BYTES` | 4 MiB | `src/streaming/session.rs:36` | Client input bytes queued per session pending write to the PTY. |
+| `MAX_CONNECT_REPLAY_FRAMES` | 24 | `src/streaming/session.rs:41` | Graphics frames replayed to one client in the connect handshake. |
+| `MAX_CONNECT_REPLAY_BYTES` | 8 MiB | `src/streaming/session.rs:47` | Aggregate replay payload bytes carried in one connect handshake. |
 
 <!-- caps-table:end -->
 

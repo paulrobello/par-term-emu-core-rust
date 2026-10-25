@@ -53,6 +53,7 @@ mod buffers;
 mod client;
 mod panes;
 mod sessions;
+mod uploads;
 mod windows;
 mod worktrees;
 use agents::*;
@@ -61,6 +62,7 @@ use client::*;
 use panes::*;
 use sessions::*;
 pub(crate) use sessions::{workspace_roster_changed, workspace_roster_fingerprint};
+use uploads::*;
 use windows::*;
 use worktrees::*;
 
@@ -259,6 +261,10 @@ fn route_command(
         | MuxCommand::ReloadConfig
         | MuxCommand::ShowNotification { .. }
         | MuxCommand::ListCommands { .. }) => route_buffer_command(ctx, command),
+        command @ (MuxCommand::UploadBegin { .. }
+        | MuxCommand::UploadChunk { .. }
+        | MuxCommand::UploadCommit { .. }
+        | MuxCommand::UploadAbort { .. }) => route_upload_command(ctx, command),
         command @ (MuxCommand::RefreshClient { .. }
         | MuxCommand::ListAgents
         | MuxCommand::ClientSnapshot { .. }

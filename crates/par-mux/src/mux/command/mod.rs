@@ -695,6 +695,42 @@ pub enum MuxCommand {
         /// The new value: `on`/`off` (also `true`/`false`) for booleans.
         value: String,
     },
+    /// Stage one client upload (`upload-begin <filename> <total-bytes>`):
+    /// open a bounded spool file under the staging directory and reply
+    /// the upload id the chunk/commit/abort verbs key on. The bytes never
+    /// touch pane input — commit bracket-pastes the materialized file's
+    /// PATH (see [`crate::mux::uploads`]).
+    UploadBegin {
+        /// The file's bare name (a path prefix is stripped daemon-side).
+        filename: String,
+        /// The byte total the chunks must land exactly.
+        total_bytes: u64,
+    },
+    /// Append one chunk to a staged upload (`upload-chunk <id> <base64>`).
+    /// The payload rides as one standard-alphabet base64 token. Any
+    /// rejection (per-chunk cap, total cap, chunk-count cap) aborts the
+    /// upload and invalidates the id.
+    UploadChunk {
+        /// The id `upload-begin` replied.
+        upload: u64,
+        /// The chunk bytes.
+        data: Vec<u8>,
+    },
+    /// Materialize a staged upload and bracket-paste the file's PATH into
+    /// a pane (`upload-commit <id> -t <pane>`). Consumes the upload; the
+    /// reply body is the pasted path. Content command: never saves state.
+    UploadCommit {
+        /// The id `upload-begin` replied.
+        upload: u64,
+        /// Target pane (the same addressing every content verb uses).
+        pane: Target<PaneId>,
+    },
+    /// Drop a staged upload and delete its spool file
+    /// (`upload-abort <id>`).
+    UploadAbort {
+        /// The id `upload-begin` replied.
+        upload: u64,
+    },
 }
 
 impl MuxCommand {
@@ -772,6 +808,10 @@ impl MuxCommand {
             | MuxCommand::ReloadConfig
             // set-option is the same class: live settings only.
             | MuxCommand::SetOption { .. }
+            | MuxCommand::UploadBegin { .. }
+            | MuxCommand::UploadChunk { .. }
+            | MuxCommand::UploadCommit { .. }
+            | MuxCommand::UploadAbort { .. }
             | MuxCommand::ShowOptions
             | MuxCommand::HasSession { .. }
             | MuxCommand::Version => false,
@@ -865,6 +905,7 @@ mod keys;
 mod panes;
 mod sessions;
 mod streams;
+mod uploads;
 mod windows;
 mod worktrees;
 use agents::*;
@@ -875,6 +916,7 @@ use keys::*;
 use panes::*;
 use sessions::*;
 use streams::*;
+use uploads::*;
 use windows::*;
 use worktrees::*;
 
@@ -1529,6 +1571,10 @@ const COMMANDS: &[(&str, CommandParser, &[&str])] = &[
     ("set-environment", parse_set_environment, &[]),
     ("show-buffer", parse_show_buffer, &[]),
     ("paste-buffer", parse_paste_buffer, &[]),
+    ("upload-begin", parse_upload_begin, &[]),
+    ("upload-chunk", parse_upload_chunk, &["base64"]),
+    ("upload-commit", parse_upload_commit, &["targeted"]),
+    ("upload-abort", parse_upload_abort, &[]),
     ("version", parse_version, &[]),
     ("reload-config", parse_reload_config, &[]),
     ("show-notification", parse_show_notification, &[]),

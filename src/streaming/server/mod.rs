@@ -56,7 +56,10 @@ const MAX_INPUT_PAYLOAD_BYTES: usize = 64 * 1024;
 /// transfers, so the cap is higher than single keystroke Input.
 /// cap: Bytes accepted in one Paste message payload from a streaming client.
 const MAX_PASTE_PAYLOAD_BYTES: usize = 256 * 1024;
-
+// The upload-chunk wire cap lives beside the other protocol caps in
+// `protocol.rs`; re-exported here so the upload handlers (and the caps
+// generator, via protocol.rs's `/// cap:` comment) see one definition.
+pub(crate) use crate::streaming::protocol::MAX_UPLOAD_CHUNK_BYTES;
 /// How long a raw connection may take to complete its WebSocket (and TLS)
 /// handshake before the server drops it (SEC-004). Pre-upgrade connections
 /// are unauthenticated, so they must not be held indefinitely.
@@ -157,6 +160,33 @@ pub trait SessionFactory: Send + Sync {
     fn close_on_last_disconnect(&self) -> bool {
         false
     }
+
+    /// The client-upload pipe for a session, when this factory backs
+    /// sessions with a mux daemon — the only place an upload can
+    /// materialize and paste (plain PTY sessions refuse uploads).
+    /// Blocking methods; callers run them off the async runtime.
+    fn upload_pipe(&self, _session_id: &str) -> Option<std::sync::Arc<dyn UploadForwarder>> {
+        None
+    }
+}
+
+/// One session's client-upload forwarder: the daemon-side half of the
+/// chunked upload verbs (MUX.md "Client uploads") over the session's mux
+/// control connection. One upload at a time per session.
+pub trait UploadForwarder: Send + Sync {
+    /// `upload-begin`: open bounded staging, reply the daemon upload id.
+    fn begin(&self, filename: &str, total_bytes: u64) -> std::io::Result<u64>;
+    /// `upload-chunk`: append one (capped) chunk; a rejection aborts the
+    /// upload daemon-side and the id goes invalid.
+    fn chunk(&self, data: &[u8]) -> std::io::Result<()>;
+    /// `upload-commit`: seal the spool file and bracket-paste its path
+    /// into the session's pane; replies the materialized path.
+    fn commit(&self) -> std::io::Result<String>;
+    /// `upload-abort`: drop the staging slot, delete the spool file.
+    fn abort(&self) -> std::io::Result<()>;
+    /// The daemon-side id of the session's in-progress (or last settled)
+    /// upload, for the `upload_finished` reports.
+    fn upload_id(&self) -> Option<u64>;
 }
 
 // =============================================================================
@@ -672,6 +702,8 @@ fn should_send(
         | ServerMessage::ViewerPresence { .. }
         | ServerMessage::AgentRoster { .. }
         | ServerMessage::AgentStateChanged { .. }
+        | ServerMessage::UploadStarted { .. }
+        | ServerMessage::UploadFinished { .. }
         | ServerMessage::Pong => true,
     }
 }

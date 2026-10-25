@@ -214,8 +214,240 @@ impl StreamingServer {
                 let msg = Self::build_snapshot_message(&session.terminal, &scope, max_commands);
                 replies.push(msg);
             }
+            crate::streaming::protocol::ClientMessage::UploadBegin {
+                filename,
+                total_bytes,
+            } => {
+                self.handle_upload_begin(
+                    session,
+                    transport_label,
+                    client_id,
+                    read_only,
+                    &filename,
+                    total_bytes,
+                    &mut replies,
+                );
+            }
+            crate::streaming::protocol::ClientMessage::UploadChunk { data } => {
+                self.handle_upload_chunk(
+                    session,
+                    transport_label,
+                    client_id,
+                    read_only,
+                    &data,
+                    &mut replies,
+                );
+            }
+            crate::streaming::protocol::ClientMessage::UploadCommit => {
+                self.handle_upload_commit(session, read_only, &mut replies);
+            }
+            crate::streaming::protocol::ClientMessage::UploadAbort => {
+                self.handle_upload_abort(session, read_only, &mut replies);
+            }
         }
         replies
+    }
+
+    // --- Client uploads (mux-backed sessions) ---------------------------
+
+    /// The sync upload refusal reply: nothing was staged, so the daemon
+    /// id is 0 and the reason rides `error`.
+    fn upload_refusal(reason: String) -> ServerMessage {
+        ServerMessage::UploadFinished {
+            upload_id: 0,
+            path: None,
+            error: Some(reason),
+        }
+    }
+
+    /// `UploadBegin`: open the session's daemon-side staging and reply
+    /// `upload_started` (or an `upload_finished` error). The verb blocks
+    /// on the pipe's op queue — bounded by the reply deadline — because a
+    /// client cannot act on a begin whose outcome is unknown; a wedged
+    /// daemon stalls this one connection's loop, never other sessions.
+    #[allow(clippy::too_many_arguments)]
+    fn handle_upload_begin(
+        self: &Arc<Self>,
+        session: &Arc<StreamSessionState>,
+        transport_label: &str,
+        client_id: uuid::Uuid,
+        read_only: bool,
+        filename: &str,
+        total_bytes: u64,
+        replies: &mut Vec<ServerMessage>,
+    ) {
+        if read_only {
+            replies.push(Self::upload_refusal(
+                "read-only connections cannot upload".to_string(),
+            ));
+            return;
+        }
+        let Some(pipe) = self
+            .session_factory
+            .as_ref()
+            .and_then(|factory| factory.upload_pipe(&session.id))
+        else {
+            crate::debug_error!(
+                "STREAMING",
+                "UploadBegin from {} {} refused: session {} has no mux upload pipe",
+                transport_label,
+                client_id,
+                session.id
+            );
+            replies.push(Self::upload_refusal(
+                "uploads require a mux-backed pane session".to_string(),
+            ));
+            return;
+        };
+        match pipe.begin(filename, total_bytes) {
+            Ok(upload_id) => replies.push(ServerMessage::UploadStarted { upload_id }),
+            Err(err) => {
+                crate::debug_error!(
+                    "STREAMING",
+                    "UploadBegin from {} {} failed: {}",
+                    transport_label,
+                    client_id,
+                    err
+                );
+                replies.push(Self::upload_refusal(err.to_string()));
+            }
+        }
+    }
+
+    /// `UploadChunk`: cap-check and forward one chunk. A rejected chunk
+    /// (daemon cap or wire cap) aborts the upload daemon-side and reports
+    /// `upload_finished`; silence is progress.
+    fn handle_upload_chunk(
+        self: &Arc<Self>,
+        session: &Arc<StreamSessionState>,
+        transport_label: &str,
+        client_id: uuid::Uuid,
+        read_only: bool,
+        data: &[u8],
+        replies: &mut Vec<ServerMessage>,
+    ) {
+        if read_only {
+            replies.push(Self::upload_refusal(
+                "read-only connections cannot upload".to_string(),
+            ));
+            return;
+        }
+        if data.len() > MAX_UPLOAD_CHUNK_BYTES {
+            crate::debug_error!(
+                "STREAMING",
+                "UploadChunk from {} {} refused: {} bytes > {} cap",
+                transport_label,
+                client_id,
+                data.len(),
+                MAX_UPLOAD_CHUNK_BYTES
+            );
+            replies.push(Self::upload_refusal(format!(
+                "chunk of {} bytes exceeds the {}-byte per-chunk cap",
+                data.len(),
+                MAX_UPLOAD_CHUNK_BYTES
+            )));
+            return;
+        }
+        let Some(pipe) = self
+            .session_factory
+            .as_ref()
+            .and_then(|factory| factory.upload_pipe(&session.id))
+        else {
+            replies.push(Self::upload_refusal(
+                "uploads require a mux-backed pane session".to_string(),
+            ));
+            return;
+        };
+        if let Err(err) = pipe.chunk(data) {
+            crate::debug_error!(
+                "STREAMING",
+                "UploadChunk from {} {} failed: {}",
+                transport_label,
+                client_id,
+                err
+            );
+            replies.push(ServerMessage::UploadFinished {
+                upload_id: pipe.upload_id().unwrap_or(0),
+                path: None,
+                error: Some(err.to_string()),
+            });
+        }
+    }
+
+    /// `UploadCommit`: seal the staged file and paste its path into the
+    /// session's pane. The path (or the failure) rides `upload_finished`.
+    fn handle_upload_commit(
+        self: &Arc<Self>,
+        session: &Arc<StreamSessionState>,
+        read_only: bool,
+        replies: &mut Vec<ServerMessage>,
+    ) {
+        if read_only {
+            replies.push(Self::upload_refusal(
+                "read-only connections cannot upload".to_string(),
+            ));
+            return;
+        }
+        let Some(pipe) = self
+            .session_factory
+            .as_ref()
+            .and_then(|factory| factory.upload_pipe(&session.id))
+        else {
+            replies.push(Self::upload_refusal(
+                "uploads require a mux-backed pane session".to_string(),
+            ));
+            return;
+        };
+        match pipe.commit() {
+            Ok(path) => replies.push(ServerMessage::UploadFinished {
+                upload_id: pipe.upload_id().unwrap_or(0),
+                path: Some(path),
+                error: None,
+            }),
+            Err(err) => replies.push(ServerMessage::UploadFinished {
+                upload_id: pipe.upload_id().unwrap_or(0),
+                path: None,
+                error: Some(err.to_string()),
+            }),
+        }
+    }
+
+    /// `UploadAbort`: drop the staging slot (its spool file is deleted
+    /// daemon-side) and report the settlement.
+    fn handle_upload_abort(
+        self: &Arc<Self>,
+        session: &Arc<StreamSessionState>,
+        read_only: bool,
+        replies: &mut Vec<ServerMessage>,
+    ) {
+        if read_only {
+            replies.push(Self::upload_refusal(
+                "read-only connections cannot upload".to_string(),
+            ));
+            return;
+        }
+        let Some(pipe) = self
+            .session_factory
+            .as_ref()
+            .and_then(|factory| factory.upload_pipe(&session.id))
+        else {
+            replies.push(Self::upload_refusal(
+                "uploads require a mux-backed pane session".to_string(),
+            ));
+            return;
+        };
+        match pipe.abort() {
+            Ok(()) => replies.push(ServerMessage::UploadFinished {
+                upload_id: pipe.upload_id().unwrap_or(0),
+                path: None,
+                error: Some("aborted".to_string()),
+            }),
+            Err(err) => replies.push(ServerMessage::UploadFinished {
+                upload_id: pipe.upload_id().unwrap_or(0),
+                path: None,
+                error: Some(err.to_string()),
+            }),
+        }
     }
 
     /// True when a PTY writer is attached to the session. Input-bearing
