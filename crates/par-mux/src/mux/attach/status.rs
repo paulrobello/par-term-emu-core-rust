@@ -336,6 +336,25 @@ impl StatusState {
         Ok(workspaces)
     }
 
+    /// The cached-first landing for the async SessionGone cascade: the
+    /// shown session's cached windows name a survivor of the gone
+    /// window — the cached active one when it survives the gone one,
+    /// else the first listed sibling — with no query, so a pathological
+    /// daemon parks nothing extra on the landing path. `None` when the
+    /// cache holds no survivor (the session itself is likely gone): the
+    /// interactive [`targets::cascade_landing`] ladder decides then.
+    pub(crate) fn cached_cascade_landing(&self, gone: &str) -> Option<String> {
+        let active = self
+            .active_window
+            .as_ref()
+            .filter(|id| self.windows.iter().any(|(known, _)| known == *id));
+        active
+            .into_iter()
+            .chain(self.windows.iter().map(|(id, _)| id))
+            .find(|id| *id != gone)
+            .cloned()
+    }
+
     /// Assign every `Some` field of `facts`, in the refresh's current
     /// order; `None` fields leave the state alone. Returns the workspace
     /// roster as `(id, name, active)` for `RefreshRows`.
@@ -1094,6 +1113,28 @@ mod tests {
             project: None,
             message: None,
         }
+    }
+
+    /// The cached-first SessionGone landing: the cached active window
+    /// lands when it survives the gone one, else the first listed
+    /// sibling, and a cache without a survivor stays silent (the
+    /// interactive ladder decides).
+    #[test]
+    fn cached_cascade_landing_picks_a_survivor_from_the_cache() {
+        let mut state = state();
+        assert_eq!(
+            state.cached_cascade_landing("@1").as_deref(),
+            Some("@0"),
+            "the cached active window survives"
+        );
+        assert_eq!(
+            state.cached_cascade_landing("@0").as_deref(),
+            Some("@1"),
+            "the gone active window falls to the first sibling"
+        );
+        state.windows.clear();
+        state.active_window = None;
+        assert_eq!(state.cached_cascade_landing("@0"), None);
     }
 
     /// The blocked reason decodes from the row's `reason=` base64 extra;

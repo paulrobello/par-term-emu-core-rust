@@ -620,53 +620,156 @@ impl WindowSession {
         // scrollback, cursor, and input modes ride the screen-restore
         // byte stream, the same stream passthrough writes to the host.
         self.replay_all_panes(conn);
-        // The status bar seeds with the view.
-        let focused = self.renderer.focused().unwrap_or(0);
-        match self.status.refresh(conn, &self.window, focused) {
-            Ok(_) => {
-                // Everything queued by now waits for the pump, output
-                // included (the replay above already covers what came
-                // before it). A pane with a queued state push is left out
-                // of the baseline: the snapshot may already show the
-                // state that push announces.
-                let queued = conn.drain_pending_events();
-                self.deferred.extend(queued);
-                self.seed_transitions();
-                let pending: Vec<u32> = self
-                    .deferred
-                    .iter()
-                    .filter_map(|event| match event {
-                        TmuxNotification::AgentStateChanged { pane_id, .. }
-                        | TmuxNotification::AgentReleased { pane_id, .. } => {
-                            pane_id.strip_prefix('%').and_then(|p| p.parse().ok())
+        // The status bar seeds with the view. On a client-snapshot
+        // daemon the seed rides the pump's continuation machinery (the
+        // async status path): the snapshot is written without waiting —
+        // the last synchronous snapshot call site on snapshot daemons —
+        // and the reply applies as a pump-tick continuation.
+        if conn.has_command_feature("client-snapshot", "v1") {
+            // Everything queued by the seed's round trips waits for the
+            // pump, output included (the replay above already covers
+            // what came before it); the agent panes among them stay out
+            // of the continuation's baseline (the snapshot may already
+            // show the state those pushes announce).
+            let queued = conn.drain_pending_events();
+            self.deferred.extend(queued);
+            let pending = self.deferred_agent_panes();
+            self.seed_status_snapshot(conn, pending);
+        } else {
+            let focused = self.renderer.focused().unwrap_or(0);
+            match self.status.refresh(conn, &self.window, focused) {
+                Ok(_) => {
+                    // Everything queued by now waits for the pump, output
+                    // included (the replay above already covers what came
+                    // before it). A pane with a queued state push is left out
+                    // of the baseline: the snapshot may already show the
+                    // state that push announces.
+                    let queued = conn.drain_pending_events();
+                    self.deferred.extend(queued);
+                    self.seed_transitions();
+                    let pending = self.deferred_agent_panes();
+                    if let Some(baseline) = self.notify.transitions.as_mut() {
+                        for pane in pending {
+                            baseline.remove(&pane);
                         }
-                        _ => None,
-                    })
-                    .collect();
-                if let Some(baseline) = self.notify.transitions.as_mut() {
-                    for pane in pending {
-                        baseline.remove(&pane);
                     }
+                    // The panel installed before this refresh — against an
+                    // empty roster (its pre-refresh install only marks the
+                    // status stale). Re-install from the committed cache, or
+                    // a re-attach with QUIET agents stays agents-empty until
+                    // an unrelated event marks the status stale: quiet
+                    // agents send no pushes to patch the panel later.
+                    self.rebuild_agent_section();
                 }
-                // The panel installed before this refresh — against an
-                // empty roster (its pre-refresh install only marks the
-                // status stale). Re-install from the committed cache, or
-                // a re-attach with QUIET agents stays agents-empty until
-                // an unrelated event marks the status stale: quiet
-                // agents send no pushes to patch the panel later.
-                self.rebuild_agent_section();
+                Err(status::StatusError::SessionGone) => {
+                    // The session died mid-seed: re-land on a survivor.
+                    return Ok(false);
+                }
+                Err(_) => {}
             }
-            Err(status::StatusError::SessionGone) => {
-                // The session died mid-seed: re-land on a survivor.
-                return Ok(false);
-            }
-            Err(_) => {}
         }
         self.chrome.status_row.invalidate();
         self.draw_status_row();
         self.chrome.tab_strip.invalidate();
         self.draw_tab_strip();
         Ok(true)
+    }
+
+    /// The agent panes a deferred push announces a state for — the
+    /// baseline-exclusion candidates both seed arms collect.
+    fn deferred_agent_panes(&self) -> Vec<u32> {
+        self.deferred
+            .iter()
+            .filter_map(|event| match event {
+                TmuxNotification::AgentStateChanged { pane_id, .. }
+                | TmuxNotification::AgentReleased { pane_id, .. } => {
+                    pane_id.strip_prefix('%').and_then(|p| p.parse().ok())
+                }
+                _ => None,
+            })
+            .collect()
+    }
+
+    /// The seed's issue half on a client-snapshot daemon: write the
+    /// status snapshot through the pump's continuation machinery
+    /// ([`Self::send_then`]) and return — the seed never blocks on the
+    /// bar. One snapshot in flight at a time (the pump's rule): while
+    /// one is owed the seed leaves the bar to the machinery and marks
+    /// the state dirty, so the reply's application re-issues on a later
+    /// tick.
+    fn seed_status_snapshot(
+        &mut self,
+        conn: &mut crate::mux::attach::conn::AttachConn,
+        pending: Vec<u32>,
+    ) {
+        if self.status_snapshot_inflight.is_some() {
+            self.status_dirty = true;
+            return;
+        }
+        self.status_dirty = false;
+        self.status_snapshot_inflight = Some(std::time::Instant::now());
+        let window = self.window.clone();
+        self.send_then(
+            conn,
+            &format!("client-snapshot -t {window}"),
+            move |s, c, reply| {
+                s.apply_seed_snapshot(c, reply, window, pending);
+            },
+        );
+    }
+
+    /// The seed snapshot's reply continuation (runs on the pump tick the
+    /// reply arrives, [`Self::dispatch_replies`]): the seed's
+    /// post-refresh steps — the baseline adoption from the committed
+    /// roster, the pushes queued before it left out of the baseline —
+    /// around the same facts commit, landing contract, and repaints the
+    /// pump's continuation ([`Self::apply_status_snapshot`]) runs.
+    fn apply_seed_snapshot(
+        &mut self,
+        conn: &mut crate::mux::attach::conn::AttachConn,
+        reply: crate::mux::client::Reply,
+        window: String,
+        pending: Vec<u32>,
+    ) {
+        self.status_snapshot_inflight = None;
+        // A reply for a window the view already left is stale: the
+        // switch's reseed re-queries (the nav_current rule).
+        if self.window != window {
+            return;
+        }
+        let focused = self.renderer.focused().unwrap_or(0);
+        match self.status.apply_snapshot_reply(&reply, focused) {
+            Ok(workspaces) => {
+                // Pushes that queued while the reply was in flight take
+                // their place beside the seed-time ones.
+                let queued = conn.drain_pending_events();
+                self.deferred.extend(queued);
+                self.seed_transitions();
+                let mut raced = pending;
+                raced.extend(self.deferred_agent_panes());
+                if let Some(baseline) = self.notify.transitions.as_mut() {
+                    for pane in raced {
+                        baseline.remove(&pane);
+                    }
+                }
+                if self.sidebar.is_on() {
+                    self.install_panel_sections(&workspaces);
+                }
+                // The snapshot carried every pane title: query-free.
+                let _ = self.refresh_pane_titles(conn);
+            }
+            Err(status::StatusError::SessionGone) => {
+                // The session died mid-seed: the landing contract runs on
+                // the pump tick, where `status_end` ends the view the
+                // way the sync path's `Ok(false)` did.
+                self.land_gone_view(conn);
+            }
+            // Stale state survives; the next mark retries.
+            Err(status::StatusError::Query) => {}
+            Err(status::StatusError::TimedOut) => {} // not produced by the reply half
+        }
+        self.draw_status_row();
+        self.draw_tab_strip();
     }
 
     /// Keep the events a seed drain consumed for the pump. A

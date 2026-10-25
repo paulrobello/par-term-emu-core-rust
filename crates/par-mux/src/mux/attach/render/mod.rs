@@ -1764,26 +1764,48 @@ impl WindowSession {
                 // The snapshot carried every pane title: query-free.
                 let _ = self.refresh_pane_titles(conn);
             }
-            Err(status::StatusError::SessionGone) => {
-                let session = self.status.session_id.clone();
-                let workspace = self.status.session_workspace.clone();
-                match cascade_landing(conn, session.as_deref(), workspace.as_deref()) {
-                    // The reseed refreshes the status itself.
-                    Ok(Some(window)) if window != self.window => {
-                        self.reseed_window(conn, &window);
-                    }
-                    // A failed landing retries on the next poll tick or
-                    // event, not immediately (the same storm rule).
-                    Err(_) => {}
-                    _ => self.status_end = true,
-                }
-            }
+            Err(status::StatusError::SessionGone) => self.land_gone_view(conn),
             // Stale state survives; the next mark retries.
             Err(status::StatusError::Query) => {}
             Err(status::StatusError::TimedOut) => {} // not produced by the reply half
         }
         self.draw_status_row();
         self.draw_tab_strip();
+    }
+
+    /// The SessionGone landing both snapshot continuations share (the
+    /// pump's and the seed's, [`Self::apply_status_snapshot`] /
+    /// [`super::session`]): land up the tree per the gone-view contract
+    /// — the session's active window while the session survives, else
+    /// the workspace's landing session, else the daemon's active
+    /// workspace. The last snapshot's cached window list resolves the
+    /// first candidate (the cached active one when it survives the gone
+    /// window, else the first listed sibling) with no query, so a
+    /// pathological daemon parks nothing extra on the landing path; a
+    /// cache with no survivor — or a cached landing that died before it
+    /// could be shown — walks the interactive ladder. Nothing left to
+    /// show raises `status_end`, the pump-visible `End`: during the
+    /// seed it ends the view on the next tick, the way the sync seed's
+    /// `Ok(false)` did. A landing that resolves back to the shown
+    /// window ends too.
+    fn land_gone_view(&mut self, conn: &mut crate::mux::attach::conn::AttachConn) {
+        if let Some(window) = self.status.cached_cascade_landing(&self.window) {
+            if self.reseed_window(conn, &window) {
+                return;
+            }
+        }
+        let session = self.status.session_id.clone();
+        let workspace = self.status.session_workspace.clone();
+        match cascade_landing(conn, session.as_deref(), workspace.as_deref()) {
+            // The reseed refreshes the status itself.
+            Ok(Some(window)) if window != self.window => {
+                self.reseed_window(conn, &window);
+            }
+            // A failed landing retries on the next poll tick or
+            // event, not immediately (the same storm rule).
+            Err(_) => {}
+            _ => self.status_end = true,
+        }
     }
 
     /// The flash's frame tick at `now` (injected so tests drive the

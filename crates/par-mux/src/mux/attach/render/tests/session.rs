@@ -4323,6 +4323,111 @@ fn status_snapshot_end_lands_through_the_continuation() {
     );
 }
 
+/// The cached-landing fixture: a session showing `@0` whose status
+/// cache already lists `@1` beside it (the last snapshot's roster,
+/// applied test-side), and a snapshot daemon whose `client-snapshot -t
+/// @0` now refuses (the window is gone). `extra_failing` names the
+/// landing queries the daemon also refuses.
+fn cached_landing_fixture(
+    tag: &str,
+    extra_failing: &[&str],
+) -> (
+    std::sync::mpsc::Receiver<(String, String)>,
+    crate::mux::attach::conn::AttachConn,
+    WindowSession,
+) {
+    let mut script = snapshot_script();
+    script
+        .replies
+        .insert("list-panes -t @1".to_string(), "%4 0 *".to_string());
+    script.notify.insert(
+        "refresh-client -t %4 -C 90x24".to_string(),
+        "%layout-change @1 0000,90x24,0,0,4 0000,90x24,0,0,4 *".to_string(),
+    );
+    script.failing.insert("client-snapshot -t @0".to_string());
+    for line in extra_failing {
+        script.failing.insert(line.to_string());
+    }
+    let (rx, conn) = fake_daemon(tag, script);
+    let mut session = snapshot_session();
+    session.status.apply_snapshot_for_test(&[
+        "snapshot 1".to_string(),
+        "workspace +0 * main".to_string(),
+        "session $1 * +0 two".to_string(),
+        "window @0 * edit".to_string(),
+        "window @1 - logs".to_string(),
+    ]);
+    (rx, conn, session)
+}
+
+/// The SessionGone landing resolves from the last snapshot's cached
+/// window list when it names a survivor of the gone window: the view
+/// reseeds onto the cached sibling with no landing query on the wire,
+/// so a pathological daemon parks nothing extra on the landing path.
+#[test]
+fn a_gone_window_lands_on_the_cached_sibling_without_queries() {
+    let (rx, mut conn, mut session) = cached_landing_fixture("cachedlanding", &[]);
+    drained(&rx);
+
+    session.status_dirty = true;
+    assert_eq!(session.refresh_status(&mut conn), EventOutcome::Continue);
+    settle(&mut session, &mut conn);
+    let wire = drained(&rx);
+    for query in [
+        "list-windows",
+        "list-workspaces",
+        "list-sessions",
+        "switch-client",
+    ] {
+        assert!(
+            !wire.iter().any(|line| line.starts_with(query)),
+            "the landing resolved from the cache: {query} never left the client"
+        );
+    }
+    assert_eq!(
+        session.window, "@1",
+        "the view landed on the cached sibling"
+    );
+    assert!(
+        !session.status_end,
+        "a survivor existed, so the view stands"
+    );
+}
+
+/// A cached landing that died before it could be shown (the session
+/// itself is gone) falls to the interactive ladder: the failed reseed
+/// reports the view did not move, the ladder runs, and nothing left to
+/// show ends the view the usual way.
+#[test]
+fn a_dead_cached_landing_falls_back_to_the_interactive_ladder() {
+    let (rx, mut conn, mut session) = cached_landing_fixture(
+        "cachedeadlanding",
+        &[
+            "client-snapshot -t @1",
+            "list-windows -t $1",
+            "list-workspaces",
+            "list-sessions -t +0",
+        ],
+    );
+    drained(&rx);
+
+    session.status_dirty = true;
+    assert_eq!(session.refresh_status(&mut conn), EventOutcome::Continue);
+    settle(&mut session, &mut conn);
+    let wire = drained(&rx);
+    for query in [
+        "list-windows -t $1",
+        "list-workspaces",
+        "list-sessions -t +0",
+    ] {
+        assert!(
+            wire.iter().any(|line| line.starts_with(query)),
+            "the ladder ran: {query} was asked"
+        );
+    }
+    assert!(session.status_end, "the ladder found nothing left to show");
+}
+
 /// The storm rule survives the async path: a snapshot still owed past
 /// the status bound is abandoned in place — the stale bar stands, no
 /// re-issue queues behind the wedged reply, and the late reply (still
@@ -4408,13 +4513,13 @@ fn mid_seed_script(push_on: &str) -> FakeScript {
     script
 }
 
-/// Seed `script`'s `@0` view with inside delivery on, run the pump's
-/// first drain, and return the session.
+/// Seed `script`'s `@0` view with the side panel up, and return.
 /// A re-attach with QUIET agents (no state pushes coming): the seed's
-/// panel install runs before the status refresh — against an empty
-/// roster — so the agents section must be re-installed once the refresh
-/// commits, or the panel stays agents-empty until an unrelated event
-/// marks the status stale.
+/// panel install runs before the status snapshot lands — against an
+/// empty roster — so the agents section must be installed once the
+/// snapshot lands via the pump's continuation machinery (the async
+/// status path, ENH-049), or the panel stays agents-empty until an
+/// unrelated event marks the status stale.
 #[test]
 fn the_seed_installs_the_agents_section_after_the_roster_lands() {
     let mut script = snapshot_script();
@@ -4433,9 +4538,15 @@ fn the_seed_installs_the_agents_section_after_the_roster_lands() {
     let mut session = WindowSession::new(90, 26);
     session.sidebar.set(true);
     let mut sink = super::RecordingSink::default();
-    session
+    let shown = session
         .seed(&mut conn, Some("%1"), &mut sink)
         .expect("the seed lands");
+    assert!(shown, "the seed shows the view without waiting on the bar");
+    assert!(
+        session.status.agents().is_empty(),
+        "the seed returned before the roster landed — the snapshot applies via the continuation"
+    );
+    settle(&mut session, &mut conn);
     let sections = session
         .renderer
         .sidebar_sections

@@ -899,12 +899,16 @@ impl WindowSession {
     /// place from a fresh layout report, replay the panes new to the
     /// renderer (every pane of a different window; on the same window
     /// only the ones it lacked, plus the output-race panes), and mark
-    /// everything dirty — the render-mode resync.
+    /// everything dirty — the render-mode resync. Returns whether the
+    /// view moved: a transport failure on the size report, or a window
+    /// whose facts proved it gone (the refresh's `SessionGone`), leaves
+    /// the view put (`false`), and the SessionGone landing caller falls
+    /// to the ladder.
     pub(super) fn reseed_window(
         &mut self,
         conn: &mut crate::mux::attach::conn::AttachConn,
         window: &str,
-    ) {
+    ) -> bool {
         super::trace_input(format_args!("reseed_window {window}"));
         let pane = self.focused_pane_or_first(conn, window);
         // Re-fit at the CURRENT renderer's frame extent — the host grid
@@ -923,7 +927,7 @@ impl WindowSession {
         }
         let report = self.size_report(conn, &pane);
         if conn.send_checked(&report).is_err() {
-            return;
+            return false;
         }
         self.window = window.to_string();
         // The cue resets with the view, then takes the new window's zoom
@@ -957,7 +961,7 @@ impl WindowSession {
             // The window vanished between the select and the query: leave
             // the view rendering its last frame; the next %sessions-changed
             // (or this switch's own burst) re-evaluates.
-            Err(status::StatusError::SessionGone) => return,
+            Err(status::StatusError::SessionGone) => return false,
             Err(_) => {}
         }
         self.chrome.status_row.invalidate();
@@ -966,6 +970,7 @@ impl WindowSession {
         self.chrome.tab_strip.reset_scroll();
         self.draw_tab_strip();
         self.pending.clear_view_work();
+        true
     }
 }
 
