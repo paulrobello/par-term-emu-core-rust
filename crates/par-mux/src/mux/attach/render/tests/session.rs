@@ -4437,6 +4437,51 @@ fn status_snapshot_end_lands_through_the_continuation() {
     );
 }
 
+/// The re-seed's status snapshot rides the same machinery the seed's
+/// does: written without waiting — no inline snapshot round trip left
+/// on snapshot daemons outside the explicit continuations — and the
+/// reply applies as a pump-tick continuation committing the same facts
+/// the sync refresh committed.
+#[test]
+fn a_reseed_issues_its_snapshot_without_blocking_and_applies_on_dispatch() {
+    let mut script = snapshot_script();
+    reseed_replies(&mut script.replies, "@0 * main", "@0", "%1\n%2");
+    let (rx, mut conn) = fake_daemon("reseedasync", script);
+    let mut session = snapshot_session();
+    drained(&rx);
+
+    session.reseed_window(&mut conn, "@0");
+    assert_eq!(session.window, "@0", "the view re-seeded onto @0");
+    assert!(
+        session.status_snapshot_inflight.is_some(),
+        "the snapshot rides the machinery, not an inline round trip"
+    );
+    assert!(!session.status_dirty, "the issue consumed the dirty mark");
+    let wire = received_within_300ms(&rx);
+    assert_eq!(
+        wire.iter()
+            .filter(|l| l.starts_with("client-snapshot"))
+            .count(),
+        1,
+        "one snapshot on the wire: {wire:?}"
+    );
+
+    settle(&mut session, &mut conn);
+    assert!(
+        session.status_snapshot_inflight.is_none(),
+        "the application releases the in-flight slot"
+    );
+    assert_eq!(
+        session.status.agents().len(),
+        2,
+        "the reply's roster committed"
+    );
+    assert!(
+        session.notify.transitions.is_some(),
+        "the transition baseline seeded"
+    );
+}
+
 /// The cached-landing fixture: a session showing `@0` whose status
 /// cache already lists `@1` beside it (the last snapshot's roster,
 /// applied test-side), and a snapshot daemon whose `client-snapshot -t
@@ -4751,6 +4796,125 @@ fn a_push_before_the_first_roster_does_not_seed_a_partial_baseline() {
     // A real transition after it still toasts.
     session.handle_event(push("blocked", "%1", "claude"));
     assert!(session.renderer.toast.is_some());
+}
+
+/// The seed's race window: a push handled while the seed's snapshot is
+/// in flight toasts (no roster is committed to judge it against), but
+/// the push stream holds no record for the pane — `record_pushed_state`
+/// seeds no baseline from the uncommitted view. The continuation's
+/// baseline adoption must therefore leave the raced pane out (the sync
+/// path drained its pre-refresh pushes and excluded them); otherwise
+/// the snapshot's entry suppresses an identical rebroadcast on a record
+/// the push stream never made.
+#[test]
+fn a_push_handled_mid_seed_stays_out_of_the_baseline_and_its_rebroadcast_toasts() {
+    use super::super::notify::NotifyDelivery;
+    let mut script = snapshot_script();
+    // The daemon applies a report before it broadcasts it, so the
+    // snapshot already carries the state the push announces.
+    let snapshot = script
+        .replies
+        .get("client-snapshot -t @0")
+        .expect("snapshot reply")
+        .clone();
+    script.replies.insert(
+        "client-snapshot -t @0".to_string(),
+        format!("{snapshot}\nagent %2 claude blocked hook ws=+0"),
+    );
+    // The push rides the snapshot reply (the wire order the race lives
+    // in); the rebroadcast rides the pump's own refresh.
+    script.notify.insert(
+        "client-snapshot -t @0".to_string(),
+        "%agent-state-changed %2 claude blocked source=hook ws=+0".to_string(),
+    );
+    let (rx, mut conn) = fake_daemon("seedrace", script);
+    let mut session = snapshot_session();
+    session.notify.delivery = NotifyDelivery::Inside;
+    session.notify.states = vec!["blocked".to_string()];
+    // The pushed pane is background (herdr's rule): a lone pane layout
+    // takes %2 out of view.
+    session
+        .renderer
+        .apply_layout(parse_layout("0000,90x24,0,0,9").expect("parses"));
+    drained(&rx);
+
+    // The seed's snapshot writes without waiting; the push is handled
+    // while it is in flight. The fake writes the push ahead of the
+    // reply block; the bounded drain waits out that write.
+    session.seed_status_snapshot(&mut conn, Vec::new());
+    assert!(session.status_snapshot_inflight.is_some());
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+    while session.renderer.toast.is_none() {
+        assert!(
+            std::time::Instant::now() < deadline,
+            "the mid-seed push never arrived"
+        );
+        assert!(session.drain_pushes(&mut conn).is_continue());
+        std::thread::sleep(std::time::Duration::from_millis(2));
+    }
+    let toast = session
+        .renderer
+        .toast
+        .clone()
+        .expect("the mid-seed push toasts");
+    assert_eq!(toast.pane, Some(2));
+    assert!(
+        session.notify.transitions.is_none(),
+        "handling a push seeds no baseline from the partial view"
+    );
+
+    // The reply's continuation adopts the baseline; the raced pane
+    // stays out of it.
+    settle(&mut session, &mut conn);
+    assert!(session.status_snapshot_inflight.is_none());
+    let baseline = session
+        .notify
+        .transitions
+        .as_ref()
+        .expect("the first roster seeded the baseline");
+    assert!(
+        !baseline.contains_key(&2),
+        "the raced pane stays out of the baseline: {baseline:?}"
+    );
+
+    // The identical rebroadcast (the daemon re-announcing the state it
+    // applied before it wrote the snapshot) toasts: there is no
+    // push-stream record to suppress it on. It rides the pump's own
+    // refresh (the way a late registration replay arrives).
+    session.status_dirty = true;
+    assert_eq!(session.refresh_status(&mut conn), EventOutcome::Continue);
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+    while session.notify.outbox.len() < 2 {
+        assert!(
+            std::time::Instant::now() < deadline,
+            "the rebroadcast never arrived"
+        );
+        assert!(session.drain_pushes(&mut conn).is_continue());
+        std::thread::sleep(std::time::Duration::from_millis(2));
+    }
+    let toast = session
+        .renderer
+        .toast
+        .clone()
+        .expect("the identical rebroadcast toasts");
+    assert_eq!(toast.pane, Some(2));
+
+    // Once recorded by that toast, an unchanged repeat is silent again:
+    // no new bell (the rebroadcast's card is still the one up).
+    let bells = session.notify.outbox.len();
+    session.handle_event(TmuxNotification::AgentStateChanged {
+        pane_id: "%2".to_string(),
+        agent: "claude".to_string(),
+        state: "blocked".to_string(),
+        source: "hook".to_string(),
+        ws: "+0".to_string(),
+        msg: String::new(),
+    });
+    assert_eq!(
+        session.notify.outbox.len(),
+        bells,
+        "a recorded repeat stays silent"
+    );
 }
 
 /// A shown pane's death announces the respawn affordance even under the

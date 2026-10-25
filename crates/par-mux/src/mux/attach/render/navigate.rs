@@ -900,10 +900,13 @@ impl WindowSession {
     /// renderer (every pane of a different window; on the same window
     /// only the ones it lacked, plus the output-race panes), and mark
     /// everything dirty — the render-mode resync. Returns whether the
-    /// view moved: a transport failure on the size report, or a window
-    /// whose facts proved it gone (the refresh's `SessionGone`), leaves
-    /// the view put (`false`), and the SessionGone landing caller falls
-    /// to the ladder.
+    /// view moved: a transport failure on the size report leaves the
+    /// view put (`false`), and on a legacy per-fact daemon so does a
+    /// window whose facts proved it gone (the refresh's `SessionGone`),
+    /// the SessionGone landing caller falling to the ladder; on a
+    /// client-snapshot daemon the facts ride the async continuation
+    /// instead and a gone window lands through the shared gone-view
+    /// contract there.
     pub(super) fn reseed_window(
         &mut self,
         conn: &mut crate::mux::attach::conn::AttachConn,
@@ -952,17 +955,29 @@ impl WindowSession {
         // changed position/shape re-emits even when the recorded state
         // coincidentally matches the old window's.
         self.cursor.invalidate();
-        // Fresh facts for the new view; a session gone mid-switch ends
-        // the view through the pump's normal path on the next mark.
-        let focused = self.renderer.focused().unwrap_or(0);
-        self.status_dirty = true;
-        match self.status.refresh(conn, window, focused) {
-            Ok(_) => self.seed_transitions(),
-            // The window vanished between the select and the query: leave
-            // the view rendering its last frame; the next %sessions-changed
-            // (or this switch's own burst) re-evaluates.
-            Err(status::StatusError::SessionGone) => return false,
-            Err(_) => {}
+        // Fresh facts for the new view. On a client-snapshot daemon the
+        // re-seed's snapshot rides the pump's one-in-flight machinery
+        // like the seed's does — the last synchronous snapshot call
+        // site: written without waiting, applied as a pump-tick
+        // continuation, where a session gone mid-switch lands through
+        // the shared gone-view contract instead of this function's
+        // `false`. Legacy per-fact daemons keep the synchronous
+        // refresh: their round trips answer queries the notifications
+        // never carried, and a session gone mid-switch leaves the view
+        // put (`false`), the caller falling to the ladder.
+        if conn.has_command_feature("client-snapshot", "v1") {
+            self.reseed_status_snapshot(conn, window);
+        } else {
+            let focused = self.renderer.focused().unwrap_or(0);
+            self.status_dirty = true;
+            match self.status.refresh(conn, window, focused) {
+                Ok(_) => self.seed_transitions(),
+                // The window vanished between the select and the query: leave
+                // the view rendering its last frame; the next %sessions-changed
+                // (or this switch's own burst) re-evaluates.
+                Err(status::StatusError::SessionGone) => return false,
+                Err(_) => {}
+            }
         }
         self.chrome.status_row.invalidate();
         self.draw_status_row();

@@ -697,7 +697,7 @@ impl WindowSession {
     /// one is owed the seed leaves the bar to the machinery and marks
     /// the state dirty, so the reply's application re-issues on a later
     /// tick.
-    fn seed_status_snapshot(
+    pub(super) fn seed_status_snapshot(
         &mut self,
         conn: &mut crate::mux::attach::conn::AttachConn,
         pending: Vec<u32>,
@@ -708,6 +708,7 @@ impl WindowSession {
         }
         self.status_dirty = false;
         self.status_snapshot_inflight = Some(std::time::Instant::now());
+        self.seed_snapshot_inflight = true;
         let window = self.window.clone();
         self.send_then(
             conn,
@@ -732,6 +733,8 @@ impl WindowSession {
         pending: Vec<u32>,
     ) {
         self.status_snapshot_inflight = None;
+        self.seed_snapshot_inflight = false;
+        let seed_raced = std::mem::take(&mut self.seed_raced_panes);
         // A reply for a window the view already left is stale: the
         // switch's reseed re-queries (the nav_current rule).
         if self.window != window {
@@ -747,6 +750,9 @@ impl WindowSession {
                 self.seed_transitions();
                 let mut raced = pending;
                 raced.extend(self.deferred_agent_panes());
+                // Pushes handled while the flight was owed join them:
+                // the adoption leaves the raced panes out.
+                raced.extend(seed_raced);
                 if let Some(baseline) = self.notify.transitions.as_mut() {
                     for pane in raced {
                         baseline.remove(&pane);
@@ -769,6 +775,79 @@ impl WindowSession {
             Err(status::StatusError::TimedOut) => {} // not produced by the reply half
         }
         self.draw_status_row();
+        self.draw_tab_strip();
+    }
+
+    /// The re-seed's issue half on a client-snapshot daemon: the same
+    /// one-in-flight machinery the seed and pump use
+    /// ([`Self::seed_status_snapshot`] / [`Self::refresh_status_async`]).
+    /// While a snapshot is owed the re-seed leaves the bar to the
+    /// machinery and marks the state dirty, so the owed reply's
+    /// application re-issues for the new window on a later tick.
+    pub(super) fn reseed_status_snapshot(
+        &mut self,
+        conn: &mut crate::mux::attach::conn::AttachConn,
+        window: &str,
+    ) {
+        if self.status_snapshot_inflight.is_some() {
+            self.status_dirty = true;
+            return;
+        }
+        self.status_dirty = false;
+        self.status_snapshot_inflight = Some(std::time::Instant::now());
+        let window = window.to_string();
+        let landing = self.landing_reseed;
+        self.send_then(
+            conn,
+            &format!("client-snapshot -t {window}"),
+            move |s, c, reply| {
+                s.apply_reseed_snapshot(c, reply, window, landing);
+            },
+        );
+    }
+
+    /// The re-seed snapshot's reply continuation (runs on the pump tick
+    /// the reply arrives, [`Self::dispatch_replies`]): the re-seed's own
+    /// post-refresh step — the transition baseline seed — around the
+    /// facts commit and the same bar/strip repaints the sync path ran
+    /// inline after its refresh. A session gone mid-switch lands through
+    /// the shared gone-view contract — the async form of the sync
+    /// path's `return false` — except on a landing re-seed itself, whose
+    /// `SessionGone` walks the interactive ladder directly: re-landing
+    /// from the same stale cache would ping-pong between dead windows
+    /// forever, where the sync path's `false` fall-through reached the
+    /// ladder in one step.
+    fn apply_reseed_snapshot(
+        &mut self,
+        conn: &mut crate::mux::attach::conn::AttachConn,
+        reply: crate::mux::client::Reply,
+        window: String,
+        landing: bool,
+    ) {
+        self.status_snapshot_inflight = None;
+        // A reply for a window the view already left is stale: the
+        // next mark re-queries (the nav_current rule).
+        if self.window != window {
+            return;
+        }
+        let focused = self.renderer.focused().unwrap_or(0);
+        match self.status.apply_snapshot_reply(&reply, focused) {
+            Ok(_) => self.seed_transitions(),
+            Err(status::StatusError::SessionGone) => {
+                if landing {
+                    self.land_gone_ladder(conn);
+                } else {
+                    self.land_gone_view(conn);
+                }
+            }
+            // Stale state survives; the next mark retries.
+            Err(status::StatusError::Query) => {}
+            Err(status::StatusError::TimedOut) => {} // not produced by the reply half
+        }
+        self.chrome.status_row.invalidate();
+        self.draw_status_row();
+        self.chrome.tab_strip.invalidate();
+        self.chrome.tab_strip.reset_scroll();
         self.draw_tab_strip();
     }
 

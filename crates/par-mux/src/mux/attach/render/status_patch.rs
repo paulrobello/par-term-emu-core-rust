@@ -50,6 +50,15 @@ impl WindowSession {
             .strip_prefix('%')
             .and_then(|p| p.parse::<u32>().ok())
         {
+            // A push handled while the seed's snapshot is in flight
+            // joins the seed's raced set: the sync path drained its
+            // pre-refresh pushes and the adoption left them out of the
+            // baseline; the async seed's adoption must too, or the
+            // snapshot's entry suppresses an identical rebroadcast on a
+            // record the push stream never made.
+            if self.seed_snapshot_inflight && !self.seed_raced_panes.contains(&pane) {
+                self.seed_raced_panes.push(pane);
+            }
             let previous = self.record_pushed_state(pane, state);
             if let Some(state) = state {
                 self.notify_agent_state(pane, agent, previous.as_deref(), state, ws, msg);

@@ -853,6 +853,22 @@ struct WindowSession {
     /// abandoned, since the pump tick that wrote it (the async status
     /// path, [`Self::refresh_status_async`]).
     status_snapshot_inflight: Option<std::time::Instant>,
+    /// Whether the re-seed now issuing its snapshot is the gone-view
+    /// landing's ([`Self::land_gone_view`], both branches): its reply's
+    /// `SessionGone` walks the interactive ladder directly — the async
+    /// form of the sync path's `false` fall-through — instead of
+    /// re-landing from the same stale cache forever.
+    landing_reseed: bool,
+    /// Whether the snapshot now in flight is the seed's
+    /// ([`Self::seed_status_snapshot`]): pushes handled while it is owed
+    /// join `seed_raced_panes`.
+    seed_snapshot_inflight: bool,
+    /// Agent panes whose state pushes were handled while the seed's
+    /// snapshot was in flight. The sync path drained its pre-refresh
+    /// pushes and left them out of the baseline; the seed's continuation
+    /// must too, or the snapshot's entry suppresses an identical
+    /// rebroadcast on a record the push stream never made.
+    seed_raced_panes: Vec<u32>,
     /// The nothing-left-to-show `End` raised by the snapshot reply's
     /// continuation (the reply cannot end the view through a return
     /// value any more); the pump's status step checks it.
@@ -1281,6 +1297,9 @@ impl WindowSession {
             chrome: ChromeRows::new(cols),
             status_dirty: true,
             status_snapshot_inflight: None,
+            landing_reseed: false,
+            seed_snapshot_inflight: false,
+            seed_raced_panes: Vec::new(),
             status_end: false,
             modal: Modal::None,
             prefix: chords.prefix,
@@ -1804,16 +1823,35 @@ impl WindowSession {
     /// window ends too.
     fn land_gone_view(&mut self, conn: &mut crate::mux::attach::conn::AttachConn) {
         if let Some(window) = self.status.cached_cascade_landing(&self.window) {
-            if self.reseed_window(conn, &window) {
+            self.landing_reseed = true;
+            let moved = self.reseed_window(conn, &window);
+            self.landing_reseed = false;
+            if moved {
                 return;
             }
         }
+        self.land_gone_ladder(conn);
+    }
+
+    /// The interactive-ladder half of the gone-view landing, shared by
+    /// [`Self::land_gone_view`] and the landing re-seed's continuation:
+    /// the session's active window while the session survives, else the
+    /// workspace's landing session, else the daemon's active workspace.
+    /// A failed landing retries on the next poll tick or event, not
+    /// immediately (the storm rule); nothing left to show raises
+    /// `status_end`, the pump-visible `End`. A ladder landing that
+    /// resolves to a window re-seeds flagged ([`Self::landing_reseed`]),
+    /// so its own `SessionGone` walks the ladder again instead of the
+    /// stale cache.
+    fn land_gone_ladder(&mut self, conn: &mut crate::mux::attach::conn::AttachConn) {
         let session = self.status.session_id.clone();
         let workspace = self.status.session_workspace.clone();
         match cascade_landing(conn, session.as_deref(), workspace.as_deref()) {
             // The reseed refreshes the status itself.
             Ok(Some(window)) if window != self.window => {
+                self.landing_reseed = true;
                 self.reseed_window(conn, &window);
+                self.landing_reseed = false;
             }
             // A failed landing retries on the next poll tick or
             // event, not immediately (the same storm rule).
