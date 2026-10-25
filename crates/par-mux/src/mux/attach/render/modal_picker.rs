@@ -173,8 +173,10 @@ impl WindowSession {
     }
 
     /// Dispatch one palette action: the table's first four rows are the
-    /// non-chord paths (fixed order), the rest through the management
-    /// chord table.
+    /// non-chord paths (fixed order), the last four the tab moves
+    /// (left/right as chords, start/end on the SHOWN window through
+    /// `move-window -s {shown} -t {slot}`), the rest through the
+    /// management chord table.
     fn run_palette_action(
         &mut self,
         conn: &mut crate::mux::attach::conn::AttachConn,
@@ -185,12 +187,26 @@ impl WindowSession {
             1 => self.enter_help(),
             2 => self.reload_config(conn),
             3 => self.detach_requested = true,
+            19 => self.move_palette_window(conn, super::modal_menu::TabMove::Left),
+            20 => self.move_palette_window(conn, super::modal_menu::TabMove::Right),
+            21 => self.move_palette_window(conn, super::modal_menu::TabMove::Start),
+            22 => self.move_palette_window(conn, super::modal_menu::TabMove::End),
             _ => {
                 if let Some((Some(key), _)) = PALETTE_ACTIONS.get(action) {
                     self.management_chord(*key, conn);
                 }
             }
         }
+    }
+    /// The palette's `move tab to start`/`move tab to end`: the shown
+    /// window through the tab menu's move helper.
+    fn move_palette_window(
+        &mut self,
+        conn: &mut crate::mux::attach::conn::AttachConn,
+        to: super::modal_menu::TabMove,
+    ) {
+        let shown = self.window.clone();
+        self.move_window_slot(conn, &shown, to);
     }
     /// Open the workspace picker (the workspace-picker chord): the
     /// daemon's workspace roster — id, name, the active one `>`-marked —

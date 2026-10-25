@@ -11,6 +11,16 @@ use crate::mux::attach::targets::{active_window_row, parse_workspace_line};
 use crate::mux::ipc::SessionRow;
 use par_term_emu_core::keyboard::TermKeyEvent;
 
+/// Where a tab-menu/palette move row sends its window: one slot
+/// left/right, or the first/last slot outright.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) enum TabMove {
+    Left,
+    Right,
+    Start,
+    End,
+}
+
 /// The context menus' footer controls line.
 pub(super) const MENU_FOOTER: &str = " navigate arrows/j/k · action enter/click · close esc/q ";
 /// The context menus' overlay title (the target's name rides the panel's
@@ -41,7 +51,15 @@ pub(super) fn compose_menu_panel(
         MenuAction::RespawnToggle,
     ];
     let actions: &[MenuAction] = match target {
-        MenuTarget::Tab(_) => &[MenuAction::Rename, MenuAction::Close, MenuAction::AddTab],
+        MenuTarget::Tab(_) => &[
+            MenuAction::Rename,
+            MenuAction::Close,
+            MenuAction::AddTab,
+            MenuAction::MoveLeft,
+            MenuAction::MoveRight,
+            MenuAction::MoveFirst,
+            MenuAction::MoveLast,
+        ],
         MenuTarget::Workspace(_) => &ws_actions,
         MenuTarget::Commands => &[
             MenuAction::Settings,
@@ -51,7 +69,15 @@ pub(super) fn compose_menu_panel(
         ],
     };
     let labels: &[&str] = match target {
-        MenuTarget::Tab(_) => &["rename", "close", "add tab"],
+        MenuTarget::Tab(_) => &[
+            "rename",
+            "close",
+            "add tab",
+            "move left",
+            "move right",
+            "move to start",
+            "move to end",
+        ],
         MenuTarget::Workspace(_) if group_armed => {
             &["rename", "close group", "new", "respawn on exit"]
         }
@@ -313,6 +339,18 @@ impl WindowSession {
             (MenuTarget::Tab(window), MenuAction::Close) => {
                 self.close_window_from_menu(conn, &window);
             }
+            (MenuTarget::Tab(window), MenuAction::MoveLeft) => {
+                self.move_window_slot(conn, &window, TabMove::Left);
+            }
+            (MenuTarget::Tab(window), MenuAction::MoveRight) => {
+                self.move_window_slot(conn, &window, TabMove::Right);
+            }
+            (MenuTarget::Tab(window), MenuAction::MoveFirst) => {
+                self.move_window_slot(conn, &window, TabMove::Start);
+            }
+            (MenuTarget::Tab(window), MenuAction::MoveLast) => {
+                self.move_window_slot(conn, &window, TabMove::End);
+            }
             (MenuTarget::Workspace(workspace), MenuAction::Rename) => {
                 self.enter_prompt(PromptTarget::Workspace(workspace));
             }
@@ -340,6 +378,52 @@ impl WindowSession {
             // own actions).
             _ => {}
         }
+    }
+    /// The tab menu's move rows and the palette's move-tab rows: send
+    /// `move-window -s {id} -t {slot}` for `window` — one slot
+    /// left/right (an edge flashes, the move chords' rule) or the
+    /// first/last slot outright (the daemon clamps out-of-range slots
+    /// to the ends). A no-op move (already at the slot) sends nothing.
+    pub(super) fn move_window_slot(
+        &mut self,
+        conn: &mut crate::mux::attach::conn::AttachConn,
+        window: &str,
+        to: TabMove,
+    ) {
+        let windows: Vec<String> = self
+            .status
+            .windows()
+            .iter()
+            .map(|(id, _)| id.clone())
+            .collect();
+        let Some(at) = windows.iter().position(|id| id == window) else {
+            return;
+        };
+        let slot = match to {
+            TabMove::Start => 0,
+            TabMove::End => windows.len().saturating_sub(1),
+            TabMove::Left => {
+                if at == 0 {
+                    self.chrome.flash("already the first tab".to_string());
+                    self.draw_status_row();
+                    return;
+                }
+                at - 1
+            }
+            TabMove::Right => {
+                if at + 1 >= windows.len() {
+                    self.chrome.flash("already the last tab".to_string());
+                    self.draw_status_row();
+                    return;
+                }
+                at + 1
+            }
+        };
+        if slot == at {
+            return;
+        }
+        let _ = conn.send_forget(&format!("move-window -s {window} -t {slot}"));
+        self.status_dirty = true;
     }
     /// The workspace menu's `respawn on exit`: flip the workspace's
     /// keep-one-tab respawn option (`set-workspace-respawn -t {id}

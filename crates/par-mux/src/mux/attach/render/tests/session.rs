@@ -30,7 +30,12 @@ fn compose_menu_panel_maps_rows_to_actions() {
     assert_eq!(rows[2].text, " close ");
     assert_eq!(mapping[3], Some(MenuAction::AddTab));
     assert_eq!(rows[3].text, " add tab ");
-    assert_eq!(mapping[4], None, "the footer consumes its clicks");
+    assert_eq!(mapping[4], Some(MenuAction::MoveLeft));
+    assert_eq!(rows[4].text, " move left ");
+    assert_eq!(mapping[5], Some(MenuAction::MoveRight));
+    assert_eq!(mapping[6], Some(MenuAction::MoveFirst));
+    assert_eq!(mapping[7], Some(MenuAction::MoveLast));
+    assert_eq!(mapping[8], None, "the footer consumes its clicks");
 
     let (_, ws_mapping) = compose_menu_panel(
         &MenuTarget::Workspace("+0".to_string()),
@@ -2103,23 +2108,27 @@ fn menu_arrows_move_the_selection_across_header_and_footer() {
     assert_eq!(session.menu().unwrap().selected, 2);
     session.route_key(&mut conn, &key(TermKey::Down, 0));
     assert_eq!(session.menu().unwrap().selected, 3);
-    session.route_key(&mut conn, &key(TermKey::Down, 0));
-    assert_eq!(
-        session.menu().unwrap().selected,
-        1,
-        "Down wraps past the footer back to rename"
-    );
+    // Six more Downs walk the move rows and wrap past the footer back
+    // to rename (actions now rows 1..=7, the footer 8).
+    for expected in [4, 5, 6, 7, 1] {
+        session.route_key(&mut conn, &key(TermKey::Down, 0));
+        assert_eq!(
+            session.menu().unwrap().selected,
+            expected,
+            "Down lands on row {expected}"
+        );
+    }
     session.route_key(&mut conn, &key(TermKey::Up, 0));
     assert_eq!(
         session.menu().unwrap().selected,
-        3,
-        "Up wraps over the header to add tab"
+        7,
+        "Up wraps over the header to move to end"
     );
     // `j`/`k`, the byte spelling, land on the same rows.
     session.route_stdin_bytes(&mut conn, b"k");
-    assert_eq!(session.menu().unwrap().selected, 2);
+    assert_eq!(session.menu().unwrap().selected, 6);
     session.route_stdin_bytes(&mut conn, b"j");
-    assert_eq!(session.menu().unwrap().selected, 3);
+    assert_eq!(session.menu().unwrap().selected, 7);
 }
 
 /// Enter dispatches the selected action through the click path: the

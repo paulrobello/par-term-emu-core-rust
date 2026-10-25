@@ -503,9 +503,11 @@ pub(crate) enum PickerRef {
 }
 
 /// The keyboard palette's actions (`prefix :`): every management chord
-/// plus the settings/help/reload/detach paths, type-to-filter from the
-/// open (the picker's `/` machinery, with the filter live at the open).
-/// The labels show beside their EFFECTIVE chords
+/// plus the chordless paths — settings/keybinds/reload/detach (the
+/// table's first four, fixed order) and the tab moves to start/end
+/// (the last two, shown-window targets) — type-to-filter from the
+/// open (the picker's `/` machinery, with the filter live at the
+/// open). The labels show beside their EFFECTIVE chords
 /// ([`palette_action_chord`]); the action dispatches through
 /// [`crate::mux::attach::ManagementKey`] where one exists.
 pub(crate) const PALETTE_ACTIONS: &[(Option<ManagementKey>, &str)] = &[
@@ -528,6 +530,10 @@ pub(crate) const PALETTE_ACTIONS: &[(Option<ManagementKey>, &str)] = &[
     (Some(ManagementKey::WorkspaceNext), "next workspace"),
     (Some(ManagementKey::WorkspacePrev), "previous workspace"),
     (Some(ManagementKey::NotifyJump), "jump to notification"),
+    (Some(ManagementKey::MoveWindowLeft), "move tab left"),
+    (Some(ManagementKey::MoveWindowRight), "move tab right"),
+    (None, "move tab to start"),
+    (None, "move tab to end"),
 ];
 
 /// A palette action's chord at its EFFECTIVE binding, the help panel's
@@ -563,6 +569,8 @@ pub(crate) fn palette_action_chord(
             ManagementKey::WorkspaceNext => m.workspace_next,
             ManagementKey::WorkspacePrev => m.workspace_prev,
             ManagementKey::NotifyJump => m.notify_jump,
+            ManagementKey::MoveWindowLeft => m.move_window_left,
+            ManagementKey::MoveWindowRight => m.move_window_right,
             _ => return None,
         },
     };

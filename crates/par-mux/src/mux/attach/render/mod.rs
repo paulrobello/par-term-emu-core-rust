@@ -1059,6 +1059,13 @@ enum MenuAction {
     Rename,
     Close,
     AddTab,
+    /// The tab menu's move actions: one slot left/right (an edge
+    /// flashes, the chords' rule), or the first/last slot outright —
+    /// `move-window -s {id} -t {slot}` for the right-clicked tab.
+    MoveLeft,
+    MoveRight,
+    MoveFirst,
+    MoveLast,
     NewWorkspace,
     /// Toggle the workspace's keep-one-tab respawn option.
     RespawnToggle,

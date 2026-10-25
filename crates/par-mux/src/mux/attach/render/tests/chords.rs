@@ -282,6 +282,9 @@ fn join_pane_chord_picks_a_window_and_joins() {
 #[test]
 fn palette_type_to_filter_and_keybind_rows() {
     let (rx, mut conn, mut session) = two_pane_session("palette", FakeScript::default());
+    // A taller host: the palette's 23 rows must fit above the fold for
+    // the row-level asserts below.
+    session.refit_renderer(80, 60);
     chord(&mut session, &mut conn, b':');
     drained(&rx);
     settle(&mut session, &mut conn);
@@ -299,6 +302,20 @@ fn palette_type_to_filter_and_keybind_rows() {
     assert!(
         !settings.contains("C-b"),
         "settings has no chord: {settings}"
+    );
+    // The move-tab rows: left/right spell their chords, start/end spell
+    // none (the chordless move rows).
+    assert!(
+        text.contains("C-b <"),
+        "the move-left row spells its chord: {text}"
+    );
+    let to_start = overlay_text(&session)
+        .into_iter()
+        .find(|line| line.contains("move tab to start"))
+        .expect("the move-to-start row");
+    assert!(
+        !to_start.contains("C-b"),
+        "the chordless move row spells none: {to_start}"
     );
     // Typing filters straight away (no `/` press), and Enter on the
     // filtered row runs it — `detach` ends the session.
@@ -998,6 +1015,93 @@ fn closing_the_shown_tab_lands_on_the_marked_survivor() {
     );
     assert_eq!(session.window, "@0");
     assert!(session.status_dirty);
+}
+
+/// The tab menu's move rows: one row per move for the RIGHT-CLICKED
+/// tab — `move-window -s {id} -t {slot}` from the cached window order;
+/// an edge left flashes and sends nothing (the move chords' rule).
+#[test]
+fn tab_menu_move_rows_reorder_the_targeted_tab() {
+    let lines = |body: &[&str]| body.iter().map(|l| l.to_string()).collect::<Vec<_>>();
+    let (rx, mut conn, mut session) = two_pane_session("tab-move", FakeScript::default());
+    session.status.apply_snapshot_for_test(&lines(&[
+        "snapshot 1",
+        "workspace +0 * default",
+        "session $0 * +0 work",
+        "window @0 - one",
+        "window @1 * one",
+        "pane %0",
+        "pane %1",
+    ]));
+    session.status_dirty = false;
+    session.open_menu(MenuTarget::Tab("@1".to_string()));
+    session.menu_click(&mut conn, 6); // the "move to start" row
+    settle(&mut session, &mut conn);
+    assert_eq!(drained(&rx), vec!["move-window -s @1 -t 0".to_string()]);
+    assert!(session.status_dirty);
+
+    // The first tab's move left flashes and sends nothing.
+    let (rx, mut conn, mut session) = two_pane_session("tab-move-edge", FakeScript::default());
+    session.status.apply_snapshot_for_test(&lines(&[
+        "snapshot 1",
+        "workspace +0 * default",
+        "session $0 * +0 work",
+        "window @0 - one",
+        "window @1 * one",
+        "pane %0",
+        "pane %1",
+    ]));
+    session.status_dirty = false;
+    session.open_menu(MenuTarget::Tab("@0".to_string()));
+    session.menu_click(&mut conn, 4); // the "move left" row
+    settle(&mut session, &mut conn);
+    assert_eq!(drained(&rx), Vec::<String>::new());
+    assert_eq!(
+        session.chrome.flash_text(),
+        Some("already the first tab"),
+        "the edge press flashes"
+    );
+}
+
+/// The palette's `move tab to start` row: typing filters to it and
+/// Enter sends the shown window's move — the same move-window command
+/// the tab menu's row sends for its right-clicked tab.
+#[test]
+fn palette_move_tab_rows_send_the_move_window_command() {
+    let lines = |body: &[&str]| body.iter().map(|l| l.to_string()).collect::<Vec<_>>();
+    let (rx, mut conn, mut session) = two_pane_session("palette-move", FakeScript::default());
+    // The shown window (@0) seeded NOT first: the start move has a slot
+    // to change.
+    session.status.apply_snapshot_for_test(&lines(&[
+        "snapshot 1",
+        "workspace +0 * default",
+        "session $0 * +0 work",
+        "window @1 * one",
+        "window @0 - one",
+        "pane %0",
+        "pane %1",
+    ]));
+    chord(&mut session, &mut conn, b':');
+    drained(&rx);
+    settle(&mut session, &mut conn);
+    for byte in b"to start" {
+        session.route_plain(&[*byte], &mut conn);
+    }
+    settle(&mut session, &mut conn);
+    session.route_plain(b"\r", &mut conn);
+    settle(&mut session, &mut conn);
+    let sent = drained(&rx);
+    assert!(
+        !matches!(session.modal, Modal::Picker(_)),
+        "the palette dismissed after running the action"
+    );
+    assert_eq!(
+        sent.iter()
+            .filter(|command| command.starts_with("move-window"))
+            .collect::<Vec<_>>(),
+        vec!["move-window -s @0 -t 0"],
+        "the move-window command rode the wire: {sent:?}"
+    );
 }
 
 /// The workspace menu's close: when the shown session lives in the

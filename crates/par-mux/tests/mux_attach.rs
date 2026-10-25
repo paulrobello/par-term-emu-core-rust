@@ -6237,10 +6237,11 @@ fn render_mode_tab_menu_actions_click_with_the_panel_up() {
 
     // Click the RENAME row at its RAW host coordinates (the menu's
     // painted geometry: the widest row is the 28-char footer, so the
-    // box is 30 wide centered over the 80-col host — x0 = 25; 5 rows
-    // plus the border ring centered over 22 content rows — y0 = 7).
+    // box is 30 wide centered over the 80-col host — x0 = 25; 9 rows
+    // (header, seven actions, footer) plus the border ring centered
+    // over 22 content rows — y0 = 5).
     let x0 = (80usize.saturating_sub(30)) / 2; // 25
-    let y0 = (22usize.saturating_sub(7)) / 2; // 7
+    let y0 = (22usize.saturating_sub(11)) / 2; // 5
     let menu_col = x0 + 5; // inside the box, 1-based host col
     let menu_row = y0 + 4; // rename (panel row 1) paints at host y0+3; SGR is 1-based
     host.to_child
