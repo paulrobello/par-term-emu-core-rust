@@ -1049,12 +1049,12 @@ fn scrollbar_gutter_option_reserves_a_column_and_indicates() {
     }
 }
 
-/// The `drag-cursor-shape` option: while a divider drag is live the
+/// The `change-cursor-shape` option: while a divider drag is live the
 /// frame's cursor placement carries the resize shape (steady block),
 /// overriding the pane's tracked DECSCUSR shape; option off (and
 /// drag end) keeps the pane's own shape.
 #[test]
-fn drag_cursor_shape_option_shapes_the_cursor_during_a_drag() {
+fn change_cursor_shape_shapes_the_cursor_during_a_drag() {
     let mut session = WindowSession::new(80, 24);
     session
         .renderer
@@ -1091,7 +1091,7 @@ fn drag_cursor_shape_option_shapes_the_cursor_during_a_drag() {
     );
 
     // Option on: the drag frame shapes the cursor.
-    session.cursor.drag_shape = true;
+    session.cursor.change_cursor_shape = true;
     session.renderer.mark_all_dirty();
     let mut sink = RecordingSink::default();
     session.frame(&mut sink);
@@ -1117,19 +1117,19 @@ fn drag_cursor_shape_option_shapes_the_cursor_during_a_drag() {
     assert_eq!(last.2, CursorStyle::BlinkingBar, "drag end restores");
 }
 
-/// The `drag-cursor-shape` pointer half: a no-button hover over a
+/// The `change-cursor-shape` pointer half: a no-button hover over a
 /// divider wants the axis-correct resize POINTER (OSC 22
 /// `ew-resize`), a hover off it or the option off restores `text`,
 /// and a live drag keeps the shape wherever the pointer wanders.
 #[test]
-fn drag_cursor_shape_option_shapes_the_pointer() {
+fn change_cursor_shape_shapes_the_pointer() {
     let (rx, mut conn) = recording_conn("ptr-shape");
     let mut session = WindowSession::new(80, 24);
     session
         .renderer
         .apply_layout(parse_layout(TWO_PANE_LAYOUT).expect("parses"));
     drained(&rx);
-    session.cursor.drag_shape = true;
+    session.cursor.change_cursor_shape = true;
     // A no-button hover ON the divider column (content x=39 → host col
     // 40; cb 35 = motion with no button).
     session.route_mouse(&mut conn, sgr(35, 40, 5, false));
@@ -1174,13 +1174,74 @@ fn drag_cursor_shape_option_shapes_the_pointer() {
     // Option off: the hover wants nothing (and the trailing restore
     // lands).
     session.drag = None;
-    session.cursor.drag_shape = false;
+    session.cursor.change_cursor_shape = false;
     session.route_mouse(&mut conn, sgr(35, 40, 5, false));
     let mut sink = RecordingSink::default();
     session.frame(&mut sink);
     let raw = String::from_utf8_lossy(&sink.raw).to_string();
     assert!(!raw.contains("]22;ew-resize"), "off shapes nothing: {raw}");
     assert!(raw.contains("]22;text"), "off restores: {raw}");
+}
+
+/// The `change-cursor-shape` tab half: a no-button hover ON a clickable
+/// tab block wants the pointing POINTER (OSC 22 `pointer`, X11
+/// `hand2`), a hover on the bar between tabs restores `text`, and the
+/// option off shapes nothing.
+#[test]
+fn tab_hover_shapes_the_pointer() {
+    let mut replies = std::collections::HashMap::new();
+    replies.insert("list-sessions".to_string(), "$0: work".to_string());
+    replies.insert(
+        "list-windows -t $0".to_string(),
+        "@0 - main\n@1 * vim".to_string(),
+    );
+    let (rx, mut conn) = scripted_conn("tab-ptr", replies);
+    let mut session = WindowSession::new(80, 25);
+    session.window = "@0".to_string();
+    session.status.refresh(&mut conn, "@0", 1).expect("refresh");
+    session.draw_tab_strip();
+    drained(&rx);
+    session.cursor.change_cursor_shape = true;
+    // The strip layout: "  main  " spans strip cols 0..8, the gap is
+    // col 8, "  vim  " spans 9..16; the strip row is host row 1 (SGR).
+    // Emit is change-gated, so each shape change must follow a
+    // different want: tab, bar, tab, then off.
+    session.route_mouse(&mut conn, sgr(35, 10, 1, false));
+    let mut sink = RecordingSink::default();
+    session.frame(&mut sink);
+    let raw = String::from_utf8_lossy(&sink.raw);
+    assert!(
+        raw.contains("]22;pointer") && raw.contains("]22;hand2"),
+        "the hover shapes the pointer over the tab: {raw:?}"
+    );
+    // A hover on the gap between tabs restores the terminal's pointer.
+    session.route_mouse(&mut conn, sgr(35, 9, 1, false));
+    let mut sink = RecordingSink::default();
+    session.frame(&mut sink);
+    assert!(
+        String::from_utf8_lossy(&sink.raw).contains("]22;text"),
+        "the bar between tabs restores: {:?}",
+        String::from_utf8_lossy(&sink.raw)
+    );
+    // Onto the tab again, then the option off: a shaped pointer plus a
+    // disabled setting writes nothing further.
+    session.route_mouse(&mut conn, sgr(35, 10, 1, false));
+    let mut sink = RecordingSink::default();
+    session.frame(&mut sink);
+    assert!(
+        String::from_utf8_lossy(&sink.raw).contains("]22;pointer"),
+        "the hover re-shapes: {:?}",
+        String::from_utf8_lossy(&sink.raw)
+    );
+    session.cursor.change_cursor_shape = false;
+    session.route_mouse(&mut conn, sgr(35, 10, 1, false));
+    let mut sink = RecordingSink::default();
+    session.frame(&mut sink);
+    let raw = String::from_utf8_lossy(&sink.raw).to_string();
+    assert!(
+        !raw.contains("]22;pointer") && raw.contains("]22;text"),
+        "off restores instead of re-shaping: {raw}"
+    );
 }
 
 /// The drag END: the release report itself must restore the pointer
@@ -1195,7 +1256,7 @@ fn drag_release_restores_the_pointer_shape() {
         .renderer
         .apply_layout(parse_layout(TWO_PANE_LAYOUT).expect("parses"));
     drained(&rx);
-    session.cursor.drag_shape = true;
+    session.cursor.change_cursor_shape = true;
     // Press on the divider (host col 40), drag left, release over the
     // left pane — all through the real hit dispatch.
     session.route_mouse(&mut conn, sgr(0, 40, 5, false));
@@ -1223,7 +1284,7 @@ fn drag_release_restores_the_pointer_shape() {
 }
 
 /// The side panel's own resize handles shape the pointer too (config
-/// `drag-cursor-shape`): the strip's edge column hovers left/right, the
+/// `change-cursor-shape`): the strip's edge column hovers left/right, the
 /// rule row up/down, the chevron cell and the panel's content restore,
 /// and a live sidebar drag keeps its shape while the pointer is over
 /// the panes (the live report: the pointer never changed there).
@@ -1246,7 +1307,7 @@ fn sidebar_handles_shape_the_pointer() {
         },
     ]));
     drained(&rx);
-    session.cursor.drag_shape = true;
+    session.cursor.change_cursor_shape = true;
     // Emit is change-gated: an assert whose want was already sent reads
     // an empty frame.
     let mut last: &'static str = "";
@@ -2037,15 +2098,68 @@ fn anchored_overlay_stays_inside_the_frame() {
             .collect()
     };
     renderer.set_overlay(Some((MENU_TITLE, rows(5), None)));
-    renderer.set_overlay_anchor(Some((75, 2)));
+    renderer.set_overlay_anchor(Some(super::super::OverlayAnchor::Above(75, 2)));
     let (x0, y0, inner, height) = renderer.overlay_geometry().expect("up");
     assert!(x0 + inner + 2 <= 80, "pulled left inside the frame");
     assert_eq!(y0, 0, "a box taller than the rows above pins to the top");
+    assert!(y0 + height + 2 <= 24);
+    // Below (the tab menu's anchor): the top ring on the anchor row.
+    renderer.set_overlay_anchor(Some(super::super::OverlayAnchor::Below(75, 0)));
+    let (x0, y0, inner, height) = renderer.overlay_geometry().expect("up");
+    assert_eq!(
+        x0,
+        80 - (inner + 2),
+        "a far-right anchor pulls back left so the box fits"
+    );
+    assert_eq!(y0, 0, "Below puts the top ring on the anchor row");
+    assert!(y0 + height + 2 <= 24, "the box stays inside the frame");
+    renderer.set_overlay_anchor(Some(super::super::OverlayAnchor::Below(2, 0)));
+    let (x0, y0, _, _) = renderer.overlay_geometry().expect("up");
+    assert_eq!(x0, 2, "a near-left anchor aligns to the anchor column");
+    assert_eq!(y0, 0);
+    // A box taller than the rows below its anchor pulls up to fit.
+    renderer.set_overlay_anchor(Some(super::super::OverlayAnchor::Below(2, 20)));
+    let (_, y0, _, height) = renderer.overlay_geometry().expect("up");
+    assert_eq!(
+        y0,
+        24 - (height + 2),
+        "clamped up so the whole box fits the frame"
+    );
     assert!(y0 + height + 2 <= 24);
     renderer.set_overlay(None);
     renderer.set_overlay(Some((MENU_TITLE, rows(5), None)));
     let (cx, _, cinner, _) = renderer.overlay_geometry().expect("up");
     assert_eq!(cx, (80 - (cinner + 2)) / 2, "the next overlay centers");
+}
+
+/// The tab menu anchors under the clicked tab: the box's left ring on
+/// the tab's left edge and its top ring on the first row below the
+/// strip — not centered in the terminal.
+#[test]
+fn tab_menu_opens_under_the_clicked_tab() {
+    let mut replies = std::collections::HashMap::new();
+    replies.insert("list-sessions".to_string(), "$0: work".to_string());
+    replies.insert(
+        "list-windows -t $0".to_string(),
+        "@0 - main\n@1 * vim".to_string(),
+    );
+    let (rx, mut conn) = scripted_conn("tabmenu-anchor", replies);
+    let mut session = WindowSession::new(80, 25);
+    session.window = "@0".to_string();
+    session.status.refresh(&mut conn, "@0", 1).expect("refresh");
+    session.draw_tab_strip();
+    drained(&rx);
+    // A right press (cb 2) on the second tab's block ("  vim  ", strip
+    // cols 9..16; SGR col 13 = strip col 12, row 1 = the strip row).
+    session.route_mouse(&mut conn, sgr(2, 13, 1, false));
+    assert!(
+        session.menu().is_some(),
+        "the right press opens the tab menu"
+    );
+    let (x0, y0, inner, _) = session.renderer.overlay_geometry().expect("menu up");
+    assert_eq!(x0, 9, "the box's left ring on the tab's left edge");
+    assert_eq!(y0, 0, "the box's top ring on the first row below the strip");
+    assert!(x0 + inner + 2 <= 80, "the box stays inside the frame");
 }
 
 /// The command menu's `keybinds` row opens the help panel.

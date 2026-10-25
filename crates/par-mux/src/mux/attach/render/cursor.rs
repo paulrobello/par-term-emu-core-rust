@@ -21,9 +21,11 @@ pub(super) struct CursorState {
     /// keep it lost forever, so every frame re-asserts the placement
     /// after [`CURSOR_HEARTBEAT`].
     last_emit: Instant,
-    /// While a divider drag is live, the host cursor carries the resize
-    /// shape (best-effort DECSCUSR steady block; restored on drag end).
-    pub(super) drag_shape: bool,
+    /// The `[client] change-cursor-shape` setting in force: shapes the
+    /// host POINTER (OSC 22) over resize handles, and while a divider
+    /// drag is live the host text cursor (best-effort DECSCUSR steady
+    /// block; restored on drag end).
+    pub(super) change_cursor_shape: bool,
     /// The hidden-cursor IME anchor the last frame parked at (host
     /// cell), `None` when none was parked.
     anchor: Option<(u16, u16)>,
@@ -34,7 +36,7 @@ impl CursorState {
         Self {
             placed: Some(None),
             last_emit: now,
-            drag_shape: false,
+            change_cursor_shape: false,
             anchor: None,
         }
     }

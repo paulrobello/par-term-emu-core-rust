@@ -1,5 +1,5 @@
-//! The host POINTER's shape: the divider resize cue (config
-//! `drag-cursor-shape`) written as OSC 22 — the pointer-shape escape
+//! The host POINTER's shape: the hover cues (config
+//! `change-cursor-shape`) written as OSC 22 — the pointer-shape escape
 //! ghostty/kitty/xterm accept (CSS cursor names, best-effort: a
 //! terminal without it keeps its own pointer; the DECSCUSR
 //! steady-block during a live drag remains the fallback cue there).
@@ -7,7 +7,7 @@
 //! `col-resize`/`row-resize`: ghostty's macOS apprt maps only the
 //! former pair to a pointer and silently drops the latter (its
 //! `setCursorShape` `default:` arm), while kitty accepts both.
-//! Each resize shape is followed by its X11 cursor-font synonym:
+//! Each shape is followed by its X11 cursor-font synonym:
 //! iTerm2's OSC 22 map knows only X11 names and RESETS its pointer on
 //! any name it does not know, so the CSS names alone left iTerm2's
 //! pointer unchanged (live report, 2026-10-16). The order is safe in
@@ -22,6 +22,8 @@ use super::FlushSink;
 pub(super) const RESIZE_COL: &str = "ew-resize";
 /// A horizontal divider row drags up/down.
 pub(super) const RESIZE_ROW: &str = "ns-resize";
+/// A clickable tab block under the pointer (the tab strip's tabs).
+pub(super) const TAB_POINTER: &str = "pointer";
 /// The restore shape: the terminal's own hover-over-text pointer.
 const RESTORE: &str = "text";
 
@@ -31,6 +33,7 @@ fn x11_synonym(name: &str) -> Option<&'static str> {
     match name {
         RESIZE_COL => Some("sb_h_double_arrow"),
         RESIZE_ROW => Some("sb_v_double_arrow"),
+        TAB_POINTER => Some("hand2"),
         _ => None,
     }
 }

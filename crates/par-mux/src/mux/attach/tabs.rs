@@ -579,15 +579,21 @@ impl TabStrip {
         }
     }
 
-    /// The window index a click at strip column `col` lands on — the
-    /// visible tab whose block spans the column (its pads included).
-    /// Gap and marker columns hit nothing.
-    pub(crate) fn hit_test(&self, col: u16) -> Option<usize> {
+    /// The visible tab block spanning strip column `col`, pads included
+    /// — the hover hit-test's source of truth. Gap, marker, and ` + `
+    /// columns hit nothing.
+    pub(crate) fn tab_cell_at(&self, col: u16) -> Option<&TabCell> {
         self.layout
             .cells
             .iter()
             .find(|cell| col >= cell.col && col < cell.col.saturating_add(cell.width))
-            .map(|cell| cell.window_index)
+    }
+
+    /// The window index a click at strip column `col` lands on — the
+    /// visible tab whose block spans the column (its pads included).
+    /// Gap and marker columns hit nothing.
+    pub(crate) fn hit_test(&self, col: u16) -> Option<usize> {
+        self.tab_cell_at(col).map(|cell| cell.window_index)
     }
 
     /// Whether a click at strip column `col` lands on the ` + ` button

@@ -336,6 +336,19 @@ pub(crate) type OverlayScroll = (usize, usize, usize);
 /// composed rows, and its optional scroll state.
 pub(crate) type Overlay = (&'static str, Vec<HelpRow>, Option<OverlayScroll>);
 
+/// Where an anchored overlay pins itself instead of centering: the
+/// anchor is a frame cell `(x, y)` — the box's left ring at `x`, pulled
+/// back left when the box would overflow the frame's right edge.
+/// [`OverlayAnchor::Above`] puts the box's bottom ring on `y` (the
+/// command menu beside its chip, opening upward); [`OverlayAnchor::Below`]
+/// puts its top ring on `y` (the tab menu under its tab, opening
+/// downward), pulled back up when the rows below cannot hold it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum OverlayAnchor {
+    Above(u16, u16),
+    Below(u16, u16),
+}
+
 /// The frame renderer: pane emulators + layout rects + the double buffers
 /// the damage diff reads.
 pub struct PaneRenderer {
@@ -366,9 +379,10 @@ pub struct PaneRenderer {
     overlay: Option<Overlay>,
     /// Reversed spans `(row, from, to)` over the overlay's inner columns.
     overlay_highlights: Vec<(usize, usize, usize)>,
-    /// Where the overlay anchors instead of centering (the command menu
-    /// beside its chip); cleared with the overlay.
-    overlay_anchor: Option<(u16, u16)>,
+    /// Where the overlay anchors instead of centering: the command menu
+    /// beside its chip (opening upward), the tab menu under its tab
+    /// (opening downward); cleared with the overlay.
+    overlay_anchor: Option<OverlayAnchor>,
     /// The in-app notification card (notify-delivery `inside`).
     toast: Option<toast::Toast>,
     /// The popup command window painted over the panes (above the
@@ -979,8 +993,8 @@ struct WindowSession {
     /// Host-cursor placement bookkeeping: the emit guard, the heartbeat
     /// clock, and the drag-shape option (see [`CursorState`]).
     cursor: CursorState,
-    /// The host POINTER's shape (OSC 22): the divider resize cue
-    /// `drag-cursor-shape` raises on hover/drag (see [`pointer::PointerState`]).
+    /// The host POINTER's shape (OSC 22): the resize cue `change-cursor-shape`
+    /// raises on hover/drag (see [`pointer::PointerState`]).
     pointer: pointer::PointerState,
     /// The panes' kitty graphics as the host holds them (config
     /// `kitty-graphics`, gated on the host's query answer).

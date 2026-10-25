@@ -5410,13 +5410,13 @@ fn render_mode_panel_menu_chip_detaches() {
     );
 }
 
-/// The drag-cursor-shape pointer cue END TO END (card 01a13d8c): the
+/// The change-cursor-shape pointer cue END TO END (card 01a13d8c): the
 /// live render client under a PTY writes OSC 22 to the host terminal —
 /// the bytes ghostty/kitty turn into the resize pointer — when the
 /// pointer hovers or drags a divider, and restores `text` after.
 #[cfg(unix)]
 #[test]
-fn render_mode_drag_cursor_shape_writes_osc22_to_the_host() {
+fn render_mode_change_cursor_shape_writes_osc22_to_the_host() {
     let (fixture, _daemon, mut client) = fixture_with_session("ptr22");
     let pane_a = client
         .send("list-panes")
@@ -5438,7 +5438,7 @@ fn render_mode_drag_cursor_shape_writes_osc22_to_the_host() {
         &fixture,
         &["-t", &pane_a],
         "render",
-        "[client]\ndrag-cursor-shape = true\nsidebar-on-launch = false\n",
+        "[client]\nchange-cursor-shape = true\nsidebar-on-launch = false\n",
     );
     let mut seed = expect_output(
         &host,
@@ -6180,7 +6180,7 @@ fn render_mode_settings_notify_delivery_cycles() {
         &fixture,
         &["-t", &pane_a],
         "render",
-        "[client]\nborder-lines = \"herdr\"\nnotify-states = [\"working\", \"blocked\", \"idle\"]\nnotify-delivery = \"off\"\nscrollbar-gutter = true\ndrag-cursor-shape = true\npane-gaps = 0\n",
+        "[client]\nborder-lines = \"herdr\"\nnotify-states = [\"working\", \"blocked\", \"idle\"]\nnotify-delivery = \"off\"\nscrollbar-gutter = true\nchange-cursor-shape = true\npane-gaps = 0\n",
     );
     let mut got = expect_output(
         &host,
@@ -6279,11 +6279,12 @@ fn render_mode_settings_notify_delivery_cycles() {
 }
 
 /// The tab context menu must be CLICKABLE with the side panel up: the
-/// modal centers over the HOST width (the pane layout already carries
-/// the strip offset), so its clicks map by the raw host column — the
-/// guard mapped them through `x - strip` and every click landed one
-/// panel width left of the visible items (the manual-pass round-7
-/// report; the same defect class as round 5's unclickable +).
+/// menu's geometry is host-absolute (anchored under the clicked tab,
+/// whose block spans absolute host columns), so its clicks map by the
+/// raw host column — the guard mapped them through `x - strip` and every
+/// click landed one panel width left of the visible items (the
+/// manual-pass round-7 report; the same defect class as round 5's
+/// unclickable +).
 #[cfg(unix)]
 #[test]
 fn render_mode_tab_menu_actions_click_with_the_panel_up() {
@@ -6336,15 +6337,14 @@ fn render_mode_tab_menu_actions_click_with_the_panel_up() {
         plain_text(&flash)
     );
 
-    // Click the RENAME row at its RAW host coordinates (the menu's
-    // painted geometry: the widest row is the 28-char footer, so the
-    // box is 30 wide centered over the 80-col host — x0 = 25; 9 rows
-    // (header, seven actions, footer) plus the border ring centered
-    // over 22 content rows — y0 = 5).
-    let x0 = (80usize.saturating_sub(30)) / 2; // 25
-    let y0 = (22usize.saturating_sub(11)) / 2; // 5
-    let menu_col = x0 + 5; // inside the box, 1-based host col
-    let menu_row = y0 + 4; // rename (panel row 1) paints at host y0+3; SGR is 1-based
+    // Click the RENAME row at its RAW host coordinates (the menu is
+    // anchored under the clicked tab: the tab block `  att  ` starts at
+    // 0-based host col 20 — the box's left ring x0 — and its top ring
+    // sits on the first frame row, host row 1 0-based. The rename row
+    // (panel row 1) paints at frame row 2, host row 3 0-based; SGR is
+    // 1-based.)
+    let menu_col = 25; // x0 (20) + 5, inside the box, 1-based host col
+    let menu_row = 4; // frame row 2 + the strip row + the 1-based origin
     host.to_child
         .write_all(format!("\x1b[<0;{menu_col};{menu_row}M").as_bytes())
         .expect("menu click");

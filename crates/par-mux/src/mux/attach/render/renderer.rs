@@ -1,7 +1,9 @@
 //! The pane renderer's state: layout, focus, emulators, titles, scroll, display
 //! options, and the frame orchestrator.
 
-use super::{DividerHit, Glyphs, Overlay, PaneChrome, PaneEmulator, PaneRect, PaneRenderer};
+use super::{
+    DividerHit, Glyphs, Overlay, OverlayAnchor, PaneChrome, PaneEmulator, PaneRect, PaneRenderer,
+};
 use par_term_emu_core::cursor::CursorStyle;
 use par_term_emu_core::terminal::Terminal;
 use ratatui::buffer::{Buffer, Cell as RtCell};
@@ -357,16 +359,28 @@ impl PaneRenderer {
             .min(self.height.saturating_sub(2) as usize)
             .max(1);
         let (x0, y0) = match self.overlay_anchor {
-            // Anchored (the command menu beside its chip): the box's left
-            // ring at the anchor column, its bottom ring on the anchor
-            // row — pulled back inside the frame when it would overflow.
-            Some((ax, ay)) => {
+            // Anchored: the box's left ring at the anchor column, pulled
+            // back inside the frame when it would overflow. `Above`
+            // (the command menu beside its chip) puts the bottom ring on
+            // the anchor row — the box opens upward; `Below` (the tab
+            // menu under its tab) puts the top ring on the anchor row —
+            // it opens downward, clamped back up when the rows below
+            // cannot hold it.
+            Some(anchor) => {
+                let (ax, ay, below) = match anchor {
+                    OverlayAnchor::Above(ax, ay) => (usize::from(ax), usize::from(ay), false),
+                    OverlayAnchor::Below(ax, ay) => (usize::from(ax), usize::from(ay), true),
+                };
                 let w = inner + 2;
                 let h = height + 2;
-                let x0 = usize::from(ax).min((self.width as usize).saturating_sub(w));
-                let y0 = (usize::from(ay) + 1)
-                    .saturating_sub(h)
-                    .min((self.height as usize).saturating_sub(h));
+                let x0 = ax.min((self.width as usize).saturating_sub(w));
+                let y0 = if below {
+                    ay.min((self.height as usize).saturating_sub(h))
+                } else {
+                    (ay + 1)
+                        .saturating_sub(h)
+                        .min((self.height as usize).saturating_sub(h))
+                };
                 (x0, y0)
             }
             None => (
@@ -390,10 +404,11 @@ impl PaneRenderer {
         x >= x0 && x <= x0 + inner + 1 && frame_y >= y0 && frame_y <= y0 + height + 1
     }
 
-    /// Anchor the NEXT overlay at frame cell `(x, y)` (its left ring at
-    /// `x`, bottom ring on row `y`) instead of centering it; a new
-    /// overlay without an anchor clears it.
-    pub(crate) fn set_overlay_anchor(&mut self, anchor: Option<(u16, u16)>) {
+    /// Anchor the NEXT overlay instead of centering it:
+    /// [`OverlayAnchor::Above`] hangs the box's bottom ring on the
+    /// anchor row, [`OverlayAnchor::Below`] its top ring; a new overlay
+    /// without an anchor clears it.
+    pub(crate) fn set_overlay_anchor(&mut self, anchor: Option<OverlayAnchor>) {
         if self.overlay_anchor != anchor {
             self.overlay_anchor = anchor;
             self.dirty = true;
@@ -401,7 +416,8 @@ impl PaneRenderer {
     }
 
     /// The command menu chip's frame cell `(x_end, y)`: the column just
-    /// right of the chip and its row — where the command menu anchors.
+    /// right of the chip and its row — wrap it in
+    /// [`OverlayAnchor::Above`] where the command menu anchors.
     pub(crate) fn sidebar_menu_chip_anchor(&self) -> Option<(u16, u16)> {
         self.sidebar_lines()
             .into_iter()

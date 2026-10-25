@@ -404,14 +404,15 @@ pub struct ClientSection {
         skip_serializing_if = "Option::is_none"
     )]
     pub scrollbar_gutter: Option<bool>,
-    /// While a divider drag is live, shape the host cursor to the resize
-    /// shape (best-effort DECSCUSR; restored on drag end). Default off.
+    /// While the pointer is over a resize handle, and while a drag is
+    /// live, shape the host cursor to the resize shape (best-effort
+    /// DECSCUSR; restored on leave/drag end). Default on.
     #[serde(
         default,
-        rename = "drag-cursor-shape",
+        rename = "change-cursor-shape",
         skip_serializing_if = "Option::is_none"
     )]
-    pub drag_cursor_shape: Option<bool>,
+    pub change_cursor_shape: Option<bool>,
     /// Draw kitty graphics protocol images the panes emit on the host
     /// terminal (render mode; herdr's `terminal.kitty_graphics`). Only
     /// takes effect when the host answers the launch kitty query.
@@ -1056,7 +1057,7 @@ pub fn render(eff: &EffectiveConfig) -> String {
             show_label_in_border: Some(defaults.show_label_in_border),
             pane_gaps: Some(defaults.pane_gaps),
             scrollbar_gutter: Some(defaults.scrollbar_gutter),
-            drag_cursor_shape: Some(defaults.drag_cursor_shape),
+            change_cursor_shape: Some(defaults.change_cursor_shape),
             kitty_graphics: Some(defaults.kitty_graphics),
             session_picker: Some(defaults.session_picker),
             git_status: Some(defaults.git_status),
@@ -1168,10 +1169,10 @@ pub struct Chords {
     /// The reserved right-edge gutter column (config
     /// `scrollbar-gutter`). Default off.
     pub scrollbar_gutter: bool,
-    /// The drag cursor shaping (config `drag-cursor-shape`): the
+    /// The cursor/pointer shaping (config `change-cursor-shape`): the
     /// resize pointer (OSC 22) over divider hovers/drags plus the
-    /// DECSCUSR steady block during a live drag. Default off.
-    pub drag_cursor_shape: bool,
+    /// DECSCUSR steady block during a live drag. Default on.
+    pub change_cursor_shape: bool,
     /// Kitty graphics drawn on a kitty-capable host (config
     /// `kitty-graphics`). Default on.
     pub kitty_graphics: bool,
@@ -1311,7 +1312,7 @@ impl Chords {
             show_label_in_border: true,
             pane_gaps: 0,
             scrollbar_gutter: false,
-            drag_cursor_shape: false,
+            change_cursor_shape: true,
             kitty_graphics: true,
             session_picker: false,
             git_status: true,
@@ -1615,10 +1616,10 @@ pub fn reload_client_chords(file: &ConfigFile, current: &Chords) -> Result<Chord
         .client
         .scrollbar_gutter
         .unwrap_or(current.scrollbar_gutter);
-    let drag_cursor_shape = file
+    let change_cursor_shape = file
         .client
-        .drag_cursor_shape
-        .unwrap_or(current.drag_cursor_shape);
+        .change_cursor_shape
+        .unwrap_or(current.change_cursor_shape);
     let kitty_graphics = file.client.kitty_graphics.unwrap_or(current.kitty_graphics);
     let session_picker = file.client.session_picker.unwrap_or(current.session_picker);
     let git_status = file.client.git_status.unwrap_or(current.git_status);
@@ -1671,7 +1672,7 @@ pub fn reload_client_chords(file: &ConfigFile, current: &Chords) -> Result<Chord
         show_label_in_border,
         pane_gaps,
         scrollbar_gutter,
-        drag_cursor_shape,
+        change_cursor_shape,
         kitty_graphics,
         session_picker,
         git_status,
@@ -2439,13 +2440,13 @@ remain-on-exit = true
             (
                 kept.pane_gaps,
                 kept.scrollbar_gutter,
-                kept.drag_cursor_shape
+                kept.change_cursor_shape
             ),
-            (0, false, false),
-            "absent keys keep the defaults off"
+            (0, false, true),
+            "absent keys keep the defaults (change-cursor-shape on)"
         );
         let file: ConfigFile = toml::from_str(
-            "[client]\npane-gaps = 2\nscrollbar-gutter = true\ndrag-cursor-shape = true\n",
+            "[client]\npane-gaps = 2\nscrollbar-gutter = true\nchange-cursor-shape = false\n",
         )
         .unwrap();
         let moved = reload_client_chords(&file, &defaults).unwrap();
@@ -2453,10 +2454,10 @@ remain-on-exit = true
             (
                 moved.pane_gaps,
                 moved.scrollbar_gutter,
-                moved.drag_cursor_shape
+                moved.change_cursor_shape
             ),
-            (2, true, true),
-            "stated keys resolve"
+            (2, true, false),
+            "stated keys resolve; an explicit false beats the on default"
         );
         // gen-config emits all three; the output parses back.
         let text = render(&EffectiveConfig::default());
@@ -2468,9 +2469,39 @@ remain-on-exit = true
             "gen-config emits scrollbar-gutter"
         );
         assert_eq!(
-            file.client.drag_cursor_shape,
-            Some(false),
-            "gen-config emits drag-cursor-shape"
+            file.client.change_cursor_shape,
+            Some(true),
+            "gen-config emits change-cursor-shape"
+        );
+    }
+
+    /// The rename (`drag-cursor-shape` → `change-cursor-shape`): the
+    /// `[client]` section tolerates unknown keys, so a pre-rename file
+    /// still loads and the new default applies — the old key never pins
+    /// the setting off.
+    #[test]
+    fn change_cursor_shape_renamed_key_and_merge() {
+        let defaults = Chords::with_defaults();
+        let empty: ConfigFile = toml::from_str("[client]\n").unwrap();
+        assert!(
+            reload_client_chords(&empty, &defaults)
+                .unwrap()
+                .change_cursor_shape,
+            "the default is on"
+        );
+        let off: ConfigFile = toml::from_str("[client]\nchange-cursor-shape = false\n").unwrap();
+        assert!(
+            !reload_client_chords(&off, &defaults)
+                .unwrap()
+                .change_cursor_shape,
+            "an explicit false beats the on default"
+        );
+        let legacy: ConfigFile = toml::from_str("[client]\ndrag-cursor-shape = false\n").unwrap();
+        assert!(
+            reload_client_chords(&legacy, &defaults)
+                .unwrap()
+                .change_cursor_shape,
+            "the pre-rename key is an unknown key: the default applies"
         );
     }
 
@@ -2795,7 +2826,7 @@ remain-on-exit = true
         assert_eq!(c.show_label_in_border, Some(defaults.show_label_in_border));
         assert_eq!(c.pane_gaps, Some(defaults.pane_gaps));
         assert_eq!(c.scrollbar_gutter, Some(defaults.scrollbar_gutter));
-        assert_eq!(c.drag_cursor_shape, Some(defaults.drag_cursor_shape));
+        assert_eq!(c.change_cursor_shape, Some(defaults.change_cursor_shape));
         assert_eq!(c.kitty_graphics, Some(defaults.kitty_graphics));
         assert_eq!(c.session_picker, Some(defaults.session_picker));
         assert_eq!(

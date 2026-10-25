@@ -2133,7 +2133,10 @@ fn session_defaults_come_from_chords_with_defaults() {
         session.render_opts.scrollbar_gutter,
         defaults.scrollbar_gutter
     );
-    assert_eq!(session.cursor.drag_shape, defaults.drag_cursor_shape);
+    assert_eq!(
+        session.cursor.change_cursor_shape,
+        defaults.change_cursor_shape
+    );
     // No theme key: the built-in look, no palette anywhere.
     assert_eq!(defaults.theme, "default");
     assert!(session.renderer.palette().is_none());

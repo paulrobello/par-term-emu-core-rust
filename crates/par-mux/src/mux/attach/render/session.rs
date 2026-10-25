@@ -318,7 +318,7 @@ impl WindowSession {
         self.set_show_label_in_border(chords.show_label_in_border);
         self.set_pane_gaps(chords.pane_gaps);
         self.set_scrollbar_gutter(chords.scrollbar_gutter);
-        self.cursor.drag_shape = chords.drag_cursor_shape;
+        self.cursor.change_cursor_shape = chords.change_cursor_shape;
         self.set_kitty_enabled(chords.kitty_graphics);
         let eff = crate::mux::config::resolve(file, &crate::mux::config::Overrides::default());
         self.set_border_colors(
@@ -1088,7 +1088,7 @@ impl WindowSession {
             let (hx, hy) = geometry.frame_to_host(x, y);
             (hx, hy, style)
         });
-        // The drag cursor shape (config `drag-cursor-shape`): while a
+        // The cursor shaping (config `change-cursor-shape`): while a
         // divider drag is live the host cursor carries the resize shape
         // (best-effort DECSCUSR steady block — DECSCUSR has no
         // column-resize value; every drag-end path clears `drag`, so the
@@ -1096,7 +1096,7 @@ impl WindowSession {
         // the axis-correct resize shape via OSC 22 (see `update_pointer`)
         // — this text-cursor swap is the fallback cue for terminals
         // without OSC 22.
-        if self.cursor.drag_shape && matches!(&self.drag, Some(DragState::Active { .. })) {
+        if self.cursor.change_cursor_shape && matches!(&self.drag, Some(DragState::Active { .. })) {
             cursor = cursor.map(|(x, y, _)| (x, y, CursorStyle::SteadyBlock));
         }
         // A modal overlay (help, picker) covers the focused pane: placing

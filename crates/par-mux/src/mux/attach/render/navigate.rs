@@ -684,7 +684,7 @@ impl WindowSession {
                 show_label_in_border: self.render_opts.show_label_in_border,
                 pane_gaps: self.render_opts.pane_gaps,
                 scrollbar_gutter: self.render_opts.scrollbar_gutter,
-                drag_cursor_shape: self.cursor.drag_shape,
+                change_cursor_shape: self.cursor.change_cursor_shape,
                 kitty_graphics: self.kitty.enabled,
                 session_picker: self.session_picker,
                 git_status: self.git_status,

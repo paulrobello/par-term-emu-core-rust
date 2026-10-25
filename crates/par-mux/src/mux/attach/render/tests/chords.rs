@@ -2749,7 +2749,10 @@ fn mouse_hit_maps_the_tab_strip_and_the_pane_area() {
     session.draw_tab_strip();
     assert_eq!(
         session.mouse_hit(&sgr(2, 13, 1, false)),
-        Hit::TabMenu("@1".to_string())
+        Hit::TabMenu {
+            id: "@1".to_string(),
+            anchor: (9, 0)
+        }
     );
     assert_eq!(
         session.mouse_hit(&sgr(2, 9, 1, false)),
