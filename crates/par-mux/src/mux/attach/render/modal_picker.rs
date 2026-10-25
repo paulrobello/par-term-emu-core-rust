@@ -4,8 +4,9 @@
 
 use super::{Modal, PickerState, WindowSession};
 use crate::mux::attach::panels::{
-    compose_picker_panel, picker_rows, HelpRow, PickerEntry, PickerRef, PALETTE_ACTIONS,
-    PICKER_OVERLAY_TITLE, WORKSPACE_PICKER_OVERLAY_TITLE,
+    compose_picker_panel, palette_action_chord, picker_rows, HelpRow, PickerEntry, PickerRef,
+    PALETTE_ACTIONS, PALETTE_FOOTER, PICKER_FOOTER, PICKER_OVERLAY_TITLE,
+    WORKSPACE_PICKER_OVERLAY_TITLE,
 };
 use crate::mux::attach::targets::{parse_session_line, parse_workspace_line};
 use par_term_emu_core::keyboard::TermKeyEvent;
@@ -102,8 +103,10 @@ impl WindowSession {
     /// Open the command palette (the `palette` chord): every management
     /// action plus settings/keybinds/reload/detach as a filterable picker
     /// list — the keyboard path to the click-only menu chips and every
-    /// chord, one list (the TUI audit's R2). Same picker machinery: `/`
-    /// filters, arrows/j/k move, Enter runs, esc/q dismisses.
+    /// chord, one list (the TUI audit's R2). The filter is live from the
+    /// open: typing filters immediately (no `/` first), arrows/j/k move,
+    /// Enter runs the selected action, esc dismisses. Each row carries
+    /// its action's EFFECTIVE chord, spelled like the keybinds panel.
     pub(super) fn enter_palette(&mut self) {
         let commands: Vec<(usize, String)> = PALETTE_ACTIONS
             .iter()
@@ -112,24 +115,41 @@ impl WindowSession {
             .collect();
         self.open_modal(Modal::Picker(PickerState {
             commands: Some(commands),
+            filtering: true,
             ..PickerState::default()
         }));
         self.refresh_picker();
     }
 
-    /// Compose the palette's overlay: one row per action label, through
-    /// the picker's filter, cursor, and windowing.
+    /// Compose the palette's overlay: one row per action — the label in
+    /// a left column, its EFFECTIVE chord (the live config's binding,
+    /// the help panel's spelling) in a second column — through the
+    /// picker's filter, cursor, and windowing. The filter matches the
+    /// whole row, so a chord fragment finds its action too.
     fn refresh_palette(&mut self, commands: &[(usize, String)]) {
         let Modal::Picker(picker) = &self.modal else {
             return;
         };
+        let width = commands
+            .iter()
+            .map(|(_, label)| label.chars().count())
+            .max()
+            .unwrap_or(0);
         let rows: Vec<HelpRow> = commands
             .iter()
-            .map(|(_, label)| HelpRow {
-                text: format!(" {label} "),
-                accent: false,
-                footer: false,
-                render_only: false,
+            .map(|(i, label)| {
+                let chord =
+                    palette_action_chord(*i, self.prefix, self.reload_key, &self.management);
+                let text = match chord {
+                    Some(chord) => format!(" {label:<width$}  {chord} "),
+                    None => format!(" {label:<width$} "),
+                };
+                HelpRow {
+                    text,
+                    accent: false,
+                    footer: false,
+                    render_only: false,
+                }
             })
             .collect();
         let refs: Vec<PickerRef> = commands
@@ -145,6 +165,7 @@ impl WindowSession {
             picker.selected,
             visible,
             picker.start,
+            PALETTE_FOOTER,
         );
         self.store_picker_compose(filtered_refs, start, lines.len());
         self.renderer
@@ -232,6 +253,7 @@ impl WindowSession {
             picker.selected,
             visible,
             picker.start,
+            PICKER_FOOTER,
         );
         self.store_picker_compose(filtered_refs, start, lines.len());
         self.renderer
@@ -386,6 +408,7 @@ impl WindowSession {
             picker.selected,
             visible,
             picker.start,
+            PICKER_FOOTER,
         );
         self.store_picker_compose(filtered_refs, start, lines.len());
         self.renderer
@@ -401,6 +424,19 @@ impl WindowSession {
     ) {
         let _ = conn;
         use par_term_emu_core::keyboard::TermKey;
+        // The palette's filter is live from the open: arrows move the
+        // selection without leaving the filter (a session/workspace
+        // picker filters only through its `/` box, whose typing owns
+        // every key).
+        if let Modal::Picker(picker) = &self.modal {
+            if picker.filtering && picker.commands.is_some() {
+                match ev.key() {
+                    TermKey::Up => return self.picker_move(-1),
+                    TermKey::Down => return self.picker_move(1),
+                    _ => {}
+                }
+            }
+        }
         let Modal::Picker(picker) = &mut self.modal else {
             return;
         };
@@ -453,7 +489,16 @@ impl WindowSession {
                     self.leave_picker();
                     return false;
                 }
-                b'\r' => picker.filtering = false,
+                b'\r' => {
+                    // The palette runs the selected action straight from
+                    // its live filter; a session/workspace picker's Enter
+                    // commits the filter box and keeps the modal up.
+                    if picker.commands.is_some() {
+                        self.picker_activate(conn);
+                    } else {
+                        picker.filtering = false;
+                    }
+                }
                 b if b.is_ascii_graphic() || b == b' ' => {
                     picker.filter.push(b as char);
                     self.refresh_picker();

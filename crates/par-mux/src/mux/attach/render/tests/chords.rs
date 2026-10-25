@@ -273,32 +273,65 @@ fn join_pane_chord_picks_a_window_and_joins() {
 }
 
 /// The command palette (prefix :): the chord opens the picker with the
-/// action list; Enter on a filtered row runs the action — `detach` ends
-/// the session, `reload config` takes the reload path (the R2 audit rec:
-/// a keyboard path to the click-only menu chips).
+/// action list — each row showing its EFFECTIVE chord (the live
+/// config's binding, the keybinds panel's spelling; the chordless
+/// settings row showing none) — and the filter live from the open:
+/// typing filters with no `/` first, and Enter on the filtered row runs
+/// the action (the R2 audit rec: a keyboard path to the click-only
+/// menu chips).
 #[test]
-fn palette_chord_filters_and_runs_actions() {
+fn palette_type_to_filter_and_keybind_rows() {
     let (rx, mut conn, mut session) = two_pane_session("palette", FakeScript::default());
     chord(&mut session, &mut conn, b':');
     drained(&rx);
     settle(&mut session, &mut conn);
-    // Filter to the detach row and run it (Enter commits the filter, a
-    // second Enter activates the selected row).
-    chord(&mut session, &mut conn, b'/');
-    for byte in b"deta" {
-        chord(&mut session, &mut conn, *byte);
+    let text = overlay_text(&session).join("\n");
+    for chord in ["C-b c", "C-b x", "C-b ?", "C-b C-r", "C-b d"] {
+        assert!(
+            text.contains(chord),
+            "the row spells its chord {chord}: {text}"
+        );
     }
-    chord(&mut session, &mut conn, b'\r');
-    chord(&mut session, &mut conn, b'\r');
+    let settings = overlay_text(&session)
+        .into_iter()
+        .find(|line| line.contains("settings"))
+        .expect("the settings row");
+    assert!(
+        !settings.contains("C-b"),
+        "settings has no chord: {settings}"
+    );
+    // Typing filters straight away (no `/` press), and Enter on the
+    // filtered row runs it — `detach` ends the session.
+    for byte in b"deta" {
+        session.route_plain(&[*byte], &mut conn);
+    }
+    settle(&mut session, &mut conn);
+    session.route_plain(b"\r", &mut conn);
     settle(&mut session, &mut conn);
     drained(&rx);
     assert!(session.detach_requested, "the detach action ran");
-    // Settings open from the palette too (fresh session, first row).
-    let (rx, mut conn, mut session) = two_pane_session("palette2", FakeScript::default());
+}
+
+/// The palette's live filter: arrows move the selection without leaving
+/// the filter (a letter afterwards still edits the query), and Enter
+/// runs the selected action from the filtered list.
+#[test]
+fn palette_arrows_move_while_filtering() {
+    use par_term_emu_core::keyboard::{TermKey, TermKeyEvent};
+    let (rx, mut conn, mut session) = two_pane_session("palette-arr", FakeScript::default());
     chord(&mut session, &mut conn, b':');
     drained(&rx);
     settle(&mut session, &mut conn);
-    chord(&mut session, &mut conn, b'\r');
+    session.picker_key(&mut conn, &TermKeyEvent::functional(TermKey::Down, 0));
+    settle(&mut session, &mut conn);
+    assert!(
+        overlay_text(&session)[0].starts_with(" /"),
+        "the filter stays live through the arrow: {:#?}",
+        overlay_text(&session)
+    );
+    session.route_plain(b"sett", &mut conn);
+    settle(&mut session, &mut conn);
+    session.route_plain(b"\r", &mut conn);
     settle(&mut session, &mut conn);
     drained(&rx);
     assert!(matches!(session.modal, Modal::Settings(_)));

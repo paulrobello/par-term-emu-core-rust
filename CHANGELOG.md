@@ -7,6 +7,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- **par-mux: the command palette shows each action's live keybind and filters from the first keystroke** (`crates/par-mux/src/mux/attach/panels.rs`, `attach/render/modal_picker.rs`, `attach/tests.rs`, `render/tests/chords.rs`, `docs/MUX.md`): palette rows carry their action's EFFECTIVE chord in the keybinds panel's spelling (`C-b x`) — from the live config, so a remap shows the remapped key, and the chordless settings row shows none — and the palette opens with its filter live: typing filters with no `/` first, a chord fragment matches its action too, arrows move the selection without leaving the filter, and Enter runs the selected action straight from the filter. The session/workspace pickers keep their `/` machinery unchanged (their compose now takes the footer line, the palette spelling its own). Pinned by `palette_type_to_filter_and_keybind_rows`, `palette_arrows_move_while_filtering`, `palette_action_chord_spells_the_live_binding`, and the footer-parameterized `compose_picker_panel_filters_marks_and_maps_clicks`.
+
 ## [0.66.1] - 2026-10-24
 
 ### Changed

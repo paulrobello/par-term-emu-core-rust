@@ -470,6 +470,11 @@ pub(crate) fn compose_help_panel(
 pub(crate) const PICKER_FOOTER: &str =
     " navigate arrows/j/k · select enter/click · filter / · close esc/q ";
 
+/// The command palette's footer/controls line (render mode): the filter
+/// is live from the open, so the footer never advertises `filter /`.
+pub(crate) const PALETTE_FOOTER: &str =
+    " type to filter · arrows/j/k navigate · enter run · click select · esc close ";
+
 /// One session in the picker's queried state: its windows as
 /// `(window_id, name)` in window order, the session's active window id,
 /// and whether the session is the one the view currently shows.
@@ -498,8 +503,10 @@ pub(crate) enum PickerRef {
 }
 
 /// The keyboard palette's actions (`prefix :`): every management chord
-/// plus the settings/help/reload/detach paths, filterable by the picker's
-/// `/`. The labels show; the action dispatches through
+/// plus the settings/help/reload/detach paths, type-to-filter from the
+/// open (the picker's `/` machinery, with the filter live at the open).
+/// The labels show beside their EFFECTIVE chords
+/// ([`palette_action_chord`]); the action dispatches through
 /// [`crate::mux::attach::ManagementKey`] where one exists.
 pub(crate) const PALETTE_ACTIONS: &[(Option<ManagementKey>, &str)] = &[
     (None, "settings"),
@@ -522,6 +529,45 @@ pub(crate) const PALETTE_ACTIONS: &[(Option<ManagementKey>, &str)] = &[
     (Some(ManagementKey::WorkspacePrev), "previous workspace"),
     (Some(ManagementKey::NotifyJump), "jump to notification"),
 ];
+
+/// A palette action's chord at its EFFECTIVE binding, the help panel's
+/// spelling (`C-b x`); `None` for the actions with no chord (settings)
+/// or an index past the table. `reload` is the reload chord's key byte
+/// (it lives outside [`crate::mux::config::Management`]).
+pub(crate) fn palette_action_chord(
+    action: usize,
+    prefix: u8,
+    reload: u8,
+    m: &crate::mux::config::Management,
+) -> Option<String> {
+    let key = match action {
+        // The click-only paths the table carries with `None` keys:
+        // keybinds opens at the help chord, reload at the reload chord,
+        // detach at its fixed prefix chord.
+        1 => m.help,
+        2 => reload,
+        3 => b'd',
+        _ => match PALETTE_ACTIONS.get(action)?.0? {
+            ManagementKey::SplitRight => m.split_right,
+            ManagementKey::SplitDown => m.split_down,
+            ManagementKey::KillPane => m.kill_pane,
+            ManagementKey::BreakPane => m.break_pane,
+            ManagementKey::JoinPane => m.join_pane,
+            ManagementKey::NewWindow => m.new_window,
+            ManagementKey::Zoom => m.zoom,
+            ManagementKey::RenameWindow => m.rename_window,
+            ManagementKey::RenamePane => m.rename_pane,
+            ManagementKey::WorkspacePicker => m.workspace_picker,
+            ManagementKey::Sidebar => m.sidebar,
+            ManagementKey::StatusBar => m.status_bar,
+            ManagementKey::WorkspaceNext => m.workspace_next,
+            ManagementKey::WorkspacePrev => m.workspace_prev,
+            ManagementKey::NotifyJump => m.notify_jump,
+            _ => return None,
+        },
+    };
+    Some(format!("{} {}", spell_key(prefix), spell_key(key)))
+}
 
 /// The picker's display rows from the queried entries: one accent
 /// header per session (` $N: name`, `>`-marked when the session is the
@@ -599,8 +645,11 @@ pub(crate) fn listbox_scroll(start: usize, selected: usize, visible: usize) -> u
 /// footer controls line. Returns the panel rows, the FILTERED refs (the
 /// selection/click target for each content row, in content order), and
 /// the window's content start index, so a click at composed row `i`
-/// maps to content row `start + i - 1`. Pure over its inputs — the
-/// unit-test surface for the picker.
+/// maps to content row `start + i - 1`. `footer` is the modal's
+/// controls line (the session/workspace pickers and the palette spell
+/// different ones). Pure over its inputs — the unit-test surface for
+/// the picker.
+#[allow(clippy::too_many_arguments)] // the pure compose's positional test surface
 pub(crate) fn compose_picker_panel(
     rows: &[HelpRow],
     refs: &[PickerRef],
@@ -609,6 +658,7 @@ pub(crate) fn compose_picker_panel(
     selected: usize,
     visible: usize,
     start: usize,
+    footer: &str,
 ) -> (Vec<HelpRow>, Vec<PickerRef>, usize) {
     let lower = filter.to_lowercase();
     let mut content: Vec<HelpRow> = Vec::new();
@@ -651,7 +701,7 @@ pub(crate) fn compose_picker_panel(
     }
     panel.extend(window);
     panel.push(HelpRow {
-        text: PICKER_FOOTER.to_string(),
+        text: footer.to_string(),
         accent: false,
         footer: true,
         render_only: false,

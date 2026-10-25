@@ -2309,7 +2309,8 @@ fn compose_picker_panel_filters_marks_and_maps_clicks() {
     let (rows, refs) = super::picker_rows(&entries, Some("@0"));
     // Full panel: 4 content rows + footer — no idle placeholder (the
     // footer already advertises `filter /`).
-    let (panel, refs2, start) = super::compose_picker_panel(&rows, &refs, "", false, 0, 100, 0);
+    let (panel, refs2, start) =
+        super::compose_picker_panel(&rows, &refs, "", false, 0, 100, 0, super::PICKER_FOOTER);
     assert_eq!(panel.len(), 5, "content + footer: {panel:?}");
     assert_eq!(start, 0);
     assert_eq!(refs2.len(), 4);
@@ -2320,7 +2321,7 @@ fn compose_picker_panel_filters_marks_and_maps_clicks() {
     // Filter "vim" keeps only that window row and its header; the
     // other session's header hides with no matching children.
     let (filtered, frefs, fstart) =
-        super::compose_picker_panel(&rows, &refs, "vim", false, 0, 100, 0);
+        super::compose_picker_panel(&rows, &refs, "vim", false, 0, 100, 0, super::PICKER_FOOTER);
     let ftext = filtered
         .iter()
         .map(|r| r.text.as_str())
@@ -2341,7 +2342,8 @@ fn compose_picker_panel_filters_marks_and_maps_clicks() {
     );
     assert_eq!(fstart, 0);
     // The selection cursor: selected=2 marks the third content row.
-    let (marked, _, _) = super::compose_picker_panel(&rows, &refs, "", false, 2, 100, 0);
+    let (marked, _, _) =
+        super::compose_picker_panel(&rows, &refs, "", false, 2, 100, 0, super::PICKER_FOOTER);
     assert!(
         marked[2].text.starts_with('▸'),
         "the selected row carries the cursor glyph: {}",
@@ -2353,15 +2355,56 @@ fn compose_picker_panel_filters_marks_and_maps_clicks() {
     );
     // Click mapping: composed row 1 (content row 1) maps to content
     // index start + 1.
-    let (small, _, small_start) = super::compose_picker_panel(&rows, &refs, "", false, 0, 2, 0);
+    let (small, _, small_start) =
+        super::compose_picker_panel(&rows, &refs, "", false, 0, 2, 0, super::PICKER_FOOTER);
     assert_eq!(small.len(), 3, "2 visible + footer");
     assert_eq!(small_start, 0);
     // Panning: a selected row below the window moves `start`.
-    let (_panned, _, panned_start) = super::compose_picker_panel(&rows, &refs, "", false, 3, 2, 0);
+    let (_panned, _, panned_start) =
+        super::compose_picker_panel(&rows, &refs, "", false, 3, 2, 0, super::PICKER_FOOTER);
     assert_eq!(
         panned_start, 2,
         "the window pans to keep the cursor visible"
     );
+}
+
+/// The palette rows' chord column: every chorded action spells its
+/// EFFECTIVE binding (the help panel's spelling — a remapped chord
+/// shows its remapped key), and the chordless actions spell none.
+#[test]
+fn palette_action_chord_spells_the_live_binding() {
+    let mut m = crate::mux::config::Management::default();
+    // Defaults: new window c, kill pane x, keybinds ?, reload C-r,
+    // detach d — prefix C-b.
+    assert_eq!(
+        palette_action_chord(4, 0x02, 0x12, &m).as_deref(),
+        Some("C-b c")
+    );
+    assert_eq!(
+        palette_action_chord(9, 0x02, 0x12, &m).as_deref(),
+        Some("C-b x")
+    );
+    assert_eq!(
+        palette_action_chord(1, 0x02, 0x12, &m).as_deref(),
+        Some("C-b ?")
+    );
+    assert_eq!(
+        palette_action_chord(2, 0x02, 0x12, &m).as_deref(),
+        Some("C-b C-r")
+    );
+    assert_eq!(
+        palette_action_chord(3, 0x02, 0x12, &m).as_deref(),
+        Some("C-b d")
+    );
+    // A remapped chord shows the remapped key.
+    m.kill_pane = b'K';
+    assert_eq!(
+        palette_action_chord(9, 0x02, 0x12, &m).as_deref(),
+        Some("C-b K")
+    );
+    // The chordless action (settings), and an index past the table.
+    assert_eq!(palette_action_chord(0, 0x02, 0x12, &m), None);
+    assert_eq!(palette_action_chord(99, 0x02, 0x12, &m), None);
 }
 
 /// The listbox panning rule: `start` moves only when `selected`
