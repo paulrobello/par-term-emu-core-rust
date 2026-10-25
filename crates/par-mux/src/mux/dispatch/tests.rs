@@ -1717,6 +1717,14 @@ fn snapshot_with_gate(
     (config, epoch, assert_ok(&reply))
 }
 
+/// Refresh the badge cache for the harness's live workspaces — the
+/// refresher tick's work, run inline: the pins drive it the way the
+/// daemon's thread does, since a reply path no longer resolves.
+fn refresh_badges(h: &Harness) {
+    let guard = h.tree.lock();
+    crate::mux::git_status::refresh_known_badges(&guard, std::time::Duration::from_secs(9));
+}
+
 /// The snapshot's `git` row follows the ACTIVE pane's repo through the
 /// real chain: OSC 7-reported cwds in two panes of the displayed
 /// session's active window, the active pane's branch badges. A pane
@@ -1738,6 +1746,7 @@ fn client_snapshot_git_badge_follows_the_active_pane() {
     plant_osc7(&h, p0, &repos.repo);
     plant_osc7(&h, p1, &repos_b.repo);
     // split-window activates the NEW pane (p1): its branch badges.
+    refresh_badges(&h);
     let (_, _, body) = snapshot_with_gate(&h, None);
     let git_rows: Vec<&String> = body.iter().filter(|l| l.starts_with("git ")).collect();
     assert_eq!(git_rows.len(), 1, "one git row: {body:?}");
@@ -1749,6 +1758,7 @@ fn client_snapshot_git_badge_follows_the_active_pane() {
     );
     // Selecting the other pane re-points the badge.
     assert_ok(&h.run(&format!("select-pane -t {p0}")));
+    refresh_badges(&h);
     let (_, _, body) = snapshot_with_gate(&h, None);
     let git_rows: Vec<&String> = body.iter().filter(|l| l.starts_with("git ")).collect();
     assert_eq!(
@@ -1759,6 +1769,7 @@ fn client_snapshot_git_badge_follows_the_active_pane() {
     );
     // A pane parked outside any repo drops the row entirely.
     plant_osc7(&h, p0, &repos.plain);
+    refresh_badges(&h);
     let (_, _, body) = snapshot_with_gate(&h, None);
     assert!(
         !body.iter().any(|l| l.starts_with("git ")),
@@ -1797,6 +1808,7 @@ fn client_snapshot_git_badge_falls_back_and_respects_the_key() {
     }
     // No OSC 7, no child: the pane reports no cwd — the workspace's
     // launch folder (the link's checkout) answers.
+    refresh_badges(&h);
     let (_, _, body) = snapshot_with_gate(&h, None);
     let git_rows: Vec<&String> = body.iter().filter(|l| l.starts_with("git ")).collect();
     assert_eq!(git_rows.len(), 1, "one git row: {body:?}");
@@ -1807,6 +1819,49 @@ fn client_snapshot_git_badge_falls_back_and_respects_the_key() {
         !body.iter().any(|l| l.starts_with("git ")),
         "a disabled key serves no row: {body:?}"
     );
+}
+
+/// The async-badge contract: a snapshot reply never runs git — with an
+/// empty cache the `git` row is absent, and it appears only once the
+/// refresher tick has resolved the workspace's chain.
+#[test]
+fn client_snapshot_serves_git_from_the_cache_alone() {
+    if !git_available() {
+        return;
+    }
+    crate::mux::git_status::reset_cache();
+    let repos = TempRepo::new("cache-only", "cold-cache");
+    let h = Harness::new();
+    assert_ok(&h.run("new-session -s main"));
+    let ws = {
+        let guard = h.tree.lock();
+        guard.active_workspace().unwrap()
+    };
+    {
+        let mut guard = h.tree.lock();
+        guard
+            .set_worktree_link(
+                ws,
+                Some(crate::mux::tree::WorktreeLink {
+                    repo: repos.repo.clone(),
+                    checkout: repos.repo.clone(),
+                    branch: Some("cold-cache".to_string()),
+                }),
+            )
+            .unwrap();
+    }
+    // Cold cache: no row — and no git run behind the reply.
+    let (_, _, body) = snapshot_with_gate(&h, None);
+    assert!(
+        !body.iter().any(|l| l.starts_with("git ")),
+        "a cold cache serves no row: {body:?}"
+    );
+    // One refresher tick resolves the chain; the badge serves after.
+    refresh_badges(&h);
+    let (_, _, body) = snapshot_with_gate(&h, None);
+    let git_rows: Vec<&String> = body.iter().filter(|l| l.starts_with("git ")).collect();
+    assert_eq!(git_rows.len(), 1, "the tick's badge serves: {body:?}");
+    assert!(git_rows[0].contains(" cold-cache "), "{git_rows:?}");
 }
 
 /// Records the per-spawn cwd each `create_pane` receives, then builds a

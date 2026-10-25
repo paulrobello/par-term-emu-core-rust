@@ -1381,7 +1381,8 @@ impl WindowSession {
             // 6b. The git badge: the status stream carries no event when
             //     a repo's branch or ahead/behind changes, so re-query on
             //     a slow cadence while the panel is up and the key is on
-            //     (the daemon serves the row from its 3 s cache).
+            //     (the daemon serves the rows from the refresher
+            //     thread's cache — no git in the reply).
             if self.git_poll_due(std::time::Instant::now()) {
                 self.status_dirty = true;
             }
@@ -1645,9 +1646,13 @@ impl WindowSession {
         self.status_dirty = false;
         match self.refresh_status_facts(conn) {
             Ok(()) => {}
-            // A wedged daemon: the stale bar stands and the next
-            // tick retries, instead of the pump blocking on it.
-            Err(status::StatusError::TimedOut) => self.status_dirty = true,
+            // A wedged daemon: the stale bar stands. No immediate
+            // re-dirty — an immediate re-issue queues behind the same
+            // slow reply and freezes input for one 500 ms bound per
+            // pump pass (the storm behind the "temporarily
+            // unresponsive" reports). The next poll tick or event
+            // re-queries.
+            Err(status::StatusError::TimedOut) => {}
             Err(status::StatusError::SessionGone) => {
                 let session = self.status.session_id.clone();
                 let workspace = self.status.session_workspace.clone();
@@ -1656,8 +1661,9 @@ impl WindowSession {
                     Ok(Some(window)) if window != self.window => {
                         self.reseed_window(conn, &window);
                     }
-                    // A wedged daemon: retry the landing on the next tick.
-                    Err(_) => self.status_dirty = true,
+                    // A failed landing retries on the next poll tick or
+                    // event, not immediately (the same storm rule).
+                    Err(_) => {}
                     _ => return EventOutcome::End,
                 }
             }

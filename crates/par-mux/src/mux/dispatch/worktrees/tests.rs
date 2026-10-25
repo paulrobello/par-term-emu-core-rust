@@ -146,6 +146,9 @@ fn worktree_create_opens_a_workspace_grouped_under_the_repo_workspace() {
     // its agent rows: the side panel's grouping source.
     let first_pane = h.spawns.0.lock()[0].0;
     let window = h.tree.lock().window_of_pane(first_pane).unwrap();
+    // The badge comes from the refresher's cache; tick it inline the way
+    // the daemon's thread does — a reply path no longer resolves.
+    crate::mux::git_status::refresh_known_badges(&h.tree.lock(), std::time::Duration::from_secs(9));
     let snapshot = h.ok(&format!("client-snapshot -t {window}"));
     let worktree_rows: Vec<&str> = snapshot
         .lines()

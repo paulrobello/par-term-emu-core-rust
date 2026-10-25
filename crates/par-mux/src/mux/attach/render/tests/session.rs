@@ -3442,7 +3442,11 @@ fn status_refresh_times_out_and_keeps_replies_aligned() {
         took < std::time::Duration::from_millis(800),
         "bounded by the status timeout: {took:?}"
     );
-    assert!(session.status_dirty, "the next tick retries");
+    assert!(
+        !session.status_dirty,
+        "a timeout leaves the re-query to the next poll or event — an immediate \
+         re-issue queues behind the same slow reply, one 500 ms bound per pass"
+    );
     assert_eq!(
         drained(&rx),
         vec!["list-sessions"],

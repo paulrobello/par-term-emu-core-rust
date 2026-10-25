@@ -385,9 +385,10 @@ pub(super) fn roster_rows(guard: &MuxTree) -> Vec<String> {
 /// `list-agents` rows; `worktree` rows are exactly the `list-worktrees`
 /// rows (the side panel's grouping); the `git` row is the displayed
 /// session's workspace's git badge — the active pane's live cwd, else
-/// the workspace's launch folder, resolved through a 3 s-cached
-/// `git status -sb`; absent for a detached HEAD, a non-repo, or when
-/// `[client] git-status` is off. Additive rule: clients ignore unknown row kinds and
+/// the workspace's launch folder, served from the refresher thread's
+/// cache alone (a reply path never spawns git); absent until the
+/// refresher's first tick on the workspace, for a detached HEAD, a
+/// non-repo, or when `[client] git-status` is off. Additive rule: clients ignore unknown row kinds and
 /// trailing `key=value` tokens; a positional change bumps the version.
 pub(super) fn cmd_client_snapshot(ctx: &Ctx<'_>, window: Target<WindowId>) -> Outcome {
     let guard = ctx.tree.lock();
@@ -407,32 +408,8 @@ pub(super) fn cmd_client_snapshot(ctx: &Ctx<'_>, window: Target<WindowId>) -> Ou
     workspaces.sort();
     // Per-workspace git sources, resolved under the lock: each
     // workspace's active session's active pane's live cwd, else its
-    // worktree checkout. The bounded reads run outside the lock below.
-    let git_sources: Vec<(
-        WorkspaceId,
-        Option<std::path::PathBuf>,
-        Option<std::path::PathBuf>,
-    )> = {
-        let mut pairs = Vec::new();
-        for id in &workspaces {
-            let Some(ws) = guard.workspace(*id) else {
-                continue;
-            };
-            let cwd = ws
-                .sessions
-                .get(ws.active)
-                .or_else(|| ws.sessions.first())
-                .and_then(|sid| guard.session(*sid))
-                .and_then(|s| s.windows.get(s.active).copied())
-                .and_then(|w| guard.window(w))
-                .map(|w| w.active)
-                .and_then(|p| guard.pane(p))
-                .and_then(|pane| pane.persistence_cwd());
-            let launch = ws.worktree.as_ref().map(|link| link.checkout.clone());
-            pairs.push((*id, cwd, launch));
-        }
-        pairs
-    };
+    // worktree checkout (the shared chain the refresher tick runs).
+    let git_sources = crate::mux::git_status::badge_sources(&guard);
     for ws in workspaces.iter().filter_map(|id| guard.workspace(*id)) {
         let marker = if Some(ws.id) == active_workspace {
             '*'
@@ -479,29 +456,23 @@ pub(super) fn cmd_client_snapshot(ctx: &Ctx<'_>, window: Target<WindowId>) -> Ou
             .map(|row| format!("worktree {row}")),
     );
     drop(guard);
-    // The git badges resolve OUTSIDE the tree lock: the bounded `git
-    // status` behind them must never stretch the daemon's dispatch. The
-    // chain is per workspace: the workspace's active pane's live cwd,
-    // else the workspace's launch folder (its worktree checkout) — one
-    // row per workspace, id order. The cache TTL is the configured poll
-    // minus one second, so a scheduled poll lands after expiry and runs
-    // fresh, while the double-reads of one cycle are served.
-    let (git_enabled, git_ttl) = ctx
+    // The git rows serve from the badge cache ALONE — the refresher
+    // thread runs the bounded `git status` reads off every reply path
+    // (the freeze contract), so a snapshot costs a map read per
+    // workspace. The chain is per workspace, id order: the workspace's
+    // active pane's live cwd, else its launch folder (its worktree
+    // checkout). A workspace the refresher has not ticked on yet serves
+    // no row until the next one.
+    let git_enabled = ctx
         .config
-        .map(|config| {
-            let cfg = config.lock();
-            (
-                cfg.git_status,
-                std::time::Duration::from_secs(cfg.git_poll_secs.saturating_sub(1).max(1)),
-            )
-        })
-        .unwrap_or((true, std::time::Duration::from_secs(9)));
+        .map(|config| config.lock().git_status)
+        .unwrap_or(true);
     if git_enabled {
         for (ws, cwd, launch) in &git_sources {
-            if let Some(badge) = crate::mux::git_status::cached_badge(
-                crate::mux::git_status::badge_dir(cwd.as_deref(), launch.as_deref()),
-                git_ttl,
-            ) {
+            if let Some(badge) = crate::mux::git_status::cached(crate::mux::git_status::badge_dir(
+                cwd.as_deref(),
+                launch.as_deref(),
+            )) {
                 lines.push(format!(
                     "git {}",
                     crate::mux::ipc::GitStatusRow {

@@ -108,6 +108,10 @@ const MAX_CONTROL_LINE_BYTES: usize = 1024 * 1024;
 /// (SEC-133).
 const PROBE_JOIN_BOUND: Duration = Duration::from_secs(1);
 
+/// The badge refresher's shutdown join bound: one `REFRESH_TICK` (2 s)
+/// plus slack.
+const BADGE_JOIN_BOUND: Duration = Duration::from_secs(3);
+
 /// How often an evicted client's connection threads re-check the eviction
 /// flag. Both the writer and the reader of a connection run with
 /// send/recv timeouts of this length, so eviction tears a wedged client
@@ -370,6 +374,16 @@ impl MuxServer {
             Arc::clone(&self.clients),
         );
 
+        // The async-badge card: the git-badge refresher owns every
+        // bounded `git status` run behind the sidebar badges, off every
+        // reply path — a snapshot's git rows cost cache reads alone.
+        // Same reasoning as the probe worker above.
+        let badge_worker = crate::mux::git_status::spawn_badge_refresher(
+            Arc::clone(&self.tree),
+            Arc::clone(&self.shutdown),
+            self.config.clone(),
+        );
+
         // The scrape tier rides this loop as its heartbeat: pattern
         // overrides live beside the state file when there is one, and the
         // idle poll doubles as the 1 s tick without a thread of its own to
@@ -548,6 +562,14 @@ impl MuxServer {
                 par_term_emu_core::debug_error!(
                     "MUX",
                     "host probe still running at shutdown; detached"
+                );
+            }
+            // At most BADGE_JOIN_BOUND, then detached: the refresher wakes
+            // on a 2 s tick, so the bound covers one wake plus slack.
+            if !join_bounded(badge_worker, BADGE_JOIN_BOUND) {
+                par_term_emu_core::debug_error!(
+                    "MUX",
+                    "git badge refresher still running at shutdown; detached"
                 );
             }
         }

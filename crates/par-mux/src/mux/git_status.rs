@@ -1,6 +1,8 @@
 //! The sidebar git badge's daemon-side resolver: one `git status -sb`
-//! read per displayed chain, cached with a short TTL, served into the
-//! `client-snapshot` reply as `git` rows.
+//! read per displayed chain, refreshed by a daemon-wide background
+//! thread on the configured cadence and served into the
+//! `client-snapshot` reply as `git` rows from the cache alone — a
+//! reply path never spawns git.
 //!
 //! Resolution (the card's contract): the displayed session's workspace →
 //! its active window → its active pane → the pane's live cwd (OSC 7
@@ -45,35 +47,142 @@ fn cache() -> &'static parking_lot::Mutex<HashMap<PathBuf, CacheEntry>> {
     CACHE.get_or_init(|| parking_lot::Mutex::new(HashMap::new()))
 }
 
+/// The refresher's wake cadence: each wake gathers the live badge dirs
+/// under a brief tree lock, then runs its bounded git reads outside any
+/// lock. A badge's worst-case age is `ttl` plus one wake.
+const REFRESH_TICK: Duration = Duration::from_secs(2);
+
+/// How long past its `ttl` a cache entry survives before the prune
+/// drops it (a workspace whose pane moved on stops costing map rows).
+const PRUNE_TTLS: u32 = 10;
+
 /// The badge for `dir` (the chain's chosen directory), served from the
-/// cache while younger than `ttl` — the configured poll interval minus
-/// one second, so a scheduled poll always lands after expiry and runs
-/// fresh, while the double-reads of one cycle (snapshot + re-query)
-/// are served. `None` when the directory is `None`, not a repo, or has
-/// a detached HEAD — the sidebar's no-badge facts.
-pub(crate) fn cached_badge(dir: Option<&Path>, ttl: Duration) -> Option<GitBadge> {
-    let dir = dir?;
-    let mut entries = cache().lock();
-    if let Some(entry) = entries.get(dir) {
-        if entry.at.elapsed() < ttl {
-            return entry.badge.clone();
-        }
-    }
-    let badge = resolve(dir);
-    entries.insert(
-        dir.to_path_buf(),
-        CacheEntry {
-            at: Instant::now(),
-            badge: badge.clone(),
-        },
-    );
-    badge
+/// cache ALONE — stale entries included. The refresher thread
+/// ([`refresh_known_badges`]) keeps entries fresh on the configured
+/// cadence, so a snapshot reply never runs git (the freeze contract:
+/// the bounded reads a reply path used to pay serially now run where
+/// nothing waits on them). `None` when the directory is `None` or has
+/// never been refreshed — the sidebar shows nothing for it until the
+/// refresher's next tick.
+pub(crate) fn cached(dir: Option<&Path>) -> Option<GitBadge> {
+    cache().lock().get(dir?).and_then(|e| e.badge.clone())
 }
 
 /// Reset the cache — the tests' isolation seam.
 #[cfg(test)]
 pub(crate) fn reset_cache() {
     cache().lock().clear();
+}
+
+/// The refresher tick's work: gather the live badge dirs from `tree`
+/// (a brief lock) and run the bounded git reads for every entry older
+/// than `ttl` — the configured poll minus one second, the freshness
+/// the inline path used to give — then prune entries the workspaces
+/// have left behind. Runs on the refresher thread and in the tests;
+/// never on a reply path.
+pub(crate) fn refresh_known_badges(tree: &crate::mux::tree::MuxTree, ttl: Duration) {
+    let dirs: Vec<PathBuf> = badge_sources(tree)
+        .into_iter()
+        .filter_map(|(_, cwd, launch)| {
+            badge_dir(cwd.as_deref(), launch.as_deref()).map(|dir| dir.to_path_buf())
+        })
+        .collect();
+    for dir in &dirs {
+        let fresh = cache()
+            .lock()
+            .get(dir)
+            .is_some_and(|e| e.at.elapsed() < ttl);
+        if fresh {
+            continue;
+        }
+        let badge = resolve(dir);
+        cache().lock().insert(
+            dir.clone(),
+            CacheEntry {
+                at: Instant::now(),
+                badge,
+            },
+        );
+    }
+    let max_age = ttl.saturating_mul(PRUNE_TTLS);
+    prune(max_age);
+}
+
+/// Drop cache entries older than `max_age` — a workspace whose pane
+/// moved on stops costing a map row. Its own fn so the unit tests can
+/// exercise it without a tree.
+fn prune(max_age: Duration) {
+    cache().lock().retain(|_, e| e.at.elapsed() <= max_age);
+}
+
+/// The daemon-wide badge refresher: the one thread that runs the
+/// bounded `git status` reads behind the sidebar badges, so no reply
+/// path ever spawns git. Follows the host-probe worker's lifecycle —
+/// 2 s wakes, exits within one wake of shutdown. The daemon-side
+/// `[client] git-status` gate and `git-poll-secs` clock are read fresh
+/// each wake (live on reload).
+pub(crate) fn spawn_badge_refresher(
+    tree: std::sync::Arc<parking_lot::Mutex<crate::mux::tree::MuxTree>>,
+    shutdown: std::sync::Arc<std::sync::atomic::AtomicBool>,
+    config: Option<std::sync::Arc<parking_lot::Mutex<crate::mux::config::EffectiveConfig>>>,
+) -> std::thread::JoinHandle<()> {
+    std::thread::spawn(move || loop {
+        std::thread::sleep(REFRESH_TICK);
+        if shutdown.load(std::sync::atomic::Ordering::Relaxed) {
+            break;
+        }
+        let Some((enabled, ttl)) = config.as_ref().map(|config| {
+            let cfg = config.lock();
+            (cfg.git_status, badge_ttl(cfg.git_poll_secs))
+        }) else {
+            continue;
+        };
+        if !enabled {
+            continue;
+        }
+        refresh_known_badges(&tree.lock(), ttl);
+    })
+}
+
+/// The badge TTL from the configured poll (`git-poll-secs`): one second
+/// under the poll, floored at one second — the freshness the inline
+/// path's cache gave.
+fn badge_ttl(git_poll_secs: u64) -> Duration {
+    Duration::from_secs(git_poll_secs.saturating_sub(1).max(1))
+}
+
+/// Per-workspace badge source directories in workspace id order: the
+/// workspace's active session's active window's active pane's live cwd,
+/// else the workspace's launch folder (its worktree checkout). The
+/// snapshot's `git` rows and the refresher tick enumerate the same
+/// chain.
+pub(crate) fn badge_sources(
+    tree: &crate::mux::tree::MuxTree,
+) -> Vec<(
+    crate::mux::ids::WorkspaceId,
+    Option<PathBuf>,
+    Option<PathBuf>,
+)> {
+    let mut workspaces = tree.workspaces();
+    workspaces.sort();
+    workspaces
+        .iter()
+        .filter_map(|id| {
+            let ws = tree.workspace(*id)?;
+            let cwd = ws
+                .sessions
+                .get(ws.active)
+                .or_else(|| ws.sessions.first())
+                .and_then(|sid| tree.session(*sid))
+                .and_then(|s| s.windows.get(s.active).copied())
+                .and_then(|w| tree.window(w))
+                .map(|w| w.active)
+                .and_then(|p| tree.pane(p))
+                .and_then(|pane| pane.persistence_cwd());
+            let launch = ws.worktree.as_ref().map(|link| link.checkout.clone());
+            Some((*id, cwd, launch))
+        })
+        .collect()
 }
 
 /// The chain's tail: the pane's live cwd first, the workspace's launch
@@ -336,37 +445,25 @@ mod tests {
             &repo,
         );
         reset_cache();
-        let badge = cached_badge(Some(&repo), TEST_TTL).expect("a committed repo badges");
+        let badge = resolve(&repo).expect("a committed repo badges");
         assert_eq!(badge.branch, "feature/gitbadge");
         assert_eq!((badge.ahead, badge.behind), (0, 0));
         // The plain directory next door is not a repo.
         reset_cache();
         let plain = tmp.join("plain");
         std::fs::create_dir_all(&plain).unwrap();
-        assert_eq!(cached_badge(Some(&plain), TEST_TTL), None);
+        assert_eq!(resolve(&plain), None);
         reset_cache();
-        assert_eq!(cached_badge(None, TEST_TTL), None, "no directory, no badge");
+        assert_eq!(cached(None), None, "no directory, no badge");
         let _ = std::fs::remove_dir_all(&tmp);
     }
 
-    /// The TTL serves the cached value inside the window and recomputes
-    /// after it (a repo renamed between reads).
+    /// The snapshot's contract: the cache serves stale entries too
+    /// (stale-while-revalidate — a reply path never resolves), and the
+    /// prune drops what nothing refreshes any more.
     #[test]
-    fn cache_serves_within_the_ttl_and_recomputes_after() {
-        let tmp = std::env::temp_dir().join(format!(
-            "par-mux-gitbadge-ttl-{}-{}",
-            std::process::id(),
-            std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .unwrap()
-                .as_nanos()
-        ));
-        std::fs::create_dir_all(&tmp).unwrap();
-        let dir = tmp.clone();
-        // The cache is keyed by the probed directory and holds
-        // `Option<GitBadge>`; the TTL seam is `cached_badge`'s own
-        // timestamp check, exercised directly against the entry map.
-        let key: PathBuf = dir.clone();
+    fn cache_serves_stale_entries_and_prunes_expired_ones() {
+        let key: PathBuf = std::env::temp_dir().join("par-mux-gitbadge-stale");
         {
             let mut entries = cache().lock();
             entries.insert(
@@ -382,16 +479,16 @@ mod tests {
             );
         }
         assert_eq!(
-            cached_badge(Some(&dir), TEST_TTL).map(|b| b.branch),
+            cached(Some(&key)).map(|b| b.branch),
             Some("fresh".to_string()),
-            "inside the TTL the cached value is served"
+            "a fresh entry serves"
         );
         {
             let mut entries = cache().lock();
             entries.insert(
-                key,
+                key.clone(),
                 CacheEntry {
-                    at: Instant::now() - TEST_TTL - Duration::from_millis(1),
+                    at: Instant::now() - TEST_TTL,
                     badge: Some(GitBadge {
                         branch: "stale".to_string(),
                         ahead: 0,
@@ -400,12 +497,21 @@ mod tests {
                 },
             );
         }
-        let recomputed = cached_badge(Some(&dir), TEST_TTL);
-        assert_ne!(
-            recomputed.map(|b| b.branch),
+        assert_eq!(
+            cached(Some(&key)).map(|b| b.branch),
             Some("stale".to_string()),
-            "past the TTL the entry recomputes (a non-repo here answers None)"
+            "a stale entry still serves — the refresher owns the recompute"
         );
-        let _ = std::fs::remove_dir_all(&tmp);
+        // The prune drops what nothing has refreshed within
+        // PRUNE_TTLS × ttl; a fresh-enough entry survives it.
+        prune(TEST_TTL.saturating_mul(PRUNE_TTLS));
+        assert_eq!(
+            cached(Some(&key)).map(|b| b.branch),
+            Some("stale".to_string()),
+            "inside the prune bound the entry survives"
+        );
+        prune(Duration::ZERO);
+        assert_eq!(cached(Some(&key)), None, "past the bound the entry drops");
+        let _ = std::fs::remove_file(&key);
     }
 }
