@@ -2033,7 +2033,7 @@ fn test_osc1337_inline_image_single_sequence() {
     assert!(
         events
             .iter()
-            .any(|e| matches!(e, crate::terminal::TerminalEvent::GraphicsAdded(_))),
+            .any(|e| matches!(e, crate::terminal::TerminalEvent::GraphicsAdded { .. })),
         "GraphicsAdded must fire for a placed inline image"
     );
     assert!(

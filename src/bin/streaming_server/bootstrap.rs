@@ -7,10 +7,9 @@
 use anyhow::{Context, Result};
 use par_term_emu_core_rust::pty_session::PtySession;
 use par_term_emu_core_rust::streaming::auth_hash::legacy_hash_format;
-use par_term_emu_core_rust::streaming::protocol::terminal_event_to_server_message;
 use par_term_emu_core_rust::streaming::{
-    HttpBasicAuthConfig, PasswordConfig, ServerMessage, SessionFactory, SessionFactoryResult,
-    StreamSessionState, StreamingServer,
+    inline_image, HttpBasicAuthConfig, PasswordConfig, ServerMessage, SessionFactory,
+    SessionFactoryResult, StreamSessionState, StreamingServer,
 };
 use parking_lot::Mutex;
 use std::collections::HashMap;
@@ -88,7 +87,7 @@ fn spawn_event_forwarder(
             let events = terminal.write().poll_events();
             last_poll = Instant::now();
             for event in events {
-                if let Some(msg) = terminal_event_to_server_message(event) {
+                for msg in inline_image::event_messages(&terminal, event, None) {
                     deliver(msg);
                 }
             }

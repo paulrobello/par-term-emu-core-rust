@@ -449,7 +449,7 @@ fn virtual_placement_does_not_advance_cursor() {
 /// graphics_added and the streaming server's graphics subscribers never hear
 /// kitty placements (a=t is transmit-only and displays nothing, so it stays
 /// silent). The event carries the placement row, captured before the cursor
-/// advance.
+/// advance, plus the store id the frame's pixels are fetched by.
 #[test]
 fn display_paths_emit_graphics_added() {
     use crate::terminal::TerminalEvent;
@@ -459,29 +459,37 @@ fn display_paths_emit_graphics_added() {
 
     // a=T: transmit a 2x2 image and display it at the cursor (0, 0).
     term.process(b"\x1b_Ga=T,f=24,i=42,s=2,v=2;AAAAAAAAAAAAAAAA\x1b\\");
-    let row = term
+    let (image_id, row) = term
         .poll_events()
         .into_iter()
         .find_map(|e| match e {
-            TerminalEvent::GraphicsAdded(row) => Some(row),
+            TerminalEvent::GraphicsAdded { image_id, row } => Some((image_id, row)),
             _ => None,
         })
         .expect("a=T must emit GraphicsAdded");
     assert_eq!(row, 0, "a=T at cursor (0, 0) reports the placement row");
+    assert!(
+        term.all_graphics().iter().any(|g| g.id == image_id),
+        "the event's image_id must resolve to the stored graphic"
+    );
 
     // a=p: re-displaying the stored image is a new placement at the
     // current cursor row.
     let row_before = term.cursor().row;
     term.process(b"\x1b_Ga=p,i=42\x1b\\");
-    let row = term
+    let (image_id, row) = term
         .poll_events()
         .into_iter()
         .find_map(|e| match e {
-            TerminalEvent::GraphicsAdded(row) => Some(row),
+            TerminalEvent::GraphicsAdded { image_id, row } => Some((image_id, row)),
             _ => None,
         })
         .expect("a=p must emit GraphicsAdded");
     assert_eq!(row, row_before, "a=p reports the placement row");
+    assert!(
+        term.all_graphics().iter().any(|g| g.id == image_id),
+        "the re-display's image_id must resolve too"
+    );
 }
 
 /// Card 01a0d9e6f012, criterion 3: after displaying an image the cursor row
@@ -540,7 +548,7 @@ fn w1_h24_exact_payload_stores_graphic_and_emits_event() {
     assert!(
         term.poll_events()
             .into_iter()
-            .any(|e| matches!(e, TerminalEvent::GraphicsAdded(_))),
+            .any(|e| matches!(e, TerminalEvent::GraphicsAdded { .. })),
         "a=T must emit GraphicsAdded for the 1x24 shape"
     );
     assert_eq!(
@@ -577,7 +585,7 @@ fn short_payload_for_declared_dims_is_silently_rejected() {
         !term
             .poll_events()
             .into_iter()
-            .any(|e| matches!(e, TerminalEvent::GraphicsAdded(_))),
+            .any(|e| matches!(e, TerminalEvent::GraphicsAdded { .. })),
         "no GraphicsAdded for a rejected graphic"
     );
     assert_eq!(

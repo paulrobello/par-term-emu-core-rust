@@ -19,6 +19,7 @@ import {
 } from '@/lib/protocol';
 import { TerminalConnection } from '@/lib/terminal-connection';
 import { cursorForPointerShape } from '@/lib/pointer-shape';
+import { inlineImageSequence } from '@/lib/inline-image';
 import {
   clamp,
   clampPan,
@@ -937,6 +938,15 @@ export default function Terminal({ wsUrl, fontSize, onStatusChange, onThemeChang
           if (!xtermRef.current) return;
           // Use RAF-batched write for better performance
           bufferWrite(data);
+        },
+        onInlineImage: (frame) => {
+          const term = xtermRef.current;
+          if (!term) return;
+          // Re-materialize the frame as the iTerm2 sequence the ImageAddon
+          // already decodes; chained through bufferWrite's queue so the
+          // sequence lands in stream order after the pane's own bytes.
+          const seq = inlineImageSequence(frame);
+          if (seq) bufferWrite(seq);
         },
         onConnected: (connected) => {
           const term = xtermRef.current;

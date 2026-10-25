@@ -229,9 +229,10 @@ impl Terminal {
                 graphic.set_cell_dimensions(cell_w, cell_h);
 
                 let row = if display_mode { 0 } else { self.cursor.row };
+                let image_id = graphic.id;
                 self.graphics.graphics_store.add_graphic(graphic);
                 self.events
-                    .push(crate::terminal::TerminalEvent::GraphicsAdded(row));
+                    .push(crate::terminal::TerminalEvent::GraphicsAdded { image_id, row });
 
                 // Advance cursor to next line(s) as per test expectation.
                 // DECSDM display mode leaves the cursor where it was.

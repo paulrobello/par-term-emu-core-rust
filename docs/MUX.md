@@ -1379,7 +1379,7 @@ A structurally killed pane is reaped at kill time instead: `PtySession::kill` fo
 
 ## Streaming Panes to the Web
 
-`par-term-streamer --mux-socket <path>` (built with `--features streaming-bin,mux`) serves the daemon's panes to the web and mobile frontend: each streaming session mirrors one pane (`?session=pane-N`), keys and mouse reach it through `send-keys -H`, and a viewer's resize is recorded as the streaming server connection's sizing contribution under the [smallest-attached-client rule](#command-reference) (opening a viewer never resizes the pane). The library form is `streaming::MuxSessionFactory`. Full behavior: [STREAMING.md — Mux-Backed Sessions](STREAMING.md#mux-backed-sessions).
+`par-term-streamer --mux-socket <path>` (built with `--features streaming-bin,mux`) serves the daemon's panes to the web and mobile frontend: each streaming session mirrors one pane (`?session=pane-N`), keys and mouse reach it through `send-keys -H`, and a viewer's resize is recorded as the streaming server connection's sizing contribution under the [smallest-attached-client rule](#command-reference) (opening a viewer never resizes the pane). A graphic a pane app placed (OSC 1337, Sixel, Kitty) streams to viewers as a pane-tagged `inline_image` frame. The library form is `streaming::MuxSessionFactory`. Full behavior, including the output-only input semantic for pane images: [STREAMING.md — Inline Images](STREAMING.md#inline-images).
 
 ## Embedding from Rust
 

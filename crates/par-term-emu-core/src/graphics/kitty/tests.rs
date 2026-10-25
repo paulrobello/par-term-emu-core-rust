@@ -2204,7 +2204,7 @@ fn terminal_applies_the_file_media_gate_over_apc() {
     assert!(
         events
             .iter()
-            .any(|e| matches!(e, TerminalEvent::GraphicsAdded(_))),
+            .any(|e| matches!(e, TerminalEvent::GraphicsAdded { .. })),
         "gated t=t must produce a graphic by default"
     );
     assert!(!path.exists(), "rendering terminal deletes the temp file");
@@ -2221,7 +2221,7 @@ fn terminal_applies_the_file_media_gate_over_apc() {
     assert!(
         !events
             .iter()
-            .any(|e| matches!(e, TerminalEvent::GraphicsAdded(_))),
+            .any(|e| matches!(e, TerminalEvent::GraphicsAdded { .. })),
         "Off must refuse the t=t APC"
     );
     assert!(path.exists(), "refused APC must leave the file alone");

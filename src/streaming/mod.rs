@@ -60,6 +60,9 @@ pub mod server;
 pub mod config;
 
 #[cfg(feature = "streaming")]
+pub mod inline_image;
+
+#[cfg(feature = "streaming")]
 pub mod session;
 
 #[cfg(feature = "streaming")]
@@ -97,6 +100,9 @@ pub use client::Client;
 
 #[cfg(feature = "streaming")]
 pub use config::{ApiAuthConfig, HttpBasicAuthConfig, PasswordConfig, StreamingConfig, TlsConfig};
+
+#[cfg(feature = "streaming")]
+pub use inline_image::{apply_inline_image, event_messages, inline_image_frame};
 
 #[cfg(feature = "streaming")]
 pub use session::{SessionInfo, SessionRegistry, StreamSessionState};

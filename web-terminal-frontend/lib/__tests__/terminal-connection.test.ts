@@ -25,6 +25,7 @@ import {
   ShutdownSchema,
   TitleSchema,
   BellSchema,
+  InlineImageSchema,
   CwdChangedSchema,
   HyperlinkAddedSchema,
   SelectionChangedSchema,
@@ -133,6 +134,7 @@ function createCallbacks() {
     onHyperlinkAdded: vi.fn(),
     onUserVarChanged: vi.fn(),
     onSelectionChanged: vi.fn(),
+    onInlineImage: vi.fn(),
   };
 }
 
@@ -436,6 +438,33 @@ describe('dispatch routing', () => {
     expect(cbs.onOutput).not.toHaveBeenCalled();
     expect(cbs.onStatus).not.toHaveBeenCalledWith('disconnected');
     expect(cbs.onServerError).not.toHaveBeenCalled();
+  });
+
+  it('routes an inlineImage frame to onInlineImage with its payload intact', () => {
+    const { cbs, ws } = openConnection();
+
+    ws.simulateMessage(
+      serverFrame({
+        case: 'inlineImage',
+        value: create(InlineImageSchema, {
+          imageId: 42n,
+          paneId: 7,
+          format: 'rgba',
+          width: 2,
+          height: 2,
+          data: new Uint8Array([1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16]),
+        }),
+      }),
+    );
+
+    expect(cbs.onInlineImage).toHaveBeenCalledTimes(1);
+    const frame = cbs.onInlineImage.mock.calls[0][0];
+    expect(frame.imageId).toBe(42n);
+    expect(frame.paneId).toBe(7);
+    expect(frame.format).toBe('rgba');
+    expect(frame.width).toBe(2);
+    expect(frame.height).toBe(2);
+    expect(Array.from(frame.data)).toEqual([1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16]);
   });
 });
 

@@ -28,14 +28,15 @@
 
 use crate::mux::{connect_local_stream, LocalStream};
 use crate::streaming::error::StreamingError;
+use crate::streaming::inline_image_frame;
 use crate::streaming::protocol::ServerMessage;
 use crate::streaming::server::{SessionFactory, SessionFactoryResult, StreamingServer};
 use crate::streaming::session::StreamSessionState;
-use crate::terminal::Terminal;
+use crate::terminal::{Terminal, TerminalEvent};
 use crate::tmux_control::{TmuxControlParser, TmuxNotification};
 use interprocess::TryClone as _;
 use parking_lot::{Mutex, RwLock};
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::io::{self, BufRead, BufReader, Write};
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -112,6 +113,11 @@ struct MirrorLink {
     /// Output buffered until `setup_session` connects the broadcaster
     /// (`Buffering`), then the broadcaster's sender (`Live`).
     sink: Mutex<Sink>,
+    /// Graphics ids already streamed as InlineImage frames. A placement
+    /// raises `GraphicsAdded` exactly once per mirror, but re-fits re-seed
+    /// and a future seed carrying graphics could re-raise an id — this is
+    /// the once-only guard, so a graphic is sent once, never on every poll.
+    sent_images: Mutex<HashSet<u64>>,
     status: Mutex<Option<(ServerMessage, Vec<String>)>>,
     session: RwLock<Option<std::sync::Weak<StreamSessionState>>>,
 }
@@ -123,6 +129,12 @@ impl MirrorLink {
 
     fn window(&self) -> String {
         self.window.lock().clone()
+    }
+
+    /// Claim a graphics id for streaming; `false` when this mirror already
+    /// sent it, so a re-raised announce never re-streams the frame.
+    fn claim_image(&self, image_id: u64) -> bool {
+        self.sent_images.lock().insert(image_id)
     }
 
     /// Move the mirror to a new pane, window pair. The drain thread is the
@@ -566,6 +578,7 @@ impl SessionFactory for MuxSessionFactory {
             alive: AtomicBool::new(true),
             closed: AtomicBool::new(false),
             sink: Mutex::new(Sink::Buffering(Vec::new())),
+            sent_images: Mutex::new(HashSet::new()),
             status: Mutex::new(info.first().and_then(|line| parse_viewer_status(line))),
             session: RwLock::new(None),
         });
@@ -762,14 +775,42 @@ fn spawn_drain(
                     TmuxNotification::Output { pane_id: id, data }
                         if id == format!("%{}", link.pane()) =>
                     {
-                        let dispatch_batch = {
+                        let (dispatch_batch, events) = {
                             let mut term = link.terminal.write();
                             let batch = term.process_deferred(&data);
                             term.drain_responses();
-                            batch
+                            // The events the batch raised drain under the same
+                            // lock: a GraphicsAdded fetches its pixels here,
+                            // once, never per subscriber.
+                            (batch, term.poll_events())
                         };
                         dispatch_batch.deliver();
                         forward(&link, &data);
+                        for event in events {
+                            let TerminalEvent::GraphicsAdded { image_id, row } = event else {
+                                // Mirrors stream text via %output itself; only
+                                // the frame-bearing event needs converting.
+                                continue;
+                            };
+                            if !link.claim_image(image_id) {
+                                continue;
+                            }
+                            let Some(frame) = inline_image_frame(
+                                &link.terminal.read(),
+                                image_id,
+                                Some(link.pane()),
+                            ) else {
+                                continue;
+                            };
+                            if let Some(server) = server.as_ref().and_then(std::sync::Weak::upgrade)
+                            {
+                                server.send_to_session(
+                                    &session_id,
+                                    ServerMessage::graphics_added(row as u16),
+                                );
+                                server.send_to_session(&session_id, frame);
+                            }
+                        }
                     }
                     TmuxNotification::LayoutChange {
                         window_id,
@@ -1403,6 +1444,89 @@ mod tests {
         // is driven by the viewer's own input (send-keys -H).
         type_line(&session, TYPED_AFTER);
         wait_mirror(&session, "DELTA-AFTER");
+    }
+
+    /// A pane graphic streams to the mirror's viewers: the raw `%output`
+    /// decodes on the mirror, and the raised GraphicsAdded becomes the cheap
+    /// announce plus the pane-tagged InlineImage frame — pixels included,
+    /// sent once (a bounded quiet window after the first frame stays empty;
+    /// the drain acts per event, never per poll).
+    #[test]
+    fn a_pane_graphic_streams_as_an_inline_image_frame() {
+        let rt = runtime();
+        let _entered = rt.enter();
+        let (_dir, socket, _serving, mut control, pane) = daemon();
+        let pane_num: u32 = pane.trim_start_matches('%').parse().expect("pane number");
+
+        let server = streaming(&socket);
+        let session = mirror(&server, &pane);
+        let mut updates = session.broadcast_tx.subscribe();
+
+        // A 2x2 RGB kitty image as PTY output: the hex line is a printf the
+        // pane's shell runs (input queues in the pty until the shell reads
+        // it, so one send executes exactly once whenever the shell is up).
+        // RGB decodes to RGBA in the store: 4 pixels x 4 bytes.
+        let line = b"printf '\\033_Ga=T,f=24,i=77,s=2,v=2;AAAAAAAAAAAAAAAA\\033\\\\'\r";
+        let hex: String = line
+            .iter()
+            .map(|b| format!("{b:02x} "))
+            .collect::<String>()
+            .trim_end()
+            .to_string();
+        control
+            .send(&format!("send-keys -t {pane} -H {hex}"))
+            .expect("send-keys");
+
+        let deadline = Instant::now() + CEILING;
+        let mut frames = Vec::new();
+        let mut announces = 0usize;
+        loop {
+            while let Ok(msg) = updates.try_recv() {
+                match msg {
+                    ServerMessage::GraphicsAdded { .. } => announces += 1,
+                    ServerMessage::InlineImage { .. } => frames.push(msg),
+                    _ => {}
+                }
+            }
+            if !frames.is_empty() || Instant::now() >= deadline {
+                break;
+            }
+            std::thread::sleep(Duration::from_millis(20));
+        }
+        assert!(
+            !frames.is_empty(),
+            "the graphic never streamed as a frame; pane capture:\n{}\nmirror graphics: {}",
+            control
+                .send(&format!("capture-pane -t {pane}"))
+                .expect("capture")
+                .join("\n"),
+            session.terminal.read().graphics_count()
+        );
+        let ServerMessage::InlineImage {
+            image_id,
+            pane_id,
+            format,
+            width,
+            height,
+            data,
+        } = &frames[0]
+        else {
+            panic!("not an InlineImage frame");
+        };
+        assert_eq!(*pane_id, Some(pane_num), "the frame names its pane");
+        assert_eq!(format, "rgba", "store pixels are RGBA");
+        assert_eq!((*width, *height), (2, 2));
+        assert_eq!(data.len(), 16, "2x2 RGB decoded to RGBA");
+        assert!(*image_id > 0);
+        assert!(announces >= 1, "the cheap announce rides along");
+
+        // Sent once: a bounded quiet window after the first frame sees no
+        // second frame for the same placement.
+        std::thread::sleep(Duration::from_millis(300));
+        let dupes = std::iter::from_fn(|| updates.try_recv().ok())
+            .filter(|m| matches!(m, ServerMessage::InlineImage { .. }))
+            .count();
+        assert_eq!(dupes, 0, "the frame must not re-stream on later polls");
     }
 
     #[test]

@@ -36,7 +36,7 @@ pub fn terminal_event_to_server_message(event: TerminalEvent) -> Option<ServerMe
             tm.timestamp,
         ),
         TerminalEvent::ModeChanged(mode, enabled) => ServerMessage::mode_changed(mode, enabled),
-        TerminalEvent::GraphicsAdded(row) => ServerMessage::graphics_added(row as u16),
+        TerminalEvent::GraphicsAdded { row, .. } => ServerMessage::graphics_added(row as u16),
         TerminalEvent::HyperlinkAdded { url, row, col, id } => {
             if let Some(id) = id {
                 ServerMessage::hyperlink_added_with_id(url, row as u16, col as u16, id.to_string())

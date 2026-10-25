@@ -591,9 +591,10 @@ impl Terminal {
                     // Announce placement like the Sixel path (dcs) does so
                     // graphics subscribers hear iTerm2 images too.
                     self.events
-                        .push(crate::terminal::TerminalEvent::GraphicsAdded(
-                            graphic.position.1,
-                        ));
+                        .push(crate::terminal::TerminalEvent::GraphicsAdded {
+                            image_id: graphic.id,
+                            row: graphic.position.1,
+                        });
 
                     crate::debug_log!(
                         "ITERM",

@@ -49,8 +49,15 @@ pub enum TerminalEvent {
     SizeChanged(usize, usize),
     /// A terminal mode changed
     ModeChanged(String, bool),
-    /// Graphics added at row
-    GraphicsAdded(usize),
+    /// Graphics added at row. `image_id` is the [`crate::graphics::TerminalGraphic`]
+    /// id in the terminal's store, so a consumer can fetch the frame's pixels
+    /// by id without the event carrying them.
+    GraphicsAdded {
+        /// Terminal graphic id (the placement's store id)
+        image_id: u64,
+        /// Row the graphic was placed at
+        row: usize,
+    },
     /// Hyperlink added with URL, position, and optional internal ID
     HyperlinkAdded {
         /// The URL of the hyperlink
@@ -237,7 +244,7 @@ impl TerminalEvent {
             TerminalEvent::PointerShapeChanged(_) => TerminalEventKind::PointerShapeChanged,
             TerminalEvent::SizeChanged(_, _) => TerminalEventKind::SizeChanged,
             TerminalEvent::ModeChanged(_, _) => TerminalEventKind::ModeChanged,
-            TerminalEvent::GraphicsAdded(_) => TerminalEventKind::GraphicsAdded,
+            TerminalEvent::GraphicsAdded { .. } => TerminalEventKind::GraphicsAdded,
             TerminalEvent::HyperlinkAdded { .. } => TerminalEventKind::HyperlinkAdded,
             TerminalEvent::DirtyRegion(_, _) => TerminalEventKind::DirtyRegion,
             TerminalEvent::CwdChanged(_) => TerminalEventKind::CwdChanged,
@@ -484,7 +491,10 @@ mod tests {
 
     #[test]
     fn test_event_kind_graphics_added() {
-        let event = TerminalEvent::GraphicsAdded(10);
+        let event = TerminalEvent::GraphicsAdded {
+            image_id: 7,
+            row: 10,
+        };
         assert_eq!(event.kind(), TerminalEventKind::GraphicsAdded);
     }
 

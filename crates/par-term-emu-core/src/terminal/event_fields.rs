@@ -69,7 +69,8 @@ pub fn event_fields(event: &TerminalEvent) -> Vec<(String, EventField)> {
             put!("mode", EventField::Str(mode.clone()));
             put!("enabled", EventField::Bool(*enabled));
         }
-        TerminalEvent::GraphicsAdded(row) => {
+        TerminalEvent::GraphicsAdded { image_id, row } => {
+            put!("image_id", EventField::Int(*image_id as i64));
             put!("row", EventField::Int(*row as i64));
         }
         TerminalEvent::HyperlinkAdded { url, row, col, id } => {

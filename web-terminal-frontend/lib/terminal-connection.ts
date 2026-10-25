@@ -57,6 +57,8 @@ export interface TerminalConnectionCallbacks {
   onSelectionChanged?(selection: ServerCase<'selectionChanged'>): void;
   /** OSC 22 pointer shape; `null` restores the client's own pointer. */
   onPointerShapeChanged?(shape: string | null): void;
+  /** An inline-image frame (decoded RGBA pixels for a pane graphic). */
+  onInlineImage?(frame: ServerCase<'inlineImage'>): void;
 }
 
 const HEARTBEAT_INTERVAL_MS = 25000; // Send ping every 25 seconds
@@ -342,6 +344,10 @@ export class TerminalConnection {
 
       case 'pointerShapeChanged':
         this.callbacks.onPointerShapeChanged?.(msg.message.value.shape ?? null);
+        break;
+
+      case 'inlineImage':
+        this.callbacks.onInlineImage?.(msg.message.value);
         break;
 
       default:
