@@ -10,7 +10,7 @@
 #[cfg(feature = "streaming")]
 mod streaming_tests {
     use par_term_emu_core_rust::streaming::protocol::{
-        ClientMessage, EventType, ServerMessage, ThemeInfo,
+        ClientMessage, EventType, ServerMessage, ThemeInfo, MAX_INLINE_IMAGE_BYTES,
     };
     use par_term_emu_core_rust::streaming::{
         decode_client_message, decode_server_message, encode_client_message, encode_server_message,
@@ -48,6 +48,52 @@ mod streaming_tests {
         assert!(
             matches!(decode_client_message(&wire).unwrap(), ClientMessage::ViewerIdentity { kind, .. } if kind == "mobile")
         );
+    }
+
+    /// Inline-image frames round-trip JSON and protobuf with bytes intact;
+    /// the 8 MiB payload cap is enforced on the encode boundary.
+    #[test]
+    fn inline_image_round_trip_and_payload_cap() {
+        let message = ServerMessage::inline_image(
+            7,
+            Some(3),
+            "png".to_string(),
+            640,
+            480,
+            vec![1, 2, 3, 0xff],
+        );
+        assert!(matches!(
+            &message,
+            ServerMessage::InlineImage { image_id: 7, pane_id: Some(3), format, width: 640, height: 480, .. }
+                if format == "png"
+        ));
+
+        let json = serde_json::to_value(&message).unwrap();
+        let from_json: ServerMessage = serde_json::from_value(json.clone()).unwrap();
+        let wire = encode_server_message(&from_json).unwrap();
+        let decoded = decode_server_message(&wire).unwrap();
+        assert_eq!(serde_json::to_value(&decoded).unwrap(), json);
+
+        assert!(matches!(
+            &decoded,
+            ServerMessage::InlineImage { image_id, pane_id, data, width, height, .. }
+                if *image_id == 7
+                    && *pane_id == Some(3)
+                    && *width == 640
+                    && *height == 480
+                    && data == &vec![1, 2, 3, 0xff]
+        ));
+
+        let oversized = ServerMessage::inline_image(
+            1,
+            None,
+            "rgba".to_string(),
+            1,
+            1,
+            vec![0u8; MAX_INLINE_IMAGE_BYTES + 1],
+        );
+        let err = encode_server_message(&oversized).unwrap_err();
+        assert!(err.to_string().contains("8388608"));
     }
 
     mod protocol_constructors {

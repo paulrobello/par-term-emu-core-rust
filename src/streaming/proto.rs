@@ -15,6 +15,7 @@ use crate::streaming::error::{Result, StreamingError};
 use crate::streaming::protocol::{
     AgentEntry as AppAgentEntry, ClientMessage as AppClientMessage, EventType as AppEventType,
     MouseEventType, ServerMessage as AppServerMessage, ThemeInfo as AppThemeInfo,
+    MAX_INLINE_IMAGE_BYTES,
 };
 use flate2::read::ZlibDecoder;
 use flate2::write::ZlibEncoder;
@@ -37,22 +38,34 @@ pub mod pb;
 /// (prompts, short commands) is 200-800 bytes
 const COMPRESSION_THRESHOLD: usize = 256;
 
-/// Maximum size of a decompressed payload (1 MiB).
+/// Maximum size of a decompressed payload (9 MiB).
 ///
 /// Caps zlib-inflated output to prevent zip-bomb denial of service: a small
 /// compressed frame could otherwise expand into gigabytes and OOM the server.
-/// 1 MiB is far above any legitimate terminal streaming frame (the WS layer
-/// also caps inbound frames, but this defends against the decompression path
-/// directly).
+/// The bound stays hard; 9 MiB leaves headroom for the largest legitimate
+/// frame, an 8 MiB [`MAX_INLINE_IMAGE_BYTES`] inline image plus protobuf
+/// framing overhead.
 /// cap: Decompressed bytes accepted from one zlib-compressed streaming frame.
-const MAX_DECOMPRESSED_SIZE: usize = 1024 * 1024;
+const MAX_DECOMPRESSED_SIZE: usize = 9 * 1024 * 1024;
 
 /// Wire format flags
 const FLAG_UNCOMPRESSED: u8 = 0x00;
 const FLAG_COMPRESSED: u8 = 0x01;
 
-/// Encode a server message to binary format with optional compression
+/// Encode a server message to binary format with optional compression.
+///
+/// Inline-image payloads over [`MAX_INLINE_IMAGE_BYTES`] are rejected here,
+/// server-side, before any encoding — oversize frames never leave the
+/// server.
 pub fn encode_server_message(msg: &AppServerMessage) -> Result<Vec<u8>> {
+    if let AppServerMessage::InlineImage { data, .. } = msg {
+        if data.len() > MAX_INLINE_IMAGE_BYTES {
+            return Err(StreamingError::InvalidMessage(format!(
+                "InlineImage payload exceeds {} byte limit",
+                MAX_INLINE_IMAGE_BYTES
+            )));
+        }
+    }
     let proto_msg: pb::ServerMessage = msg.into();
     let payload = proto_msg.encode_to_vec();
 
@@ -374,7 +387,9 @@ impl FromWire<String> for MouseEventType {
 
 /// Field-specific conversions named by `#[proto(with = ..)]`.
 pub(crate) mod wire {
-    use super::{pb, AppAgentEntry, FromWire, Result, StreamingError, ToWire};
+    use super::{
+        pb, AppAgentEntry, FromWire, Result, StreamingError, ToWire, MAX_INLINE_IMAGE_BYTES,
+    };
 
     /// Progress percent: `u8` in the app; the decode clamps to 100.
     pub(crate) mod percent {
@@ -420,6 +435,26 @@ pub(crate) mod wire {
                 )
             })?;
             AppAgentEntry::from_wire(agent)
+        }
+    }
+
+    /// `InlineImage.data`: payload bytes, capped at [`MAX_INLINE_IMAGE_BYTES`]
+    /// (8 MiB) so an image frame can never enter the app unbounded.
+    pub(crate) mod inline_image_data {
+        use super::{Result, StreamingError, MAX_INLINE_IMAGE_BYTES};
+
+        pub(crate) fn to_wire(v: &[u8]) -> Vec<u8> {
+            v.to_owned()
+        }
+
+        pub(crate) fn from_wire(w: Vec<u8>) -> Result<Vec<u8>> {
+            if w.len() > MAX_INLINE_IMAGE_BYTES {
+                return Err(StreamingError::InvalidMessage(format!(
+                    "InlineImage payload exceeds {} byte limit",
+                    MAX_INLINE_IMAGE_BYTES
+                )));
+            }
+            Ok(w)
         }
     }
 }

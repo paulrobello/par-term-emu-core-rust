@@ -316,6 +316,16 @@ pub struct LoadAverage {
     pub fifteen_minutes: f64,
 }
 
+/// Size cap for [`ServerMessage::InlineImage`] payloads: 8 MiB.
+///
+/// Enforced at both wire boundaries — `encode_server_message` rejects
+/// oversize payloads server-side before encoding, and the wire decode
+/// (`proto::wire::inline_image_data`) rejects them client-side — so an
+/// image frame can never enter or leave the streaming wire unbounded.
+///
+/// cap: Image bytes accepted in one InlineImage streaming frame.
+pub const MAX_INLINE_IMAGE_BYTES: usize = 8 * 1024 * 1024;
+
 /// Messages sent from server to client
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[cfg_attr(
@@ -1064,6 +1074,35 @@ pub enum ServerMessage {
         /// Requested shape name (`ew-resize`, `text`, …); `None` = the client's own pointer applies
         #[serde(skip_serializing_if = "Option::is_none")]
         shape: Option<String>,
+    },
+
+    /// Inline image frame: one image delivered to a pane via OSC 1337 (or a
+    /// pane graphic forwarded by the mux streamer). Subscribes under
+    /// [`EventType::Graphics`].
+    ///
+    /// The payload is size-bounded: [`MAX_INLINE_IMAGE_BYTES`] is enforced
+    /// on both wire boundaries — `encode_server_message` rejects oversize
+    /// frames server-side, and the wire decode rejects them client-side —
+    /// so an image can never enter or leave the wire unbounded.
+    #[serde(rename = "inline_image")]
+    InlineImage {
+        /// Terminal graphic id, for replace/delete tracking
+        image_id: u64,
+        /// par-mux pane the image belongs to; `None` = the streamed terminal itself
+        #[serde(skip_serializing_if = "Option::is_none")]
+        pane_id: Option<u32>,
+        /// Payload format tag (`"rgba"`, `"png"`, `"jpeg"`, …)
+        format: String,
+        /// Pixel width
+        width: u32,
+        /// Pixel height
+        height: u32,
+        /// Encoded image bytes; at most [`MAX_INLINE_IMAGE_BYTES`]
+        #[cfg_attr(
+            feature = "streaming",
+            proto(with = "crate::streaming::proto::wire::inline_image_data")
+        )]
+        data: Vec<u8>,
     },
 }
 
@@ -1821,6 +1860,29 @@ impl ServerMessage {
     /// Create a pointer shape changed message
     pub fn pointer_shape_changed(shape: Option<String>) -> Self {
         Self::PointerShapeChanged { shape }
+    }
+
+    /// Create an inline image frame.
+    ///
+    /// `data` must be at most [`MAX_INLINE_IMAGE_BYTES`]; oversize payloads
+    /// are rejected at the wire boundaries (`encode_server_message` and the
+    /// wire decode), never truncated.
+    pub fn inline_image(
+        image_id: u64,
+        pane_id: Option<u32>,
+        format: String,
+        width: u32,
+        height: u32,
+        data: Vec<u8>,
+    ) -> Self {
+        Self::InlineImage {
+            image_id,
+            pane_id,
+            format,
+            width,
+            height,
+            data,
+        }
     }
 
     /// Create a selection changed message

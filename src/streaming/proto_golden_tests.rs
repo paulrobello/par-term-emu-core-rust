@@ -354,6 +354,22 @@ fn server_fixtures() -> Vec<AppServerMessage> {
             count: 0,
             viewers: vec![],
         },
+        S::InlineImage {
+            image_id: 7,
+            pane_id: Some(3),
+            format: "png".into(),
+            width: 640,
+            height: 480,
+            data: vec![1, 2, 3, 0xff],
+        },
+        S::InlineImage {
+            image_id: 0,
+            pane_id: None,
+            format: String::new(),
+            width: 0,
+            height: 0,
+            data: vec![],
+        },
     ]
 }
 
@@ -542,6 +558,17 @@ fn lossy_server_inputs() -> Vec<(&'static str, pb::ServerMessage)> {
                 released: false,
             })),
         ),
+        (
+            "inline image payload over cap",
+            wrap(M::InlineImage(pb::InlineImage {
+                image_id: 1,
+                pane_id: Some(2),
+                format: "rgba".into(),
+                width: 1,
+                height: 1,
+                data: vec![0u8; crate::streaming::protocol::MAX_INLINE_IMAGE_BYTES + 1],
+            })),
+        ),
     ]
 }
 
@@ -690,9 +717,10 @@ fn proto_golden_fixtures_cover_every_variant() {
             S::PointerShapeChanged { .. } => "PointerShapeChanged",
             S::PaneSizeStatus { .. } => "PaneSizeStatus",
             S::ViewerPresence { .. } => "ViewerPresence",
+            S::InlineImage { .. } => "InlineImage",
         });
     }
-    assert_eq!(seen.len(), 42, "server fixtures miss a variant");
+    assert_eq!(seen.len(), 43, "server fixtures miss a variant");
     let mut seen = std::collections::BTreeSet::new();
     for msg in client_fixtures() {
         seen.insert(match msg {

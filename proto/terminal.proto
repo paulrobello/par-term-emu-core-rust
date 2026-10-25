@@ -101,6 +101,7 @@ message ServerMessage {
     PointerShapeChanged pointer_shape_changed = 40;
     PaneSizeStatus pane_size_status = 41;
     ViewerPresence viewer_presence = 42;
+    InlineImage inline_image = 43;
   }
 }
 
@@ -227,6 +228,19 @@ message ModeChanged {
 message GraphicsAdded {
   uint32 row = 1;                   // Row where graphics were added
   optional string format = 2;       // Graphics format ("sixel", "iterm2", "kitty")
+}
+
+// Inline image frame: one image delivered to a pane via OSC 1337 (or a
+// pane graphic forwarded by the mux streamer). `data` carries the encoded
+// image bytes; the app layer rejects payloads above 8 MiB
+// (MAX_INLINE_IMAGE_BYTES) on both encode and decode.
+message InlineImage {
+  uint64 image_id = 1;              // Terminal graphic id (replace/delete tracking)
+  optional uint32 pane_id = 2;      // par-mux pane id; absent = the streamed terminal itself
+  string format = 3;                // Payload format tag ("rgba", "png", "jpeg", ...)
+  uint32 width = 4;                 // Pixel width
+  uint32 height = 5;                // Pixel height
+  bytes data = 6;                   // Encoded image bytes (<= 8 MiB)
 }
 
 // Hyperlink added (OSC 8)

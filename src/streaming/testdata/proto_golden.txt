@@ -98,6 +98,10 @@ S d20221080312086174746163683a3712077765623a616263120a6d6f62696c653a646566
   = Ok(ViewerPresence { count: 3, viewers: ["attach:7", "web:abc", "mobile:def"] })
 S d20200
   = Ok(ViewerPresence { count: 0, viewers: [] })
+S da0215080710031a03706e6720800528e0033204010203ff
+  = Ok(InlineImage { image_id: 7, pane_id: Some(3), format: "png", width: 640, height: 480, data: [1, 2, 3, 255] })
+S da0200
+  = Ok(InlineImage { image_id: 0, pane_id: None, format: "", width: 0, height: 0, data: [] })
 C 0a050a03696e03
   = Ok(Input { data: "in\u{3}" })
 C 1204085a1021
@@ -150,6 +154,8 @@ LS agent state missing agent
   = Err(InvalidMessage("AgentStateChanged is missing its agent field"))
 LS agent state pane zero default entry
   = Ok(AgentStateChanged { agent: AgentEntry { pane_id: 0, agent: "", state: "", source: "", reason: "", workspace: "", project: "", pane_label: "" }, released: false })
+LS inline image payload over cap
+  = Err(InvalidMessage("InlineImage payload exceeds 8388608 byte limit"))
 LC empty client oneof
   = Err(InvalidMessage("Empty client message"))
 LC input invalid utf8
