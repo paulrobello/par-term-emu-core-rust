@@ -331,6 +331,17 @@ impl WindowSession {
         self.theme.dark = chords.theme_dark.clone();
         self.theme.light = chords.theme_light.clone();
         self.apply_theme();
+        // The tab strip's width bounds: a change dirties the strip's
+        // next paint (the layout is derived per frame, so only the
+        // invalidation is needed).
+        let bounds = crate::mux::attach::tabs::TabBounds {
+            min: chords.tab_width_min,
+            max: chords.tab_width_max,
+        };
+        if self.chrome.tab_strip.bounds != bounds {
+            self.chrome.tab_strip.bounds = bounds;
+            self.chrome.tab_strip.invalidate();
+        }
         known_style
     }
 

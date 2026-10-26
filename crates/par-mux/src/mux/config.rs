@@ -395,6 +395,25 @@ pub struct ClientSection {
     /// fills with the theme background. Default 0.
     #[serde(default, rename = "pane-gaps", skip_serializing_if = "Option::is_none")]
     pub pane_gaps: Option<u16>,
+    /// The tab strip's per-tab minimum cell width in columns (config
+    /// `tab-width-min`): a tab whose name is shorter still gets a block
+    /// this wide. 0 = no floor. Default 0.
+    #[serde(
+        default,
+        rename = "tab-width-min",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub tab_width_min: Option<u16>,
+    /// The tab strip's per-tab maximum cell width in columns (config
+    /// `tab-width-max`): a longer name truncates and ellipsizes to fit;
+    /// 0 = no cap. When both are set and min exceeds max, max wins.
+    /// Default 0.
+    #[serde(
+        default,
+        rename = "tab-width-max",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub tab_width_max: Option<u16>,
     /// Reserve a right-edge gutter column in every render-mode pane rect
     /// (content narrows by one; the gutter shows a minimal scroll
     /// position indicator while the pane is scrolled). Default off.
@@ -1056,6 +1075,8 @@ pub fn render(eff: &EffectiveConfig) -> String {
             pane_borders: None,
             show_label_in_border: Some(defaults.show_label_in_border),
             pane_gaps: Some(defaults.pane_gaps),
+            tab_width_min: Some(defaults.tab_width_min),
+            tab_width_max: Some(defaults.tab_width_max),
             scrollbar_gutter: Some(defaults.scrollbar_gutter),
             change_cursor_shape: Some(defaults.change_cursor_shape),
             kitty_graphics: Some(defaults.kitty_graphics),
@@ -1166,6 +1187,13 @@ pub struct Chords {
     /// Visible gap bands between panes in render mode (config
     /// `pane-gaps`). Default 0.
     pub pane_gaps: u16,
+    /// The tab strip's per-tab minimum cell width (config
+    /// `tab-width-min`). 0 = no floor; when both bounds are set and min
+    /// exceeds max, max wins. Default 0.
+    pub tab_width_min: u16,
+    /// The tab strip's per-tab maximum cell width (config
+    /// `tab-width-max`). 0 = no cap. Default 0.
+    pub tab_width_max: u16,
     /// The reserved right-edge gutter column (config
     /// `scrollbar-gutter`). Default off.
     pub scrollbar_gutter: bool,
@@ -1317,6 +1345,8 @@ impl Chords {
             session_picker: false,
             git_status: true,
             git_poll_secs: 10,
+            tab_width_min: 0,
+            tab_width_max: 0,
             border_lines: "herdr".to_string(),
             agents_sort: "grouped".to_string(),
             sidebar_width: 20,
@@ -1630,6 +1660,10 @@ pub fn reload_client_chords(file: &ConfigFile, current: &Chords) -> Result<Chord
         .git_poll_secs
         .map(|v| if v == 0 { 0 } else { v.clamp(3, 600) })
         .unwrap_or(current.git_poll_secs);
+    // Tab-width bounds ride as plain values with 0 = none (the file
+    // philosophy); max wins over min at the layout site.
+    let tab_width_min = file.client.tab_width_min.unwrap_or(current.tab_width_min);
+    let tab_width_max = file.client.tab_width_max.unwrap_or(current.tab_width_max);
     // The border line style rides as its spelling; an unknown value is
     // the renderer's warn-and-default (the file philosophy), not a
     // reload error.
@@ -1689,6 +1723,8 @@ pub fn reload_client_chords(file: &ConfigFile, current: &Chords) -> Result<Chord
         theme_dark,
         theme_light,
         popups,
+        tab_width_min,
+        tab_width_max,
     })
 }
 
@@ -2445,8 +2481,13 @@ remain-on-exit = true
             (0, false, true),
             "absent keys keep the defaults (change-cursor-shape on)"
         );
+        assert_eq!(
+            (kept.tab_width_min, kept.tab_width_max),
+            (0, 0),
+            "absent tab-width bounds keep the unbounded defaults"
+        );
         let file: ConfigFile = toml::from_str(
-            "[client]\npane-gaps = 2\nscrollbar-gutter = true\nchange-cursor-shape = false\n",
+            "[client]\npane-gaps = 2\nscrollbar-gutter = true\nchange-cursor-shape = false\ntab-width-min = 12\ntab-width-max = 40\n",
         )
         .unwrap();
         let moved = reload_client_chords(&file, &defaults).unwrap();
@@ -2459,10 +2500,25 @@ remain-on-exit = true
             (2, true, false),
             "stated keys resolve; an explicit false beats the on default"
         );
+        assert_eq!(
+            (moved.tab_width_min, moved.tab_width_max),
+            (12, 40),
+            "stated tab-width bounds resolve"
+        );
         // gen-config emits all three; the output parses back.
         let text = render(&EffectiveConfig::default());
         let file: ConfigFile = toml::from_str(&text).unwrap();
         assert_eq!(file.client.pane_gaps, Some(0), "gen-config emits pane-gaps");
+        assert_eq!(
+            file.client.tab_width_min,
+            Some(0),
+            "gen-config emits tab-width-min"
+        );
+        assert_eq!(
+            file.client.tab_width_max,
+            Some(0),
+            "gen-config emits tab-width-max"
+        );
         assert_eq!(
             file.client.scrollbar_gutter,
             Some(false),

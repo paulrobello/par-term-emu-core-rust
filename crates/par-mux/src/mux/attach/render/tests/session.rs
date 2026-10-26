@@ -5804,7 +5804,7 @@ fn settings_row_toggles_the_session_picker() {
         "the row shows the default in force: {rows:#?}"
     );
     assert!(!session.session_picker);
-    session.route_stdin_bytes(&mut conn, b"jjjjj\r");
+    session.route_stdin_bytes(&mut conn, b"jjjjjjj\r");
     settle(&mut session, &mut conn);
     let written = std::fs::read_to_string(&path).unwrap();
     assert!(written.contains("session-picker = true"), "{written}");
@@ -5823,6 +5823,10 @@ fn settings_row_toggles_the_git_badge() {
     session.settings_path = Some(path.clone());
     session.enter_settings();
     session.route_stdin_bytes(&mut conn, b"\t\t");
+    // The general tab now carries nine fixed rows (the tab-width rows
+    // included) and the panel scrolls — reach the git row before
+    // asserting on it.
+    session.route_stdin_bytes(&mut conn, b"jjjjjjjj");
     let rows = overlay_text(&session);
     assert!(
         rows.iter()
@@ -5830,7 +5834,7 @@ fn settings_row_toggles_the_git_badge() {
         "the row shows the default in force: {rows:#?}"
     );
     assert!(session.git_status);
-    session.route_stdin_bytes(&mut conn, b"jjjjjj\r");
+    session.route_stdin_bytes(&mut conn, b"\r");
     settle(&mut session, &mut conn);
     let written = std::fs::read_to_string(&path).unwrap();
     assert!(written.contains("git-status = false"), "{written}");

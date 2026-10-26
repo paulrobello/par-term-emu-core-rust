@@ -279,7 +279,7 @@ fn settings_row_toggles_kitty_graphics_live() {
         "the row shows the default in force: {rows:#?}"
     );
     assert!(session.kitty.enabled);
-    session.route_stdin_bytes(&mut conn, b"jjjj\r");
+    session.route_stdin_bytes(&mut conn, b"jjjjjj\r");
     settle(&mut session, &mut conn);
     let written = std::fs::read_to_string(&path).unwrap();
     assert!(written.contains("kitty-graphics = false"), "{written}");

@@ -202,6 +202,16 @@ impl SettingsSection {
                     kind: SettingKind::Number { min: 1, max: 99 },
                 },
                 SettingSpec {
+                    key: "tab-width-min",
+                    label: "tab min width",
+                    kind: SettingKind::Number { min: 0, max: 60 },
+                },
+                SettingSpec {
+                    key: "tab-width-max",
+                    label: "tab max width",
+                    kind: SettingKind::Number { min: 0, max: 120 },
+                },
+                SettingSpec {
                     key: "kitty-graphics",
                     label: "kitty graphics",
                     kind: SettingKind::Toggle,
@@ -499,6 +509,10 @@ pub(super) struct SettingsValues {
     /// The git badge poll interval in seconds (`[client] git-poll-secs`).
     pub git_poll_secs: u64,
     pub resize_step: u32,
+    /// The tab strip's width bounds (config `tab-width-min`/`-max`;
+    /// 0 = none).
+    pub tab_width_min: u16,
+    pub tab_width_max: u16,
     pub notify_delivery: String,
     pub notify_states: Vec<String>,
     pub sound: crate::mux::config::SoundSettings,
@@ -560,6 +574,8 @@ impl SettingsValues {
             "session-picker" => FieldVal::Bool(self.session_picker),
             "git-status" => FieldVal::Bool(self.git_status),
             "resize-step" => FieldVal::Num(self.resize_step),
+            "tab-width-min" => FieldVal::Num(self.tab_width_min as u32),
+            "tab-width-max" => FieldVal::Num(self.tab_width_max as u32),
             "notify-delivery" => FieldVal::Text(self.notify_delivery.clone()),
             "sound" => FieldVal::Bool(self.sound.enabled),
             "sound-done" => FieldVal::Text(self.sound.done.clone()),
@@ -878,6 +894,8 @@ impl WindowSession {
             git_status: self.git_status,
             git_poll_secs: self.git_poll_secs,
             resize_step: self.resize_step,
+            tab_width_min: self.chrome.tab_strip.bounds.min,
+            tab_width_max: self.chrome.tab_strip.bounds.max,
             notify_delivery: self.notify.delivery.name().to_string(),
             notify_states: self.notify.states.clone(),
             sound: self.notify.sound.clone(),
@@ -1320,6 +1338,8 @@ mod tests {
             git_status: true,
             git_poll_secs: 10,
             resize_step: 1,
+            tab_width_min: 0,
+            tab_width_max: 0,
             notify_delivery: "terminal".to_string(),
             notify_states: vec!["blocked".to_string(), "idle".to_string()],
             sound: crate::mux::config::SoundSettings::default(),

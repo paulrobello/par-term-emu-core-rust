@@ -113,6 +113,9 @@ pub(crate) struct TabStrip {
     /// The color theme (config `theme`); `None` = the measured herdr
     /// constants above.
     pub(crate) palette: Option<crate::mux::theme::Palette>,
+    /// Per-tab cell-width bounds (config `tab-width-min`/`tab-width-max`);
+    /// the default is the unbounded layout.
+    pub(crate) bounds: TabBounds,
 }
 
 /// The strip's colors: `(bar, inactive block, muted text, active block,
@@ -209,13 +212,37 @@ fn place(texts: &[String], widths: &[usize], start: u16, budget: usize) -> Optio
 /// stay hidden (each marker budgets its column plus a `GAP` up front);
 /// the run contains the active tab in the auto run, or the
 /// scrolled-to tab when `scroll` is set.
-pub(crate) fn layout_tabs(
+/// Per-tab cell-width bounds (config `tab-width-min`/`tab-width-max`).
+/// `Default` is today's behavior: no floor, no cap (a 0 max reads as no
+/// cap at the layout site). When min exceeds a set max, max wins.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub(crate) struct TabBounds {
+    pub min: u16,
+    pub max: u16,
+}
+
+/// The bounded layout: every tab cell clamps to at least `bounds.min`
+/// columns and — when a cap is set — at most `bounds.max`, long names
+/// truncating and ellipsizing to fit; a floor above the cap clamps to
+/// the cap (max wins). Same three stages as before: whole names when
+/// they fit under the cap, the widest shared name budget that fits,
+/// then the visible run with edge markers.
+pub(crate) fn layout_tabs_bounded(
     windows: &[(String, String)],
     active: Option<&str>,
     cols: usize,
     lead: u16,
     scroll: Option<usize>,
+    bounds: TabBounds,
 ) -> TabLayout {
+    // Normalize: a 0 cap is no cap; a floor above the cap clamps to the
+    // cap (max wins).
+    let max_w = if bounds.max == 0 {
+        u16::MAX
+    } else {
+        bounds.max
+    };
+    let min_w = bounds.min.min(max_w);
     if windows.is_empty() {
         return TabLayout::default();
     }
@@ -224,6 +251,16 @@ pub(crate) fn layout_tabs(
         .position(|(id, _)| Some(id.as_str()) == active)
         .unwrap_or(0);
     let lead = (lead as usize).min(cols);
+    // The whole-names stage runs only when the longest cell fits under
+    // the cap; the budget search's upper bound is the cap's name budget.
+    let max_name = windows
+        .iter()
+        .map(|(_, name)| display_width(&super::chrome_safe(name)))
+        .max()
+        .unwrap_or(1)
+        .max(1);
+    let stage1_allows = max_name + 2 * PAD <= max_w as usize;
+    let budget_cap = max_w.saturating_sub(2 * PAD as u16) as usize;
 
     // The button's three columns cap the tab area at the row's tail; a
     // strip narrower than the button plus one tab column cannot host
@@ -243,32 +280,33 @@ pub(crate) fn layout_tabs(
             .collect();
         let widths: Vec<usize> = texts
             .iter()
-            .map(|text| display_width(text) + 2 * PAD)
+            .map(|text| (display_width(text) + 2 * PAD).max(min_w as usize))
             .collect();
         (texts, widths)
     };
 
-    // Stage 1.
-    let (texts, widths) = texts_widths(None);
-    if let Some(cells) = place(&texts, &widths, start, tab_cols) {
-        return TabLayout {
-            plus: plus_after(&cells, None, start, cols, hostable),
-            cells,
-            left_marker: None,
-            right_marker: None,
-            total: windows.len(),
-        };
+    // Stage 1: whole names, and only when the cap allows them whole.
+    if stage1_allows {
+        let (texts, widths) = texts_widths(None);
+        if let Some(cells) = place(&texts, &widths, start, tab_cols) {
+            return TabLayout {
+                plus: plus_after(&cells, None, start, cols, hostable),
+                cells,
+                left_marker: None,
+                right_marker: None,
+                total: windows.len(),
+            };
+        }
     }
 
-    // Stage 2.
-    let max_name = windows
-        .iter()
-        .map(|(_, name)| display_width(&super::chrome_safe(name)))
-        .max()
-        .unwrap_or(1)
-        .max(1);
-    for budget in (1..=max_name).rev() {
+    // Stage 2: the shared name budget never exceeds the cap's budget;
+    // a candidate whose cells still breach the cap (the ellipsis costs
+    // its budget one column) is skipped for a smaller one.
+    for budget in (1..=max_name.min(budget_cap)).rev() {
         let (texts, widths) = texts_widths(Some(budget));
+        if widths.iter().any(|&w| w > max_w as usize) {
+            continue;
+        }
         if let Some(cells) = place(&texts, &widths, start, tab_cols) {
             return TabLayout {
                 plus: plus_after(&cells, None, start, cols, hostable),
@@ -282,8 +320,10 @@ pub(crate) fn layout_tabs(
 
     // Stage 3. The run seeds at the wheel offset when set; `None` is
     // the active-centered auto run (an overflowing strip scrolls to
-    // reach its hidden tabs — the audit's R6).
+    // reach its hidden tabs — the audit's R6). Widths stay under the
+    // cap even here: a budget-1 cell over the cap clips its text.
     let (texts, widths) = texts_widths(Some(1));
+    let widths: Vec<usize> = widths.iter().map(|w| (*w).min(max_w as usize)).collect();
     // `total` is the run's span (blocks plus the gaps between them): a
     // candidate adds its block and one gap, each hidden-edge marker its
     // column and one gap.
@@ -421,6 +461,7 @@ impl TabStrip {
             layout: TabLayout::default(),
             scroll: None,
             palette: None,
+            bounds: TabBounds::default(),
         }
     }
 
@@ -490,7 +531,14 @@ impl TabStrip {
         lead: Option<(&str, u16)>,
     ) {
         let lead_w = lead.map_or(0, |(_, w)| w);
-        let layout = layout_tabs(windows, active, self.cols as usize, lead_w, self.scroll);
+        let layout = layout_tabs_bounded(
+            windows,
+            active,
+            self.cols as usize,
+            lead_w,
+            self.scroll,
+            self.bounds,
+        );
         self.layout = layout.clone();
         let (bar_bg, inactive_bg, muted_fg, active_bg, active_fg, accent) =
             strip_colors(self.palette);
@@ -637,7 +685,7 @@ mod tests {
     #[test]
     fn short_names_place_every_tab_in_order() {
         let ws = windows();
-        let layout = layout_tabs(&ws, Some("@1"), 80, 0, None);
+        let layout = layout_tabs_bounded(&ws, Some("@1"), 80, 0, None, TabBounds::default());
         assert_eq!(layout.cells.len(), 3);
         assert_eq!(layout.left_marker, None);
         assert_eq!(layout.right_marker, None);
@@ -662,8 +710,8 @@ mod tests {
     fn spoofing_format_chars_do_not_widen_a_tab() {
         let clean = vec![("@0".to_string(), "abc".to_string())];
         let spoofed = vec![("@0".to_string(), "\u{202E}abc".to_string())];
-        let a = layout_tabs(&clean, Some("@0"), 80, 0, None);
-        let b = layout_tabs(&spoofed, Some("@0"), 80, 0, None);
+        let a = layout_tabs_bounded(&clean, Some("@0"), 80, 0, None, TabBounds::default());
+        let b = layout_tabs_bounded(&spoofed, Some("@0"), 80, 0, None, TabBounds::default());
         assert_eq!(b.cells[0].text, "abc");
         assert_eq!(b.cells[0].width, a.cells[0].width);
     }
@@ -680,7 +728,7 @@ mod tests {
         // block is b + 1 (ellipsis) + 4 (pads) wide, two blocks plus one
         // gap: budget 6 overflows (11 + 1 + 11 = 23 > 21), budget 5 fits
         // exactly ('  devel…  ' = '  docum…  ' = 10, 10 + 1 + 10 = 21).
-        let layout = layout_tabs(&ws, Some("@0"), 24, 0, None);
+        let layout = layout_tabs_bounded(&ws, Some("@0"), 24, 0, None, TabBounds::default());
         assert_eq!(layout.cells.len(), 2);
         assert_eq!(layout.cells[0].text, "devel\u{2026}");
         assert_eq!(layout.cells[1].text, "docum\u{2026}");
@@ -703,7 +751,7 @@ mod tests {
         // truncates it so the button fits — the boundary case, the
         // button exactly at the row's tail.
         let big = vec![("@0".to_string(), "x".repeat(80).to_string())];
-        let layout = layout_tabs(&big, Some("@0"), 80, 0, None);
+        let layout = layout_tabs_bounded(&big, Some("@0"), 80, 0, None, TabBounds::default());
         let plus = layout.plus.expect("an 80-col strip hosts the button");
         assert!(plus + 3 <= 80, "the button stays on the row");
         let last = layout.cells.last().expect("the tab is visible");
@@ -721,7 +769,7 @@ mod tests {
             .map(|i| (format!("@{i}"), format!("window{i}")))
             .collect();
         for cols in 0..=80usize {
-            let layout = layout_tabs(&ws, Some("@6"), cols, 0, None);
+            let layout = layout_tabs_bounded(&ws, Some("@6"), cols, 0, None, TabBounds::default());
             if let Some(plus) = layout.plus {
                 assert!(
                     plus as usize + 3 <= cols,
@@ -764,7 +812,14 @@ mod tests {
         for ws in &lists {
             for &active in [0usize, ws.len() / 2, ws.len() - 1].iter() {
                 for cols in 0..=200usize {
-                    let layout = layout_tabs(ws, Some(ws[active].0.as_str()), cols, 0, None);
+                    let layout = layout_tabs_bounded(
+                        ws,
+                        Some(ws[active].0.as_str()),
+                        cols,
+                        0,
+                        None,
+                        TabBounds::default(),
+                    );
                     if let (Some(plus), Some(marker)) = (layout.plus, layout.right_marker) {
                         if marker >= plus {
                             hits.push(format!(
@@ -793,7 +848,7 @@ mod tests {
         // hidden-edge marker costs its column plus a gap (2), so a run
         // of k blocks needs 7k - 1 + 4 <= 27: k = 3, the active tab and
         // the two on its left (the run grows leftward first).
-        let layout = layout_tabs(&ws, Some("@7"), 30, 0, None);
+        let layout = layout_tabs_bounded(&ws, Some("@7"), 30, 0, None, TabBounds::default());
         let visible: Vec<usize> = layout.cells.iter().map(|c| c.window_index).collect();
         assert_eq!(visible, vec![5, 6, 7], "contiguous run with the active");
         assert_eq!(layout.left_marker, Some(0), "tabs hide on the left");
@@ -818,7 +873,7 @@ mod tests {
         let ws: Vec<(String, String)> = (0..12)
             .map(|i| (format!("@{i}"), format!("w{i}")))
             .collect();
-        let layout = layout_tabs(&ws, Some("@11"), 30, 0, None);
+        let layout = layout_tabs_bounded(&ws, Some("@11"), 30, 0, None, TabBounds::default());
         let visible: Vec<usize> = layout.cells.iter().map(|c| c.window_index).collect();
         assert!(visible.contains(&11));
         assert_eq!(
@@ -880,7 +935,7 @@ mod tests {
         );
 
         // Explicit scroll 0 seeds the head run; None is the auto run.
-        let head = layout_tabs(&ws, Some("@7"), 30, 0, Some(0));
+        let head = layout_tabs_bounded(&ws, Some("@7"), 30, 0, Some(0), TabBounds::default());
         assert_eq!(
             head.cells
                 .iter()
@@ -888,7 +943,7 @@ mod tests {
                 .collect::<Vec<_>>(),
             vec![0, 1, 2]
         );
-        let auto = layout_tabs(&ws, Some("@7"), 30, 0, None);
+        let auto = layout_tabs_bounded(&ws, Some("@7"), 30, 0, None, TabBounds::default());
         assert_eq!(
             auto.cells
                 .iter()
@@ -911,7 +966,7 @@ mod tests {
     #[test]
     fn hit_test_maps_columns_to_windows() {
         let ws = windows();
-        let layout = layout_tabs(&ws, Some("@1"), 80, 0, None);
+        let layout = layout_tabs_bounded(&ws, Some("@1"), 80, 0, None, TabBounds::default());
         let mut strip = TabStrip::new(80);
         strip.layout = layout;
         assert_eq!(strip.hit_test(0), Some(0), "the left pad owns the block");
@@ -956,7 +1011,7 @@ mod tests {
             ("@0".to_string(), "日本語".to_string()),
             ("@1".to_string(), "vim".to_string()),
         ];
-        let layout = layout_tabs(&ws, Some("@0"), 80, 0, None);
+        let layout = layout_tabs_bounded(&ws, Some("@0"), 80, 0, None, TabBounds::default());
         assert_eq!(layout.cells[0].width, 6 + 2 * PAD as u16);
         assert_eq!(layout.cells[1].col, layout.cells[0].width + GAP as u16);
         let mut strip = TabStrip::new(80);
@@ -1105,7 +1160,7 @@ mod tests {
     #[test]
     fn degenerate_width_keeps_the_active_tab() {
         let ws = windows();
-        let layout = layout_tabs(&ws, Some("@2"), 6, 0, None);
+        let layout = layout_tabs_bounded(&ws, Some("@2"), 6, 0, None, TabBounds::default());
         let visible: Vec<usize> = layout.cells.iter().map(|c| c.window_index).collect();
         assert!(visible.contains(&2), "active visible even tiny");
     }
@@ -1169,7 +1224,7 @@ mod tests {
     fn plus_button_lays_out_paints_and_hits() {
         // '  main  ' = 8, '  vim  ' = 7, '  build  ' = 9 plus two gaps →
         // 26 used, the button 26..29 of the 40-col strip.
-        let layout = layout_tabs(&windows(), Some("@0"), 40, 0, None);
+        let layout = layout_tabs_bounded(&windows(), Some("@0"), 40, 0, None, TabBounds::default());
         assert_eq!(layout.plus, Some(26), "the button follows the last tab");
         let mut strip = TabStrip::new(40);
         strip.layout = layout.clone();
@@ -1194,7 +1249,7 @@ mod tests {
         }
         // Degenerate: a strip narrower than the button plus one tab
         // column cannot host the reservation.
-        let tiny = layout_tabs(&windows(), Some("@0"), 3, 0, None);
+        let tiny = layout_tabs_bounded(&windows(), Some("@0"), 3, 0, None, TabBounds::default());
         assert_eq!(tiny.plus, None, "the plus needs 3 spare columns");
     }
 
@@ -1210,7 +1265,7 @@ mod tests {
         // blocks at 20..28, 29..36, 37..46 of the 80-col strip, the
         // button 46..49.
         let ws = windows();
-        let layout = layout_tabs(&ws, Some("@1"), 80, 20, None);
+        let layout = layout_tabs_bounded(&ws, Some("@1"), 80, 20, None, TabBounds::default());
         assert_eq!(layout.plus, Some(46), "the button follows the last tab");
         assert_eq!(layout.cells[0].col, 20, "tabs start at the lead width");
         assert_eq!(layout.cells[0].text, "main");
@@ -1259,5 +1314,57 @@ mod tests {
         assert_eq!(plain.buffer[(1, 0)].symbol(), " ", "tab pad");
         assert_eq!(plain.buffer[(2, 0)].symbol(), "m");
         assert_ne!(plain.buffer[(2, 0)].fg, ACCENT);
+    }
+
+    /// A min pads short tabs up to the floor: every cell is at least
+    /// `min` columns (pads included) and keeps its whole name.
+    #[test]
+    fn min_width_pads_short_tabs_up_to_the_floor() {
+        let ws = windows();
+        let layout =
+            layout_tabs_bounded(&ws, Some("@1"), 120, 0, None, TabBounds { min: 20, max: 0 });
+        assert_eq!(layout.cells.len(), 3);
+        let widths: Vec<u16> = layout.cells.iter().map(|c| c.width).collect();
+        assert!(widths.iter().all(|&w| w >= 20), "{widths:?}");
+        assert_eq!(layout.cells[0].text, "main", "a padded tab keeps its name");
+    }
+
+    /// A max truncates long names to the cap: no cell exceeds `max`
+    /// columns and the truncated name ellipsizes; the short tab stays
+    /// whole.
+    #[test]
+    fn max_width_truncates_long_names_to_the_cap() {
+        let ws = vec![
+            ("@0".to_string(), "a-very-long-session-name".to_string()),
+            ("@1".to_string(), "b".to_string()),
+        ];
+        let layout =
+            layout_tabs_bounded(&ws, Some("@0"), 120, 0, None, TabBounds { min: 0, max: 10 });
+        let widths: Vec<u16> = layout.cells.iter().map(|c| c.width).collect();
+        assert!(widths.iter().all(|&w| w <= 10), "{widths:?}");
+        assert!(
+            layout.cells[0].text.ends_with('\u{2026}'),
+            "the truncated name ellipsizes: {:?}",
+            layout.cells[0].text
+        );
+        assert_eq!(layout.cells[1].text, "b", "the short name stays whole");
+    }
+
+    /// A min above the cap clamps to the cap (max wins): cells sit at
+    /// the cap, never past it.
+    #[test]
+    fn a_min_above_the_cap_clamps_to_the_cap() {
+        let ws = windows();
+        let layout = layout_tabs_bounded(
+            &ws,
+            Some("@1"),
+            120,
+            0,
+            None,
+            TabBounds { min: 30, max: 10 },
+        );
+        let widths: Vec<u16> = layout.cells.iter().map(|c| c.width).collect();
+        assert!(widths.iter().all(|&w| w <= 10), "{widths:?}");
+        assert!(widths.iter().all(|&w| w >= 10), "{widths:?}");
     }
 }

@@ -713,6 +713,8 @@ impl WindowSession {
                 theme_dark: self.theme.dark.clone(),
                 theme_light: self.theme.light.clone(),
                 popups: self.popups.clone(),
+                tab_width_min: self.chrome.tab_strip.bounds.min,
+                tab_width_max: self.chrome.tab_strip.bounds.max,
             },
         ) {
             Ok(chords) => {
