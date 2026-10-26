@@ -40,16 +40,20 @@ use std::sync::Arc;
 use std::thread::JoinHandle;
 use std::time::Duration;
 
-/// How often the accept loop's idle poll runs the scrape tier — the
-/// fallback state pass over panes whose agent reports no state hook
-/// (par-mux.md Phase 5 scrape tier).
+/// How often the cadence worker runs the scrape tier — the fallback state
+/// pass over panes whose agent reports no state hook (par-mux.md Phase 5
+/// scrape tier).
 const SCRAPE_INTERVAL: std::time::Duration = std::time::Duration::from_secs(1);
 
-/// How often the accept loop's idle poll runs the pane reaper — the pass
+/// How often the cadence worker runs the pane reaper — the pass
 /// that closes panes whose child exited (tmux semantics: a pane dies with
 /// its process). The PTY reader flips `is_running` on EOF within
 /// milliseconds of the exit; this poll bounds the close latency.
 const REAP_INTERVAL: std::time::Duration = std::time::Duration::from_millis(250);
+
+/// The cadence worker's tick: how often it re-checks the shutdown flag and
+/// the scrape/reap due times while idle.
+const CADENCE_TICK: Duration = Duration::from_millis(10);
 
 /// How often the persist worker re-checks the shutdown flag while idle.
 /// Bounds how long the shutdown join waits after the flag is set.
@@ -111,6 +115,11 @@ const PROBE_JOIN_BOUND: Duration = Duration::from_secs(1);
 /// The badge refresher's shutdown join bound: one `REFRESH_TICK` (2 s)
 /// plus slack.
 const BADGE_JOIN_BOUND: Duration = Duration::from_secs(3);
+
+/// The cadence worker's shutdown join bound (SEC-133): the worker exits
+/// within one [`CADENCE_TICK`] of the shutdown flag, so the bound covers a
+/// tick plus whatever duty it is mid-flight in.
+const CADENCE_JOIN_BOUND: Duration = Duration::from_secs(3);
 
 /// How often an evicted client's connection threads re-check the eviction
 /// flag. Both the writer and the reader of a connection run with
@@ -384,10 +393,8 @@ impl MuxServer {
             self.config.clone(),
         );
 
-        // The scrape tier rides this loop as its heartbeat: pattern
-        // overrides live beside the state file when there is one, and the
-        // idle poll doubles as the 1 s tick without a thread of its own to
-        // own a lifecycle for.
+        // The scrape tier rides the cadence worker as its heartbeat:
+        // pattern overrides live beside the state file when there is one.
         let engine = Arc::new(crate::mux::scrape::ScrapeEngine::load(
             state_path
                 .as_ref()
@@ -396,16 +403,29 @@ impl MuxServer {
                 .as_deref(),
         ));
         self.tree.lock().scrape_engine = Some(Arc::clone(&engine));
-        let mut last_scrape = std::time::Instant::now();
-        let mut last_reap = std::time::Instant::now();
-        // When the daemon (persisting only) first observed an empty tree —
-        // zero sessions (clients do not hold it), or only dead panes with
-        // no client connected —
-        // reset to None the moment a session (or live pane) returns. Held
-        // past EXIT_EMPTY_GRACE it ends the loop as [LoopExit::Empty]
-        // (when `daemon.exit-empty` is on, the default; off, it never
-        // fires).
-        let mut empty_since: Option<std::time::Instant> = None;
+
+        // Card 01a1764da374: the background cadence (scrape tick, dead-pane
+        // reap, plugin hook reaps, exit-when-empty) owns its own thread, off
+        // the accept loop. Inline in the accept loop's idle arm, one wedged
+        // call between accepts froze every cadence duty at once — a labeled
+        // pane went unscraped for ~50 minutes while control commands stayed
+        // instant (observed 2026-10-26). The loop below accepts and
+        // dispatches; this thread ticks.
+        let exit_request: Arc<Mutex<Option<LoopExit>>> = Arc::new(Mutex::new(None));
+        let cadence_worker = {
+            let handles = CadenceHandles {
+                tree: Arc::clone(&self.tree),
+                clients: Arc::clone(&self.clients),
+                engine: Arc::clone(&engine),
+                shutdown: Arc::clone(&self.shutdown),
+                config: self.config.clone(),
+                persist_tx: persist_tx.clone(),
+                output_epoch: Arc::clone(&self.output_epoch),
+                exit_request: Arc::clone(&exit_request),
+                persisting: state_path.is_some(),
+            };
+            std::thread::spawn(move || run_cadence_loop(&handles))
+        };
         let mut exit = LoopExit::Requested;
 
         loop {
@@ -457,65 +477,6 @@ impl MuxServer {
                             });
                         }
                     }
-                    crate::mux::plugins::reap_expired_hooks();
-                    if last_scrape.elapsed() >= SCRAPE_INTERVAL {
-                        for notification in crate::mux::scrape::scrape_tick(&self.tree, &engine) {
-                            broadcast_notification(&self.clients, &notification);
-                        }
-                        last_scrape = std::time::Instant::now();
-                    }
-                    if last_reap.elapsed() >= REAP_INTERVAL {
-                        reap_dead_panes(
-                            &self.tree,
-                            &self.clients,
-                            self.config.as_ref(),
-                            persist_tx.as_ref(),
-                            &self.output_epoch,
-                        );
-                        last_reap = std::time::Instant::now();
-                    }
-                    // Exit-when-empty, the persisting daemon only: an
-                    // embedded `run()` server serves until stopped, whatever
-                    // it holds. Clients do NOT hold an empty daemon — the
-                    // last session dying under an attached client exits it
-                    // after the grace, and the client learns through the
-                    // %exit every shutdown broadcasts (tmux exit-empty
-                    // semantics; the manual-pass report). Both locks are
-                    // taken and released one at a time — never nested.
-                    // `daemon.exit-empty = false` (the live applied config)
-                    // skips the check entirely; a server without an
-                    // applied config keeps the built-in on default.
-                    if state_path.is_some()
-                        && self
-                            .config
-                            .as_ref()
-                            .is_none_or(|config| config.lock().exit_empty)
-                    {
-                        // "Empty" counts a tree whose every pane is dead
-                        // too, but only with no client connected: held
-                        // panes (remain-on-exit, keep-one-tab) are what an
-                        // attached client shows its exit cue and respawns
-                        // over, so a client holds them; with nobody
-                        // connected and nothing alive, the daemon collects
-                        // itself instead of lingering on frozen screens.
-                        let idle_empty = self.tree.lock().sessions().is_empty()
-                            || (self.tree.lock().all_panes_dead()
-                                && self.clients.lock().is_empty());
-                        empty_since = match (idle_empty, empty_since) {
-                            (true, Some(since)) => Some(since),
-                            (true, None) => Some(std::time::Instant::now()),
-                            (false, _) => None,
-                        };
-                        if empty_since.is_some_and(|since| since.elapsed() >= EXIT_EMPTY_GRACE) {
-                            // Held empty past the grace: exit through the
-                            // same %exit + final-save path every shutdown
-                            // takes, recorded as Empty so the save's origin
-                            // clears the last-good snapshot.
-                            exit = LoopExit::Empty;
-                            log::info!("par-mux: tree empty; daemon exiting (exit-when-empty)");
-                            self.shutdown.store(true, Ordering::Relaxed);
-                        }
-                    }
                 }
                 // A signal may land mid-accept; that is not a listener fault.
                 Err(err) if err.kind() == std::io::ErrorKind::Interrupted => continue,
@@ -541,6 +502,28 @@ impl MuxServer {
                     exit = LoopExit::Fault;
                     break;
                 }
+            }
+        }
+
+        // The cadence worker holds a persist-sender clone and its
+        // exit-when-empty duty may be what raised the shutdown flag, so it
+        // joins BEFORE the persist worker drains: its final reap send still
+        // lands, and the ARC-003 ordering (worker drained before the final
+        // save) holds. At most CADENCE_JOIN_BOUND, then detached (SEC-133) —
+        // the worker exits within one tick of the flag, so the bound covers
+        // a tick plus whatever duty it is mid-flight in.
+        if !join_bounded(cadence_worker, CADENCE_JOIN_BOUND) {
+            par_term_emu_core::debug_error!(
+                "MUX",
+                "cadence worker still running at shutdown; detached"
+            );
+        }
+        // An exit-when-empty verdict is the cadence thread's: it hands the
+        // LoopExit here and raises the flag; the loop below only observed
+        // the flag. A fault or a requested shutdown keeps its own verdict.
+        if exit == LoopExit::Requested {
+            if let Some(requested) = exit_request.lock().take() {
+                exit = requested;
             }
         }
 
@@ -600,6 +583,112 @@ fn join_bounded(handle: JoinHandle<()>, bound: Duration) -> bool {
     }
     let _ = handle.join();
     true
+}
+
+/// The cadence worker's shared handles (card 01a1764da374): everything the
+/// background duties touch, grouped so the spawn site and the loop read as
+/// one unit. Inline in the accept loop's idle arm these duties shared one
+/// failure domain with accepts — one wedged call between accepts froze
+/// every duty at once, and a busy accept stream starved them behind
+/// accepts.
+struct CadenceHandles {
+    tree: Arc<Mutex<MuxTree>>,
+    clients: Clients,
+    engine: Arc<crate::mux::scrape::ScrapeEngine>,
+    shutdown: Arc<AtomicBool>,
+    config: Option<Arc<Mutex<EffectiveConfig>>>,
+    persist_tx: Option<Sender<(SaveOrigin, PersistState)>>,
+    output_epoch: OutputEpoch,
+    exit_request: Arc<Mutex<Option<LoopExit>>>,
+    persisting: bool,
+}
+
+/// The cadence worker's loop: scrape tick, dead-pane reap, plugin hook
+/// reaps, exit-when-empty. Exits within one [`CADENCE_TICK`] of the
+/// shutdown flag; the exit-when-empty verdict rides `exit_request` back to
+/// the accept loop, which only observes the flag.
+fn run_cadence_loop(handles: &CadenceHandles) {
+    let CadenceHandles {
+        tree,
+        clients,
+        engine,
+        shutdown,
+        config,
+        persist_tx,
+        output_epoch,
+        exit_request,
+        persisting,
+    } = handles;
+    let mut last_scrape = std::time::Instant::now();
+    let mut last_reap = std::time::Instant::now();
+    // When the daemon (persisting only) first observed an empty tree —
+    // zero sessions (clients do not hold it), or only dead panes with no
+    // client connected — reset to None the moment a session (or live pane)
+    // returns. Held past EXIT_EMPTY_GRACE it hands the loop an
+    // [LoopExit::Empty] verdict (when `daemon.exit-empty` is on, the
+    // default; off, it never fires).
+    let mut empty_since: Option<std::time::Instant> = None;
+    loop {
+        if shutdown.load(Ordering::Relaxed) {
+            return;
+        }
+        std::thread::sleep(CADENCE_TICK);
+        crate::mux::plugins::reap_expired_hooks();
+        if last_scrape.elapsed() >= SCRAPE_INTERVAL {
+            for notification in crate::mux::scrape::scrape_tick(tree, engine) {
+                broadcast_notification(clients, &notification);
+            }
+            last_scrape = std::time::Instant::now();
+        }
+        if last_reap.elapsed() >= REAP_INTERVAL {
+            reap_dead_panes(
+                tree,
+                clients,
+                config.as_ref(),
+                persist_tx.as_ref(),
+                output_epoch,
+            );
+            last_reap = std::time::Instant::now();
+        }
+        // Exit-when-empty, the persisting daemon only: an embedded `run()`
+        // server serves until stopped, whatever it holds. Clients do NOT
+        // hold an empty daemon — the last session dying under an attached
+        // client exits it after the grace, and the client learns through
+        // the %exit every shutdown broadcasts (tmux exit-empty semantics;
+        // the manual-pass report). `daemon.exit-empty = false` (the live
+        // applied config) skips the check entirely; a server without an
+        // applied config keeps the built-in on default.
+        if *persisting
+            && config
+                .as_ref()
+                .is_none_or(|config| config.lock().exit_empty)
+        {
+            // "Empty" counts a tree whose every pane is dead too, but only
+            // with no client connected: held panes (remain-on-exit,
+            // keep-one-tab) are what an attached client shows its exit cue
+            // and respawns over, so a client holds them; with nobody
+            // connected and nothing alive, the daemon collects itself
+            // instead of lingering on frozen screens.
+            let idle_empty = tree.lock().sessions().is_empty()
+                || (tree.lock().all_panes_dead() && clients.lock().is_empty());
+            empty_since = match (idle_empty, empty_since) {
+                (true, Some(since)) => Some(since),
+                (true, None) => Some(std::time::Instant::now()),
+                (false, _) => None,
+            };
+            if empty_since.is_some_and(|since| since.elapsed() >= EXIT_EMPTY_GRACE) {
+                // Held empty past the grace: exit through the same %exit +
+                // final-save path every shutdown takes, recorded as Empty
+                // so the save's origin clears the last-good snapshot.
+                if shutdown.load(Ordering::Relaxed) {
+                    return;
+                }
+                exit_request.lock().replace(LoopExit::Empty);
+                log::info!("par-mux: tree empty; daemon exiting (exit-when-empty)");
+                shutdown.store(true, Ordering::Relaxed);
+            }
+        }
+    }
 }
 
 /// Spawn the persist worker (ARC-003): the one thread that serializes and

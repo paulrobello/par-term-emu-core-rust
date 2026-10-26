@@ -569,6 +569,129 @@ fn a_connected_client_receives_exit_when_the_tree_empties() {
     assert!(saw_exit, "the attached client receives %exit");
 }
 
+/// Card 01a1764da374: a client that stops draining its socket must not
+/// freeze the background cadence. The slow client registers, then never
+/// reads again while a pane floods `%output` at it — its writer wedges in
+/// the full socket buffer, the connection stays held — and the cadence
+/// still runs to completion: control commands keep answering on a second
+/// client, and the exit-when-empty tick (the one cadence duty with an
+/// externally visible verdict) still ends the daemon, whose %exit the
+/// healthy client receives.
+#[cfg(unix)]
+#[test]
+fn cadence_advances_while_a_slow_client_holds_its_connection() {
+    use crate::mux::ipc::connect_local_stream;
+    use std::io::{BufRead, BufReader, Write};
+
+    let dir = temp_dir();
+    let path = dir.path().join("cadence-slow-client.sock");
+    let state_path = dir.path().join("state.json");
+    // A bounded flood: ~256 KiB through the PTY — enough to wedge a
+    // non-reading client's writer in the socket buffer, well under the
+    // 4096-line eviction depth, so the slow client stays held, not evicted.
+    let flood = dir.path().join("flood.sh");
+    std::fs::write(&flood, "#!/bin/sh\nyes flood-line | head -c 262144\n").expect("write flood");
+    let server = MuxServer::bind(&path).expect("bind");
+    let (done_tx, done_rx) = channel();
+    std::thread::spawn(move || {
+        server.run_persisting(state_path);
+        let _ = done_tx.send(());
+    });
+
+    let round_trip = |writer: &mut LocalStream, command: &str| -> String {
+        let mut reader = {
+            let clone = writer.try_clone().expect("clone for reading");
+            BufReader::new(clone)
+        };
+        writeln!(writer, "{command}").expect("write");
+        writer.flush().expect("flush");
+        // Broadcast lines (%window-add, the flood's %output) interleave
+        // with the reply block, so drain until %end rather than counting
+        // lines; the deadline bounds a wedged daemon.
+        let mut block = String::new();
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+        while std::time::Instant::now() < deadline && block.len() < (1 << 20) {
+            let mut line = String::new();
+            if reader.read_line(&mut line).unwrap_or(0) == 0 {
+                break;
+            }
+            block.push_str(&line);
+            if line.starts_with("%end") || line.starts_with("%error") {
+                break;
+            }
+        }
+        block
+    };
+
+    // The slow client: registers once (broadcast membership), then reads
+    // and writes nothing more.
+    let slow = connect_local_stream(&path).expect("slow client connects");
+    let mut slow_writer = slow.try_clone().expect("clone");
+    assert!(
+        round_trip(&mut slow_writer, "list-sessions").contains("%end"),
+        "slow client registered"
+    );
+
+    // The healthy client: registered, and the one whose round trips prove
+    // control traffic stays instant through the stall.
+    let healthy = connect_local_stream(&path).expect("healthy client connects");
+    let mut writer = healthy.try_clone().expect("clone");
+    assert!(
+        round_trip(&mut writer, "list-sessions").contains("%end"),
+        "healthy client registered"
+    );
+
+    // The flood pane: its %output fan-out is what the slow client stops
+    // draining.
+    let flood_path = flood.display().to_string();
+    let reply = round_trip(
+        &mut writer,
+        &format!("new-session -s flood sh {flood_path}"),
+    );
+    assert!(reply.contains("%end"), "flood pane spawned: {reply}");
+
+    // The flood lands and wedges the slow client's writer before the next
+    // assertion (the pane itself finishes on its own: `head` closes the
+    // pipe, `yes` dies on SIGPIPE).
+    std::thread::sleep(std::time::Duration::from_millis(700));
+
+    let reply = round_trip(&mut writer, "list-sessions");
+    assert!(
+        reply.contains("%end"),
+        "control round trip stays instant through the stall: {reply}"
+    );
+
+    // Empty the tree; the cadence's exit-when-empty duty then ends the
+    // daemon within the test grace while the slow client stays held.
+    let reply = round_trip(&mut writer, "kill-session -t flood");
+    assert!(reply.contains("%end"), "session killed: {reply}");
+
+    // 30 s starvation bound, not a timing assertion (44d4212 class): the
+    // cadence grace is 300 ms under test, but the exit path can be starved
+    // past 5 s under full-suite gate load.
+    done_rx
+        .recv_timeout(std::time::Duration::from_secs(30))
+        .expect("the cadence still exits the emptied daemon");
+
+    // And the healthy client learns through the broadcast %exit.
+    let mut reader = BufReader::new(healthy);
+    let mut saw_exit = false;
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+    while std::time::Instant::now() < deadline {
+        let mut line = String::new();
+        match reader.read_line(&mut line) {
+            Ok(0) | Err(_) => break,
+            Ok(_) if line.starts_with("%exit") => {
+                saw_exit = true;
+                break;
+            }
+            Ok(_) => continue,
+        }
+    }
+    assert!(saw_exit, "the healthy client receives %exit");
+    let _ = slow;
+}
+
 /// `daemon.exit-empty = false` (the live applied config) holds an empty
 /// persisting daemon past the grace — WITH a connected client, the
 /// shape the default-config flip test above now covers from the other

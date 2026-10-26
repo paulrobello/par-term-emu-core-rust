@@ -56,7 +56,11 @@ use std::sync::Arc;
 pub fn handle_report(line: &str, tree: &Arc<Mutex<MuxTree>>) -> (String, Option<TmuxNotification>) {
     let report: serde_json::Value = match serde_json::from_str(line) {
         Ok(value) => value,
-        Err(err) => return (error_reply(None, &format!("invalid JSON: {err}")), None),
+        Err(err) => {
+            let reply = error_reply(None, &format!("invalid JSON: {err}"));
+            log_report_outcome("?", "invalid-json", &reply);
+            return (reply, None);
+        }
     };
     let id = report.get("id").cloned();
     let method = report
@@ -64,17 +68,28 @@ pub fn handle_report(line: &str, tree: &Arc<Mutex<MuxTree>>) -> (String, Option<
         .and_then(serde_json::Value::as_str)
         .unwrap_or_default();
     let Some(params) = report.get("params") else {
-        return (error_reply(id, "missing params"), None);
+        let reply = error_reply(id, "missing params");
+        log_report_outcome("?", method, &reply);
+        return (reply, None);
     };
 
-    match method {
+    let (reply, notification) = match method {
         "pane.report_agent" => handle_state_report(id, params, tree),
         "pane.report_agent_session" => handle_session_report(id, params, tree),
         "pane.report_agent_session_cwd" => handle_session_report_cwd(id, params, tree),
         "pane.report_agent_telemetry" => handle_telemetry_report(id, params, tree),
         "pane.release_agent" => handle_release_report(id, params, tree),
         other => (error_reply(id, &format!("unknown method: {other}")), None),
-    }
+    };
+    log_report_outcome(
+        params
+            .get("pane_id")
+            .and_then(serde_json::Value::as_str)
+            .unwrap_or("?"),
+        method,
+        &reply,
+    );
+    (reply, notification)
 }
 
 /// The fields every report carries: the pane it claims, the agent label,
@@ -377,6 +392,30 @@ fn error_reply(id: Option<serde_json::Value>, message: &str) -> String {
     format!("{}\n", serde_json::Value::Object(reply))
 }
 
+/// One debug line per hook report (card 01a1764da374): pane, method, and
+/// accepted/rejected — the restart-roster forensics trail the 2026-10-26
+/// investigation lacked. Outcome reads the reply's `error` key, the shape
+/// every rejection in this module returns.
+fn log_report_outcome(pane: &str, method: &str, reply: &str) {
+    if !log::log_enabled!(log::Level::Debug) {
+        return;
+    }
+    let outcome = if reply_is_error(reply) {
+        "rejected"
+    } else {
+        "accepted"
+    };
+    log::debug!("par-mux: hook report pane {pane} method {method}: {outcome}");
+}
+
+/// Whether one of this module's JSON replies carries an `error` key.
+/// Unparseable reads as rejected — a malformed reply is never an accept.
+fn reply_is_error(reply: &str) -> bool {
+    serde_json::from_str::<serde_json::Value>(reply.trim())
+        .map(|value| value.get("error").is_some())
+        .unwrap_or(true)
+}
+
 /// Dispatch one hook-report line against a per-pane endpoint bound to
 /// `bound` (ENH-039). Identical to [`handle_report`] except the binding: a
 /// report naming another pane is refused (`pane_id does not match this
@@ -391,9 +430,17 @@ pub fn handle_report_for(
 ) -> (String, Option<TmuxNotification>) {
     let mut report: serde_json::Value = match serde_json::from_str(line) {
         Ok(value) => value,
-        Err(err) => return (error_reply(None, &format!("invalid JSON: {err}")), None),
+        Err(err) => {
+            let reply = error_reply(None, &format!("invalid JSON: {err}"));
+            log_report_outcome("?", "invalid-json", &reply);
+            return (reply, None);
+        }
     };
     let id = report.get("id").cloned();
+    let method = report
+        .get("method")
+        .and_then(serde_json::Value::as_str)
+        .unwrap_or("invalid-json");
     match report
         .get("params")
         .and_then(|params| params.get("pane_id"))
@@ -412,10 +459,9 @@ pub fn handle_report_for(
         Some(value) => {
             let named = value.as_str().and_then(|raw| PaneId::from_str(raw).ok());
             if named != Some(bound) {
-                return (
-                    error_reply(id, "pane_id does not match this endpoint"),
-                    None,
-                );
+                let reply = error_reply(id, "pane_id does not match this endpoint");
+                log_report_outcome(value.as_str().unwrap_or("?"), method, &reply);
+                return (reply, None);
             }
         }
     }
