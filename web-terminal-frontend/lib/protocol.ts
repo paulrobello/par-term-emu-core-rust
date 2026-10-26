@@ -26,6 +26,10 @@ import {
   FocusChangeSchema,
   PasteInputSchema,
   SubscribeSchema,
+  UploadBeginSchema,
+  UploadChunkSchema,
+  UploadCommitSchema,
+  UploadAbortSchema,
   type ThemeInfo,
 } from './proto/terminal_pb';
 import * as pako from 'pako';
@@ -224,6 +228,60 @@ export function createSubscribeMessage(events: number[]): ClientMessage {
     message: {
       case: 'subscribe',
       value: create(SubscribeSchema, { events }),
+    },
+  });
+}
+
+/**
+ * Create an upload_begin message: opens daemon-side staging for a file of
+ * `totalBytes` bytes (capped client-side by lib/pane-upload.ts).
+ */
+export function createUploadBeginMessage(filename: string, totalBytes: number): ClientMessage {
+  return create(ClientMessageSchema, {
+    message: {
+      case: 'uploadBegin',
+      value: create(UploadBeginSchema, {
+        filename,
+        totalBytes: BigInt(totalBytes),
+      }),
+    },
+  });
+}
+
+/**
+ * Create an upload_chunk message carrying one staged chunk (at most the
+ * 64 KiB per-chunk cap).
+ */
+export function createUploadChunkMessage(data: Uint8Array): ClientMessage {
+  return create(ClientMessageSchema, {
+    message: {
+      case: 'uploadChunk',
+      value: create(UploadChunkSchema, { data }),
+    },
+  });
+}
+
+/**
+ * Create an upload_commit message: seals the staged upload and
+ * bracket-pastes its materialized path into the session's pane.
+ */
+export function createUploadCommitMessage(): ClientMessage {
+  return create(ClientMessageSchema, {
+    message: {
+      case: 'uploadCommit',
+      value: create(UploadCommitSchema, {}),
+    },
+  });
+}
+
+/**
+ * Create an upload_abort message: abandons the in-progress upload.
+ */
+export function createUploadAbortMessage(): ClientMessage {
+  return create(ClientMessageSchema, {
+    message: {
+      case: 'uploadAbort',
+      value: create(UploadAbortSchema, {}),
     },
   });
 }

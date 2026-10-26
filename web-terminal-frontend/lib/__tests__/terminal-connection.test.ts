@@ -30,6 +30,8 @@ import {
   HyperlinkAddedSchema,
   SelectionChangedSchema,
   UserVarChangedSchema,
+  UploadStartedSchema,
+  UploadFinishedSchema,
 } from '@/lib/proto/terminal_pb';
 import * as pako from 'pako';
 import type { ServerMessage } from '@/lib/proto/terminal_pb';
@@ -135,6 +137,8 @@ function createCallbacks() {
     onUserVarChanged: vi.fn(),
     onSelectionChanged: vi.fn(),
     onInlineImage: vi.fn(),
+    onUploadStarted: vi.fn(),
+    onUploadFinished: vi.fn(),
   };
 }
 
@@ -465,6 +469,35 @@ describe('dispatch routing', () => {
     expect(frame.width).toBe(2);
     expect(frame.height).toBe(2);
     expect(Array.from(frame.data)).toEqual([1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16]);
+  });
+
+  it('routes upload events to the upload callbacks', () => {
+    const { cbs, ws } = openConnection();
+
+    ws.simulateMessage(
+      serverFrame({
+        case: 'uploadStarted',
+        value: create(UploadStartedSchema, { uploadId: 7n }),
+      }),
+    );
+    expect(cbs.onUploadStarted).toHaveBeenCalledTimes(1);
+    expect(cbs.onUploadStarted.mock.calls[0][0].uploadId).toBe(7n);
+
+    ws.simulateMessage(
+      serverFrame({
+        case: 'uploadFinished',
+        value: create(UploadFinishedSchema, {
+          uploadId: 7n,
+          path: '/tmp/par-mux-uploads/upload-1-file.txt',
+          error: undefined,
+        }),
+      }),
+    );
+    expect(cbs.onUploadFinished).toHaveBeenCalledTimes(1);
+    expect(cbs.onUploadFinished.mock.calls[0][0]).toMatchObject({
+      uploadId: 7n,
+      path: '/tmp/par-mux-uploads/upload-1-file.txt',
+    });
   });
 });
 

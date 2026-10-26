@@ -59,6 +59,10 @@ export interface TerminalConnectionCallbacks {
   onPointerShapeChanged?(shape: string | null): void;
   /** An inline-image frame (decoded RGBA pixels for a pane graphic). */
   onInlineImage?(frame: ServerCase<'inlineImage'>): void;
+  /** A client upload began staging daemon-side (the upload_begin ack). */
+  onUploadStarted?(started: ServerCase<'uploadStarted'>): void;
+  /** An upload settled: committed (path set) or failed/aborted (error set). */
+  onUploadFinished?(finished: ServerCase<'uploadFinished'>): void;
 }
 
 const HEARTBEAT_INTERVAL_MS = 25000; // Send ping every 25 seconds
@@ -348,6 +352,14 @@ export class TerminalConnection {
 
       case 'inlineImage':
         this.callbacks.onInlineImage?.(msg.message.value);
+        break;
+
+      case 'uploadStarted':
+        this.callbacks.onUploadStarted?.(msg.message.value);
+        break;
+
+      case 'uploadFinished':
+        this.callbacks.onUploadFinished?.(msg.message.value);
         break;
 
       default:

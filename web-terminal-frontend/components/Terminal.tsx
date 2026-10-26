@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useRef, useCallback } from 'react';
+import { useEffect, useRef, useCallback, useState } from 'react';
 import { Terminal as XTerm } from '@xterm/xterm';
 import { FitAddon } from '@xterm/addon-fit';
 import { WebglAddon } from '@xterm/addon-webgl';
@@ -18,6 +18,9 @@ import {
   themeToXtermOptions,
 } from '@/lib/protocol';
 import { TerminalConnection } from '@/lib/terminal-connection';
+import { PaneUploader } from '@/lib/pane-upload';
+import type { UploadUiState } from '@/lib/pane-upload';
+import { UploadSurface } from '@/components/UploadSurface';
 import { cursorForPointerShape } from '@/lib/pointer-shape';
 import { inlineImageSequence } from '@/lib/inline-image';
 import type { InlineImage } from '@/lib/proto/terminal_pb';
@@ -194,6 +197,12 @@ export default function Terminal({ wsUrl, fontSize, onStatusChange, onThemeChang
   const mouseTrackingRef = useRef<boolean>(false);
   const focusTrackingRef = useRef<boolean>(false);
   const bracketedPasteRef = useRef<boolean>(false);
+
+  // Pane upload (lib/pane-upload.ts): the controller lives in a ref across
+  // renders/reconnects; its state drives the UploadSurface pill.
+  const uploaderRef = useRef<PaneUploader | null>(null);
+  const [uploadState, setUploadState] = useState<UploadUiState>({ phase: 'idle' });
+  const [connected, setConnected] = useState(false);
 
   // Track hyperlinks: Map<row, {url, col, id}[]>
   const hyperlinksRef = useRef<Map<number, Array<{url: string; col: number; id?: string}>>>(new Map());
@@ -923,7 +932,13 @@ export default function Terminal({ wsUrl, fontSize, onStatusChange, onThemeChang
 
     if (!connectionRef.current) {
       connectionRef.current = new TerminalConnection(wsUrl, {
-        onStatus: (newStatus) => propsRef.current.onStatusChange?.(newStatus),
+        onStatus: (newStatus) => {
+          propsRef.current.onStatusChange?.(newStatus);
+          setConnected(newStatus === 'connected');
+          if (newStatus === 'disconnected' || newStatus === 'error') {
+            uploaderRef.current?.connectionLost();
+          }
+        },
         onRetryingChange,
         onConnectionClosed: () => {
           xtermRef.current?.write('\r\n\x1b[1;33mDisconnected from server\x1b[0m\r\n');
@@ -1160,6 +1175,12 @@ export default function Terminal({ wsUrl, fontSize, onStatusChange, onThemeChang
         onPointerShapeChanged: (shape) => {
           applyCursor(shape);
         },
+        onUploadStarted: (started) => {
+          uploaderRef.current?.handleStarted(started.uploadId);
+        },
+        onUploadFinished: (finished) => {
+          uploaderRef.current?.handleFinished(finished);
+        },
       });
     }
 
@@ -1169,6 +1190,18 @@ export default function Terminal({ wsUrl, fontSize, onStatusChange, onThemeChang
   const disconnect = useCallback(() => {
     connectionRef.current?.dispose();
     connectionRef.current = null;
+  }, []);
+
+  // Lazily build the upload controller; its `send` always targets the live
+  // connection (a no-op while the socket is closed).
+  const getUploader = useCallback((): PaneUploader => {
+    if (!uploaderRef.current) {
+      uploaderRef.current = new PaneUploader({
+        send: (msg) => connectionRef.current?.send(msg),
+        onState: setUploadState,
+      });
+    }
+    return uploaderRef.current;
   }, []);
 
   // Expose control functions to parent
@@ -1236,6 +1269,13 @@ export default function Terminal({ wsUrl, fontSize, onStatusChange, onThemeChang
   return (
     <div ref={containerRef} className="terminal-shell" onClick={handleTerminalClick}>
       <div ref={terminalRef} className="flex-1 terminal-scrollbar" />
+      <UploadSurface
+        state={uploadState}
+        enabled={connected}
+        onPickFile={(file) => getUploader().start(file)}
+        onAbort={() => getUploader().abort()}
+        onDismiss={() => getUploader().dismiss()}
+      />
       <div ref={rightDotsRef} className="terminal-dead-space" aria-hidden="true" />
       <div ref={bottomDotsRef} className="terminal-dead-space" aria-hidden="true" />
     </div>
