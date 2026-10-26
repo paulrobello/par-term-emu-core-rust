@@ -197,6 +197,11 @@ pub(super) fn handle_session_report(
         Err(message) => return (error_reply(id, &message), None),
     };
 
+    // A SessionStart report carries identity only. The claim it writes has
+    // no state, and the roster lists only panes WITH state — so without a
+    // classification here, a resumed agent stays invisible until its first
+    // state event, which a quiet session may not fire for hours.
+    let needs_classify;
     let notification = {
         let mut guard = tree.lock();
         // The owning workspace for the push, read before the pane_mut
@@ -271,6 +276,7 @@ pub(super) fn handle_session_report(
         }
         pane.set_agent_claim(&claim);
         record_seq(pane, header.source.as_deref(), header.seq);
+        needs_classify = claim.state.is_none();
 
         // The rebroadcast keeps the state's OWN provenance: a claude-shaped
         // pane (identity by hook, state by scrape) must not relabel a
@@ -290,6 +296,13 @@ pub(super) fn handle_session_report(
                 msg: claim.message.clone().unwrap_or_default(),
             })
     };
+    let notification = notification.or_else(|| {
+        if needs_classify {
+            crate::mux::scrape::classify_claimed_pane(tree, header.pane_id)
+        } else {
+            None
+        }
+    });
     (ok_reply(id), notification)
 }
 

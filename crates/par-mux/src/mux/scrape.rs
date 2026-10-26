@@ -774,6 +774,87 @@ pub(crate) fn scrape_tick_with(
     notifications
 }
 
+/// One claimed pane's immediate classification: the tick's evaluate-or-
+/// fallback arm run once, off the tick's cadence. The session-report path
+/// calls this right after a SessionStart identity report, because that
+/// report carries no state and the roster shows only panes WITH state —
+/// without this, a resumed agent stays invisible until its first state
+/// event, which a quiet session may not fire for hours.
+pub(crate) fn classify_claimed_pane(
+    tree: &Arc<Mutex<MuxTree>>,
+    pane_id: PaneId,
+) -> Option<TmuxNotification> {
+    let engine = {
+        let guard = tree.lock();
+        guard
+            .scrape_engine
+            .clone()
+            .unwrap_or_else(ScrapeEngine::bundled)
+    };
+    // The process table reads the whole OS process list: off the lock, the
+    // order the tick and adopt-pane keep.
+    let table = ProcessTable::snapshot();
+    let mut guard = tree.lock();
+    let ws = guard
+        .workspace_of_pane(pane_id)
+        .map(|w| w.to_string())
+        .unwrap_or_default();
+    let in_view = crate::mux::hooks::pane_in_view(&guard, pane_id);
+    let pane = guard.pane_mut(pane_id)?;
+    if !pane.is_running() {
+        return None;
+    }
+    let agent = pane.metadata().get("agent").cloned()?;
+    if pane
+        .metadata()
+        .get("agent_state_source")
+        .map(String::as_str)
+        == Some("hook")
+    {
+        // Hook authority is never scraped (the tick's rule): a hook-sourced
+        // stateless pane's own next state report re-establishes it.
+        return None;
+    }
+    let snapshot = {
+        let terminal = pane.terminal();
+        let term = terminal.read();
+        PaneSnapshot {
+            title: term.title().to_string(),
+            screen: term.content(),
+        }
+    };
+    let set = engine.set_for(&agent)?;
+    let Some((state, rule)) = set
+        .evaluate(&snapshot)
+        .or_else(|| set.fallback(&agent, pane.child_pid(), table.as_ref()))
+    else {
+        // No match is unknown, never idle: clear an earlier scrape guess,
+        // keep the push channel claim-only (the tick's honesty rule).
+        if pane
+            .metadata()
+            .get("agent_state_source")
+            .map(String::as_str)
+            == Some("scrape")
+        {
+            pane.clear_metadata(SCRAPE_KEYS);
+        }
+        return None;
+    };
+    let prior_state = pane.metadata().get("agent_state").map(String::as_str);
+    let state = crate::mux::hooks::derive_state(prior_state, state, in_view);
+    pane.set_metadata("agent_state", state);
+    pane.set_metadata("agent_state_source", "scrape");
+    pane.set_metadata("agent_state_rule", rule);
+    Some(TmuxNotification::AgentStateChanged {
+        pane_id: pane_id.to_string(),
+        agent,
+        state: state.to_string(),
+        source: "scrape".to_string(),
+        ws,
+        msg: String::new(),
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1977,5 +2058,103 @@ contains = ["Override Idle"]
         let child = tree.lock().pane(pane_id).unwrap().child_pid().unwrap();
         let alive = table_running(child, &["claude"]);
         assert_eq!(tick_state(&tree, pane_id, Some(&alive)), (None, None));
+    }
+
+    /// A SessionStart report carries identity only, and the roster lists
+    /// only panes WITH state — so the session-report path now runs the
+    /// tick's evaluate arm once before replying, making a resumed agent
+    /// roster-visible on its resume hook alone.
+    #[test]
+    fn a_session_report_classifies_a_stateless_claim_immediately() {
+        let mut tree = MuxTree::new(Box::new(ShellPaneFactory::default()));
+        tree.scrape_engine = Some(ScrapeEngine::load(None).into());
+        let session = tree
+            .new_session("resume-roster", 80, 24)
+            .expect("session spawns");
+        let pane_id = tree
+            .session(session)
+            .expect("session exists")
+            .windows
+            .iter()
+            .filter_map(|window| tree.window(*window))
+            .flat_map(|window| window.panes())
+            .next()
+            .expect("a new session has a pane");
+        let tree = Arc::new(Mutex::new(tree));
+
+        // Claude's idle title matches the bundled `osc_title_idle` rule.
+        feed(&tree, pane_id, b"\x1b]2;\xe2\x9c\xb3 resuming\x07");
+        let report = format!(
+            r#"{{"id":"t-1","method":"pane.report_agent_session","params":{{"pane_id":"{pane_id}","agent":"claude","seq":1000,"source":"hook","agent_session_id":"resume-1"}}}}"#
+        );
+        let (reply, notification) = crate::mux::hooks::handle_report(&report, &tree);
+        assert!(
+            reply.contains(r#""result":"ok""#),
+            "the session report is accepted: {reply}"
+        );
+        let guard = tree.lock();
+        let pane = guard.pane(pane_id).expect("pane exists");
+        assert_eq!(
+            pane.metadata().get("agent").map(String::as_str),
+            Some("claude"),
+            "the claim is set"
+        );
+        assert_eq!(
+            pane.metadata().get("agent_state").map(String::as_str),
+            Some("idle"),
+            "the report's classify made the pane roster-visible"
+        );
+        assert_eq!(
+            pane.metadata()
+                .get("agent_state_source")
+                .map(String::as_str),
+            Some("scrape"),
+            "scrape provenance, never a fake hook state"
+        );
+        let TmuxNotification::AgentStateChanged { state, source, .. } =
+            notification.expect("the classify broadcasts")
+        else {
+            panic!("expected an AgentStateChanged push");
+        };
+        assert_eq!(state, "idle");
+        assert_eq!(source, "scrape");
+    }
+
+    /// A claim that already carries hook state is not re-classified by its
+    /// own session reports: hook authority is never scraped.
+    #[test]
+    fn a_session_report_never_reclassifies_a_hook_stated_claim() {
+        let (tree, pane_id) = tree_with_pane();
+        tree.lock().scrape_engine = Some(ScrapeEngine::load(None).into());
+
+        // The hook speaks first: a working state report, then the resume's
+        // identity report. The state and its provenance survive untouched.
+        crate::mux::hooks::handle_report(
+            &format!(
+                r#"{{"id":"t-1","method":"pane.report_agent","params":{{"pane_id":"{pane_id}","agent":"claude","state":"working","seq":1000,"source":"par-mux:test"}}}}"#
+            ),
+            &tree,
+        );
+        crate::mux::hooks::handle_report(
+            &format!(
+                r#"{{"id":"t-2","method":"pane.report_agent_session","params":{{"pane_id":"{pane_id}","agent":"claude","seq":2000,"source":"hook","agent_session_id":"resume-2"}}}}"#
+            ),
+            &tree,
+        );
+
+        let guard = tree.lock();
+        let pane = guard.pane(pane_id).expect("pane exists");
+        assert_eq!(
+            pane.metadata().get("agent_state").map(String::as_str),
+            Some("working"),
+            "the hook state survives the identity report"
+        );
+        assert_eq!(
+            pane.metadata()
+                .get("agent_state_source")
+                .map(String::as_str),
+            Some("hook"),
+            "hook authority is never scraped"
+        );
     }
 }
