@@ -1151,6 +1151,11 @@ test-web:
 		echo "Error: web-terminal-frontend directory not found!"; \
 		exit 1; \
 	fi
+	@if [ ! -d "web-terminal-frontend/node_modules" ]; then \
+		echo "Error: web-terminal-frontend/node_modules is missing (a fresh git worktree does not copy it)."; \
+		echo "  Bootstrap it first:  cd web-terminal-frontend && bun install"; \
+		exit 1; \
+	fi
 	cd web-terminal-frontend && bun run test
 	@echo ""
 
