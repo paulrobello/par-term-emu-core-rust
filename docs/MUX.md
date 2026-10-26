@@ -1106,12 +1106,19 @@ suffix rather than failing.
 
 Files materialize under `$TMPDIR/par-mux-uploads/` (mode 0700, files
 0600 — same-uid only, like the control socket). A **committed** file is
-left in place for the pane app to read and is never deleted by the daemon:
-its lifetime is the pane app's (or the user's) to end, and OS temp
-cleanup is the backstop. **Aborted, expired, and refused-incomplete**
-uploads are deleted at once. The staging state itself is never persisted —
-a daemon restart drops in-flight uploads, and their spool files are
-deleted by the next sweep.
+left in place for the pane app to read: its lifetime is the pane app's
+(or the user's) to end, and the daemon never deletes it on its own.
+**Aborted, expired, and refused-incomplete** uploads are deleted at once.
+The staging state itself is never persisted — a daemon restart drops
+in-flight uploads, and their spool files are deleted by the next sweep.
+Because a dead daemon cannot clean up after itself, a daemon **start**
+also sweeps the staging directory, deleting `upload-*` files older than
+24 hours: committed files every pane app outlived, or spool files a
+crash left behind. In-flight uploads die with their daemon and are
+minutes old at most, so no concurrently running daemon's upload can
+reach that age — the age guard is the concurrency guard, and the sweep
+never touches a live daemon's uploads. OS temp cleanup remains the
+backstop for everything younger.
 
 ## Git worktree workspaces
 

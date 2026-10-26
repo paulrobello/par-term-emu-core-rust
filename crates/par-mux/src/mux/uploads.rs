@@ -15,7 +15,9 @@
 //! client to clean up. Committed files deliberately outlive the upload:
 //! the pane app owns the file once the path is pasted (lifetime and
 //! directory documented in MUX.md's Uploads section and SECURITY.md's
-//! caps table).
+//! caps table). In-flight uploads die with their daemon, so a committed
+//! file older than [`UPLOAD_STALE_MAX_AGE`] belongs to a daemon that is
+//! gone — the daemon-startup sweep deletes such orphans.
 //!
 //! One upload at a time per client is the streaming shape (one active
 //! upload per pane session); the daemon-side registry still keys by id so
@@ -51,6 +53,13 @@ pub const UPLOAD_IDLE_TIMEOUT: Duration = Duration::from_secs(30);
 /// Time from `upload-begin` before an upload is abandoned regardless of
 /// progress, so a slow-drip upload cannot stage forever.
 pub const UPLOAD_TOTAL_TIMEOUT: Duration = Duration::from_secs(600);
+
+/// Age past which a committed spool file in the staging directory is
+/// considered orphaned: in-flight uploads die with their daemon (the
+/// staging state is never persisted), so a file this old was left by a
+/// daemon that is gone — and no concurrently running daemon's upload can
+/// be this old, which is what keeps the startup sweep off live uploads.
+pub const UPLOAD_STALE_MAX_AGE: Duration = Duration::from_secs(24 * 60 * 60);
 
 /// The directory committed and in-flight upload files live under. Files
 /// are 0600 in a 0700 directory (same-uid only, like the control socket).
@@ -284,6 +293,63 @@ pub(crate) fn sweep_expired() {
     sweep(&mut registry, Instant::now());
 }
 
+/// The daemon-startup sweep entry point: delete `upload-*` files in the
+/// staging directory older than [`UPLOAD_STALE_MAX_AGE`] — committed
+/// files every pane app outlived, or spool files a dead daemon never
+/// cleaned up. Returns the number of files deleted, for the caller's
+/// startup log line. Fail-open by construction: an absent or unreadable
+/// staging directory deletes nothing, per-file errors are logged and
+/// skipped, and nothing propagates — a sweep problem must never block
+/// daemon start.
+///
+/// Called once before this daemon serves; no uploads are in flight in
+/// this process yet, and the age guard is what makes it safe beside a
+/// concurrently running daemon's in-flight uploads.
+pub fn sweep_stale_at_startup() -> usize {
+    sweep_stale_files(&staging_dir(), UPLOAD_STALE_MAX_AGE)
+}
+
+/// The startup sweep's testable core: delete regular files named
+/// `upload-*` in `dir` whose mtime is more than `max_age` ago. A future
+/// mtime (clock skew) counts as not stale.
+fn sweep_stale_files(dir: &Path, max_age: Duration) -> usize {
+    let Ok(entries) = std::fs::read_dir(dir) else {
+        return 0;
+    };
+    let now = std::time::SystemTime::now();
+    let mut removed = 0;
+    for entry in entries.flatten() {
+        let Ok(name) = entry.file_name().into_string() else {
+            continue;
+        };
+        if !name.starts_with("upload-") {
+            continue;
+        }
+        let Ok(file_type) = entry.file_type() else {
+            continue;
+        };
+        if !file_type.is_file() {
+            continue;
+        }
+        let stale = std::fs::metadata(entry.path())
+            .and_then(|meta| meta.modified())
+            .ok()
+            .and_then(|mtime| now.duration_since(mtime).ok())
+            .is_some_and(|age| age > max_age);
+        if !stale {
+            continue;
+        }
+        match std::fs::remove_file(entry.path()) {
+            Ok(()) => removed += 1,
+            Err(err) => log::warn!(
+                "par-mux: startup sweep could not delete {}: {err}",
+                entry.path().display()
+            ),
+        }
+    }
+    removed
+}
+
 /// A `upload-begin` filename must be a bare file name: path components
 /// are stripped (a client cannot point the paste outside the staging
 /// directory), control characters and Windows-reserved punctuation are
@@ -473,5 +539,61 @@ mod tests {
         let id = begin("e.bin", 1).expect("begin");
         let err = chunk(id, b"").unwrap_err();
         assert!(err.contains("empty"), "unexpected: {err}");
+    }
+
+    // The startup sweep is registry-free, so it cannot collide with the
+    // lifecycle scenarios above; it runs on its own directory anyway, so
+    // it shares nothing with them (nor with a live daemon's real staging
+    // directory) at all.
+    #[test]
+    fn startup_sweep_deletes_stale_upload_files_and_keeps_fresh_ones() {
+        let dir =
+            std::env::temp_dir().join(format!("par-mux-uploads-sweep-test-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).expect("sweep test dir");
+        let old = dir.join("upload-000001-photo.png");
+        let fresh = dir.join("upload-000002-photo.png");
+        let not_upload = dir.join("keepme.txt");
+        std::fs::write(&old, b"stale").expect("write the stale file");
+        std::fs::write(&fresh, b"fresh").expect("write the fresh file");
+        std::fs::write(&not_upload, b"keep").expect("write the non-upload file");
+        backdate(&old, UPLOAD_STALE_MAX_AGE + Duration::from_secs(3_600));
+        backdate(
+            &not_upload,
+            UPLOAD_STALE_MAX_AGE + Duration::from_secs(3_600),
+        );
+
+        let removed = sweep_stale_files(&dir, UPLOAD_STALE_MAX_AGE);
+        assert_eq!(removed, 1, "exactly the stale upload file is deleted");
+        assert!(!old.exists(), "the stale upload file is gone");
+        assert!(
+            fresh.exists(),
+            "a fresh upload file survives the 24 h age guard"
+        );
+        assert!(
+            not_upload.exists(),
+            "files outside the upload- prefix are untouched"
+        );
+
+        // An absent directory is a no-op sweep, not an error (fail-open).
+        assert_eq!(
+            sweep_stale_files(&dir.join("absent"), UPLOAD_STALE_MAX_AGE),
+            0,
+            "an absent staging directory sweeps nothing"
+        );
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// Set a file's mtime `age` into the past — how the test fakes a file
+    /// a dead daemon left behind (`FileTimes` is std; no backdating
+    /// dependency).
+    fn backdate(path: &Path, age: Duration) {
+        let file = std::fs::OpenOptions::new()
+            .append(true)
+            .open(path)
+            .expect("open for backdating");
+        file.set_times(std::fs::FileTimes::new().set_modified(std::time::SystemTime::now() - age))
+            .expect("backdate the mtime");
     }
 }

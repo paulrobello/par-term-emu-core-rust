@@ -1694,6 +1694,16 @@ fn run_daemon(cli: Cli, path: std::path::PathBuf) -> std::io::Result<std::proces
     if cli.restart && tree.sessions().is_empty() {
         log::warn!("par-mux: restored tree is empty; daemon exiting (exit-when-empty)");
     }
+    // Committed upload files persist for pane apps by design, so spool
+    // files orphaned by a dead daemon linger until OS temp cleanup — which
+    // is not guaranteed to ever run. Anything older than 24 h cannot be an
+    // in-flight upload of a concurrently running daemon (the age guard is
+    // the concurrency guard), so the startup sweep deletes it. Fail-open:
+    // a sweep error logs and daemon start continues.
+    let swept = par_mux::mux::uploads::sweep_stale_at_startup();
+    if swept > 0 {
+        log::info!("par-mux: startup sweep deleted {swept} stale upload spool file(s)");
+    }
     if eff.pane_endpoints {
         // Reclaim crash leftovers before this daemon binds anything, so the
         // endpoint cap counts only live endpoints (ENH-039).

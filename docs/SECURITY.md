@@ -1413,11 +1413,11 @@ sections; the numbers live here.
 | `CLIENT_QUEUE_DEPTH` | 4,096 | `crates/par-mux/src/mux/server/mod.rs:83` | Broadcast lines queued per control-socket client before the daemon evicts it. |
 | `CLIENT_QUEUE_AGGREGATE_DEPTH` | `CLIENT_QUEUE_DEPTH * 2` | `crates/par-mux/src/mux/server/mod.rs:95` | Broadcast lines queued across all control-socket clients before the daemon evicts the deepest queue. |
 | `MAX_CONTROL_LINE_BYTES` | 1 MiB | `crates/par-mux/src/mux/server/mod.rs:104` | Bytes accumulated from one control-socket client line before the daemon closes it. |
-| `MAX_UPLOAD_CHUNK_BYTES` | 64 KiB | `crates/par-mux/src/mux/uploads.rs:31` | Base64-decoded bytes accepted for one `upload-chunk`. |
-| `MAX_UPLOAD_TOTAL_BYTES` | 100 MiB | `crates/par-mux/src/mux/uploads.rs:34` | Total bytes one upload may stage. |
-| `MAX_UPLOAD_CHUNKS` | 4,096 | `crates/par-mux/src/mux/uploads.rs:37` | Chunks one upload may accept (bounds a tiny-chunk flood below the |
-| `MAX_CONCURRENT_UPLOADS` | 8 | `crates/par-mux/src/mux/uploads.rs:41` | Uploads staged concurrently daemon-wide. |
-| `MAX_UPLOAD_NAME_BYTES` | 200 | `crates/par-mux/src/mux/uploads.rs:44` | Bytes of one `upload-begin` filename (a bare file name, never a |
+| `MAX_UPLOAD_CHUNK_BYTES` | 64 KiB | `crates/par-mux/src/mux/uploads.rs:33` | Base64-decoded bytes accepted for one `upload-chunk`. |
+| `MAX_UPLOAD_TOTAL_BYTES` | 100 MiB | `crates/par-mux/src/mux/uploads.rs:36` | Total bytes one upload may stage. |
+| `MAX_UPLOAD_CHUNKS` | 4,096 | `crates/par-mux/src/mux/uploads.rs:39` | Chunks one upload may accept (bounds a tiny-chunk flood below the |
+| `MAX_CONCURRENT_UPLOADS` | 8 | `crates/par-mux/src/mux/uploads.rs:43` | Uploads staged concurrently daemon-wide. |
+| `MAX_UPLOAD_NAME_BYTES` | 200 | `crates/par-mux/src/mux/uploads.rs:46` | Bytes of one `upload-begin` filename (a bare file name, never a |
 | `MAX_BADGE_FORMAT_LENGTH` | 4 KiB | `crates/par-term-emu-core/src/badge.rs:189` | Badge format bytes accepted from one OSC 1337 SetBadgeFormat payload. |
 | `MAX_IMAGE_DATA_SIZE` | 100 MiB | `crates/par-term-emu-core/src/graphics/iterm.rs:17` | Base64 image bytes accepted from one iTerm2 inline-image sequence. |
 | `MAX_FILE_SIZE` | 100 MiB | `crates/par-term-emu-core/src/graphics/kitty/decode.rs:155` | Bytes read from one kitty file medium named by an escape payload. |
