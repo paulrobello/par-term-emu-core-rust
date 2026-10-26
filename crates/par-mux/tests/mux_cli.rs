@@ -1108,7 +1108,12 @@ fn list_servers_prunes_only_dead_entries_and_reregistration_is_a_noop() {
     wait_listening(fixture.socket());
     let base = fixture.state_dir();
 
-    // The daemon registered itself at bind.
+    // The daemon registered itself at bind. The registry write trails
+    // the listener's bind by a few statements in daemon startup, so on a
+    // loaded host the connect below can win that race — poll for the
+    // entry briefly instead of asserting cold (measured 2026-10-25: two
+    // cold asserts failed at host load ~700 while the same tree passed
+    // under it repeatedly otherwise).
     let entry_file = base.join("servers").join(format!(
         "{}.json",
         fixture
@@ -1117,7 +1122,14 @@ fn list_servers_prunes_only_dead_entries_and_reregistration_is_a_noop() {
             .and_then(|s| s.to_str())
             .expect("utf-8 stem")
     ));
-    assert!(entry_file.exists(), "the daemon registered at bind");
+    let registered = std::time::Instant::now() + std::time::Duration::from_secs(10);
+    while !entry_file.exists() {
+        assert!(
+            std::time::Instant::now() < registered,
+            "the daemon registered at bind"
+        );
+        std::thread::sleep(std::time::Duration::from_millis(25));
+    }
     let before = std::fs::read(&entry_file).expect("entry bytes");
 
     // Re-registering the same live daemon must not rewrite the entry.
