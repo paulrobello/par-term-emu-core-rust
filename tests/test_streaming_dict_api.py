@@ -365,6 +365,20 @@ SERVER_CASES = [
     ("file_transfer_failed", {"id": 1}, {"id": 1, "reason": "unknown"}),
     ("upload_requested", {"format": "base64"}, {"format": "base64"}),
     ("upload_requested", {}, {"format": "base64"}),
+    # Upload replies (sent only to the uploading session).
+    ("upload_started", {"upload_id": 7}, {"upload_id": 7}),
+    ("upload_started", {}, {"upload_id": 0}),
+    (
+        "upload_finished",
+        {"upload_id": 7, "path": "/tmp/f.bin", "error": "boom"},
+        {"upload_id": 7, "path": "/tmp/f.bin", "error": "boom"},
+    ),
+    (
+        "upload_finished",
+        {"upload_id": 7, "path": "/tmp/f.bin"},
+        {"upload_id": 7, "path": "/tmp/f.bin", "error": None},
+    ),
+    ("upload_finished", {}, {"upload_id": 0, "path": None, "error": None}),
     ("screen_cleared", {"include_scrollback": True}, {"include_scrollback": True}),
     ("screen_cleared", {}, {"include_scrollback": False}),
 ]
@@ -447,6 +461,18 @@ CLIENT_CASES = [
         {"operation": "get"},
         {"operation": "get", "content": None, "target": None},
     ),
+    # Client uploads (mux-backed staging; the chunk payload rides kwargs
+    # as bytes and the decoded dict emits bytes, like inline_image).
+    (
+        "upload_begin",
+        {"filename": "f.bin", "total_bytes": 10},
+        {"filename": "f.bin", "total_bytes": 10},
+    ),
+    ("upload_begin", {}, {"filename": "", "total_bytes": 0}),
+    ("upload_chunk", {"data": b"\x01\x02\x03"}, {"data": b"\x01\x02\x03"}),
+    ("upload_chunk", {}, {"data": b""}),
+    ("upload_commit", {}, {}),
+    ("upload_abort", {}, {}),
 ]
 
 
