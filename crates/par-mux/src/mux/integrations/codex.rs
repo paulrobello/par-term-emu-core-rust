@@ -1014,14 +1014,31 @@ args = ["mcp", "serve"]
             }
         };
         stream
-            .set_read_timeout(Some(Duration::from_secs(5)))
+            .set_read_timeout(Some(Duration::from_millis(250)))
             .expect("read timeout");
         let mut buf = Vec::new();
         let mut reader = std::io::BufReader::new(stream);
         use std::io::BufRead as _;
-        reader
-            .read_until(b'\n', &mut buf)
-            .expect("reads the report line");
+        // The report line can land late under load; a single-shot read turns
+        // that into a flaky panic, so poll until the line or a deadline.
+        let read_deadline = Instant::now() + Duration::from_secs(10);
+        loop {
+            match reader.read_until(b'\n', &mut buf) {
+                Ok(0) => break,
+                Ok(_) if buf.ends_with(b"\n") => break,
+                Ok(_) => {}
+                Err(err)
+                    if err.kind() == std::io::ErrorKind::WouldBlock
+                        || err.kind() == std::io::ErrorKind::TimedOut =>
+                {
+                    assert!(
+                        Instant::now() < read_deadline,
+                        "the report line never arrived within 10s"
+                    );
+                }
+                Err(err) => panic!("read failed: {err}"),
+            }
+        }
         let _ = reader.get_ref().shutdown(Shutdown::Both);
         let line = String::from_utf8(buf).expect("utf-8 report");
         let request: JsonValue = serde_json::from_str(line.trim()).expect("parses the report");
