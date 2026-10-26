@@ -3642,6 +3642,52 @@ fn focus_pane_returns_before_a_slow_select_answers() {
     assert_eq!(session.chrome.flash_text(), None);
 }
 
+/// An agent-row click lights its row on the click's own frame: focus_pane
+/// moves the client-local focus (`renderer.focused()` — what the panel's
+/// rows activate on) and rebuilds the panel from the cache, instead of
+/// waiting for the throttled refresh a quiet pane may not tick for (the
+/// second-click report).
+#[test]
+fn sidebar_agent_row_click_highlights_the_row_immediately() {
+    let (_rx, mut conn, mut session) = two_pane_session("agent-hl", FakeScript::default());
+    show_sidebar(&mut session);
+    session.status.apply_snapshot_for_test(&[
+        "snapshot 1".to_string(),
+        "workspace +0 * app".to_string(),
+        "session $0 * +0 main".to_string(),
+        "window @0 * 1".to_string(),
+        "agent %1 claude working hook".to_string(),
+        "agent %2 kimi idle hook".to_string(),
+    ]);
+    session.rebuild_agent_section();
+    let selected = |session: &WindowSession| -> Vec<u32> {
+        session
+            .renderer
+            .sidebar_sections
+            .clone()
+            .expect("sections")
+            .iter()
+            .flat_map(|s| s.rows.iter())
+            .filter_map(|row| match row.id {
+                SidebarRowId::Pane(p) if row.active => Some(p),
+                _ => None,
+            })
+            .collect()
+    };
+    assert_eq!(
+        selected(&session),
+        vec![1],
+        "the layout's first pane starts focused"
+    );
+    session.focus_pane(&mut conn, 2);
+    settle(&mut session, &mut conn);
+    assert_eq!(
+        selected(&session),
+        vec![2],
+        "the clicked row lights on the click's own frame"
+    );
+}
+
 const THREE_PANE: &str = "0000,90x24,0,0{30x24,0,0,1,30x24,30,0,2,30x24,60,0,3}";
 
 /// A fake daemon advertising `client-snapshot v1` (ENH-043), scripted

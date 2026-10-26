@@ -7,6 +7,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+- **par-mux attach: an agent-row click lights its row on the click's own frame** (`crates/par-mux/src/mux/attach/render/navigate.rs`, `session.rs`, `render/tests/session.rs`, `docs/MUX.md`): clicking an agent in the side panel switched to that agent but the row's highlight waited for the throttled status refresh — a refresh a quiet pane may not tick for until the next input event, which is exactly what a second click was. The click's own path now moves the client-local focus (`renderer.focused()`, what the panel's rows activate on) and rebuilds the panel from the cache; a cross-window click's landing reseed repaints the panel again with the landed focus. Pinned by `sidebar_agent_row_click_highlights_the_row_immediately`.
+
 ## [0.68.0] - 2026-10-26
 
 ### Added

@@ -513,6 +513,15 @@ impl WindowSession {
         {
             return;
         }
+        // The row's highlight is client-local (`renderer.focused()`):
+        // move it now and rebuild the panel from the cache, so the
+        // clicked row lights on this frame instead of waiting for the
+        // throttled refresh a quiet pane may not tick for (the
+        // second-click reports). A cross-window click's pane is not in
+        // the shown layout yet — focus(pane) ignores it there, and the
+        // landing below repaints the panel from its reseed.
+        self.renderer.focus(pane);
+        self.rebuild_agent_section();
         let gen = self.begin_nav();
         let expected = self.window.clone();
         self.send_then(

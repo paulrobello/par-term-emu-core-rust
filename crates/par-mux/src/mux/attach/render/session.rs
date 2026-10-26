@@ -849,6 +849,10 @@ impl WindowSession {
         self.chrome.tab_strip.invalidate();
         self.chrome.tab_strip.reset_scroll();
         self.draw_tab_strip();
+        // A landing (or any reseed) can move the focus onto the freshly
+        // seeded layout's marked pane: repaint the side panel's highlight
+        // from the cache with it.
+        self.rebuild_agent_section();
     }
 
     /// Keep the events a seed drain consumed for the pump. A
