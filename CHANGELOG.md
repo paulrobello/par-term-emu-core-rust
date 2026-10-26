@@ -7,6 +7,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+- **Dependencies: sweep to latest stable across Rust, Python, the web frontend, and CI**: `cargo update` bumps openssl-probe 0.2.2 and serial2 0.2.39 (14 crates correctly held at semver majors — pyo3 0.30, syn 3, toml 1.1, zbus 6, criterion 0.8, parking_lot 0.13, …; the gitignored `fuzz/Cargo.lock` re-locked locally), `uv lock --upgrade` bumps pytest-asyncio 1.4.1 with its `pyproject.toml` floor synced to `>=1.4.1`, and ncu + `bun install` bumps autoprefixer 10.6.2, postcss 8.5.32, pako 3.0.3 with the static export rebuilt. Action pins: `taiki-e/install-action` v2.87.32 and `claude-code-action` v1.0.263; every other pinned action was already current.
+
 ### Added
 - **par-mux attach: the tab strip's per-tab width is configurable with a floor and a cap** (`crates/par-mux/src/mux/config.rs`, `crates/par-mux/src/mux/attach/tabs.rs`, `crates/par-mux/src/mux/attach/render/{session.rs,navigate.rs,modal_settings.rs}`, `docs/MUX.md`): two new `[client]` keys — `tab-width-min` (default 0 = no floor) pads a short tab's block up to the floor and `tab-width-max` (default 0 = no cap) truncates a longer name with an ellipsis at the cap, max winning when min exceeds it; both live on reload and ship as `general`-tab settings rows (the standing TUI-settings rule), written through the same generic key path. gen-config emits both defaults. Pinned by `min_width_pads_short_tabs_up_to_the_floor`, `max_width_truncates_long_names_to_the_cap`, `a_min_above_the_cap_clamps_to_the_cap`, and the extended `herdr_parity_display_options_resolve_and_gen_config_emits`.
 

@@ -19,7 +19,7 @@
     "@xterm/addon-webgl": "^0.19.0",
     "@xterm/xterm": "^6.0.0",
     "next": "16.4.3",
-    "pako": "^3.0.2",
+    "pako": "^3.0.3",
     "react": "^19.3.1",
     "react-dom": "^19.3.1"
   },
@@ -32,11 +32,11 @@
     "@types/node": "^26.6.5",
     "@types/react": "^19.3.0",
     "@types/react-dom": "^19.3.0",
-    "autoprefixer": "^10.6.1",
+    "autoprefixer": "^10.6.2",
     "eslint": "^10",
     "eslint-config-next": "^16.4.3",
     "happy-dom": "^21.0.4",
-    "postcss": "^8.5.31",
+    "postcss": "^8.5.32",
     "tailwindcss": "^4.3.3",
     "typescript": "^7",
     "vitest": "^5.0.5"
