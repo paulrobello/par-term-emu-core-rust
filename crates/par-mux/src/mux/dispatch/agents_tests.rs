@@ -268,7 +268,20 @@ fn agent_start_appends_the_configured_resume_words() {
     let deadline = Instant::now() + crate::mux::test_wait::CEILING;
     loop {
         let cwd = f.tree.lock().pane(PANE).and_then(|p| p.persistence_cwd());
-        if cwd.as_deref() == Some(dir.path()) {
+        // A host shell without OSC 7 integration reports the child's
+        // kernel cwd, whose macOS form resolves /var/folders under
+        // /private/var — never string-equal to tempfile's unresolved
+        // path. Compare canonical forms so the test is hermetic on both
+        // host kinds (measured 2026-10-26: deterministic fail on MiniMac
+        // where the shells carry no integration hooks, pass on MacDaddy
+        // where they do).
+        let want = dir.path().canonicalize().ok();
+        if cwd
+            .as_deref()
+            .and_then(|cwd| cwd.canonicalize().ok())
+            .as_ref()
+            == want.as_ref()
+        {
             break;
         }
         assert!(Instant::now() < deadline, "the pane cwd never moved");
