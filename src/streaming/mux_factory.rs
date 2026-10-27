@@ -9,9 +9,11 @@
 //!
 //! One connection per session, read in order by one reader thread whose
 //! lines feed first the handshake in `create_session`, then the drain thread.
-//! The seed (`refresh-client -t %N`) is read in `create_session` against a
-//! reply deadline, and `%output` pushed before its reply block is discarded
-//! (the replay already reflects it); everything after is applied. Ordering is
+//! The seed (`refresh-client -t %N -G` — the screen replay plus the pane's
+//! graphics placements, with a plain-form retry when an older daemon
+//! rejects the flag) is read in `create_session` against a reply deadline,
+//! and `%output` pushed before its reply block is discarded (the replay
+//! already reflects it); everything after is applied. Ordering is
 //! the reason this does not use [`crate::mux::MuxClient`], which splits
 //! replies and notifications into separate channels.
 //!
@@ -28,12 +30,12 @@
 
 use crate::mux::{connect_local_stream, LocalStream};
 use crate::streaming::error::StreamingError;
-use crate::streaming::inline_image_frame;
-use crate::streaming::protocol::ServerMessage;
+use crate::streaming::protocol::{ServerMessage, MAX_INLINE_IMAGE_BYTES};
 use crate::streaming::server::{
     SessionFactory, SessionFactoryResult, StreamingServer, UploadForwarder,
 };
 use crate::streaming::session::StreamSessionState;
+use crate::streaming::{apply_inline_image, inline_image_frame};
 use crate::terminal::{Terminal, TerminalEvent};
 use crate::tmux_control::{TmuxControlParser, TmuxNotification};
 use base64::Engine as _;
@@ -562,17 +564,14 @@ impl SessionFactory for MuxSessionFactory {
             .ok_or_else(|| fail("pane-info", io::Error::other(format!("bad reply {info:?}"))))?;
 
         let mut terminal = Terminal::with_scrollback(cols, rows, self.scrollback);
-        let seed = command(
-            &mut writer,
-            &reader,
-            &format!("refresh-client -t %{pane}"),
-            timeout,
-        )
-        .map_err(|e| fail("refresh-client -t", e))?;
-        terminal.process(seed.join("\n").as_bytes());
+        let seed = seed_reply(&mut writer, &reader, pane, timeout)
+            .map_err(|e| fail("refresh-client -t", e))?;
+        let (screen, seed_graphics) = split_graphics_seed(&seed);
+        terminal.process(screen.as_bytes());
         // The daemon's pane answers terminal queries itself; the mirror's
         // copies would double every reply.
         terminal.drain_responses();
+        ingest_graphics_seed(&mut terminal, &seed_graphics);
         let terminal = Arc::new(RwLock::new(terminal));
 
         let writer = Arc::new(Mutex::new(Some(writer)));
@@ -905,6 +904,35 @@ fn spawn_drain(
     });
 }
 
+/// The seed command: `refresh-client -t %N -G` — the screen replay plus a
+/// `%graphics-begin`/`%graphics-end` section carrying the pane's graphics
+/// placements, so a mirror's `Connected.graphics` replays images placed
+/// before attach. An `%error` first line means an older daemon rejected
+/// the unknown flag: retry the plain form, which seeds screen-only,
+/// exactly the pre-`-G` behavior.
+fn seed_reply(
+    writer: &mut LocalStream,
+    reader: &MuxLines,
+    pane: u32,
+    timeout: Duration,
+) -> io::Result<Vec<String>> {
+    let reply = command(
+        writer,
+        reader,
+        &format!("refresh-client -t %{pane} -G"),
+        timeout,
+    )?;
+    if reply.first().is_some_and(|line| line.starts_with("%error")) {
+        return command(
+            writer,
+            reader,
+            &format!("refresh-client -t %{pane}"),
+            timeout,
+        );
+    }
+    Ok(reply)
+}
+
 /// A resolved active-workspace pane, everything the re-seed needs.
 struct WorkspaceTarget {
     session: String,
@@ -915,9 +943,115 @@ struct WorkspaceTarget {
     /// The `pane-info -M` reply line, re-parsed into the viewer-status
     /// snapshot the viewers of the new pane start from.
     status_line: String,
-    /// The `refresh-client -t %NEW` replay, line-per-line as the daemon
-    /// sent it.
-    seed: Vec<String>,
+    /// The `refresh-client -t %NEW -G` replay's screen part — the reply
+    /// with its graphics section split off.
+    screen: String,
+    /// The seed's graphics placements, ingested after the screen replay.
+    graphics: Vec<SeedGraphicFrame>,
+}
+
+/// One graphics placement the seed carried: the daemon's store entry in
+/// the frame shape [`apply_inline_image`] ingests.
+struct SeedGraphicFrame {
+    id: u64,
+    col: u32,
+    row: u32,
+    width: u32,
+    height: u32,
+    data: Vec<u8>,
+}
+
+/// Daemon placement ids plus this offset keep seed graphics out of the
+/// mirror process's own graphic-id counter range: a placement parsed
+/// after attach draws ids from the mirror's counter (small numbers), and
+/// an unchanged seed id colliding with it would put two graphics under
+/// one id in the mirror store.
+const SEED_GRAPHICS_ID_OFFSET: u64 = 1 << 62;
+
+/// Marker lines framing the seed's graphics section — the daemon side
+/// writes them (crates/par-mux `graphics_seed_section`); keep the two
+/// spellings in sync. A pane can print any text, so the split anchors on
+/// the LAST begin marker.
+const GRAPHICS_SEED_BEGIN: &str = "%graphics-begin";
+const GRAPHICS_SEED_END: &str = "%graphics-end";
+
+/// Split a seed reply into its screen part and its graphics frames. The
+/// section is optional: a flagless reply (older daemon, or no graphics
+/// on the pane) is all screen.
+fn split_graphics_seed(lines: &[String]) -> (String, Vec<SeedGraphicFrame>) {
+    let Some(begin) = lines.iter().rposition(|line| line == GRAPHICS_SEED_BEGIN) else {
+        return (lines.join("\n"), Vec::new());
+    };
+    let Some(span) = lines[begin + 1..]
+        .iter()
+        .position(|line| line == GRAPHICS_SEED_END)
+    else {
+        return (lines.join("\n"), Vec::new());
+    };
+    let screen = lines[..begin].join("\n");
+    let frames = lines[begin + 1..begin + 1 + span]
+        .iter()
+        .filter_map(|line| parse_seed_graphic(line))
+        .collect();
+    (screen, frames)
+}
+
+/// Parse one `%gfx <id> <col> <row> <width> <height> <base64-rgba>` line;
+/// `None` skips a malformed line rather than failing the whole seed.
+fn parse_seed_graphic(line: &str) -> Option<SeedGraphicFrame> {
+    use base64::Engine as _;
+    let fields: Vec<&str> = line.split_whitespace().collect();
+    if fields.len() != 7 || fields[0] != "%gfx" {
+        return None;
+    }
+    let id = fields[1].parse().ok()?;
+    let col = fields[2].parse().ok()?;
+    let row = fields[3].parse().ok()?;
+    let width = fields[4].parse().ok()?;
+    let height = fields[5].parse().ok()?;
+    let data = base64::engine::general_purpose::STANDARD
+        .decode(fields[6])
+        .ok()?;
+    Some(SeedGraphicFrame {
+        id,
+        col,
+        row,
+        width,
+        height,
+        data,
+    })
+}
+
+/// Ingest the seed's placements into the mirror store so
+/// `Connected.graphics` replays them. Oldest first, so the store stays
+/// chronological and the connect replay (newest first) matches the
+/// daemon's own selection. Seed ids ride [`SEED_GRAPHICS_ID_OFFSET`]; a
+/// frame over the wire cap is skipped exactly like an oversize live
+/// frame.
+fn ingest_graphics_seed(terminal: &mut Terminal, frames: &[SeedGraphicFrame]) {
+    for frame in frames.iter().rev() {
+        if frame.data.len() > MAX_INLINE_IMAGE_BYTES {
+            crate::debug_error!(
+                "STREAMING",
+                "seed graphic {} not ingested: {} payload bytes exceed the {}-byte cap",
+                frame.id,
+                frame.data.len(),
+                MAX_INLINE_IMAGE_BYTES
+            );
+            continue;
+        }
+        let message = ServerMessage::inline_image(
+            SEED_GRAPHICS_ID_OFFSET + frame.id,
+            None,
+            "rgba".to_string(),
+            frame.width,
+            frame.height,
+            frame.data.clone(),
+            frame.col,
+            frame.row,
+        );
+        let _ = apply_inline_image(terminal, &message);
+    }
 }
 
 /// Re-resolve the daemon's active workspace pane and, when it moved,
@@ -979,12 +1113,8 @@ fn resolve_workspace_target(
         .and_then(|l| parse_pane_info(l))
         .ok_or_else(|| io::Error::other(format!("bad pane-info reply {info:?}")))?;
     let status_line = info.first().cloned().unwrap_or_default();
-    let seed = command(
-        &mut writer,
-        &reader,
-        &format!("refresh-client -t %{pane}"),
-        timeout,
-    )?;
+    let seed = seed_reply(&mut writer, &reader, pane, timeout)?;
+    let (screen, graphics) = split_graphics_seed(&seed);
     Ok(Some(WorkspaceTarget {
         session,
         pane,
@@ -992,7 +1122,8 @@ fn resolve_workspace_target(
         cols,
         rows,
         status_line,
-        seed,
+        screen,
+        graphics,
     }))
 }
 
@@ -1020,8 +1151,9 @@ fn apply_workspace_target(
             resized = true;
             batches.push(term.resize_deferred(target.cols, target.rows));
         }
-        batches.push(term.process_deferred(target.seed.join("\n").as_bytes()));
+        batches.push(term.process_deferred(target.screen.as_bytes()));
         term.drain_responses();
+        ingest_graphics_seed(&mut term, &target.graphics);
     }
     for batch in batches {
         batch.deliver();
@@ -1842,6 +1974,132 @@ mod tests {
             .filter(|m| matches!(m, ServerMessage::InlineImage { .. }))
             .count();
         assert_eq!(dupes, 0, "the frame must not re-stream on later polls");
+    }
+
+    /// A graphic placed BEFORE the mirror attaches replays to a late
+    /// joiner through `Connected.graphics`: the seed's `-G` section
+    /// carries the pane's placements into the mirror store (the card's
+    /// regression — the seed reproduced the visible grid but not the
+    /// images, so late joiners saw a pane without its graphics), and a
+    /// placement after attach still streams live as an InlineImage frame.
+    #[test]
+    fn a_graphic_placed_before_attach_replays_in_connected_graphics() {
+        let rt = runtime();
+        let _entered = rt.enter();
+        let (_dir, socket, _serving, mut control, pane) = daemon();
+        let pane_num: u32 = pane.trim_start_matches('%').parse().expect("pane number");
+
+        // The image emission and a marker ride one send-keys: the marker
+        // reaching the pane capture proves the pane terminal processed
+        // the image bytes above it, so the mirror below attaches AFTER
+        // the placement deterministically.
+        let line =
+            b"printf '\\033_Ga=T,f=24,i=77,s=2,v=2;AAAAAAAAAAAAAAAA\\033\\\\'; echo GFX-PLACED\r";
+        let hex: String = line
+            .iter()
+            .map(|b| format!("{b:02x} "))
+            .collect::<String>()
+            .trim_end()
+            .to_string();
+        control
+            .send(&format!("send-keys -t {pane} -H {hex}"))
+            .expect("send-keys");
+        wait("GFX-PLACED in the pane", || {
+            let text = control
+                .send(&format!("capture-pane -t {pane}"))
+                .expect("capture")
+                .join("\n");
+            (!has_line(&text, "GFX-PLACED")).then_some(text)
+        });
+
+        let server = streaming(&socket);
+        let session = mirror(&server, &pane);
+        let connected = session.build_connect_message("late-joiner", false);
+        let ServerMessage::Connected { graphics, .. } = connected else {
+            panic!("expected a Connected message");
+        };
+        assert_eq!(
+            graphics.len(),
+            1,
+            "the pre-attach graphic replays to the late joiner: {graphics:?}"
+        );
+        let frame = &graphics[0];
+        assert_eq!(frame.format, "rgba", "store pixels replay as RGBA");
+        assert_eq!((frame.width, frame.height), (2, 2));
+        assert_eq!(frame.data.len(), 16, "2x2 RGB decoded to RGBA");
+        assert_eq!(frame.pane_id, None, "replay frames tag no pane");
+        assert!(
+            frame.image_id >= SEED_GRAPHICS_ID_OFFSET,
+            "seed ids ride the offset, out of the mirror counter's range"
+        );
+        // The read guard is scoped: holding it past this block would block
+        // the drain's write for the live leg below, and the live frame
+        // would never arrive.
+        {
+            let mirror = session.terminal.read();
+            let stored = mirror
+                .all_graphics()
+                .iter()
+                .find(|g| g.id == frame.image_id)
+                .expect("the seed ingested into the mirror store");
+            assert_eq!((stored.width, stored.height), (2, 2));
+            assert_eq!(
+                stored.position,
+                (frame.col as usize, frame.row as usize),
+                "the replay carries the stored placement"
+            );
+        }
+
+        // The live leg is untouched: a placement after attach still
+        // arrives as the pane-tagged InlineImage frame.
+        let mut updates = session.broadcast_tx.subscribe();
+        let line = b"printf '\\033_Ga=T,f=24,i=88,s=2,v=2;BBBBBBBBBBBBBBBB\\033\\\\'\r";
+        let hex: String = line
+            .iter()
+            .map(|b| format!("{b:02x} "))
+            .collect::<String>()
+            .trim_end()
+            .to_string();
+        control
+            .send(&format!("send-keys -t {pane} -H {hex}"))
+            .expect("send-keys");
+        let deadline = Instant::now() + CEILING;
+        let mut frames = Vec::new();
+        loop {
+            while let Ok(msg) = updates.try_recv() {
+                if let ServerMessage::InlineImage { .. } = msg {
+                    frames.push(msg);
+                }
+            }
+            if !frames.is_empty() || Instant::now() >= deadline {
+                break;
+            }
+            std::thread::sleep(Duration::from_millis(20));
+        }
+        assert!(
+            !frames.is_empty(),
+            "a placement after attach must still stream live; mirror graphics: {} pane capture:\n{}",
+            session.terminal.read().graphics_count(),
+            control
+                .send(&format!("capture-pane -t {pane}"))
+                .expect("capture")
+                .join("\n"),
+        );
+        let ServerMessage::InlineImage {
+            image_id,
+            pane_id,
+            data,
+            ..
+        } = &frames[0]
+        else {
+            panic!("not an InlineImage frame");
+        };
+        assert_eq!(*pane_id, Some(pane_num), "the live frame names its pane");
+        assert!(
+            *image_id < SEED_GRAPHICS_ID_OFFSET,
+            "live frames draw ids from the mirror's own counter"
+        );
+        assert_eq!(data.len(), 16, "the live frame carries the decoded pixels");
     }
 
     #[test]

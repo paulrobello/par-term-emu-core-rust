@@ -217,6 +217,12 @@ pub enum MuxCommand {
         /// `None` (an older client) declares no chrome — PTYs keep the
         /// full rect, exactly the pre-declaration sizing.
         chrome: Option<crate::mux::layout::PaneChrome>,
+        /// `-G`: append the pane's graphics placements to the seed reply,
+        /// after the screen bytes, as a `%graphics-begin`/`%graphics-end`
+        /// section the streaming mirror parses into its own store (so
+        /// `Connected.graphics` replays images placed before attach).
+        /// Only the seed form carries it; a `-C` size report ignores it.
+        graphics: bool,
     },
     /// Add a window to a session, optionally named.
     NewWindow {

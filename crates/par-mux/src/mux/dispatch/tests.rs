@@ -369,6 +369,77 @@ fn target_less_refresh_client_never_replays_a_screen() {
     );
 }
 
+/// The seed's `-G` section: a pane with graphics placements appends a
+/// `%graphics-begin`/`%graphics-end` manifest after the screen bytes, so
+/// a streaming mirror can reconstruct the placements into its own store;
+/// the flagless reply stays screen-only.
+#[test]
+fn refresh_client_seed_with_graphics_carries_a_placement_manifest() {
+    let tree = Arc::new(Mutex::new(MuxTree::new(Box::new(
+        ShellPaneFactory::default(),
+    ))));
+    let clients = Arc::new(Mutex::new(Vec::new()));
+    let __output_epoch: crate::mux::server::OutputEpoch = std::sync::Arc::default();
+    let ctx = Ctx {
+        output_epoch: &__output_epoch,
+        tree: &tree,
+        clients: &clients,
+        command_number: 1,
+        shutdown: None,
+        config: None,
+        client_id: None,
+    };
+    let run = |line: &str| dispatch_command(parse_command(line).unwrap(), &ctx, None, None);
+    run("new-session -s main");
+    let pane = {
+        let guard = tree.lock();
+        let session = guard.sessions()[0];
+        let window = guard.session(session).unwrap().windows[0];
+        guard.window(window).unwrap().panes()[0]
+    };
+    {
+        let terminal = tree.lock().pane(pane).unwrap().terminal();
+        terminal
+            .write()
+            .process(b"\x1b_Ga=T,f=24,s=2,v=2;AAAAAAAAAAAAAAAA\x1b\\");
+    }
+    let plain = run(&format!("refresh-client -t %{}", pane.0));
+    assert!(
+        !plain.contains("%graphics-begin"),
+        "the flagless seed stays screen-only: {plain}"
+    );
+
+    let reply = run(&format!("refresh-client -t %{} -G", pane.0));
+    assert!(
+        reply.contains("%graphics-begin") && reply.contains("%graphics-end"),
+        "the -G seed carries the manifest: {reply}"
+    );
+    let line = reply
+        .lines()
+        .find(|l| l.starts_with("%gfx "))
+        .expect("one manifest line per placement");
+    let fields: Vec<&str> = line.split_whitespace().collect();
+    assert_eq!(fields.len(), 7, "id col row width height base64: {line}");
+    assert_eq!((fields[4], fields[5]), ("2", "2"), "the 2x2 kitty image");
+    use base64::Engine as _;
+    let pixels = base64::engine::general_purpose::STANDARD
+        .decode(fields[6])
+        .expect("the manifest carries base64 RGBA");
+    assert_eq!(pixels.len(), 16, "2x2 RGB decoded to RGBA");
+    let store = tree.lock().pane(pane).unwrap().terminal();
+    let terminal = store.read();
+    let stored = terminal
+        .all_graphics()
+        .iter()
+        .next()
+        .expect("the pane store holds the placement");
+    assert_eq!(
+        fields[1],
+        stored.id.to_string(),
+        "the manifest names the store id"
+    );
+}
+
 /// Spawns the first pane as a shell; every later spawn fails.
 struct FirstSpawnOnly(AtomicBool);
 

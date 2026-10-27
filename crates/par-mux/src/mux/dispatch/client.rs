@@ -13,7 +13,15 @@ pub(super) fn route_client_command(ctx: &Ctx<'_>, command: MuxCommand) -> Outcom
             size,
             cell_pixels,
             chrome,
-        } => cmd_refresh_client(ctx, pane, size, cell_pixels, chrome.unwrap_or_default()),
+            graphics,
+        } => cmd_refresh_client(
+            ctx,
+            pane,
+            size,
+            cell_pixels,
+            chrome.unwrap_or_default(),
+            graphics,
+        ),
         MuxCommand::ListAgents => cmd_list_agents(ctx),
         MuxCommand::ClientSnapshot { window } => cmd_client_snapshot(ctx, window),
         // The socket's connection loop serves pane streams before dispatch
@@ -37,6 +45,7 @@ pub(super) fn cmd_refresh_client(
     size: Option<(u16, u16)>,
     cell_pixels: Option<(u16, u16)>,
     chrome: PaneChrome,
+    graphics: bool,
 ) -> Outcome {
     // `-p` is applied first and independently of `-C` and of the target:
     // the cell size is daemon-wide state every later re-fit reads
@@ -60,7 +69,7 @@ pub(super) fn cmd_refresh_client(
             };
             match size {
                 Some(size) => refresh_pane_window(ctx, pane, size, chrome),
-                None => replay_pane_screen(ctx, pane),
+                None => replay_pane_screen(ctx, pane, graphics),
             }
         }
     }
@@ -151,15 +160,83 @@ fn refresh_pane_window(
 /// cells (plain text trims them), and finally the cursor
 /// position/visibility/style and the input modes a full-screen app's next
 /// %output deltas assume.
-fn replay_pane_screen(ctx: &Ctx<'_>, pane: PaneId) -> Outcome {
+fn replay_pane_screen(ctx: &Ctx<'_>, pane: PaneId, graphics: bool) -> Outcome {
     let guard = ctx.tree.lock();
     match guard.pane(pane) {
         Some(target) => {
-            let screen = target.terminal().read().export_screen_restore_sequence();
-            Outcome::ok(ctx, &screen)
+            let terminal = target.terminal();
+            let terminal = terminal.read();
+            let mut seed = terminal.export_screen_restore_sequence();
+            if graphics {
+                if let Some(section) = graphics_seed_section(&terminal) {
+                    seed.push('\n');
+                    seed.push_str(&section);
+                }
+            }
+            Outcome::ok(ctx, &seed)
         }
         None => Outcome::err(ctx, &format!("no such pane: {pane}")),
     }
+}
+
+/// The streaming `Connected.graphics` replay caps the seed section
+/// mirrors (src/streaming/session.rs): the mirror re-applies its own
+/// authoritative caps at ingest, these bound the transfer.
+const SEED_GRAPHICS_MAX_FRAMES: usize = 24;
+const SEED_GRAPHICS_MAX_BYTES: usize = 8 * 1024 * 1024;
+
+/// Marker lines framing the seed's graphics section. Reply-block bodies
+/// are inert on the wire (only `%begin`/`%end` frame them), but a pane
+/// can print any text, so the mirror splits on the LAST begin marker.
+const GRAPHICS_SEED_BEGIN: &str = "%graphics-begin";
+const GRAPHICS_SEED_END: &str = "%graphics-end";
+
+/// The pane's graphics placements as the seed's `%gfx` section: newest
+/// first, bounded like the streaming connect replay (frame count,
+/// aggregate bytes, per-frame payload), `None` when the walk yields
+/// nothing so a pane without graphics seeds byte-identical to before.
+/// One line per placement: `%gfx <id> <col> <row> <width> <height>
+/// <base64-rgba>` — the shape `apply_inline_image` ingests, so a mirror
+/// reconstructs every placement without re-decoding an image format.
+fn graphics_seed_section(terminal: &par_term_emu_core::terminal::Terminal) -> Option<String> {
+    use base64::Engine as _;
+    let store = terminal.all_graphics();
+    if store.is_empty() {
+        return None;
+    }
+    let mut lines: Vec<String> = Vec::new();
+    let mut aggregate = 0usize;
+    for graphic in store.iter().rev() {
+        if lines.len() >= SEED_GRAPHICS_MAX_FRAMES
+            || aggregate + graphic.pixels.len() > SEED_GRAPHICS_MAX_BYTES
+        {
+            break;
+        }
+        if graphic.pixels.len() > SEED_GRAPHICS_MAX_BYTES {
+            continue;
+        }
+        aggregate += graphic.pixels.len();
+        lines.push(format!(
+            "%gfx {} {} {} {} {} {}",
+            graphic.id,
+            graphic.position.0,
+            graphic.position.1,
+            graphic.width,
+            graphic.height,
+            base64::engine::general_purpose::STANDARD.encode(graphic.pixels.as_ref()),
+        ));
+    }
+    if lines.is_empty() {
+        return None;
+    }
+    let mut section = String::from(GRAPHICS_SEED_BEGIN);
+    for line in lines {
+        section.push('\n');
+        section.push_str(&line);
+    }
+    section.push('\n');
+    section.push_str(GRAPHICS_SEED_END);
+    Some(section)
 }
 
 /// The issuing connection selected `window` for itself (`select-window`,

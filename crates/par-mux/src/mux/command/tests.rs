@@ -1604,7 +1604,8 @@ fn parses_refresh_client_with_and_without_a_size_report() {
             pane: Some(Target::Id(PaneId(0))),
             size: None,
             cell_pixels: None,
-            chrome: None
+            chrome: None,
+            graphics: false,
         }
     );
     assert_eq!(
@@ -1613,7 +1614,8 @@ fn parses_refresh_client_with_and_without_a_size_report() {
             pane: Some(Target::Id(PaneId(0))),
             size: Some((120, 40)),
             cell_pixels: None,
-            chrome: None
+            chrome: None,
+            graphics: false,
         }
     );
     // The cell-pixel report rides along or stands alone: a client
@@ -1624,7 +1626,8 @@ fn parses_refresh_client_with_and_without_a_size_report() {
             pane: Some(Target::Id(PaneId(0))),
             size: Some((120, 40)),
             cell_pixels: Some((10, 20)),
-            chrome: None
+            chrome: None,
+            graphics: false,
         }
     );
     assert_eq!(
@@ -1633,7 +1636,19 @@ fn parses_refresh_client_with_and_without_a_size_report() {
             pane: Some(Target::Id(PaneId(0))),
             size: None,
             cell_pixels: Some((9, 17)),
-            chrome: None
+            chrome: None,
+            graphics: false,
+        }
+    );
+    // `-G`: the seed's graphics section — the streaming mirror's flag.
+    assert_eq!(
+        parse_command("refresh-client -t %0 -G").unwrap(),
+        MuxCommand::RefreshClient {
+            pane: Some(Target::Id(PaneId(0))),
+            size: None,
+            cell_pixels: None,
+            chrome: None,
+            graphics: true,
         }
     );
 }
@@ -1654,6 +1669,7 @@ fn parses_refresh_client_chrome_declaration() {
                 gap: 0,
                 gutter: false,
             }),
+            graphics: false,
         }
     );
     assert!(parse_command("refresh-client -t %0 -C 80x22 -I ring=1").is_err());
@@ -1677,7 +1693,8 @@ fn parses_target_less_refresh_client_as_a_pure_size_report() {
             pane: None,
             size: Some((120, 40)),
             cell_pixels: Some((10, 20)),
-            chrome: None
+            chrome: None,
+            graphics: false,
         }
     );
     // Either measurement can appear alone in the target-less form.
@@ -1687,7 +1704,8 @@ fn parses_target_less_refresh_client_as_a_pure_size_report() {
             pane: None,
             size: Some((100, 30)),
             cell_pixels: None,
-            chrome: None
+            chrome: None,
+            graphics: false,
         }
     );
     assert_eq!(
@@ -1696,7 +1714,8 @@ fn parses_target_less_refresh_client_as_a_pure_size_report() {
             pane: None,
             size: None,
             cell_pixels: Some((10, 20)),
-            chrome: None
+            chrome: None,
+            graphics: false,
         }
     );
     // Caps and malformed values reject exactly as the -t form does.
@@ -1711,7 +1730,8 @@ fn parses_target_less_refresh_client_as_a_pure_size_report() {
             pane: None,
             size: None,
             cell_pixels: None,
-            chrome: None
+            chrome: None,
+            graphics: false,
         }
     );
     // And an invalid pane target still errors in the -t form.
@@ -1748,7 +1768,8 @@ fn refresh_client_rejects_sizes_over_the_caps() {
             pane: Some(Target::Id(PaneId(0))),
             size: Some((MAX_CLIENT_COLS, MAX_CLIENT_ROWS)),
             cell_pixels: Some((MAX_CELL_PIXELS, MAX_CELL_PIXELS)),
-            chrome: None
+            chrome: None,
+            graphics: false,
         }
     );
 }
@@ -1828,6 +1849,7 @@ fn mutates_marks_exactly_the_structural_commands() {
             size: Some((80, 24)),
             cell_pixels: None,
             chrome: None,
+            graphics: false,
         },
         MuxCommand::NewWindow {
             target: None,
@@ -1893,6 +1915,7 @@ fn mutates_marks_exactly_the_structural_commands() {
             size: None,
             cell_pixels: None,
             chrome: None,
+            graphics: false,
         },
         MuxCommand::ListWindows {
             session: None,

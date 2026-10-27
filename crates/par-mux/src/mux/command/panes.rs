@@ -60,6 +60,9 @@ pub(super) fn parse_refresh_client(a: &Args<'_>) -> Result<MuxCommand, String> {
             ),
             None => None,
         },
+        // `-G`: the seed's graphics section. tmux's refresh-client has no
+        // `-G`; the streaming mirror is the only issuer.
+        graphics: a.has_flag("-G"),
     })
 }
 
