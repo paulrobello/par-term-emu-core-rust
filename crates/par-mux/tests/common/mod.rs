@@ -357,7 +357,15 @@ pub fn rerun_isolated(test: &str, set: &[(&str, &str)], unset: &[&str]) -> bool 
     let log = tempfile::NamedTempFile::new().expect("create re-exec log file");
     let mut command = std::process::Command::new(std::env::current_exe().expect("test exe"));
     command
-        .args(["--exact", test, "--nocapture", "--test-threads=1"])
+        // --include-ignored: this suite's tests carry load-sensitive ignore
+        // labels; the isolated child must run the named test regardless.
+        .args([
+            "--exact",
+            test,
+            "--nocapture",
+            "--test-threads=1",
+            "--include-ignored",
+        ])
         .env(REEXEC_MARKER, "1")
         .stdin(Stdio::null())
         .stdout(log.reopen().expect("reopen log for stdout"))
