@@ -262,7 +262,7 @@ Also update:
 
 - Never push unless the user requests it
 - Always run `make checkall` and fix all issues before pushing
-- Tests labeled `#[ignore = "load-sensitive ..."]` (the PTY/attach integration suites and timing-pinned render tests) are skipped by default `cargo` runs and by `make checkall`, with a deferred count printed; run exactly that set with `make test-rust-sensitive`. `make checkall-ci` keeps full coverage (its nextest legs pass `--include-ignored`) and is the done gate for any change touching labeled tests — bare `checkall` no longer covers them.
+- Tests labeled `#[ignore = "load-sensitive ..."]` (the PTY/attach integration suites and timing-pinned render tests) are skipped by default `cargo` runs and by `make checkall`, with a deferred count printed; run exactly that set with `make test-rust-sensitive`. `make checkall-ci` keeps full coverage (its nextest legs pass `include-ignored`) and is the done gate for any change touching labeled tests — bare `checkall` no longer covers them.
 - Always add tests and update documentation for new features
 - Always ensure the Python bindings are in sync with method signatures
 - When bumping project version make sure CHANGELOG.md is updated
