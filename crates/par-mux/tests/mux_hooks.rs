@@ -1055,3 +1055,84 @@ fn roster_ws(control: &mut Control, pane: &str) -> String {
         })
         .unwrap_or_default()
 }
+
+/// Card 01a17eff71d9: a detached `--restart` daemon on the DEFAULT instance
+/// (no `--state-dir`, socket `par-mux-default.sock`) writes the shared
+/// daemon log from boot, and a live hook report lands there as a debug
+/// line. HOME is redirected so the platform log and state dirs resolve
+/// inside the temp dir and the developer's real log is never touched.
+#[test]
+fn restart_relaunch_writes_the_default_daemon_log_with_hook_debug_lines() {
+    use std::process::{Command, Stdio};
+
+    let home = tempfile::Builder::new()
+        .prefix("pm-home-")
+        .tempdir()
+        .expect("temp home");
+    let socket = home.path().join("par-mux-default.sock");
+    let run = |flag: &str| {
+        Command::new(env!("CARGO_BIN_EXE_par-mux"))
+            .arg("--socket")
+            .arg(&socket)
+            .arg(flag)
+            .env("HOME", home.path())
+            .env_remove("XDG_STATE_HOME")
+            .env_remove("XDG_DATA_HOME")
+            .env_remove("XDG_CONFIG_HOME")
+            .env_remove("PAR_MUX_CONFIG")
+            .env_remove("PAR_MUX_ENV")
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .status()
+            .expect("par-mux runs")
+    };
+    let status = run("--restart");
+    assert!(
+        status.success(),
+        "--restart's parent half exits 0: {status:?}"
+    );
+    wait_listening(&socket);
+
+    let log_path = if cfg!(target_os = "macos") {
+        home.path().join("Library/Logs/par-mux/daemon.log")
+    } else {
+        home.path().join(".local/state/par-mux/daemon.log")
+    };
+    let mut control = Control::connect(&socket);
+    control.command("new-session -s logs");
+    let pane = pane_ids(&control.command("list-panes").join(""))
+        .first()
+        .expect("new-session created a pane")
+        .clone();
+    let reply = hook_round_trip(&socket, &report(&pane, "working", 1));
+    assert!(
+        reply.contains(r#""result":"ok""#),
+        "report accepted: {reply}"
+    );
+
+    let expected =
+        format!("DEBUG: par-mux: hook report pane {pane} method pane.report_agent: accepted");
+    let deadline = Instant::now() + Duration::from_secs(10);
+    let mut log = String::new();
+    while Instant::now() < deadline {
+        log = std::fs::read_to_string(&log_path).unwrap_or_default();
+        if log.contains(&expected) {
+            break;
+        }
+        std::thread::sleep(Duration::from_millis(50));
+    }
+    drop(control);
+    let stopped = run("--stop");
+    assert!(stopped.success(), "--stop exits 0: {stopped:?}");
+    assert!(
+        log.contains("par-mux listening on"),
+        "the daemon log records boot at {}: {log}",
+        log_path.display()
+    );
+    assert!(
+        log.contains(&expected),
+        "the hook report debug line reaches {}: {log}",
+        log_path.display()
+    );
+}

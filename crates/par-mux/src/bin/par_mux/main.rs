@@ -1232,7 +1232,7 @@ fn main() -> std::process::ExitCode {
     // installed those records vanish, so wire the minimal stderr sink up
     // before anything can emit.
     log::set_logger(&STDERR_LOG)
-        .map(|_| log::set_max_level(log::LevelFilter::Info))
+        .map(|_| log::set_max_level(log::LevelFilter::Debug))
         .ok();
 
     // par-mux attach: subcommand form — run the attach client and exit
@@ -1554,6 +1554,7 @@ fn run_daemon(cli: Cli, path: std::path::PathBuf) -> std::io::Result<std::proces
     // and the peek see the same resolved config. `effective` is pure:
     // flags > env > config-file tiers, no I/O beyond the config read.
     let eff = effective(&cli, true);
+    let state_dir_pinned = !eff.state_dir.is_empty();
     let state_path = match eff.state_dir.as_str() {
         "" => par_mux::mux::persist::state_file_path(&path),
         dir => par_mux::mux::persist::state_file_in(std::path::Path::new(dir), &path),
@@ -1588,7 +1589,7 @@ fn run_daemon(cli: Cli, path: std::path::PathBuf) -> std::io::Result<std::proces
                 "par-mux: saved state {} is unreadable — the fresh daemon will quarantine it \
                  and start fresh (details: {})",
                 state_path.display(),
-                daemon_log_path(&state_path).display()
+                daemon_log_path(&state_path, state_dir_pinned).display()
             ),
         }
         // --restart falls through to the detach below — the state save the
@@ -1618,10 +1619,10 @@ fn run_daemon(cli: Cli, path: std::path::PathBuf) -> std::io::Result<std::proces
                 return Err(std::io::Error::other(reason));
             }
         }
-        match fork_daemon(Some(&daemon_log_path(&state_path)))? {
+        match fork_daemon(Some(&daemon_log_path(&state_path, state_dir_pinned)))? {
             ForkOutcome::Child => {} // this process serves, detached
             ForkOutcome::Parent => {
-                return run_detached_parent(&cli, &path, &state_path);
+                return run_detached_parent(&cli, &path, &state_path, state_dir_pinned);
             }
         }
     }
@@ -1867,6 +1868,7 @@ fn run_detached_parent(
     cli: &Cli,
     path: &std::path::Path,
     state_path: &std::path::Path,
+    state_dir_pinned: bool,
 ) -> std::io::Result<std::process::ExitCode> {
     const READY_DEADLINE: std::time::Duration = std::time::Duration::from_secs(10);
     let deadline = std::time::Instant::now() + READY_DEADLINE;
@@ -1887,7 +1889,7 @@ fn run_detached_parent(
         let note = format!(
             "the daemon did not become ready on {} within 10s; see {}",
             path.display(),
-            daemon_log_path(state_path).display()
+            daemon_log_path(state_path, state_dir_pinned).display()
         );
         if cli.restart {
             eprintln!("par-mux: {note}");
@@ -1926,12 +1928,30 @@ fn run_detached_parent(
     }
 }
 
-/// The detached daemon's stderr log: beside the state file, so a `--restart`
-/// whose serving half fails (bind, restore) leaves the reason on disk —
-/// after daemonize, the terminal it was typed into may be gone. On Windows
-/// restart serves in-process and keeps the caller's stderr, so the log is
-/// only written on Unix.
-fn daemon_log_path(state_path: &std::path::Path) -> std::path::PathBuf {
+/// The detached daemon's stderr log. The default instance (no pinned
+/// state dir, state file `par-mux-default.state.json`) logs to the file the
+/// Par-mux.app launcher and launchd write, `~/Library/Logs/par-mux/daemon.log`
+/// on macOS (`daemon.log` beside the state file elsewhere), so a `--restart`
+/// self-relaunch keeps appending to its predecessor's log instead of forking
+/// stderr to a sibling file nobody tails. Every other instance, and any
+/// explicit state dir, logs beside its state file as `<state>.log`, so test
+/// and side daemons never touch the default log. After daemonize the
+/// terminal the command was typed into may be gone, so a `--restart` whose
+/// serving half fails leaves its reason here. On Windows restart serves
+/// in-process and keeps the caller's stderr, so the log is only written on
+/// Unix.
+fn daemon_log_path(state_path: &std::path::Path, state_dir_pinned: bool) -> std::path::PathBuf {
+    let default_instance = !state_dir_pinned
+        && state_path.file_name().and_then(|n| n.to_str()) == Some("par-mux-default.state.json");
+    if default_instance {
+        #[cfg(target_os = "macos")]
+        if let Some(home) = dirs::home_dir() {
+            return home.join("Library/Logs/par-mux/daemon.log");
+        }
+        if let Some(dir) = state_path.parent() {
+            return dir.join("daemon.log");
+        }
+    }
     let mut name = state_path.as_os_str().to_os_string();
     name.push(".log");
     std::path::PathBuf::from(name)
@@ -1993,12 +2013,16 @@ fn install_signal_handlers() -> std::io::Result<()> {
 
 /// The daemon's stderr logger (ARC-010): the mux library emits through
 /// `log`, and the daemon has no tracing subscriber, so this minimal sink is
-/// what makes those records visible. Level-prefixed, info and above.
+/// what makes those records visible. Level-prefixed, info and above, plus
+/// the hook-report debug trail (the restart-roster forensics lines); other
+/// debug records stay off because the emulator's diagnostics are chatty.
 struct StderrLog;
 
 impl log::Log for StderrLog {
     fn enabled(&self, metadata: &log::Metadata) -> bool {
         metadata.level() <= log::Level::Info
+            || (metadata.level() == log::Level::Debug
+                && metadata.target().starts_with("par_mux::mux::hooks"))
     }
 
     fn log(&self, record: &log::Record) {
