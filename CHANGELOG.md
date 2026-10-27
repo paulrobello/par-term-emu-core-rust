@@ -7,6 +7,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+- **par-mux attach: floored tab cells keep readable text when the strip overflows, and a tab-width change repaints at once** (`9ddb06f6`; `crates/par-mux/src/mux/attach/tabs.rs`, `crates/par-mux/src/mux/attach/render/session.rs`, `crates/par-mux/src/mux/attach/render/tests/chords.rs`): with `tab-width-min` set, a strip too narrow for every tab at the floor degraded to stage 3's budget-1 text — wide blocks showing a single character plus an ellipsis; the visible run now budgets its text to fill the floored cell (`min − 2·pad − 1` name columns), so a 20-column tab shows up to 16 name columns, and the unbounded default layout keeps budget 1. A `tab-width-min`/`tab-width-max` change through the settings dialog (or the reload chord) repainted only at the next periodic status refresh (~5 s); `apply_chords` now repaints the strip the moment the bounds change. Pinned by `stage3_with_a_floor_fills_the_cell_with_text` and `tab_width_change_repaints_the_strip_immediately`.
+
 ## [0.69.0] - 2026-10-27
 
 ### Changed

@@ -321,8 +321,13 @@ pub(crate) fn layout_tabs_bounded(
     // Stage 3. The run seeds at the wheel offset when set; `None` is
     // the active-centered auto run (an overflowing strip scrolls to
     // reach its hidden tabs — the audit's R6). Widths stay under the
-    // cap even here: a budget-1 cell over the cap clips its text.
-    let (texts, widths) = texts_widths(Some(1));
+    // cap even here: a cell over the cap clips its text. A floor above
+    // the budget-1 cell (6 cols) would waste its width on blank pads,
+    // so the text budget fills the floored cell instead — the largest
+    // budget whose text, ellipsis, and pads fit `min_w`; unbounded
+    // keeps budget 1.
+    let stage3_budget = (min_w.saturating_sub(2 * PAD as u16 + 1)).max(1) as usize;
+    let (texts, widths) = texts_widths(Some(stage3_budget));
     let widths: Vec<usize> = widths.iter().map(|w| (*w).min(max_w as usize)).collect();
     // `total` is the run's span (blocks plus the gaps between them): a
     // candidate adds its block and one gap, each hidden-edge marker its
@@ -1366,5 +1371,30 @@ mod tests {
         let widths: Vec<u16> = layout.cells.iter().map(|c| c.width).collect();
         assert!(widths.iter().all(|&w| w <= 10), "{widths:?}");
         assert!(widths.iter().all(|&w| w >= 10), "{widths:?}");
+    }
+
+    /// Stage 3 with a floor: the visible run keeps the floored cell
+    /// width and its text budget fills the cell — a 20-wide cell shows
+    /// up to 16 name columns, not the budget-1 stub (the
+    /// settings-dialog report of tabs truncating to one character).
+    #[test]
+    fn stage3_with_a_floor_fills_the_cell_with_text() {
+        let ws: Vec<(String, String)> = (0..12)
+            .map(|i| (format!("@{i}"), format!("session-name-{i:02}-long")))
+            .collect();
+        let layout =
+            layout_tabs_bounded(&ws, Some("@7"), 60, 0, None, TabBounds { min: 20, max: 30 });
+        assert!(
+            layout.cells.len() < ws.len(),
+            "12 tabs cannot fit 60 cols: stage 3 must engage"
+        );
+        for cell in &layout.cells {
+            assert_eq!(cell.width, 20, "the floor sets the cell width");
+            assert!(
+                cell.text.ends_with('\u{2026}') && cell.text.chars().count() > 2,
+                "the text fills the cell, not a 1-char stub: {:?}",
+                cell.text
+            );
+        }
     }
 }

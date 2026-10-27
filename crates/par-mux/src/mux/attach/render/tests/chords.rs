@@ -2152,6 +2152,57 @@ fn tab_strip_right_press_opens_the_tab_menu() {
     assert_eq!(session.prompt().target, PromptTarget::NewWindow);
 }
 
+/// A tab-width change repaints the strip in the same apply: the new
+/// bounds paint at once instead of waiting for the next periodic
+/// status repaint (the settings-dialog ~5s delay report).
+#[test]
+fn tab_width_change_repaints_the_strip_immediately() {
+    let mut replies = std::collections::HashMap::new();
+    replies.insert("list-sessions".to_string(), "$0: work".to_string());
+    replies.insert(
+        "list-windows -t $0".to_string(),
+        "@0 * main\n@1 - vim".to_string(),
+    );
+    let (rx, mut conn, mut session) = two_pane_session(
+        "m-tabwidth",
+        FakeScript {
+            replies,
+            ..FakeScript::default()
+        },
+    );
+    session.status.refresh(&mut conn, "@0", 1).expect("refresh");
+    session.draw_tab_strip();
+    drained(&rx);
+
+    let file: crate::mux::config::ConfigFile =
+        toml::from_str("[client]\ntab-width-min = 20\ntab-width-max = 30\n").expect("parses");
+    let chords = crate::mux::config::reload_client_chords(
+        &file,
+        &crate::mux::config::Chords::with_defaults(),
+    )
+    .expect("resolves");
+    session.apply_chords(&chords, &file);
+    assert_eq!(
+        session.chrome.tab_strip.bounds,
+        crate::mux::attach::tabs::TabBounds { min: 20, max: 30 }
+    );
+    // The apply repainted under the new bounds: the second tab's block
+    // starts after the floored 20-col first tab and its gap.
+    let diff: Vec<u16> = session
+        .chrome
+        .tab_strip
+        .diff()
+        .iter()
+        .map(|(x, _, _)| *x)
+        .collect();
+    assert!(!diff.is_empty(), "the apply repainted the strip");
+    assert_eq!(
+        session.chrome.tab_strip.hit_test(21),
+        Some(1),
+        "both tabs sit at the 20-col floor"
+    );
+}
+
 /// The pickers are modal for the pointer: wheels move the selection,
 /// a click on a content row activates it, the footer and drags do
 /// nothing, and while filtering a click on the filter line re-opens
