@@ -1080,6 +1080,11 @@ fn restart_relaunch_writes_the_default_daemon_log_with_hook_debug_lines() {
             .arg(&socket)
             .arg(flag)
             .env("HOME", home.path())
+            // The app-wrapper hand-off (card 01a17f9f15) would exec the
+            // installed /Applications launcher, which resolves the
+            // RELEASED cargo binary — out of this tree's control. The
+            // test pins THIS binary's restart behavior.
+            .env("PAR_MUX_NO_APP_WRAPPER", "1")
             .env_remove("XDG_STATE_HOME")
             .env_remove("XDG_DATA_HOME")
             .env_remove("XDG_CONFIG_HOME")

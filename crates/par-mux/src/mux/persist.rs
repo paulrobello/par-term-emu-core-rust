@@ -965,6 +965,10 @@ fn spawn_restored_pane(
     if let Some(title) = &pane.user_title {
         created.set_user_title(title);
     }
+    // A re-restored pane keeps a cwd floor too: its spawn cwd is the
+    // persisted cwd the restore just used (None only when the state had
+    // none and the factory default answered).
+    created.set_spawn_cwd(cwd.as_deref());
     if pane.dead {
         // `begin_respawn` reads the pane's cwd from the terminal's OSC 7
         // state (the dead pane has no child to ask), and the next save
@@ -2109,6 +2113,103 @@ mod tests {
                 }
             }
         }
+    }
+
+    /// Criterion 2 (card 01a17f7511): a restore re-lands each pane in its
+    /// persisted cwd — the directory Paul's agents lost to $HOME after
+    /// the 2026-10-27 crash-loop restores. The pane's child lives in the
+    /// workdir and no OSC 7 exists (the agent-pane shape), so the capture
+    /// reads the cwd off the child.
+    #[test]
+    fn restore_spawns_each_pane_in_its_persisted_cwd() {
+        let dir = tempfile::tempdir().unwrap();
+        let workdir = dir.path().join("workdir");
+        fs::create_dir_all(&workdir).unwrap();
+        let mut original = populated_tree();
+        let main = original
+            .sessions()
+            .into_iter()
+            .find(|id| original.session(*id).unwrap().name == "main")
+            .unwrap();
+        let window = original
+            .new_window_with_cwd(main, "cwdtest", 80, 24, Some(&workdir))
+            .unwrap();
+        let pane = original.window(window).unwrap().panes()[0];
+        let persisted = original
+            .pane(pane)
+            .unwrap()
+            .persistence_cwd()
+            .expect("the capture reads the cwd off the child");
+        // The kernel reports macOS's /private prefix; compare canonically.
+        assert_eq!(
+            persisted.canonicalize().unwrap(),
+            workdir.canonicalize().unwrap(),
+            "the save holds the spawn cwd"
+        );
+
+        let state = original.to_persist_state();
+        let factory = crate::mux::pane::test_support::ContextRecordingFactory::default();
+        let _restored = MuxTree::from_persist_state(&state, Box::new(factory.clone()))
+            .expect("state this build wrote must restore");
+        let spawn = factory.spawn_of(pane);
+        assert_eq!(
+            spawn.cwd.map(|cwd| cwd.canonicalize().unwrap()),
+            Some(workdir.canonicalize().unwrap()),
+            "the restore hands the factory the persisted cwd"
+        );
+    }
+
+    /// A pane saved DEAD keeps its cwd: the restore seeds it into the
+    /// pane's terminal OSC 7 state, so the agent-append resume and any
+    /// respawn-pane re-land where the pane lived — the seam the churn's
+    /// daemon deaths fell through when they saved Paul's agents dead.
+    #[test]
+    fn a_dead_panes_cwd_is_seeded_for_its_resume() {
+        let dir = tempfile::tempdir().unwrap();
+        let workdir = dir.path().join("workdir");
+        fs::create_dir_all(&workdir).unwrap();
+        let mut original = populated_tree();
+        let main = original
+            .sessions()
+            .into_iter()
+            .find(|id| original.session(*id).unwrap().name == "main")
+            .unwrap();
+        let window = original
+            .new_window_with_cwd(main, "cwdtest", 80, 24, Some(&workdir))
+            .unwrap();
+        let pane = original.window(window).unwrap().panes()[0];
+        let mut json = serde_json::to_value(original.to_persist_state()).unwrap();
+        for session in json["sessions"].as_array_mut().unwrap() {
+            for window_json in session["windows"].as_array_mut().unwrap() {
+                for pane_json in window_json["panes"].as_array_mut().unwrap() {
+                    if pane_json["id"] == pane.0 {
+                        pane_json["dead"] = serde_json::Value::Bool(true);
+                    }
+                }
+            }
+        }
+        let state: PersistState = serde_json::from_value(json).unwrap();
+        // The dead pane survives the restore only under remain-on-exit
+        // (Paul's config shape — the churn's daemon deaths saved his agent
+        // panes dead, and the agent-append resume respawns them).
+        let restored = MuxTree::from_persist_state_with_policy(
+            &state,
+            Box::new(crate::mux::pane::ShellPaneFactory::default()),
+            true,
+            &crate::mux::config::AgentAppend::default(),
+        )
+        .expect("the state restores");
+        let restored_pane = restored.pane(pane).unwrap();
+        let seeded = restored_pane.with_terminal_mut(|term| {
+            term.current_directory()
+                .map(std::path::PathBuf::from)
+                .map(|cwd| cwd.canonicalize().unwrap())
+        });
+        assert_eq!(
+            seeded.as_deref(),
+            Some(workdir.canonicalize().unwrap().as_path()),
+            "the dead pane's terminal carries the persisted cwd for its resume"
+        );
     }
 
     /// SEC-209: names in a (hand-edited or older) save file are assigned

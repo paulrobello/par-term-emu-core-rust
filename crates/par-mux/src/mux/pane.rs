@@ -166,6 +166,14 @@ pub struct MuxPane {
     /// shell), recorded at spawn so a save/restore cycle (par-mux.md D3.5)
     /// can respawn the same program.
     spawn_command: Option<String>,
+    /// The cwd this pane was SPAWNED in, recorded at creation as the
+    /// persistence floor: when neither the shell's OSC 7 report nor the
+    /// child's live cwd is available at capture time (agent panes running
+    /// a TUI never emit OSC 7, and a churn-killed or load-stalled child
+    /// has no readable cwd), the save still names the directory a restore
+    /// should re-land the pane in. The OSC 7 report supersedes it the
+    /// moment a shell publishes one.
+    spawn_cwd: Option<std::path::PathBuf>,
     /// The user-set pane title (`select-pane -T`): sticky — the program's
     /// OSC 0/2 title never overwrites it, the documented divergence from
     /// tmux recorded in par-mux.md. `None` = no user title;
@@ -239,6 +247,9 @@ pub(crate) struct PaneSnapshotParts {
     generation: u64,
     cache: Arc<Mutex<Option<SnapshotCacheEntry>>>,
     child_pid: Option<u32>,
+    /// The cwd the pane was spawned in (the persistence floor) — a cheap
+    /// field read under the tree lock, unlike the child-cwd syscall.
+    spawn_cwd: Option<std::path::PathBuf>,
 }
 
 impl PaneSnapshotParts {
@@ -249,7 +260,14 @@ impl PaneSnapshotParts {
         if let Some(reported) = self.terminal.read().current_directory() {
             return Some(std::path::PathBuf::from(reported));
         }
-        self.child_pid.and_then(process_cwd)
+        if let Some(live) = self.child_pid.and_then(process_cwd) {
+            return Some(live);
+        }
+        // The floor: neither the shell's OSC 7 nor the child's live cwd
+        // answered (an agent TUI that never reports, a churn-killed or
+        // load-stalled child) — the directory the pane was spawned in is
+        // what a restore should re-land (card 01a17f7511).
+        self.spawn_cwd.clone()
     }
 
     /// The OSC 7 hostname that came with [`Self::cwd`], only when that cwd
@@ -284,6 +302,7 @@ pub(crate) fn snapshot_from_parts(parts: &PaneSnapshotParts) -> TerminalSnapshot
         generation,
         cache,
         child_pid: _,
+        spawn_cwd: _,
     } = parts;
     let (cols, rows) = terminal.read().size();
     let key = SnapshotCacheKey {
@@ -315,6 +334,14 @@ impl MuxPane {
     /// respawns.
     pub fn spawn_command(&self) -> Option<&str> {
         self.spawn_command.as_deref()
+    }
+
+    /// Record the directory this pane was spawned in — the persistence
+    /// floor (see the `spawn_cwd` field). The factory calls this at
+    /// creation; the restore calls it with the persisted cwd so a
+    /// re-restored pane keeps a floor too.
+    pub(crate) fn set_spawn_cwd(&mut self, cwd: Option<&std::path::Path>) {
+        self.spawn_cwd = cwd.map(std::path::Path::to_path_buf);
     }
 
     /// The user-set title (`select-pane -T`), when one is set.
@@ -426,6 +453,7 @@ impl MuxPane {
             generation: self.session.update_generation(),
             cache: Arc::clone(&self.snapshot_cache),
             child_pid: self.session.child_pid(),
+            spawn_cwd: self.spawn_cwd.clone(),
         }
     }
 
@@ -941,6 +969,7 @@ impl ShellPaneFactory {
             id,
             session,
             spawn_command,
+            spawn_cwd: None,
             user_title: None,
             dead: false,
             exit_code: None,
@@ -984,14 +1013,19 @@ impl PaneFactory for ShellPaneFactory {
             None => session.spawn_shell()?,
         }
 
-        Ok(Self::finish_pane(
+        let mut created = Self::finish_pane(
             id,
             session,
             command
                 .or(self.default_command.as_deref())
                 .map(str::to_string),
             endpoint,
-        ))
+        );
+        // The spawn cwd is the persistence floor: recorded before the
+        // child exists, so a capture that can read neither OSC 7 nor the
+        // child's live cwd still names a directory (card 01a17f7511).
+        created.set_spawn_cwd(context.cwd);
+        Ok(created)
     }
 
     fn create_dead_pane(
@@ -1286,6 +1320,37 @@ mod tests {
     use parking_lot::Mutex;
     use std::sync::atomic::{AtomicUsize, Ordering};
     use std::sync::Arc;
+
+    /// The persistence cwd's floor (card 01a17f7511): with no OSC 7 on
+    /// the terminal and no live child to ask — the agent-TUI and
+    /// churn-killed-child shapes — the cwd the pane was spawned in is
+    /// what a capture persists.
+    #[test]
+    fn persistence_cwd_falls_back_to_the_spawn_cwd() {
+        let factory = ShellPaneFactory::default();
+        let cwd = std::env::temp_dir();
+        let context = SpawnContext {
+            cwd: Some(cwd.as_path()),
+            ..Default::default()
+        };
+        let pane = factory
+            .create_pane(PaneId(0), 80, 24, None, &context)
+            .expect("shell pane spawns");
+        assert_eq!(pane.spawn_cwd.as_deref(), Some(cwd.as_path()));
+        // The floor rides the collected parts (the capture's input) and
+        // answers when the higher-precedence sources are silent: no OSC 7
+        // has landed on the fresh terminal and the child's live cwd
+        // (resolvable here) is bypassed only when it cannot be — simulated
+        // with child_pid None, the churn-killed-child shape.
+        let parts = PaneSnapshotParts {
+            terminal: pane.session.terminal(),
+            generation: 0,
+            cache: Arc::new(Mutex::new(None)),
+            child_pid: None,
+            spawn_cwd: pane.spawn_cwd.clone(),
+        };
+        assert_eq!(parts.cwd(), Some(cwd));
+    }
 
     #[test]
     fn shell_factory_creates_a_running_pane() {

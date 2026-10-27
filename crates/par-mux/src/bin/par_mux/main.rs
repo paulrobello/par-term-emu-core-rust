@@ -147,6 +147,14 @@ struct Cli {
     ])]
     foreground: bool,
 
+    /// The app-wrapper hand-off's loop guard: the start already exec'd
+    /// through `/Applications/Par-mux.app`'s launcher once, so serving
+    /// (detached, after the launcher's own exec) must not hand off again.
+    /// Hidden: the serve path sets it itself when re-invoking through the
+    /// wrapper; the launcher forwards it verbatim.
+    #[arg(long, hide = true)]
+    par_mux_in_app_wrapper: bool,
+
     /// Daemon-only: daemonize to background as usual but skip the
     /// auto-attach of the invoking terminal (and the isatty fallback that
     /// skips attaching for scripted starts).
@@ -1608,14 +1616,49 @@ fn run_daemon(cli: Cli, path: std::path::PathBuf) -> std::io::Result<std::proces
     // old default, and the shape every programmatic spawner uses, because
     // a spawner that kills the child it spawned would orphan a detached
     // grandchild it can never name.
+    //
+    // macOS: hand the daemon start to the installed Par-mux.app wrapper
+    // when one exists. TCC's local-network grant attaches to the app
+    // bundle, not to a bare binary — a daemon exec'd by the app's
+    // launcher inherits the app's grant (the phone's streaming client
+    // needs it), while a daemon forked from a terminal binary is blocked.
+    // The launcher forwards our argv verbatim and execs the resolved
+    // par-mux binary in the app's context; PAR_MUX_NO_APP_WRAPPER=1 opts
+    // out, and an exec failure degrades to the bare start below.
+    #[cfg(target_os = "macos")]
+    if !cli.foreground && !cli.par_mux_in_app_wrapper {
+        if let Ok(exe) = std::env::current_exe() {
+            let no_wrapper = std::env::var_os("PAR_MUX_NO_APP_WRAPPER").is_some_and(|v| v == "1");
+            if let Some(launcher) = app_handoff_launcher(
+                &exe,
+                std::path::Path::new("/Applications/Par-mux.app"),
+                no_wrapper,
+            ) {
+                log::info!(
+                    "par-mux: handing the daemon start to {}",
+                    launcher.display()
+                );
+                let mut cmd = std::process::Command::new(&launcher);
+                // The marker rides first so the handed-off start knows it
+                // is already in the wrapper and never hands off again.
+                cmd.arg("--par-mux-in-app-wrapper");
+                cmd.args(std::env::args_os().skip(1));
+                let err = std::os::unix::process::CommandExt::exec(&mut cmd);
+                log::warn!("par-mux: app hand-off failed ({err}); starting the bare daemon");
+            }
+        }
+    }
     // Claim the state file before any serving half starts, detached or
     // foreground: a second daemon on the same state raced the first's
     // fixed-tmp saves into corruption (the 2026-10-27 crash loop), and
     // bind's live-socket refusal cannot see a daemon that load stalled
-    // into unresponsiveness. The claim survives the fork (the serving
-    // child inherits the open file description, and a flock lives as
-    // long as any fd to that description does) and releases on exit, so
-    // the --stop/--restart handoff re-acquires inside the retry window.
+    // into unresponsiveness. The claim is taken AFTER the app hand-off
+    // (the exec'd launcher must not inherit this process's lock fd — it
+    // would collide with the handed-off daemon's own claim), survives
+    // the fork (the serving child inherits the open file description,
+    // and a flock lives as long as any fd to that description does), and
+    // releases on exit, so the --stop/--restart handoff re-acquires
+    // inside the retry window.
     let _state_lock = par_mux::mux::persist::acquire_state_lock(&state_path)?;
     #[cfg(unix)]
     if !cli.foreground {
@@ -1873,6 +1916,34 @@ fn fork_daemon(stderr_log: Option<&std::path::Path>) -> std::io::Result<ForkOutc
 /// accepts is an error naming the daemon log, because after the fork the
 /// child's failures are only visible there.
 #[cfg(unix)]
+/// The installed Par-mux.app wrapper's launcher, when a daemon start
+/// should hand off to it: the launcher exists, the running binary is not
+/// itself inside that bundle (a wrapper must never hand off to itself),
+/// and the operator has not opted out with
+/// `PAR_MUX_NO_APP_WRAPPER=1`. `exe` and `app_root` are injectable so the
+/// tests can build both sides; the serve path passes `current_exe()` and
+/// the fixed `/Applications/Par-mux.app`.
+#[cfg(target_os = "macos")]
+fn app_handoff_launcher(
+    exe: &std::path::Path,
+    app_root: &std::path::Path,
+    no_wrapper: bool,
+) -> Option<std::path::PathBuf> {
+    if no_wrapper {
+        return None;
+    }
+    let app_root = app_root.canonicalize().ok()?;
+    let launcher = app_root.join("Contents/MacOS/Par-mux");
+    if !launcher.is_file() {
+        return None;
+    }
+    let exe = exe.canonicalize().ok()?;
+    if exe.starts_with(&app_root) {
+        return None;
+    }
+    Some(launcher)
+}
+
 fn run_detached_parent(
     cli: &Cli,
     path: &std::path::Path,
@@ -2048,6 +2119,52 @@ static STDERR_LOG: StderrLog = StderrLog;
 #[cfg(test)]
 mod mode_group_tests {
     use super::*;
+
+    /// The app hand-off decision (card 01a17f9f15): a bare binary outside
+    /// the bundle hands off to the installed wrapper's launcher; the
+    /// bundle's own binary, a missing launcher, and the
+    /// PAR_MUX_NO_APP_WRAPPER opt-out never do.
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn app_handoff_decision() {
+        let dir = tempfile::Builder::new()
+            .prefix("par-mux-handoff-")
+            .tempdir()
+            .expect("tempdir");
+        let launcher = dir.path().join("Par-mux.app/Contents/MacOS/Par-mux");
+        std::fs::create_dir_all(launcher.parent().unwrap()).unwrap();
+        std::fs::write(&launcher, b"").unwrap();
+
+        let bare_exe = dir.path().join("cargo-bin/par-mux");
+        std::fs::create_dir_all(bare_exe.parent().unwrap()).unwrap();
+        std::fs::write(&bare_exe, b"").unwrap();
+        assert_eq!(
+            app_handoff_launcher(&bare_exe, &dir.path().join("Par-mux.app"), false),
+            Some(launcher.canonicalize().unwrap()),
+            "a bare binary hands off to the installed launcher"
+        );
+
+        let in_app_exe = dir.path().join("Par-mux.app/Contents/MacOS/other-tool");
+        std::fs::write(&in_app_exe, b"").unwrap();
+        assert_eq!(
+            app_handoff_launcher(&in_app_exe, &dir.path().join("Par-mux.app"), false),
+            None,
+            "the bundle's own binary never hands off"
+        );
+
+        let empty = tempfile::tempdir().unwrap();
+        assert_eq!(
+            app_handoff_launcher(&bare_exe, empty.path(), false),
+            None,
+            "a missing launcher degrades to the bare start"
+        );
+
+        assert_eq!(
+            app_handoff_launcher(&bare_exe, &dir.path().join("Par-mux.app"), true),
+            None,
+            "the opt-out wins"
+        );
+    }
 
     #[test]
     fn update_flags_require_explicit_bundle_force() {

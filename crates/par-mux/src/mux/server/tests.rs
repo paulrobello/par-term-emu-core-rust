@@ -2372,6 +2372,65 @@ fn persist_worker_survives_a_failed_write_and_completes_the_next() {
     assert_eq!(ok_writes.load(Ordering::Relaxed), 1, "the second landed");
 }
 
+/// Criterion 5 (card 01a17f4438, load tolerance): the exit-when-empty
+/// clock cannot run while its read is stalled. The tree mutex is held
+/// past the whole grace while a session exists — a load-starved tick
+/// cannot even read the tree — and when the stall lifts, the verdict
+/// still requires the FULL grace of CONTINUED emptiness. A stalled read
+/// alone never hands the loop an Empty verdict.
+#[test]
+fn exit_when_empty_clock_does_not_run_under_a_stalled_read() {
+    let tree = Arc::new(Mutex::new(MuxTree::new(Box::new(
+        crate::mux::pane::ShellPaneFactory::default(),
+    ))));
+    let session = tree.lock().new_session("keepalive", 80, 24).unwrap();
+    let exit_request: Arc<Mutex<Option<LoopExit>>> = Arc::new(Mutex::new(None));
+    let shutdown = Arc::new(AtomicBool::new(false));
+    let handles = CadenceHandles {
+        tree: Arc::clone(&tree),
+        clients: Arc::new(Mutex::new(Vec::new())),
+        engine: crate::mux::scrape::ScrapeEngine::bundled(),
+        shutdown: Arc::clone(&shutdown),
+        config: Some(Arc::new(Mutex::new(
+            crate::mux::config::EffectiveConfig::default(),
+        ))),
+        persist_tx: None,
+        output_epoch: Arc::default(),
+        exit_request: Arc::clone(&exit_request),
+        persisting: true,
+    };
+    let worker = std::thread::spawn(move || run_cadence_loop(&handles));
+
+    // The stall: hold the tree mutex past the whole grace while the tree
+    // is NON-empty — the cadence tick cannot read, so it cannot observe
+    // emptiness at all, let alone hold a verdict open.
+    {
+        let _held = tree.lock();
+        std::thread::sleep(2 * EXIT_EMPTY_GRACE);
+    }
+    assert!(
+        exit_request.lock().is_none(),
+        "a stalled read must not record an empty_since, let alone a verdict"
+    );
+    assert!(!worker.is_finished(), "the cadence loop survives the stall");
+
+    // The control: real, CONTINUED emptiness still fires the verdict —
+    // after the grace, not because of the stall.
+    tree.lock().kill_session(session).unwrap();
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+    while exit_request.lock().is_none() && std::time::Instant::now() < deadline {
+        std::thread::sleep(std::time::Duration::from_millis(20));
+    }
+    assert_eq!(
+        *exit_request.lock(),
+        Some(LoopExit::Empty),
+        "genuine continued emptiness fires the verdict after the grace"
+    );
+
+    shutdown.store(true, Ordering::Relaxed);
+    worker.join().expect("the loop exits within a tick");
+}
+
 /// ARC-011: a client whose queue fills (it stopped reading the socket)
 /// is evicted from the broadcast set, while a draining sibling still
 /// receives every line pushed past the eviction.

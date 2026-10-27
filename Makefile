@@ -311,7 +311,7 @@ test-rust:
 	@echo "Running the root with the mux re-export on (mux_feature_isolation + the root lib under mux features)..."
 	cargo test --no-default-features --features rust-only,mux-bin,serde,attach -- --test-threads=1
 	@echo "Running the full par-mux member suite (lib + bin unit tests + integration tests; serialized because PTY spawns contend in parallel)..."
-	cargo test -p par-mux --features attach -- --test-threads=1
+	PAR_MUX_NO_APP_WRAPPER=1 cargo test -p par-mux --features attach -- --test-threads=1
 	@echo "Running the mux-backed streaming tests (MuxSessionFactory needs both features; no other run enables them together)..."
 	cargo test --lib --no-default-features --features rust-only,streaming,mux,serde streaming::mux_factory -- --test-threads=1
 	@echo "Running the par-term-emu-core member suites (ARC-007 O2: each mirrors the root run above that compiled the same core features before the split)..."
@@ -334,7 +334,7 @@ test-rust-streaming:
 test-rust-sensitive:
 	@echo "Running the load-sensitive Rust tests (labeled ignore = load-sensitive)..."
 	@n=`cargo test -p par-mux --features attach -- --list --ignored 2>/dev/null | grep -c ': test'`; echo "  $$n labeled tests"
-	cargo test -p par-mux --features attach -- --test-threads=1 --ignored
+	PAR_MUX_NO_APP_WRAPPER=1 cargo test -p par-mux --features attach -- --test-threads=1 --ignored
 
 test-python: dev
 	@echo "Running Python tests..."
@@ -729,7 +729,7 @@ test-mux-ci:
 		echo "D1 violation: sim pulled tokio, portable-pty, subtle, zeroize, prost, axum, or swash"; \
 		exit 1; \
 	fi
-	cargo nextest run --profile ci --locked -p par-mux --features attach --run-ignored all
+	PAR_MUX_NO_APP_WRAPPER=1 cargo nextest run --profile ci --locked -p par-mux --features attach --run-ignored all
 	cargo nextest run --profile ci --locked --no-default-features --features rust-only,mux-bin,serde,attach --run-ignored all
 	cargo nextest run --profile ci --locked -p par-term-emu-core --features mux,serde --run-ignored all
 	cargo nextest run --profile ci --locked --lib --no-default-features --features rust-only,streaming,mux,serde streaming::mux_factory
