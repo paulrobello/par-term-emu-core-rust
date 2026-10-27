@@ -1454,7 +1454,11 @@ A structurally killed pane is reaped at kill time instead: `PtySession::kill` fo
 Everything above is available as a library API under the `mux` feature:
 
 ```rust
-use par_term_emu_core_rust::mux::{MuxServer, MuxClient};
+// Since ARC-007 (the workspace split) the mux lives in the `par-mux`
+// crate: `cargo add par-mux --features mux`, and the historical
+// `par_term_emu_core_rust::mux::…` path is a re-export kept for
+// compatibility. New code imports from the member:
+use par_mux::mux::{MuxServer, MuxClient};
 
 // Serve with persistence (what the par-mux binary runs):
 let server = MuxServer::bind(&socket_path)?;
