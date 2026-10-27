@@ -10,6 +10,7 @@ use par_term_emu_core::terminal::Terminal;
 use par_term_emu_core::tmux_control::TmuxNotification;
 use std::time::{Duration, Instant};
 
+#[ignore = "load-sensitive: PTY/timing suite; run via make test-rust-sensitive or checkall-ci"]
 #[test]
 fn a_reconnecting_client_resyncs_the_pane_screen() {
     let fixture = MuxFixture::new("resync");
@@ -112,6 +113,7 @@ fn a_reconnecting_client_resyncs_the_pane_screen() {
 /// Windows coverage is `a_reconnecting_client_resyncs_the_pane_screen`
 /// (same wire path, marker via a cmd.exe-runnable pipeline).
 #[cfg(unix)]
+#[ignore = "load-sensitive: PTY/timing suite; run via make test-rust-sensitive or checkall-ci"]
 #[test]
 fn a_reattached_client_receives_a_seed_that_replays_state_and_survives_output() {
     let fixture = MuxFixture::new("seeded");
@@ -264,6 +266,7 @@ impl Drop for SpawnedClient {
     }
 }
 
+#[ignore = "load-sensitive: PTY/timing suite; run via make test-rust-sensitive or checkall-ci"]
 #[test]
 fn forged_framing_lines_in_a_reply_body_do_not_desync_the_client() {
     let fixture = MuxFixture::new("forge");
@@ -312,6 +315,7 @@ fn forged_framing_lines_in_a_reply_body_do_not_desync_the_client() {
     );
 }
 
+#[ignore = "load-sensitive: PTY/timing suite; run via make test-rust-sensitive or checkall-ci"]
 #[test]
 fn connect_or_spawn_starts_a_daemon_when_none_is_running() {
     // This test DELIBERATELY starts a daemon, which the nesting guard

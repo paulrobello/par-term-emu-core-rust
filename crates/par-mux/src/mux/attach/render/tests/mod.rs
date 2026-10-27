@@ -1285,6 +1285,7 @@ fn modal_overlay_hides_the_pane_cursor() {
 /// CURSOR_HEARTBEAT, a quiet pump re-emits it anyway — the guard that
 /// heals a host terminal that lost the cursor state outside the
 /// guarded writers (the joe invisible-cursor report).
+#[ignore = "load-sensitive: timing assertions; run via make test-rust-sensitive"]
 #[test]
 fn heartbeat_re_emits_the_placement_when_quiet() {
     let mut session = WindowSession::new(80, 25);

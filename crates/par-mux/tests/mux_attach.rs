@@ -490,6 +490,7 @@ fn menu_chip_painted(screen: &[String]) -> bool {
 /// `render_mode_settings_dialog_opens_from_the_panel_menu` failed at host
 /// load ~200 with the menu fully painted.
 #[cfg(unix)]
+#[ignore = "load-sensitive: PTY/timing suite; run via make test-rust-sensitive or checkall-ci"]
 #[test]
 fn output_matcher_reads_a_phrase_split_by_a_skipped_cell() {
     let wire = b"\x1b[9;22H\x1b[0mreload\x1b[9;29Hconfig\x1b[9;49H";
@@ -526,6 +527,7 @@ fn htop_available() -> bool {
 /// the click's release at most one frame may exceed 500 cells (htop's
 /// periodic 1.5 s meter refresh stays outside the window).
 #[cfg(unix)]
+#[ignore = "load-sensitive: PTY/timing suite; run via make test-rust-sensitive or checkall-ci"]
 #[test]
 fn render_mode_click_repaint_coalesces_into_one_frame() {
     use portable_pty::CommandBuilder as PtyCommand;
@@ -664,6 +666,7 @@ fn render_mode_click_repaint_coalesces_into_one_frame() {
 /// sort-panel oscillation) — and the constraining client detaching grows
 /// the window back.
 #[cfg(unix)]
+#[ignore = "load-sensitive: PTY/timing suite; run via make test-rust-sensitive or checkall-ci"]
 #[test]
 fn two_attach_clients_do_not_war_over_the_window_size() {
     let (fixture, _daemon, mut client) = fixture_with_session("sizewar");
@@ -801,6 +804,7 @@ fn fixture_with_session(tag: &str) -> (MuxFixture, common::DaemonGuard, par_mux:
 ///
 /// Unix-only: the pane payload pipeline is POSIX shell syntax.
 #[cfg(unix)]
+#[ignore = "load-sensitive: PTY/timing suite; run via make test-rust-sensitive or checkall-ci"]
 #[test]
 fn escape_sequence_payload_round_trips_byte_identical() {
     let (fixture, _daemon, mut client) = fixture_with_session("fidelity");
@@ -863,6 +867,7 @@ fn escape_sequence_payload_round_trips_byte_identical() {
 /// Acceptance criterion 2: prefix d detaches — the client exits 0, restores
 /// the terminal (the reset sequence appears in its output), and the pane is
 /// still running afterwards (a later capture still sees its content).
+#[ignore = "load-sensitive: PTY/timing suite; run via make test-rust-sensitive or checkall-ci"]
 #[test]
 fn prefix_d_detaches_and_leaves_the_pane_running() {
     let (fixture, _daemon, mut client) = fixture_with_session("detach");
@@ -920,6 +925,7 @@ fn prefix_d_detaches_and_leaves_the_pane_running() {
 /// `--prefix C-a`, the old prefix `C-b d` does NOT detach (it forwards
 /// to the pane), and `C-a d` does, with exit 0. Render mode used to
 /// seed `C-b` and ignore the flag.
+#[ignore = "load-sensitive: PTY/timing suite; run via make test-rust-sensitive or checkall-ci"]
 #[test]
 fn render_mode_prefix_flag_rebinds_the_detach_chord() {
     let (fixture, _daemon, mut client) = fixture_with_session("render-prefix");
@@ -965,6 +971,7 @@ fn render_mode_prefix_flag_rebinds_the_detach_chord() {
 /// reset; the DECSTBM reserve appeared at startup, so a detach must reset
 /// the region (our status redraw writes `\x1b[r` on the way out via the
 /// last draw, and detach itself re-emits a final reset).
+#[ignore = "load-sensitive: PTY/timing suite; run via make test-rust-sensitive or checkall-ci"]
 #[test]
 fn detach_restores_the_terminal_region() {
     let (fixture, _daemon, mut client) = fixture_with_session("restore");
@@ -1071,6 +1078,7 @@ fn detach_restores_the_terminal_region() {
 /// select and a resync redraw. Split the pane, then prefix o; the client's
 /// output shows the NEW pane's content (the resync of the other pane).
 #[cfg(unix)]
+#[ignore = "load-sensitive: PTY/timing suite; run via make test-rust-sensitive or checkall-ci"]
 #[test]
 fn prefix_o_switches_panes_and_resyncs() {
     let (fixture, _daemon, mut client) = fixture_with_session("switch");
@@ -1143,6 +1151,7 @@ fn prefix_o_switches_panes_and_resyncs() {
 /// the fresh split — the new pane's distinct marker reaches the client
 /// through the landing resync, and the pane it split from stays alive.
 #[cfg(unix)]
+#[ignore = "load-sensitive: PTY/timing suite; run via make test-rust-sensitive or checkall-ci"]
 #[test]
 fn split_chord_lands_the_client_on_the_new_pane() {
     let (fixture, _daemon, mut client) = fixture_with_session("chordsplit");
@@ -1208,6 +1217,7 @@ fn split_chord_lands_the_client_on_the_new_pane() {
 /// prompts for the pane title and Escape cancels without committing,
 /// and prefix B repaints the dividers at the next glyph set.
 #[cfg(unix)]
+#[ignore = "load-sensitive: PTY/timing suite; run via make test-rust-sensitive or checkall-ci"]
 #[test]
 fn render_mode_zoom_rename_border_chords() {
     let (fixture, _daemon, mut client) = fixture_with_session("renderchords");
@@ -1518,6 +1528,7 @@ fn render_mode_zoom_rename_border_chords() {
 /// prefix x: the chord kills the focused pane and the pump follows the
 /// window's survivor — the survivor's marker resyncs in.
 #[cfg(unix)]
+#[ignore = "load-sensitive: PTY/timing suite; run via make test-rust-sensitive or checkall-ci"]
 #[test]
 fn kill_chord_lands_the_client_on_the_survivor() {
     let (fixture, _daemon, mut client) = fixture_with_session("chordkill");
@@ -1579,6 +1590,7 @@ fn kill_chord_lands_the_client_on_the_survivor() {
 
 /// The client exits 0 when the daemon shuts down (%exit), restoring the
 /// terminal.
+#[ignore = "load-sensitive: PTY/timing suite; run via make test-rust-sensitive or checkall-ci"]
 #[test]
 fn daemon_exit_ends_the_client_cleanly() {
     let (fixture, _daemon, mut client) = fixture_with_session("exit");
@@ -1609,6 +1621,7 @@ fn daemon_exit_ends_the_client_cleanly() {
 /// the pane's frozen screen either way), the status row names the respawn
 /// chord, and prefix `r` respawns the pane and resumes forwarding.
 #[cfg(unix)]
+#[ignore = "load-sensitive: PTY/timing suite; run via make test-rust-sensitive or checkall-ci"]
 #[test]
 fn dead_pane_takes_no_typing_and_prefix_r_respawns() {
     let (fixture, _daemon, mut client) = fixture_with_session("deadpane");
@@ -1770,6 +1783,7 @@ fn dead_pane_takes_no_typing_and_prefix_r_respawns() {
 /// exact tracked cell is pinned headless by
 /// `status_draw_places_the_cursor_at_the_tracked_cell` (`src/mux/attach/mod.rs`).
 #[cfg(unix)]
+#[ignore = "load-sensitive: PTY/timing suite; run via make test-rust-sensitive or checkall-ci"]
 #[test]
 fn status_draw_tracks_the_cursor_under_output_flood() {
     let (fixture, _daemon, mut client) = fixture_with_session("cursorrace");
@@ -1887,6 +1901,7 @@ fn status_draw_tracks_the_cursor_under_output_flood() {
 /// The `-t` target forms resolve: a pane id attaches to that pane (its
 /// content arrives), and an unknown target is a clean failure with exit 1
 /// and a message, not a crash.
+#[ignore = "load-sensitive: PTY/timing suite; run via make test-rust-sensitive or checkall-ci"]
 #[test]
 fn target_resolution_and_clean_failure() {
     let (fixture, _daemon, mut client) = fixture_with_session("targets");
@@ -1953,6 +1968,7 @@ fn target_resolution_and_clean_failure() {
 ///
 /// The renderer runs headless (no sink): the frames stay in the
 /// [`PaneRenderer::buffer`] the assertions read.
+#[ignore = "load-sensitive: PTY/timing suite; run via make test-rust-sensitive or checkall-ci"]
 #[test]
 fn render_mode_layout_and_pane_replay_match_daemon_ground_truth() {
     let (fixture, _daemon, mut client) = fixture_with_session("render");
@@ -2096,6 +2112,7 @@ fn render_mode_layout_and_pane_replay_match_daemon_ground_truth() {
 /// An app reading arrow keys sees `ESC O A` (application) or `ESC [ A`
 /// (normal), not whatever the host terminal sent.
 #[cfg(unix)]
+#[ignore = "load-sensitive: PTY/timing suite; run via make test-rust-sensitive or checkall-ci"]
 #[test]
 fn render_mode_arrow_keys_reencode_per_the_panes_decckm() {
     let (fixture, _daemon, mut client) = fixture_with_session("renderkeys");
@@ -2186,6 +2203,7 @@ fn render_mode_arrow_keys_reencode_per_the_panes_decckm() {
 /// delete must reach the pane as `ESC [ 3 ~`. The pane's `cat -v`
 /// prints the received spelling — the pane is the authority.
 #[cfg(unix)]
+#[ignore = "load-sensitive: PTY/timing suite; run via make test-rust-sensitive or checkall-ci"]
 #[test]
 fn render_mode_forward_delete_reaches_the_pane() {
     let (fixture, _daemon, mut client) = fixture_with_session("fwdel");
@@ -2328,6 +2346,7 @@ fn render_mode_forward_delete_reaches_the_pane() {
 /// renderer repaints the pane rect from its scrollback, and the pane
 /// itself receives nothing.
 #[cfg(unix)]
+#[ignore = "load-sensitive: PTY/timing suite; run via make test-rust-sensitive or checkall-ci"]
 #[test]
 fn render_mode_wheel_scrolls_client_scrollback_without_mouse_mode() {
     let (fixture, _daemon, mut client) = fixture_with_session("wheelscroll");
@@ -2436,6 +2455,7 @@ fn render_mode_wheel_scrolls_client_scrollback_without_mouse_mode() {
 /// harness sends a left press at window (10, 5); the pane's `cat -v`
 /// prints the re-encoded report.
 #[cfg(unix)]
+#[ignore = "load-sensitive: PTY/timing suite; run via make test-rust-sensitive or checkall-ci"]
 #[test]
 fn render_mode_mouse_forwards_pane_relative_when_pane_owns_mouse() {
     let (fixture, _daemon, mut client) = fixture_with_session("mousefwd");
@@ -2531,6 +2551,7 @@ fn render_mode_mouse_forwards_pane_relative_when_pane_owns_mouse() {
 /// The wheel must forward to a mouse-owning pane exactly like a press
 /// does, re-encoded SGR pane-relative (wheel-up is button code 64).
 #[cfg(unix)]
+#[ignore = "load-sensitive: PTY/timing suite; run via make test-rust-sensitive or checkall-ci"]
 #[test]
 fn render_mode_wheel_forwards_to_a_pane_that_owns_mouse() {
     let (fixture, _daemon, mut client) = fixture_with_session("wheelfwd");
@@ -2612,6 +2633,7 @@ fn render_mode_wheel_forwards_to_a_pane_that_owns_mouse() {
 /// to the pane after the gesture (a synthesized wheel-down, a focus
 /// report, a repaint), this prints the pane's full received bytes.
 #[cfg(unix)]
+#[ignore = "load-sensitive: PTY/timing suite; run via make test-rust-sensitive or checkall-ci"]
 #[test]
 fn render_mode_scroll_gesture_sends_nothing_but_the_reports() {
     let (fixture, _daemon, mut client) = fixture_with_session("gesture");
@@ -2890,6 +2912,7 @@ fn hook_report(path: &std::path::Path, json: &str) -> String {
 /// and an agent state change broadcast (%agent-state-changed) triggers the
 /// throttled re-query — the roster chip appears/updates on the row.
 #[cfg(unix)]
+#[ignore = "load-sensitive: PTY/timing suite; run via make test-rust-sensitive or checkall-ci"]
 #[test]
 fn render_mode_status_bar_shows_sessions_and_updates_on_agent_changes() {
     let (fixture, _daemon, mut client) = fixture_with_session("statusbar");
@@ -2960,6 +2983,7 @@ fn render_mode_status_bar_shows_sessions_and_updates_on_agent_changes() {
 /// the agent's name lands in the strip columns (the sidebar-on fixture;
 /// the sidebar-off bar contract is the test above).
 #[cfg(unix)]
+#[ignore = "load-sensitive: PTY/timing suite; run via make test-rust-sensitive or checkall-ci"]
 #[test]
 fn render_mode_side_panel_carries_the_agent_roster() {
     let (fixture, _daemon, mut client) = fixture_with_session("panelroster");
@@ -3040,6 +3064,7 @@ fn render_mode_side_panel_carries_the_agent_roster() {
 /// after the first is killed and with nothing reported meanwhile, must
 /// show the same row on its own first status refresh.
 #[cfg(unix)]
+#[ignore = "load-sensitive: PTY/timing suite; run via make test-rust-sensitive or checkall-ci"]
 #[test]
 fn render_mode_side_panel_reconnect_shows_the_roster_without_a_new_report() {
     let (fixture, _daemon, mut client) = fixture_with_session("reconnroster");
@@ -3141,6 +3166,7 @@ fn render_mode_side_panel_reconnect_shows_the_roster_without_a_new_report() {
 /// row — the settle-redraw discipline means a repaint flood cannot leave
 /// it blank.
 #[cfg(unix)]
+#[ignore = "load-sensitive: PTY/timing suite; run via make test-rust-sensitive or checkall-ci"]
 #[test]
 fn render_mode_host_resize_refits_window_layout_and_status_row() {
     let (fixture, _daemon, mut client) = fixture_with_session("resize");
@@ -3327,6 +3353,7 @@ fn render_mode_host_resize_refits_window_layout_and_status_row() {
 /// remain visible outside the new frame, and (c) keep pane content seeded
 /// before the attach visible through the re-fit (position may shift).
 #[cfg(unix)]
+#[ignore = "load-sensitive: PTY/timing suite; run via make test-rust-sensitive or checkall-ci"]
 #[test]
 fn render_mode_resize_to_taller_than_handshake_covers_the_full_frame() {
     let (fixture, _daemon, mut client) = fixture_with_session("tallresize");
@@ -3493,6 +3520,7 @@ fn render_mode_resize_to_taller_than_handshake_covers_the_full_frame() {
 /// both panes while `window_visible_layout` carries the zoomed one and
 /// the flags carry `Z`; the layout parser renders the visible form.
 #[cfg(unix)]
+#[ignore = "load-sensitive: PTY/timing suite; run via make test-rust-sensitive or checkall-ci"]
 #[test]
 fn render_mode_daemon_zoom_shows_single_pane_and_unzoom_restores_split() {
     let (fixture, _daemon, mut client) = fixture_with_session("zoom");
@@ -3609,6 +3637,7 @@ fn render_mode_daemon_zoom_shows_single_pane_and_unzoom_restores_split() {
 /// scroll viewport — the pane rect's top rows repaint from scrollback —
 /// and q exits cleanly (live view restored, keys reach the pane again).
 #[cfg(unix)]
+#[ignore = "load-sensitive: PTY/timing suite; run via make test-rust-sensitive or checkall-ci"]
 #[test]
 fn render_mode_prefix_bracket_enters_scroll_mode_and_q_exits() {
     let (fixture, _daemon, mut client) = fixture_with_session("scrollmode");
@@ -3703,6 +3732,7 @@ fn render_mode_prefix_bracket_enters_scroll_mode_and_q_exits() {
 /// typing lands in the fresh pane (its shell echoes it into the grid the
 /// next frame paints).
 #[cfg(unix)]
+#[ignore = "load-sensitive: PTY/timing suite; run via make test-rust-sensitive or checkall-ci"]
 #[test]
 fn render_mode_split_chord_reseeds_the_window_with_the_new_pane() {
     let (fixture, _daemon, mut client) = fixture_with_session("rendersplit");
@@ -3802,6 +3832,7 @@ fn render_mode_split_chord_reseeds_the_window_with_the_new_pane() {
 /// up (alt-screen enter + the pane's marker in the rendered frame) and
 /// keys must still reach the pane — not exit.
 #[cfg(unix)]
+#[ignore = "load-sensitive: PTY/timing suite; run via make test-rust-sensitive or checkall-ci"]
 #[test]
 fn render_mode_without_target_attaches_the_only_session() {
     let (fixture, _daemon, mut client) = fixture_with_session("rendernotarget");
@@ -3874,6 +3905,7 @@ fn render_mode_without_target_attaches_the_only_session() {
 /// exits non-zero without attaching, and its stderr names every session
 /// plus the `-t` hint (Paul, 2026-10-17: the user picks, not the client).
 #[cfg(unix)]
+#[ignore = "load-sensitive: PTY/timing suite; run via make test-rust-sensitive or checkall-ci"]
 #[test]
 fn render_mode_without_target_refuses_when_several_sessions_exist() {
     let (fixture, _daemon, mut client) = fixture_with_session("renderoldest");
@@ -3942,6 +3974,7 @@ fn expected_refusal(client: &mut par_mux::mux::MuxClient) -> String {
 /// shell): a target-less attach against two sessions prints exactly the
 /// refusal on stderr, exits 1, and never draws the picker. Both modes.
 #[cfg(unix)]
+#[ignore = "load-sensitive: PTY/timing suite; run via make test-rust-sensitive or checkall-ci"]
 #[test]
 fn session_picker_off_or_without_a_terminal_keeps_the_refusal_bytes() {
     let (fixture, _daemon, mut client) = fixture_with_two_sessions("pickrefuse");
@@ -3979,6 +4012,7 @@ fn session_picker_off_or_without_a_terminal_keeps_the_refusal_bytes() {
 /// (stdin on the PTY). Either way the picker stays off — no footer is
 /// drawn, nothing waits for a key — and the refusal prints, exit 1.
 #[cfg(unix)]
+#[ignore = "load-sensitive: PTY/timing suite; run via make test-rust-sensitive or checkall-ci"]
 #[test]
 fn session_picker_needs_both_stdin_and_stdout_on_a_terminal() {
     let (fixture, _daemon, _client) = fixture_with_two_sessions("pickhalf");
@@ -4130,12 +4164,14 @@ fn session_picker_pick_attaches(mode: &str, tag: &str, ready: &[u8]) {
 }
 
 #[cfg(unix)]
+#[ignore = "load-sensitive: PTY/timing suite; run via make test-rust-sensitive or checkall-ci"]
 #[test]
 fn session_picker_pick_attaches_the_chosen_session_render() {
     session_picker_pick_attaches("render", "pickrender", b"\x1b[?1049h");
 }
 
 #[cfg(unix)]
+#[ignore = "load-sensitive: PTY/timing suite; run via make test-rust-sensitive or checkall-ci"]
 #[test]
 fn session_picker_pick_attaches_the_chosen_session_passthrough() {
     session_picker_pick_attaches("passthrough", "pickpass", b"\x1b[1;23r");
@@ -4145,6 +4181,7 @@ fn session_picker_pick_attaches_the_chosen_session_passthrough() {
 /// on screen, exits 1, and leaves the terminal out of raw mode with the
 /// cursor shown.
 #[cfg(unix)]
+#[ignore = "load-sensitive: PTY/timing suite; run via make test-rust-sensitive or checkall-ci"]
 #[test]
 fn session_picker_abort_prints_the_refusal_and_exits_nonzero() {
     let (fixture, _daemon, _client) = fixture_with_two_sessions("pickquit");
@@ -4190,6 +4227,7 @@ fn session_picker_abort_prints_the_refusal_and_exits_nonzero() {
 /// The tree survives the client's detach (a session, not a client-scoped
 /// view), so the daemon stays serving.
 #[cfg(unix)]
+#[ignore = "load-sensitive: PTY/timing suite; run via make test-rust-sensitive or checkall-ci"]
 #[test]
 fn render_mode_without_target_creates_the_default_session() {
     let fixture = MuxFixture::new("renderdefault");
@@ -4236,6 +4274,7 @@ fn render_mode_without_target_creates_the_default_session() {
 /// The passthrough half of the default-tree create: same daemon shape,
 /// same rule, passthrough's byte-pump seed.
 #[cfg(unix)]
+#[ignore = "load-sensitive: PTY/timing suite; run via make test-rust-sensitive or checkall-ci"]
 #[test]
 fn passthrough_without_target_creates_the_default_session() {
     let fixture = MuxFixture::new("passdefault");
@@ -4284,6 +4323,7 @@ fn passthrough_without_target_creates_the_default_session() {
 /// `select-window` and the daemon's active-window marker moves — and no
 /// `send-keys` reaches any pane from a strip click (no forwarding).
 #[cfg(unix)]
+#[ignore = "load-sensitive: PTY/timing suite; run via make test-rust-sensitive or checkall-ci"]
 #[test]
 fn render_mode_tab_click_switches_the_active_window() {
     let (fixture, _daemon, mut client) = fixture_with_session("tabstrip");
@@ -4366,6 +4406,7 @@ fn session_first_pane(client: &mut par_mux::mux::MuxClient, session: &str) -> St
 /// workspace marker moves, and the target pane's seeded content re-seeds
 /// into the frame (the select+resync contract's redraw half).
 #[cfg(unix)]
+#[ignore = "load-sensitive: PTY/timing suite; run via make test-rust-sensitive or checkall-ci"]
 #[test]
 fn render_mode_workspace_chord_selects_and_lands() {
     let (fixture, _daemon, mut client) = fixture_with_session("wschord");
@@ -4466,6 +4507,7 @@ fn render_mode_workspace_chord_selects_and_lands() {
 /// workspace's name onto the workspaces segment — the same discipline
 /// %agent-state-changed follows for the roster chips.
 #[cfg(unix)]
+#[ignore = "load-sensitive: PTY/timing suite; run via make test-rust-sensitive or checkall-ci"]
 #[test]
 fn render_mode_workspaces_changed_refreshes_the_status_segment() {
     let (fixture, _daemon, mut client) = fixture_with_session("wsstatus");
@@ -4508,6 +4550,7 @@ fn render_mode_workspaces_changed_refreshes_the_status_segment() {
 /// The passthrough status line gains the workspaces segment: workspace
 /// names in id order, the daemon's active one bracketed.
 #[cfg(unix)]
+#[ignore = "load-sensitive: PTY/timing suite; run via make test-rust-sensitive or checkall-ci"]
 #[test]
 fn passthrough_status_line_carries_the_workspaces_segment() {
     let (fixture, _daemon, mut client) = fixture_with_session("wspass");
@@ -4536,6 +4579,7 @@ fn passthrough_status_line_carries_the_workspaces_segment() {
 /// the pump on the target workspace's pane — typing after the chord
 /// reaches the new workspace's pane only.
 #[cfg(unix)]
+#[ignore = "load-sensitive: PTY/timing suite; run via make test-rust-sensitive or checkall-ci"]
 #[test]
 fn passthrough_workspace_chord_selects_and_lands() {
     let (fixture, _daemon, mut client) = fixture_with_session("wspasschord");
@@ -4603,6 +4647,7 @@ fn passthrough_workspace_chord_selects_and_lands() {
 /// The sidebar chord in isolation: boot, attach, settle, toggle on and
 /// off — bisecting the full-chain test's sidebar failure.
 #[cfg(unix)]
+#[ignore = "load-sensitive: PTY/timing suite; run via make test-rust-sensitive or checkall-ci"]
 #[test]
 fn render_mode_sidebar_toggle_minimal() {
     let (fixture, _daemon, mut client) = fixture_with_session("sidebarmini");
@@ -4920,6 +4965,7 @@ fn row24_furthest_col_on(bytes: &[u8], row_want: u16) -> usize {
 /// 20-col panel up, the right pane's marker paints at column 51; with
 /// the panel down it returns to 41.
 #[cfg(unix)]
+#[ignore = "load-sensitive: PTY/timing suite; run via make test-rust-sensitive or checkall-ci"]
 #[test]
 fn render_mode_sidebar_toggle_refits_pane_geometry() {
     let (fixture, _daemon, mut client) = fixture_with_session("sbgeo");
@@ -5069,6 +5115,7 @@ fn wait_pane_echo(client: &mut par_mux::mux::MuxClient, pane: &str, marker: &str
 /// geometry reads the marker's last paint; the client has no launch-time
 /// refit path, so that paint is the seed's division.
 #[cfg(unix)]
+#[ignore = "load-sensitive: PTY/timing suite; run via make test-rust-sensitive or checkall-ci"]
 #[test]
 fn render_mode_sidebar_on_launch_default_shows_panel_on_first_frame() {
     let (fixture, _daemon, mut client) = fixture_with_session("sblaunch");
@@ -5113,6 +5160,7 @@ fn render_mode_sidebar_on_launch_default_shows_panel_on_first_frame() {
 /// 20 of an expanded panel (the marker at 43, not 52) — and the attach
 /// writes nothing back on launch.
 #[cfg(unix)]
+#[ignore = "load-sensitive: PTY/timing suite; run via make test-rust-sensitive or checkall-ci"]
 #[test]
 fn render_mode_persisted_collapsed_panel_launches_as_the_rail() {
     let (fixture, _daemon, mut client) = fixture_with_session("sbrail");
@@ -5157,6 +5205,7 @@ fn render_mode_persisted_collapsed_panel_launches_as_the_rail() {
 /// `sidebar-on-launch = false`: the panel stays hidden on launch and the
 /// panes divide the full width (the marker at column 42).
 #[cfg(unix)]
+#[ignore = "load-sensitive: PTY/timing suite; run via make test-rust-sensitive or checkall-ci"]
 #[test]
 fn render_mode_sidebar_on_launch_false_keeps_panel_hidden() {
     let (fixture, _daemon, mut client) = fixture_with_session("sbnolaunch");
@@ -5196,6 +5245,7 @@ fn render_mode_sidebar_on_launch_false_keeps_panel_hidden() {
 /// manual-pass report: part of the status bar did not render after
 /// bringing the panel up).
 #[cfg(unix)]
+#[ignore = "load-sensitive: PTY/timing suite; run via make test-rust-sensitive or checkall-ci"]
 #[test]
 fn render_mode_sidebar_toggle_repaints_the_strip_rows() {
     let (fixture, _daemon, mut client) = fixture_with_session("sbstrip");
@@ -5263,6 +5313,7 @@ fn render_mode_sidebar_toggle_repaints_the_strip_rows() {
 /// row afterward; prefix S again restores the row, the chip, and the
 /// cursor to host row 23.
 #[cfg(unix)]
+#[ignore = "load-sensitive: PTY/timing suite; run via make test-rust-sensitive or checkall-ci"]
 #[test]
 fn render_mode_status_bar_toggle_hides_and_restores_the_row() {
     let (fixture, _daemon, mut client) = fixture_with_session("sbtoggle");
@@ -5343,6 +5394,7 @@ fn render_mode_status_bar_toggle_hides_and_restores_the_row() {
 /// The side panel's ` menu ` chip opens the command menu, and its
 /// `detach` row ends the client exactly like prefix `d` (exit 0).
 #[cfg(unix)]
+#[ignore = "load-sensitive: PTY/timing suite; run via make test-rust-sensitive or checkall-ci"]
 #[test]
 fn render_mode_panel_menu_chip_detaches() {
     let (fixture, _daemon, mut client) = fixture_with_session("menudetach");
@@ -5415,6 +5467,7 @@ fn render_mode_panel_menu_chip_detaches() {
 /// the bytes ghostty/kitty turn into the resize pointer — when the
 /// pointer hovers or drags a divider, and restores `text` after.
 #[cfg(unix)]
+#[ignore = "load-sensitive: PTY/timing suite; run via make test-rust-sensitive or checkall-ci"]
 #[test]
 fn render_mode_change_cursor_shape_writes_osc22_to_the_host() {
     let (fixture, _daemon, mut client) = fixture_with_session("ptr22");
@@ -5537,6 +5590,7 @@ fn render_mode_change_cursor_shape_writes_osc22_to_the_host() {
 /// first state (a background claim straight into `blocked`) notifies
 /// too, while an agent in the shown window stays quiet.
 #[cfg(unix)]
+#[ignore = "load-sensitive: PTY/timing suite; run via make test-rust-sensitive or checkall-ci"]
 #[test]
 fn render_mode_background_agent_state_notifies_the_host() {
     let (fixture, _daemon, mut client) = fixture_with_session("notifyhost");
@@ -5623,6 +5677,7 @@ fn render_mode_background_agent_state_notifies_the_host() {
 /// written to the file, the reload chord) under such an environment and
 /// asserts the background agent's transition reaches the host as OSC 9.
 #[cfg(unix)]
+#[ignore = "load-sensitive: PTY/timing suite; run via make test-rust-sensitive or checkall-ci"]
 #[test]
 fn render_mode_terminal_delivery_after_reload_is_osc9_under_a_leaked_kitty_env() {
     let (fixture, _daemon, mut client) = fixture_with_session("notifyleak");
@@ -5747,6 +5802,7 @@ fn shown_and_background_panes(client: &mut par_mux::mux::MuxClient) -> (String, 
 /// `config re-applied` once; the writing client A, whose own reload
 /// already applied the file, never flashes the follower cue.
 #[cfg(unix)]
+#[ignore = "load-sensitive: PTY/timing suite; run via make test-rust-sensitive or checkall-ci"]
 #[test]
 fn render_mode_settings_change_reaches_every_other_attached_client() {
     let (fixture, _daemon, mut client) = fixture_with_session("cfgprop");
@@ -5836,6 +5892,7 @@ fn render_mode_settings_change_reaches_every_other_attached_client() {
 /// here a plain control client's `reload-config` after an out-of-band
 /// file edit — reaches it, it re-applies, and it keeps running.
 #[cfg(unix)]
+#[ignore = "load-sensitive: PTY/timing suite; run via make test-rust-sensitive or checkall-ci"]
 #[test]
 fn render_mode_config_changed_reaches_a_client_attached_after_a_reload() {
     let (fixture, _daemon, mut client) = fixture_with_session("cfglate");
@@ -5899,6 +5956,7 @@ fn render_mode_config_changed_reaches_a_client_attached_after_a_reload() {
 /// shown, then the view switches to another workspace, then the agent
 /// changes state — the now-background agent must notify.
 #[cfg(unix)]
+#[ignore = "load-sensitive: PTY/timing suite; run via make test-rust-sensitive or checkall-ci"]
 #[test]
 fn render_mode_agent_in_a_left_workspace_notifies_the_host() {
     let (fixture, _daemon, mut client) = fixture_with_session("notifyws");
@@ -5988,6 +6046,7 @@ fn render_mode_agent_in_a_left_workspace_notifies_the_host() {
 /// in the real client — no host escape — when a background agent goes
 /// blocked.
 #[cfg(unix)]
+#[ignore = "load-sensitive: PTY/timing suite; run via make test-rust-sensitive or checkall-ci"]
 #[test]
 fn render_mode_inside_delivery_paints_a_toast() {
     let (fixture, _daemon, mut client) = fixture_with_session("notifytoast");
@@ -6092,6 +6151,7 @@ fn render_mode_inside_delivery_paints_a_toast() {
 /// The command menu's `settings` row opens herdr's tabbed settings
 /// dialog in the real client, and Escape closes it.
 #[cfg(unix)]
+#[ignore = "load-sensitive: PTY/timing suite; run via make test-rust-sensitive or checkall-ci"]
 #[test]
 fn render_mode_settings_dialog_opens_from_the_panel_menu() {
     let (fixture, _daemon, mut client) = fixture_with_session("settingsdlg");
@@ -6165,6 +6225,7 @@ fn render_mode_settings_dialog_opens_from_the_panel_menu() {
 /// config shape (the live report: the method seemed unchangeable from
 /// the dialog).
 #[cfg(unix)]
+#[ignore = "load-sensitive: PTY/timing suite; run via make test-rust-sensitive or checkall-ci"]
 #[test]
 fn render_mode_settings_notify_delivery_cycles() {
     let (fixture, _daemon, mut client) = fixture_with_session("setnotify");
@@ -6286,6 +6347,7 @@ fn render_mode_settings_notify_delivery_cycles() {
 /// manual-pass round-7 report; the same defect class as round 5's
 /// unclickable +).
 #[cfg(unix)]
+#[ignore = "load-sensitive: PTY/timing suite; run via make test-rust-sensitive or checkall-ci"]
 #[test]
 fn render_mode_tab_menu_actions_click_with_the_panel_up() {
     let (fixture, _daemon, mut client) = fixture_with_session("menuclick");
@@ -6365,6 +6427,7 @@ fn render_mode_tab_menu_actions_click_with_the_panel_up() {
 }
 
 #[cfg(unix)]
+#[ignore = "load-sensitive: PTY/timing suite; run via make test-rust-sensitive or checkall-ci"]
 #[test]
 fn render_mode_plus_click_works_with_the_panel_up() {
     let (fixture, _daemon, mut client) = fixture_with_session("pluspanel");
@@ -6436,6 +6499,7 @@ fn render_mode_plus_click_works_with_the_panel_up() {
 }
 
 #[cfg(unix)]
+#[ignore = "load-sensitive: PTY/timing suite; run via make test-rust-sensitive or checkall-ci"]
 #[test]
 fn render_mode_plus_click_works_on_a_wide_host() {
     let (fixture, _daemon, mut client) = fixture_with_session("pluswide");
@@ -6504,6 +6568,7 @@ fn render_mode_plus_click_works_on_a_wide_host() {
 /// (herdr's footer, the next free index as the editable default), Enter
 /// creates the window and lands on it, Esc cancels without creating.
 #[cfg(unix)]
+#[ignore = "load-sensitive: PTY/timing suite; run via make test-rust-sensitive or checkall-ci"]
 #[test]
 fn render_mode_plus_click_prompts_and_creates_a_window() {
     let (fixture, _daemon, mut client) = fixture_with_session("plusclick");
@@ -6600,6 +6665,7 @@ fn render_mode_plus_click_prompts_and_creates_a_window() {
 /// not revert the borders (the manual-pass report — the re-seed rebuilt
 /// the renderer with the default glyphs).
 #[cfg(unix)]
+#[ignore = "load-sensitive: PTY/timing suite; run via make test-rust-sensitive or checkall-ci"]
 #[test]
 fn render_mode_border_style_survives_split() {
     let (fixture, _daemon, mut client) = fixture_with_session("herdrsplit");
@@ -6662,6 +6728,7 @@ fn render_mode_border_style_survives_split() {
 /// without either, so the panel vanished and the panes painted under
 /// where it had been.
 #[cfg(unix)]
+#[ignore = "load-sensitive: PTY/timing suite; run via make test-rust-sensitive or checkall-ci"]
 #[test]
 fn render_mode_workspace_click_reseeds_with_the_panel() {
     let (fixture, _daemon, mut client) = fixture_with_session("sbsplit");
@@ -6739,6 +6806,7 @@ fn render_mode_workspace_click_reseeds_with_the_panel() {
 /// report: labels never showed because the painter read the shell's OSC
 /// title only).
 #[cfg(unix)]
+#[ignore = "load-sensitive: PTY/timing suite; run via make test-rust-sensitive or checkall-ci"]
 #[test]
 fn render_mode_border_label_paints_the_user_title() {
     let (fixture, _daemon, mut client) = fixture_with_session("labels");
@@ -6942,6 +7010,7 @@ fn shows_multi(screen: &str) -> bool {
 /// the seeded markers render, and the background workspace's session does
 /// not leak into the frame.
 #[cfg(unix)]
+#[ignore = "load-sensitive: PTY/timing suite; run via make test-rust-sensitive or checkall-ci"]
 #[test]
 fn render_mode_explicit_target_lands_on_its_sessions_window() {
     let (fixture, _daemon, mut client) = fixture_with_session("dispseed");
@@ -7000,6 +7069,7 @@ fn fixture_two_session_workspace(
 /// session, so client B follows to it instead of staying on (or, after
 /// a later follow, reverting to) the session the pointer still named.
 #[cfg(unix)]
+#[ignore = "load-sensitive: PTY/timing suite; run via make test-rust-sensitive or checkall-ci"]
 #[test]
 fn render_mode_session_landing_moves_the_display_and_the_other_client_follows() {
     let (fixture, _daemon, mut client) = fixture_two_session_workspace("dispfollow");
@@ -7059,6 +7129,7 @@ fn render_mode_session_landing_moves_the_display_and_the_other_client_follows() 
 /// sessions — the persistence the pointer carries is queried, not
 /// silently attached to.)
 #[cfg(unix)]
+#[ignore = "load-sensitive: PTY/timing suite; run via make test-rust-sensitive or checkall-ci"]
 #[test]
 fn render_mode_landing_survives_a_restart_for_the_next_attach() {
     let (fixture, mut daemon, client) = fixture_two_session_workspace("disprestart");
@@ -7103,6 +7174,7 @@ fn render_mode_landing_survives_a_restart_for_the_next_attach() {
 /// background session never moved the pointer, so the restored daemon
 /// still named the old session.)
 #[cfg(unix)]
+#[ignore = "load-sensitive: PTY/timing suite; run via make test-rust-sensitive or checkall-ci"]
 #[test]
 fn passthrough_session_landing_survives_a_restart_for_the_next_attach() {
     let (fixture, mut daemon, client) = fixture_two_session_workspace("passrestart");
@@ -7155,6 +7227,7 @@ fn passthrough_session_landing_survives_a_restart_for_the_next_attach() {
 /// a sibling session it landed on moves the display there too, so B —
 /// on the session the pointer used to name — follows to A's new tab.
 #[cfg(unix)]
+#[ignore = "load-sensitive: PTY/timing suite; run via make test-rust-sensitive or checkall-ci"]
 #[test]
 fn render_mode_new_window_in_another_client_reaches_this_client() {
     let (fixture, _daemon, _client) = fixture_two_session_workspace("newwinfollow");
@@ -7216,6 +7289,7 @@ fn render_mode_new_window_in_another_client_reaches_this_client() {
 /// CLI) reaches this render client's tab strip — `%window-add` marks the
 /// status stale like every other roster cue.
 #[cfg(unix)]
+#[ignore = "load-sensitive: PTY/timing suite; run via make test-rust-sensitive or checkall-ci"]
 #[test]
 fn render_mode_window_add_elsewhere_refreshes_the_tab_strip() {
     let (fixture, _daemon, mut client) = fixture_with_session("tabadd");
@@ -7291,6 +7365,7 @@ fn saw_pane_exited(client: &par_mux::mux::MuxClient, deadline: Duration) -> bool
 /// clients must stay attached and repaint the survivors — the pane's
 /// death is not the session's.
 #[cfg(unix)]
+#[ignore = "load-sensitive: PTY/timing suite; run via make test-rust-sensitive or checkall-ci"]
 #[test]
 fn render_mode_ctrl_d_in_a_pane_keeps_both_clients_on_the_survivors() {
     let fixture = MuxFixture::new("ctrldpane");
@@ -7379,6 +7454,7 @@ fn render_mode_ctrl_d_in_a_pane_keeps_both_clients_on_the_survivors() {
 /// the workspace keeps a sibling session — so both render clients land on
 /// the sibling's active window and repaint it instead of ending.
 #[cfg(unix)]
+#[ignore = "load-sensitive: PTY/timing suite; run via make test-rust-sensitive or checkall-ci"]
 #[test]
 fn render_mode_ctrl_d_on_a_sessions_last_pane_lands_on_the_sibling_session() {
     let fixture = MuxFixture::new("ctrldlast");
@@ -7469,6 +7545,7 @@ fn render_mode_ctrl_d_on_a_sessions_last_pane_lands_on_the_sibling_session() {
 /// client ends instead of holding a dead pane. The keep-one-tab hold is
 /// the `set-workspace-respawn` opt-in now.
 #[cfg(unix)]
+#[ignore = "load-sensitive: PTY/timing suite; run via make test-rust-sensitive or checkall-ci"]
 #[test]
 fn render_mode_ctrl_d_on_the_workspaces_last_pane_cascades_and_ends() {
     let fixture = MuxFixture::new("ctrldkeep");
@@ -7525,6 +7602,7 @@ fn render_mode_ctrl_d_on_the_workspaces_last_pane_cascades_and_ends() {
 /// repaints it instead of ending (the cached workspace is gone, so the walk
 /// falls through to the daemon's active one).
 #[cfg(unix)]
+#[ignore = "load-sensitive: PTY/timing suite; run via make test-rust-sensitive or checkall-ci"]
 #[test]
 fn render_mode_kill_of_the_shown_workspace_lands_on_the_surviving_one() {
     let fixture = MuxFixture::new("killshownws");
@@ -7624,6 +7702,7 @@ fn render_mode_kill_of_the_shown_workspace_lands_on_the_surviving_one() {
 /// exit-when-empty grace — the daemon still serving proves the end came
 /// from the client's own landing walk, not the broadcast `%exit`.
 #[cfg(unix)]
+#[ignore = "load-sensitive: PTY/timing suite; run via make test-rust-sensitive or checkall-ci"]
 #[test]
 fn render_mode_kill_workspace_of_the_only_workspace_ends_the_client() {
     let fixture = MuxFixture::new("killallws");
@@ -7672,6 +7751,7 @@ fn render_mode_kill_workspace_of_the_only_workspace_ends_the_client() {
 /// its other window. tmux semantics: both clients stay attached and land
 /// on the session's surviving window instead of ending the view.
 #[cfg(unix)]
+#[ignore = "load-sensitive: PTY/timing suite; run via make test-rust-sensitive or checkall-ci"]
 #[test]
 fn render_mode_ctrl_d_closing_a_tab_keeps_both_clients_in_the_session() {
     let fixture = MuxFixture::new("ctrldtab");
@@ -7774,6 +7854,7 @@ fn render_mode_ctrl_d_closing_a_tab_keeps_both_clients_in_the_session() {
 /// the single pane's rect is 80x22, and its interior is 78x20. A program
 /// drawing at `stty size`'s last row lands inside the painted interior.
 #[cfg(unix)]
+#[ignore = "load-sensitive: PTY/timing suite; run via make test-rust-sensitive or checkall-ci"]
 #[test]
 fn render_mode_border_ring_keeps_the_tui_last_row_visible() {
     let (fixture, _daemon, mut client) = fixture_with_session("lastrow");
@@ -7921,6 +8002,7 @@ fn marked_region<'a>(bytes: &'a [u8], start: &[u8], end: &[u8]) -> Option<&'a [u
 /// marked payload region. A cargo-build-like scrolling flood runs first,
 /// the shape Paul's pane had just before the demo.
 #[cfg(unix)]
+#[ignore = "load-sensitive: PTY/timing suite; run via make test-rust-sensitive or checkall-ci"]
 #[test]
 fn passthrough_forwards_every_byte_of_a_rich_like_flood() {
     passthrough_flood_round_trip(HostShape::Fast);
@@ -7930,6 +8012,7 @@ fn passthrough_forwards_every_byte_of_a_rich_like_flood() {
 /// painting truecolor glyphs drains far slower than the pane writes):
 /// backpressure must reach the pane, never cost bytes.
 #[cfg(unix)]
+#[ignore = "load-sensitive: PTY/timing suite; run via make test-rust-sensitive or checkall-ci"]
 #[test]
 fn passthrough_forwards_every_byte_to_a_slow_host() {
     passthrough_flood_round_trip(HostShape::Slow);
@@ -7966,6 +8049,7 @@ fn status_draw_placement_rows(bytes: &[u8]) -> Vec<u16> {
 /// bytes all arrived (the byte-exact tests above prove the transport);
 /// the host could not keep them.
 #[cfg(unix)]
+#[ignore = "load-sensitive: PTY/timing suite; run via make test-rust-sensitive or checkall-ci"]
 #[test]
 fn passthrough_output_after_a_scroll_reaches_the_host_scrollback() {
     let (fixture, _daemon, mut client) = fixture_with_session("ptscroll");
@@ -8211,6 +8295,7 @@ fn passthrough_flood_round_trip(shape: HostShape) {
 /// line applied at the old size on the daemon but fed at the new size
 /// in the client wraps differently and fails the comparison.
 #[cfg(unix)]
+#[ignore = "load-sensitive: PTY/timing suite; run via make test-rust-sensitive or checkall-ci"]
 #[test]
 fn resize_storm_post_reply_output_matches_daemon_ground_truth() {
     let (fixture, _daemon, mut client) = fixture_with_session("race");
@@ -8452,6 +8537,7 @@ fn strip_sgr(row: &str) -> String {
 /// pane's shell under a remain-on-exit daemon — the hold is what makes
 /// the pane held dead now that the auto-remove default cascades.
 #[cfg(unix)]
+#[ignore = "load-sensitive: PTY/timing suite; run via make test-rust-sensitive or checkall-ci"]
 #[test]
 fn render_mode_held_pane_shows_the_exit_cue_and_the_chord_respawns_it() {
     let fixture = MuxFixture::new("rendercue");
@@ -8535,6 +8621,7 @@ fn render_mode_held_pane_shows_the_exit_cue_and_the_chord_respawns_it() {
 /// A pane held dead BEFORE the render client attaches: the registration
 /// replay's `%pane-exited` seeds the cue on the first status row.
 #[cfg(unix)]
+#[ignore = "load-sensitive: PTY/timing suite; run via make test-rust-sensitive or checkall-ci"]
 #[test]
 fn render_mode_pane_held_before_attach_shows_the_exit_cue() {
     let (fixture, _daemon, mut client) = fixture_with_session("rendercuelate");
@@ -8576,6 +8663,7 @@ fn render_mode_pane_held_before_attach_shows_the_exit_cue() {
 /// rule: every TUI chord is editable there): the tab's last row is
 /// `respawn dead pane` at its live binding.
 #[cfg(unix)]
+#[ignore = "load-sensitive: PTY/timing suite; run via make test-rust-sensitive or checkall-ci"]
 #[test]
 fn render_mode_settings_keys_tab_lists_the_respawn_chord() {
     let (fixture, _daemon, mut client) = fixture_with_session("setrespawn");
@@ -8655,6 +8743,7 @@ fn render_mode_settings_keys_tab_lists_the_respawn_chord() {
 /// one. The "editor" is a script that copies the file it was handed out;
 /// the launcher removes the temp files when the editor exits.
 #[cfg(unix)]
+#[ignore = "load-sensitive: PTY/timing suite; run via make test-rust-sensitive or checkall-ci"]
 #[test]
 fn render_mode_copy_mode_e_opens_the_scrollback_in_the_editor() {
     use std::os::unix::fs::PermissionsExt as _;
@@ -8776,6 +8865,7 @@ fn popup_window_id(reply: &str) -> Option<String> {
 /// that exits closes its popup on its own — typing then reaches the
 /// original pane again.
 #[cfg(unix)]
+#[ignore = "load-sensitive: PTY/timing suite; run via make test-rust-sensitive or checkall-ci"]
 #[test]
 fn render_mode_popup_runs_a_command_in_a_floating_box_and_closes() {
     let (fixture, _daemon, mut client) = fixture_with_session("popup");
@@ -9008,6 +9098,7 @@ const KITTY_CLIENT_CONFIG: &str =
 /// row the daemon's own pane put it (capture-pane ground truth), so the
 /// mirror's image math matches the daemon's.
 #[cfg(unix)]
+#[ignore = "load-sensitive: PTY/timing suite; run via make test-rust-sensitive or checkall-ci"]
 #[test]
 fn render_mode_kitty_graphics_reach_a_kitty_host_positioned() {
     let (fixture, _daemon, mut client) = fixture_with_session("kittyhost");
@@ -9074,6 +9165,7 @@ fn render_mode_kitty_graphics_reach_a_kitty_host_positioned() {
 /// pane's image never reaches it — no upload, no placement, no APC at
 /// all past the one probe query — while the pane's text still paints.
 #[cfg(unix)]
+#[ignore = "load-sensitive: PTY/timing suite; run via make test-rust-sensitive or checkall-ci"]
 #[test]
 fn render_mode_kitty_graphics_stay_off_a_silent_host() {
     let (fixture, _daemon, mut client) = fixture_with_session("kittysilent");
@@ -9114,6 +9206,7 @@ fn render_mode_kitty_graphics_stay_off_a_silent_host() {
 /// `kitty-graphics = false`: the client never asks the host and never
 /// draws, even on a kitty-capable host.
 #[cfg(unix)]
+#[ignore = "load-sensitive: PTY/timing suite; run via make test-rust-sensitive or checkall-ci"]
 #[test]
 fn render_mode_kitty_graphics_config_off_sends_nothing() {
     let (fixture, _daemon, mut client) = fixture_with_session("kittyoff");

@@ -24,6 +24,7 @@ use std::time::{Duration, Instant};
 /// empty. The parser now strips that one level, so the quoted tail runs
 /// as a shell line, exactly like tmux's shell-split argv, and the pane
 /// stays alive on its trailing `sleep`.
+#[ignore = "load-sensitive: PTY/timing suite; run via make test-rust-sensitive or checkall-ci"]
 #[test]
 fn quoted_split_start_tail_runs_as_a_shell_line() {
     let fixture = MuxFixture::new("skgt");
@@ -58,6 +59,7 @@ fn quoted_split_start_tail_runs_as_a_shell_line() {
     );
 }
 
+#[ignore = "load-sensitive: PTY/timing suite; run via make test-rust-sensitive or checkall-ci"]
 #[test]
 fn panes_survive_every_client_disconnecting() {
     let fixture = MuxFixture::new("survive");
@@ -104,6 +106,7 @@ fn panes_survive_every_client_disconnecting() {
 /// is told via `%pane-title-changed`, a client that attaches AFTER the set
 /// reads it back through the `pane-title` query, and `-T ''` clears with
 /// the same broadcast.
+#[ignore = "load-sensitive: PTY/timing suite; run via make test-rust-sensitive or checkall-ci"]
 #[test]
 fn pane_titles_broadcast_query_and_clear() {
     let fixture = MuxFixture::new("titles");
@@ -209,6 +212,7 @@ fn pane_titles_broadcast_query_and_clear() {
     let _ = handle;
 }
 
+#[ignore = "load-sensitive: PTY/timing suite; run via make test-rust-sensitive or checkall-ci"]
 #[test]
 fn prepare_socket_path_makes_auto_spawn_race_safe() {
     let fixture = MuxFixture::new("race");
@@ -230,6 +234,7 @@ fn prepare_socket_path_makes_auto_spawn_race_safe() {
 /// The content pane runs `sleep` on both sides of the save/restore, so the
 /// only bytes in its terminal are the ones the test fed directly.
 #[cfg(unix)]
+#[ignore = "load-sensitive: PTY/timing suite; run via make test-rust-sensitive or checkall-ci"]
 #[test]
 fn a_restored_tree_serves_its_prior_ids_and_content() {
     use par_mux::mux::pane::ShellPaneFactory;
@@ -316,6 +321,7 @@ fn a_restored_tree_serves_its_prior_ids_and_content() {
 /// file reflects every completed mutation, so the next start restores from
 /// it rather than starting empty.
 #[cfg(unix)]
+#[ignore = "load-sensitive: PTY/timing suite; run via make test-rust-sensitive or checkall-ci"]
 #[test]
 fn sigterm_saves_state_on_the_way_out() {
     use nix::sys::signal::{self, Signal};
@@ -414,6 +420,7 @@ fn sigterm_saves_state_on_the_way_out() {
 /// a dead pane into a fresh shell in place — `%pane-respawned` on the
 /// same pane id, the new shell taking input — where the default
 /// (`remove`) would have cascaded the pane away.
+#[ignore = "load-sensitive: PTY/timing suite; run via make test-rust-sensitive or checkall-ci"]
 #[test]
 fn exit_action_shell_respawns_the_dead_pane_into_a_shell() {
     let fixture = MuxFixture::new("exitshell");
@@ -489,6 +496,7 @@ fn exit_action_shell_respawns_the_dead_pane_into_a_shell() {
 /// id, window, and frozen screen, and `respawn-pane` restarts the
 /// process in place — refusing a live pane without `-k`, restarting it
 /// with `-k`, and restarting a dead pane with no flag at all.
+#[ignore = "load-sensitive: PTY/timing suite; run via make test-rust-sensitive or checkall-ci"]
 #[test]
 fn a_dead_pane_is_held_announced_and_respawnable() {
     let fixture = MuxFixture::new("reap");
@@ -615,6 +623,7 @@ fn session_names(client: &mut MuxClient) -> String {
 /// `list-panes`, its emptied window and session cascade, and
 /// `respawn-pane` answers "no such pane" (gone, not held). A sibling
 /// session keeps the workspace, so the removal never empties it.
+#[ignore = "load-sensitive: PTY/timing suite; run via make test-rust-sensitive or checkall-ci"]
 #[test]
 fn the_auto_remove_default_deletes_a_dead_pane() {
     let fixture = MuxFixture::new("autoremove");
@@ -660,6 +669,7 @@ fn the_auto_remove_default_deletes_a_dead_pane() {
 /// hold on honors it, a `reload-config` after the config flips to
 /// auto-remove applies the change at once (the `applied:` report line),
 /// and the NEXT death is auto-removed with no restart.
+#[ignore = "load-sensitive: PTY/timing suite; run via make test-rust-sensitive or checkall-ci"]
 #[test]
 fn reload_config_flips_remain_on_exit_live() {
     let fixture = MuxFixture::new("relivereap");
@@ -722,6 +732,7 @@ fn reload_config_flips_remain_on_exit_live() {
 /// `%workspaces-changed`), nothing is held, and `respawn-pane` answers
 /// "no such pane" (gone, not held). The keep-one-tab hold survives only
 /// as the `set-workspace-respawn` opt-in.
+#[ignore = "load-sensitive: PTY/timing suite; run via make test-rust-sensitive or checkall-ci"]
 #[test]
 fn auto_remove_cascades_a_workspaces_last_pane_on_app_exit() {
     use par_term_emu_core::tmux_control::TmuxNotification;
@@ -824,6 +835,7 @@ fn exit_shell_after_guard(client: &mut MuxClient, pane: &str, code: i32) {
 /// it in place — `%pane-exited` then `%pane-respawned` on the same id,
 /// no removal notification, window/session/workspace untouched — under
 /// the product default (auto-remove). Off, the same exit holds it dead.
+#[ignore = "load-sensitive: PTY/timing suite; run via make test-rust-sensitive or checkall-ci"]
 #[test]
 fn workspace_respawn_restarts_the_last_pane_in_place() {
     let fixture = MuxFixture::new("respawnlast");
@@ -908,6 +920,7 @@ fn workspace_respawn_restarts_the_last_pane_in_place() {
 /// The crash-loop guard: a respawn-on workspace's last pane that dies
 /// within a second of its spawn is HELD dead (an rc that exits at once
 /// would otherwise respawn on every reap tick).
+#[ignore = "load-sensitive: PTY/timing suite; run via make test-rust-sensitive or checkall-ci"]
 #[test]
 fn workspace_respawn_holds_a_pane_that_dies_at_once() {
     let fixture = MuxFixture::new("respawnloop");
@@ -936,6 +949,7 @@ fn workspace_respawn_holds_a_pane_that_dies_at_once() {
 
 /// The option persists: a daemon restart restores the flag, and the
 /// restored workspace still respawns its last pane.
+#[ignore = "load-sensitive: PTY/timing suite; run via make test-rust-sensitive or checkall-ci"]
 #[test]
 fn workspace_respawn_survives_a_daemon_restart() {
     let fixture = MuxFixture::new("respawnpersist");
@@ -979,6 +993,7 @@ fn workspace_respawn_survives_a_daemon_restart() {
 /// workspace keeps the other window), and the second — now the
 /// workspace's last pane — runs the full cascade too, so the emptied
 /// session and workspace go with it.
+#[ignore = "load-sensitive: PTY/timing suite; run via make test-rust-sensitive or checkall-ci"]
 #[test]
 fn auto_remove_removes_down_to_the_workspaces_last_pane() {
     let fixture = MuxFixture::new("keeptwo");
@@ -1039,6 +1054,7 @@ fn auto_remove_removes_down_to_the_workspaces_last_pane() {
 
 /// remain-on-exit on: unchanged — every exit is held, the workspace's last
 /// pane or not.
+#[ignore = "load-sensitive: PTY/timing suite; run via make test-rust-sensitive or checkall-ci"]
 #[test]
 fn remain_on_exit_holds_every_exit_unchanged() {
     let fixture = MuxFixture::new("holdall");
@@ -1062,6 +1078,7 @@ fn remain_on_exit_holds_every_exit_unchanged() {
 /// Explicit `kill-pane` is deliberate destruction: keep-one-tab is the
 /// reap path's rule only, so killing a workspace's last LIVE pane still
 /// cascades its window, session, and workspace away.
+#[ignore = "load-sensitive: PTY/timing suite; run via make test-rust-sensitive or checkall-ci"]
 #[test]
 fn kill_pane_of_a_workspaces_last_pane_still_cascades() {
     let fixture = MuxFixture::new("killlast");
@@ -1097,6 +1114,7 @@ fn kill_pane_of_a_workspaces_last_pane_still_cascades() {
 /// `-k` or `-c` inside the command neither kills a live pane nor becomes
 /// the start directory.
 #[cfg(unix)]
+#[ignore = "load-sensitive: PTY/timing suite; run via make test-rust-sensitive or checkall-ci"]
 #[test]
 fn respawn_pane_ignores_flags_inside_the_command() {
     let fixture = MuxFixture::new("flags");
@@ -1150,6 +1168,7 @@ fn respawn_pane_ignores_flags_inside_the_command() {
 /// reply block answers first, the accept loop exits, and the final state
 /// save captures the tree — which is what `par-mux --stop` / `--restart`
 /// rely on (restart restores exactly what the stop saved).
+#[ignore = "load-sensitive: PTY/timing suite; run via make test-rust-sensitive or checkall-ci"]
 #[test]
 fn kill_server_stops_the_daemon_after_a_final_save() {
     let fixture = MuxFixture::new("killsrv");
@@ -1197,6 +1216,7 @@ fn kill_server_stops_the_daemon_after_a_final_save() {
 /// split handler once created the pane without wiring its output sink: the
 /// daemon grid filled (capture-pane showed it) but no `%output` line ever
 /// left, so every client rendered the new split pane blank.
+#[ignore = "load-sensitive: PTY/timing suite; run via make test-rust-sensitive or checkall-ci"]
 #[test]
 fn a_split_pane_pushes_its_output_to_clients() {
     let fixture = MuxFixture::new("splitout");
@@ -1282,6 +1302,7 @@ fn next_layout_change(
 /// visible layout is the zoomed pane alone at the window's full extent,
 /// and the raw flags carry tmux's `Z`. Unzooming pushes the tree back
 /// into both layout fields with empty flags.
+#[ignore = "load-sensitive: PTY/timing suite; run via make test-rust-sensitive or checkall-ci"]
 #[test]
 fn a_zoom_marks_layout_change_and_unzoom_restores_it() {
     let fixture = MuxFixture::new("zoomwire");
@@ -1349,6 +1370,7 @@ fn next_notification(
 /// the pane back and closes the emptied window (`%window-close`), with
 /// layout changes for both windows; `swap-window` reorders, and
 /// `list-windows` reflects the new order.
+#[ignore = "load-sensitive: PTY/timing suite; run via make test-rust-sensitive or checkall-ci"]
 #[test]
 fn panes_break_join_and_windows_reorder_over_the_wire() {
     let fixture = MuxFixture::new("bjr");
@@ -1460,6 +1482,7 @@ fn panes_break_join_and_windows_reorder_over_the_wire() {
 /// exactly `mux::build_stamp()`, with no session state involved — so a
 /// client can compare the daemon's core build against its own and surface a
 /// stale daemon instead of silently missing daemon-side fixes.
+#[ignore = "load-sensitive: PTY/timing suite; run via make test-rust-sensitive or checkall-ci"]
 #[test]
 fn version_reports_the_daemon_build_stamp() {
     let fixture = MuxFixture::new("version");
@@ -1498,6 +1521,7 @@ fn version_reports_the_daemon_build_stamp() {
 /// asserted here as: the daemon leads its own session, that session is not
 /// the test's, and it still serves.
 #[cfg(unix)]
+#[ignore = "load-sensitive: PTY/timing suite; run via make test-rust-sensitive or checkall-ci"]
 #[test]
 fn the_auto_spawned_daemon_runs_in_its_own_session() {
     use nix::unistd::{getpgid, getpgrp, getsid, Pid};
@@ -1558,6 +1582,7 @@ fn the_auto_spawned_daemon_runs_in_its_own_session() {
 /// socket closing mid-write. SIGTERM stays the clean shutdown path, re-proven
 /// by the teardown.
 #[cfg(unix)]
+#[ignore = "load-sensitive: PTY/timing suite; run via make test-rust-sensitive or checkall-ci"]
 #[test]
 fn terminal_signals_leave_the_daemon_serving() {
     use nix::sys::signal::{self, Signal};
@@ -1599,6 +1624,7 @@ fn terminal_signals_leave_the_daemon_serving() {
 /// and the serving process leads its own session. Unfixed, `--restart &`
 /// stays in the shell's job and closing that terminal kills every pane.
 #[cfg(unix)]
+#[ignore = "load-sensitive: PTY/timing suite; run via make test-rust-sensitive or checkall-ci"]
 #[test]
 fn restart_detaches_before_serving() {
     use nix::sys::signal::{self, Signal};
@@ -1749,6 +1775,7 @@ fn restart_detaches_before_serving() {
 /// table, silent raw connections exhaust it, and the daemon must keep
 /// answering an already-accepted client.
 #[cfg(unix)]
+#[ignore = "load-sensitive: PTY/timing suite; run via make test-rust-sensitive or checkall-ci"]
 #[test]
 fn accept_emfile_keeps_the_daemon_serving() {
     use par_mux::mux::MuxClient;
@@ -1833,6 +1860,7 @@ fn accept_emfile_keeps_the_daemon_serving() {
 /// `%error` block and the connection is closed — and the daemon keeps
 /// serving other clients afterwards. This is the complete-line case; the
 /// unterminated stream is `an_unterminated_stream_over_budget_closes_the_connection`.
+#[ignore = "load-sensitive: PTY/timing suite; run via make test-rust-sensitive or checkall-ci"]
 #[test]
 fn oversized_control_line_gets_error_and_close() {
     use std::io::{BufRead, Write as _};
@@ -1902,6 +1930,7 @@ fn oversized_control_line_gets_error_and_close() {
 /// returned, and `read_line` never returns without a newline, so the daemon
 /// kept consuming (measured: 256 MiB in, RSS 12 → 279 MiB) and never
 /// answered.
+#[ignore = "load-sensitive: PTY/timing suite; run via make test-rust-sensitive or checkall-ci"]
 #[test]
 fn an_unterminated_stream_over_budget_closes_the_connection() {
     use interprocess::local_socket::traits::Stream as _;
@@ -2003,6 +2032,7 @@ fn an_unterminated_stream_over_budget_closes_the_connection() {
 /// target — left of it under `-h`, above it in the default direction.
 /// `list-panes` walks the layout's leaf order, so its line order is the
 /// on-screen left-to-right / top-to-bottom order.
+#[ignore = "load-sensitive: PTY/timing suite; run via make test-rust-sensitive or checkall-ci"]
 #[test]
 fn split_window_b_places_the_new_pane_before_its_target() {
     let fixture = MuxFixture::new("splitb");
@@ -2054,6 +2084,7 @@ fn split_window_b_places_the_new_pane_before_its_target() {
 /// Unix-only: the process table snapshot is `None` on Windows, so the
 /// token is legitimately absent there and the poll below could only fail.
 #[cfg(unix)]
+#[ignore = "load-sensitive: PTY/timing suite; run via make test-rust-sensitive or checkall-ci"]
 #[test]
 fn pane_info_reports_the_panes_foreground_command() {
     use base64::Engine as _;
@@ -2116,6 +2147,7 @@ fn pane_info_reports_the_panes_foreground_command() {
 /// that connects after `%pane-exited` reads the code from `pane-info`'s
 /// `exited=` token.
 #[cfg(unix)]
+#[ignore = "load-sensitive: PTY/timing suite; run via make test-rust-sensitive or checkall-ci"]
 #[test]
 fn pane_info_reports_exit_for_held_pane() {
     let fixture = MuxFixture::new("paneexit");
@@ -2152,6 +2184,7 @@ fn pane_info_reports_exit_for_held_pane() {
 }
 
 /// ARC-095: a live pane's `pane-info` carries no `exited=` token.
+#[ignore = "load-sensitive: PTY/timing suite; run via make test-rust-sensitive or checkall-ci"]
 #[test]
 fn pane_info_live_pane_has_no_exited_token() {
     let fixture = MuxFixture::new("panelive");
@@ -2177,6 +2210,7 @@ fn pane_info_live_pane_has_no_exited_token() {
 /// the held pane and the zoomed window's `%layout-change` (raw flags `Z`)
 /// are the only lines before the `%begin` of the reply, and that reply is
 /// the first command's (number 1).
+#[ignore = "load-sensitive: PTY/timing suite; run via make test-rust-sensitive or checkall-ci"]
 #[test]
 fn held_state_replay_precedes_the_first_commands_reply() {
     use std::io::{BufRead, Write as _};
@@ -2262,6 +2296,7 @@ fn held_state_replay_precedes_the_first_commands_reply() {
 /// block. The first line here is an unknown command, so registration runs
 /// on the error-reply path and the numbered `%error` block is what the
 /// replay precedes.
+#[ignore = "load-sensitive: PTY/timing suite; run via make test-rust-sensitive or checkall-ci"]
 #[test]
 fn replay_precedes_begin_framing_on_a_fresh_control_connection() {
     use std::io::{BufRead, Write as _};
@@ -2337,6 +2372,7 @@ fn replay_precedes_begin_framing_on_a_fresh_control_connection() {
 /// ENH-042: `pane-exited-replay` pushes the held panes' `%pane-exited` lines
 /// to the issuing client's stream only, with an empty reply block; the
 /// other connected clients receive nothing new.
+#[ignore = "load-sensitive: PTY/timing suite; run via make test-rust-sensitive or checkall-ci"]
 #[test]
 fn pane_exited_replay_reaches_only_the_issuing_client() {
     use par_term_emu_core::tmux_control::TmuxNotification;
@@ -2392,6 +2428,7 @@ fn pane_exited_replay_reaches_only_the_issuing_client() {
 
 /// ENH-042: with no held panes `pane-exited-replay` succeeds with an empty
 /// reply and pushes no `%pane-exited` line.
+#[ignore = "load-sensitive: PTY/timing suite; run via make test-rust-sensitive or checkall-ci"]
 #[test]
 fn pane_exited_replay_with_no_held_panes_is_empty() {
     use par_term_emu_core::tmux_control::TmuxNotification;
@@ -2423,6 +2460,7 @@ fn pane_exited_replay_with_no_held_panes_is_empty() {
 /// a taken name is answered `duplicate session: <name>`, renaming onto a
 /// taken name refuses while keeping a session's own name succeeds, and
 /// the nameless default walks past taken names.
+#[ignore = "load-sensitive: PTY/timing suite; run via make test-rust-sensitive or checkall-ci"]
 #[test]
 fn duplicate_session_names_refuse_over_the_wire() {
     let fixture = MuxFixture::new("dupnames");
@@ -2463,6 +2501,7 @@ fn duplicate_session_names_refuse_over_the_wire() {
 /// The workspace commands over a live daemon socket: create, list, select,
 /// rename, kill, the workspace-filtered list-sessions, and the
 /// `%workspaces-changed` broadcast a second client receives.
+#[ignore = "load-sensitive: PTY/timing suite; run via make test-rust-sensitive or checkall-ci"]
 #[test]
 fn workspace_commands_over_the_wire() {
     let fixture = MuxFixture::new("wswire");
@@ -2613,6 +2652,7 @@ fn poll_times(
     seen
 }
 
+#[ignore = "load-sensitive: PTY/timing suite; run via make test-rust-sensitive or checkall-ci"]
 #[test]
 fn window_sizes_to_the_smallest_viewing_client_and_grows_on_disconnect() {
     let fixture = MuxFixture::new("minsize");
@@ -2696,6 +2736,7 @@ fn window_sizes_to_the_smallest_viewing_client_and_grows_on_disconnect() {
     );
 }
 
+#[ignore = "load-sensitive: PTY/timing suite; run via make test-rust-sensitive or checkall-ci"]
 #[test]
 fn a_tab_switch_broadcasts_the_session_window_change_to_the_other_client() {
     let fixture = MuxFixture::new("tabsync");
@@ -2733,6 +2774,7 @@ fn a_tab_switch_broadcasts_the_session_window_change_to_the_other_client() {
 /// second client as a `Z`-flagged `%layout-change` for the window, and A's
 /// select-away (which unzooms) reaches it as an unflagged one — the cue
 /// every attached render client sets its ` Z ` status from.
+#[ignore = "load-sensitive: PTY/timing suite; run via make test-rust-sensitive or checkall-ci"]
 #[test]
 fn a_zoom_and_its_select_away_unzoom_reach_the_other_client() {
     let fixture = MuxFixture::new("zoomsync");
@@ -2784,6 +2826,7 @@ fn a_zoom_and_its_select_away_unzoom_reach_the_other_client() {
 /// `%client-attached <id>`, and its socket drop — the same teardown an
 /// eviction ends in — as `%client-left <id> $S @W`, naming the window it
 /// was displaying. The joining client never sees its own attach line.
+#[ignore = "load-sensitive: PTY/timing suite; run via make test-rust-sensitive or checkall-ci"]
 #[test]
 fn client_attach_and_drop_broadcast_lifecycle_lines() {
     let fixture = MuxFixture::new("clientlife");
@@ -2850,6 +2893,7 @@ fn client_attach_and_drop_broadcast_lifecycle_lines() {
     );
 }
 
+#[ignore = "load-sensitive: PTY/timing suite; run via make test-rust-sensitive or checkall-ci"]
 #[test]
 fn a_client_that_never_reports_a_size_causes_no_lifecycle_lines() {
     let fixture = MuxFixture::new("clientquiet");
@@ -2878,6 +2922,7 @@ fn a_client_that_never_reports_a_size_causes_no_lifecycle_lines() {
     );
 }
 
+#[ignore = "load-sensitive: PTY/timing suite; run via make test-rust-sensitive or checkall-ci"]
 #[test]
 fn a_workspace_switch_broadcasts_the_display_move_to_the_other_client() {
     let fixture = MuxFixture::new("wssync");
@@ -2915,6 +2960,7 @@ fn a_workspace_switch_broadcasts_the_display_move_to_the_other_client() {
     );
 }
 
+#[ignore = "load-sensitive: PTY/timing suite; run via make test-rust-sensitive or checkall-ci"]
 #[test]
 fn a_control_client_that_never_reports_a_size_never_constrains() {
     let fixture = MuxFixture::new("noconstrain");
@@ -2957,6 +3003,7 @@ fn a_control_client_that_never_reports_a_size_never_constrains() {
     );
 }
 
+#[ignore = "load-sensitive: PTY/timing suite; run via make test-rust-sensitive or checkall-ci"]
 #[test]
 fn a_following_client_reconstructs_the_switched_window_screen() {
     let fixture = MuxFixture::new("rescreen");

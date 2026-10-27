@@ -2995,6 +2995,7 @@ fn prefix_chord_classifies_bytes_in_precedence_order() {
 /// The flash lives about a second of wall clock, however fast the pump
 /// spins (QA-235): 200 immediate ticks used to burn the old 60-tick
 /// budget in milliseconds under an event flood.
+#[ignore = "load-sensitive: timing assertions; run via make test-rust-sensitive"]
 #[test]
 fn flash_survives_a_fast_pump_and_clears_after_its_deadline() {
     use std::time::{Duration, Instant};
@@ -3070,6 +3071,7 @@ fn prefix_indicator_paints_the_row_and_clears_on_the_next_key() {
 /// The reload chord's outcome paints on the row the tick it is raised:
 /// `config reloaded` (or the failure) reaches the row through the
 /// arming tick, not an unrelated repaint.
+#[ignore = "load-sensitive: timing assertions; run via make test-rust-sensitive"]
 #[test]
 fn reload_chord_flash_paints_on_the_arming_tick() {
     let (rx, mut conn) = recording_conn("reload-flash");

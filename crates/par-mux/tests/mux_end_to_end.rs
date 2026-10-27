@@ -72,6 +72,7 @@ fn read_reply_block(reader: &mut BufReader<interprocess::local_socket::Stream>) 
     }
 }
 
+#[ignore = "load-sensitive: PTY/timing suite; run via make test-rust-sensitive or checkall-ci"]
 #[test]
 fn client_creates_a_session_and_receives_pushed_output() {
     let (_dir, path) = socket_path("e2e");
@@ -118,6 +119,7 @@ fn client_creates_a_session_and_receives_pushed_output() {
     drop(handle);
 }
 
+#[ignore = "load-sensitive: PTY/timing suite; run via make test-rust-sensitive or checkall-ci"]
 #[test]
 fn a_disconnecting_client_does_not_stop_the_server_or_touch_the_tree() {
     let (_dir, path) = socket_path("disconnect");
@@ -177,6 +179,7 @@ fn read_block_verdict(
     }
 }
 
+#[ignore = "load-sensitive: PTY/timing suite; run via make test-rust-sensitive or checkall-ci"]
 #[test]
 fn a_non_utf8_line_gets_an_error_reply_and_the_connection_survives() {
     let (_dir, path) = socket_path("utf8");
@@ -209,6 +212,7 @@ fn a_non_utf8_line_gets_an_error_reply_and_the_connection_survives() {
 /// `read_line` truncates the bytes it appended when the call errors and
 /// they are not valid UTF-8, after the `BufReader` already consumed them,
 /// so the old loop dropped the partial and answered `%error` for the tail.
+#[ignore = "load-sensitive: PTY/timing suite; run via make test-rust-sensitive or checkall-ci"]
 #[test]
 fn a_multibyte_char_split_across_a_poll_wake_survives() {
     let (_dir, path) = socket_path("utf8split");
@@ -240,6 +244,7 @@ fn a_multibyte_char_split_across_a_poll_wake_survives() {
 /// new-session is still inside the factory, client B's list-panes must
 /// answer — under the single-lock flow it queued behind the spawn for the
 /// whole stall, and so would every other command in the daemon.
+#[ignore = "load-sensitive: PTY/timing suite; run via make test-rust-sensitive or checkall-ci"]
 #[test]
 fn a_slow_spawn_does_not_stall_other_clients() {
     use par_mux::mux::pane::{MuxError, MuxPane, PaneFactory, ShellPaneFactory, SpawnContext};
@@ -364,6 +369,7 @@ fn a_slow_spawn_does_not_stall_other_clients() {
 /// before the fix it was installed only after the insert, and bytes the
 /// pane printed in between reached the daemon grid but never a client.
 #[cfg(unix)]
+#[ignore = "load-sensitive: PTY/timing suite; run via make test-rust-sensitive or checkall-ci"]
 #[test]
 fn a_new_panes_first_output_is_pushed_even_when_wiring_lags() {
     use par_mux::mux::pane::{MuxError, MuxPane, PaneFactory, ShellPaneFactory, SpawnContext};
@@ -440,6 +446,7 @@ fn a_new_panes_first_output_is_pushed_even_when_wiring_lags() {
 /// A dropped `MuxClient` must close its connection: the daemon withdraws
 /// the client's viewer claim without waiting for an unrelated daemon push
 /// to wake the client's reader thread into noticing the drop.
+#[ignore = "load-sensitive: PTY/timing suite; run via make test-rust-sensitive or checkall-ci"]
 #[test]
 fn a_dropped_mux_client_withdraws_its_viewer_claim() {
     use par_mux::mux::MuxClient;

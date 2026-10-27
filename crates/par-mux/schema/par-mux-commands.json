@@ -314,11 +314,12 @@
       ],
       "flags": [
         "-C",
+        "-G",
         "-I",
         "-p",
         "-t"
       ],
-      "synopsis": "-t <pane> [-C WxH] [-p WxH] [-I border=B,gap=N,gutter=G] or [-C WxH] [-p WxH] [-I …]"
+      "synopsis": "-t <pane> [-C WxH] [-p WxH] [-I border=B,gap=N,gutter=G] [-G] or [-C WxH] [-p WxH] [-I …]"
     },
     {
       "name": "reload-config",
@@ -440,6 +441,14 @@
         "-u"
       ],
       "synopsis": "-t <session> NAME VALUE or -t <session> -u NAME"
+    },
+    {
+      "name": "set-exit-action",
+      "features": [],
+      "flags": [
+        "-t"
+      ],
+      "synopsis": "-t <workspace> [remove|hold|shell]"
     },
     {
       "name": "set-option",

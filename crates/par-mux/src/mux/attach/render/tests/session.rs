@@ -50,6 +50,9 @@ fn compose_menu_panel_maps_rows_to_actions() {
             Some(MenuAction::Close),
             Some(MenuAction::NewWorkspace),
             Some(MenuAction::RespawnToggle),
+            Some(MenuAction::ExitAction("remove")),
+            Some(MenuAction::ExitAction("hold")),
+            Some(MenuAction::ExitAction("shell")),
             None
         ]
     );
@@ -2988,6 +2991,7 @@ fn paste_session(
 /// SEC-208 (a): an SGR mouse report split across two stdin bursts (two
 /// pump ticks) is one mouse route — the session's parser holds the
 /// partial — and no fragment of it reaches the pane as typed text.
+#[ignore = "load-sensitive: timing assertions; run via make test-rust-sensitive"]
 #[test]
 fn split_mouse_report_across_pump_ticks_routes_once() {
     let (rx, mut conn, mut session) = paste_session("split-mouse");
@@ -3019,6 +3023,7 @@ fn split_mouse_report_across_pump_ticks_routes_once() {
 /// SEC-208 (b): a bracketed paste split across two pump ticks forwards
 /// its body opaque — the embedded prefix + `x` never kills the pane — and
 /// a pane that enabled DECSET 2004 gets the body re-framed.
+#[ignore = "load-sensitive: timing assertions; run via make test-rust-sensitive"]
 #[test]
 fn split_paste_across_pump_ticks_is_opaque_and_rewrapped() {
     let (rx, mut conn, mut session) = paste_session("split-paste");

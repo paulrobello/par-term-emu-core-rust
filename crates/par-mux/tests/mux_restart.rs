@@ -26,6 +26,7 @@ use std::io::BufReader;
 /// Pane titles survive a restart: the save carries the user title, and the
 /// next daemon on the same socket reports it through the `pane-title`
 /// query without waiting for a change to push.
+#[ignore = "load-sensitive: PTY/timing suite; run via make test-rust-sensitive or checkall-ci"]
 #[test]
 fn a_restart_restores_pane_titles() {
     let fixture = MuxFixture::new("title");
@@ -80,6 +81,7 @@ fn a_restart_restores_pane_titles() {
 /// serve the saved tree back — same session, same pane ids, same screen and
 /// history — while the processes behind the panes are new (D3.5's scope
 /// honesty, asserted by asking the shells for their pids).
+#[ignore = "load-sensitive: PTY/timing suite; run via make test-rust-sensitive or checkall-ci"]
 #[test]
 fn a_restart_serves_the_saved_tree_with_new_processes() {
     let fixture = MuxFixture::new("arc");
@@ -263,6 +265,7 @@ fn a_restart_serves_the_saved_tree_with_new_processes() {
 /// after. The next daemon must serve the PRE-EXIT layout, restored from the
 /// last-good snapshot that reap saves never touch — not the raced
 /// emptiness the old final save would have locked in.
+#[ignore = "load-sensitive: PTY/timing suite; run via make test-rust-sensitive or checkall-ci"]
 #[test]
 fn a_shutdown_race_restores_the_pre_exit_layout() {
     let fixture = MuxFixture::new("race");
@@ -455,6 +458,7 @@ fn is_pane_exited_0_code_3(note: &TmuxNotification) -> bool {
 
 /// The restored dead pane is dead on the query side (`pane-info exited=3`),
 /// keeps its frozen screen, and has no process behind it.
+#[ignore = "load-sensitive: PTY/timing suite; run via make test-rust-sensitive or checkall-ci"]
 #[test]
 fn a_restart_restores_a_dead_pane_held_with_its_exit_code_and_screen() {
     let fixture = MuxFixture::new("deadinfo");
@@ -487,6 +491,7 @@ fn a_restart_restores_a_dead_pane_held_with_its_exit_code_and_screen() {
 /// Registration replay delivers the restored dead pane's `%pane-exited`
 /// with its code, and the reaper never announces it again: it skips an
 /// already-dead pane, so a born-dead pane is not polled or re-broadcast.
+#[ignore = "load-sensitive: PTY/timing suite; run via make test-rust-sensitive or checkall-ci"]
 #[test]
 fn a_restored_dead_pane_replays_its_exit_once_and_is_never_re_announced() {
     let fixture = MuxFixture::new("deadreplay");
@@ -520,6 +525,7 @@ fn a_restored_dead_pane_replays_its_exit_once_and_is_never_re_announced() {
 
 /// `respawn-pane` on a restored dead pane works without `-k` (there is no
 /// process to refuse over) and clears the dead state.
+#[ignore = "load-sensitive: PTY/timing suite; run via make test-rust-sensitive or checkall-ci"]
 #[test]
 fn respawn_pane_restarts_a_restored_dead_pane_without_k() {
     let fixture = MuxFixture::new("deadrespawn");
@@ -545,6 +551,7 @@ fn respawn_pane_restarts_a_restored_dead_pane_without_k() {
 /// REMOTE host (an SSH session) must not respawn in that remote path just
 /// because the same path exists locally. The persisted host rides with the
 /// cwd, so `respawn-pane` (no `-c`) falls through to the daemon default.
+#[ignore = "load-sensitive: PTY/timing suite; run via make test-rust-sensitive or checkall-ci"]
 #[test]
 fn respawn_of_a_restored_dead_pane_ignores_its_remote_osc7_cwd() {
     let fixture = MuxFixture::new("remoteosc7");
@@ -615,6 +622,7 @@ fn respawn_of_a_restored_dead_pane_ignores_its_remote_osc7_cwd() {
 
 /// A daemon restored with only dead panes and no client collects itself
 /// after the exit-when-empty grace, the same as one that saw them die.
+#[ignore = "load-sensitive: PTY/timing suite; run via make test-rust-sensitive or checkall-ci"]
 #[test]
 fn an_all_dead_restore_with_no_client_exits_after_the_grace() {
     let fixture = MuxFixture::new("deadexit");
@@ -669,6 +677,7 @@ fn assert_not_started_error_reply(reply: &str, kind: &str) {
 
 /// `send-keys` to a born-dead pane — one restored held dead with no PTY
 /// behind it — fails with the `NotStartedError` reply block.
+#[ignore = "load-sensitive: PTY/timing suite; run via make test-rust-sensitive or checkall-ci"]
 #[test]
 fn send_keys_to_a_born_dead_pane_errors_not_started() {
     let fixture = MuxFixture::new("deadkeys");
@@ -691,6 +700,7 @@ fn send_keys_to_a_born_dead_pane_errors_not_started() {
 /// produces the identical reply block: both dead-pane kinds funnel through
 /// the shared `PtySession::write` liveness check, so they are
 /// indistinguishable on the send-keys wire.
+#[ignore = "load-sensitive: PTY/timing suite; run via make test-rust-sensitive or checkall-ci"]
 #[test]
 fn send_keys_to_a_runtime_died_pane_errors_the_same() {
     let fixture = MuxFixture::new("rundeadkeys");
@@ -821,6 +831,7 @@ fn stop_via_cli(fixture: &MuxFixture) {
 /// race this pins was intermittent: the old daemon's final save (fsync +
 /// rename of a possibly large JSON) now provably lands before the socket
 /// unlinks, so the fresh daemon's restore always reads it.
+#[ignore = "load-sensitive: PTY/timing suite; run via make test-rust-sensitive or checkall-ci"]
 #[test]
 fn cli_restart_restores_a_populated_tree_five_trials() {
     for trial in 0..5 {
@@ -897,6 +908,7 @@ fn cli_restart_restores_a_populated_tree_five_trials() {
 /// exiting via exit-when-empty. The outcome matches the documented
 /// behavior — the fresh daemon serves, finds nothing, and exits after the
 /// grace.
+#[ignore = "load-sensitive: PTY/timing suite; run via make test-rust-sensitive or checkall-ci"]
 #[test]
 fn cli_restart_after_emptying_announces_the_empty_restore() {
     use std::time::{Duration, Instant};
@@ -973,6 +985,7 @@ fn cli_restart_after_emptying_announces_the_empty_restore() {
 /// file — pre-fix, that stderr went to /dev/null and the restart failed
 /// silently, which is exactly how the owner lost the daemon with no error
 /// text.
+#[ignore = "load-sensitive: PTY/timing suite; run via make test-rust-sensitive or checkall-ci"]
 #[test]
 fn cli_restart_surfaces_a_fresh_daemon_startup_failure() {
     use std::process::{Command, Stdio};
@@ -1032,6 +1045,7 @@ fn cli_restart_surfaces_a_fresh_daemon_startup_failure() {
 
 /// Workspaces survive a restart: roster, names, membership, and the active
 /// pointers all come back from the saved state (FORMAT_VERSION 3).
+#[ignore = "load-sensitive: PTY/timing suite; run via make test-rust-sensitive or checkall-ci"]
 #[test]
 fn workspaces_survive_a_restart() {
     let fixture = MuxFixture::new("wsrestart");

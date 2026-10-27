@@ -302,6 +302,7 @@ test: test-rust test-rust-streaming test-python
 
 test-rust:
 	@echo "Running Rust tests (lib unit tests + integration tests in tests/)..."
+	@n=`cargo test -p par-mux --features attach -- --list --ignored 2>/dev/null | grep -c ': test'`; echo "Deferred $$n load-sensitive tests (run via make test-rust-sensitive; checkall-ci still covers them)"
 	cargo test --no-default-features --features pyo3/auto-initialize,ffi
 	@echo "Running python_bindings unit tests (python-test: python minus extension-module, so tests link a real interpreter)..."
 	cargo test --lib --no-default-features --features python-test
@@ -323,6 +324,17 @@ test-rust-streaming:
 	@echo "Running Rust streaming tests (lib unit tests + integration tests in tests/)..."
 	cargo test --no-default-features --features pyo3/auto-initialize,streaming
 	cargo test -p par-term-emu-core
+
+# Load-sensitive leg (2026-10-27): tests labeled `#[ignore = "load-sensitive ..."]`
+# are skipped by every default cargo/nextest run, so a loaded host can gate
+# load-insensitive changes. This target runs exactly the labeled set;
+# test-mux-ci's nextest legs carry --include-ignored, so checkall-ci keeps full
+# coverage and stays the done gate for changes touching labeled tests.
+.PHONY: test-rust-sensitive
+test-rust-sensitive:
+	@echo "Running the load-sensitive Rust tests (labeled ignore = load-sensitive)..."
+	@n=`cargo test -p par-mux --features attach -- --list --ignored 2>/dev/null | grep -c ': test'`; echo "  $$n labeled tests"
+	cargo test -p par-mux --features attach -- --test-threads=1 --ignored
 
 test-python: dev
 	@echo "Running Python tests..."
@@ -717,9 +729,9 @@ test-mux-ci:
 		echo "D1 violation: sim pulled tokio, portable-pty, subtle, zeroize, prost, axum, or swash"; \
 		exit 1; \
 	fi
-	cargo nextest run --profile ci --locked -p par-mux --features attach
-	cargo nextest run --profile ci --locked --no-default-features --features rust-only,mux-bin,serde,attach
-	cargo nextest run --profile ci --locked -p par-term-emu-core --features mux,serde
+	cargo nextest run --profile ci --locked -p par-mux --features attach --include-ignored
+	cargo nextest run --profile ci --locked --no-default-features --features rust-only,mux-bin,serde,attach --include-ignored
+	cargo nextest run --profile ci --locked -p par-term-emu-core --features mux,serde --include-ignored
 	cargo nextest run --profile ci --locked --lib --no-default-features --features rust-only,streaming,mux,serde streaming::mux_factory
 
 # Windows MSVC cross-target checks: a misplaced #[cfg(unix)] broke the Windows
