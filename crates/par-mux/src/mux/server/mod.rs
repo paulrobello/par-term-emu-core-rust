@@ -306,6 +306,18 @@ impl MuxServer {
     /// [`crate::mux::persist::state_file_path`].
     pub fn run_persisting(self, state_path: PathBuf) {
         let exit = self.run_with_state_path(Some(state_path.clone()));
+        // The exit reason on the record: this line is the difference
+        // between "the daemon died several times today" staying a mystery
+        // and becoming a one-log-look diagnosis (the 2026-10-27 crash-loop
+        // forensics had no exit evidence at all).
+        log::info!(
+            "par-mux: daemon exiting ({})",
+            match exit {
+                LoopExit::Empty => "exit-when-empty",
+                LoopExit::Fault => "listener fault",
+                LoopExit::Requested => "stop request",
+            }
+        );
         let origin = match exit {
             LoopExit::Empty => SaveOrigin::ShutdownEmpty,
             LoopExit::Fault | LoopExit::Requested => SaveOrigin::Shutdown,

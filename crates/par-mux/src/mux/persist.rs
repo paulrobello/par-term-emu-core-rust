@@ -1148,6 +1148,100 @@ pub fn state_file_in(base: &Path, socket_path: &Path) -> PathBuf {
     base.join("par-mux").join(format!("{stem}.state.json"))
 }
 
+/// The daemon's exclusive claim on a state file: an advisory `flock` on
+/// `<state>.lock`, held for the daemon's whole lifetime. A second daemon
+/// resolving to the same state path fails here instead of racing the
+/// first daemon's saves — the 2026-10-27 crash loop: two live daemons'
+/// fixed-`<target>.tmp` saves interleaved, corrupted the 161 MB state at
+/// byte ~107 MB, and the quarantine/restart churn dropped every attached
+/// client. The claim survives the `--restart` fork: the child inherits
+/// the open file description, and a `flock` lives as long as any fd to
+/// that description does. Windows has no `flock`; the claim degrades to a
+/// startup warning (serve proceeds), which is safe today because Windows
+/// `--restart` serves in-process.
+#[derive(Debug)]
+pub struct StateLock {
+    /// Keeps the `flock` alive; dropping it releases the claim.
+    _file: Option<fs::File>,
+}
+
+/// The lock file's first line names its holder's pid, so a refusal can
+/// point the operator at the process to stop.
+fn lock_holder_pid(lock_path: &Path) -> Option<u32> {
+    fs::read_to_string(lock_path)
+        .ok()?
+        .lines()
+        .next()?
+        .trim()
+        .parse()
+        .ok()
+}
+
+/// Claim `state_path` for this daemon, refusing while another live daemon
+/// holds it. The retry window absorbs the `--stop`/`--restart` handoff,
+/// where the previous daemon is mid-exit and releases within a beat; a
+/// holder that outlasts it is refused by pid so the operator can act.
+pub fn acquire_state_lock(state_path: &Path) -> std::io::Result<StateLock> {
+    let mut os = state_path.as_os_str().to_os_string();
+    os.push(".lock");
+    let lock_path = PathBuf::from(os);
+
+    #[cfg(unix)]
+    {
+        use std::io::Write;
+        use std::os::fd::AsRawFd;
+        // The claim runs before the first save, so the state dir may not
+        // exist yet (a fresh --state-dir); the daemon owns its state base
+        // and creates it as write_job would.
+        if let Some(parent) = lock_path.parent() {
+            fs::create_dir_all(parent)?;
+        }
+        let mut file = fs::OpenOptions::new()
+            .create(true)
+            .truncate(false)
+            .read(true)
+            .write(true)
+            .open(&lock_path)?;
+        let claim = |file: &fs::File| -> Result<(), std::io::Error> {
+            let rc = unsafe { libc::flock(file.as_raw_fd(), libc::LOCK_EX | libc::LOCK_NB) };
+            if rc == 0 {
+                Ok(())
+            } else {
+                Err(std::io::Error::last_os_error())
+            }
+        };
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+        let mut held = claim(&file);
+        while held.is_err() && std::time::Instant::now() < deadline {
+            std::thread::sleep(std::time::Duration::from_millis(100));
+            held = claim(&file);
+        }
+        if let Err(err) = held {
+            let _ = err;
+            let holder = lock_holder_pid(&lock_path)
+                .map(|pid| pid.to_string())
+                .unwrap_or_else(|| "an unknown process".to_string());
+            return Err(std::io::Error::other(format!(
+                "state {} is already served by another daemon (pid {holder}); \
+                 stop that daemon first (`par-mux --stop`) — two daemons on \
+                 one state file corrupt each other's saves",
+                state_path.display()
+            )));
+        }
+        file.set_len(0)?;
+        file.write_all(format!("{}\n", std::process::id()).as_bytes())?;
+        Ok(StateLock { _file: Some(file) })
+    }
+    #[cfg(windows)]
+    {
+        log::warn!(
+            "par-mux: state locking is not implemented on Windows; two \
+             daemons on one state file would race their saves"
+        );
+        Ok(StateLock { _file: None })
+    }
+}
+
 /// Atomically persist `tree` to `target` (D3.3): serialize to
 /// `<target>.tmp`, fsync, then rename over the target — a crash mid-save
 /// leaves either the complete previous state or a leftover tmp the next
@@ -1696,6 +1790,51 @@ mod tests {
         let mut name = target.as_os_str().to_os_string();
         name.push(".tmp");
         PathBuf::from(name)
+    }
+
+    /// Criterion 2 (card 01a17f4438): a kill -9 mid-save leaves a partial
+    /// `<target>.tmp` beside a complete target. The loader reads only the
+    /// target, and the next save replaces the tmp wholesale — the state
+    /// file is never the torn half.
+    #[test]
+    fn leftover_tmp_never_defeats_the_state() {
+        let (_dir, target) = temp_target("tmp-orphan");
+        save_to(&tree(), &target).expect("the first save");
+        let tmp = tmp_sibling(&target);
+        fs::write(&tmp, b"{\"format_version\":").expect("plant a partial tmp");
+
+        assert!(
+            matches!(load_or_quarantine(&target), Loaded::State(_)),
+            "the loader reads the complete target, not the tmp"
+        );
+
+        save_to(&tree(), &target).expect("the next save succeeds");
+        assert!(
+            !tmp.exists(),
+            "the rename consumed the leftover tmp; the state file was never torn"
+        );
+    }
+
+    /// Criterion 1 (card 01a17f4438): a second daemon's claim on an
+    /// occupied state file refuses, naming the holder's pid from the lock
+    /// file; dropping the holder releases the claim.
+    #[test]
+    #[cfg(unix)]
+    fn state_lock_refuses_a_second_holder_until_released() {
+        let (_dir, target) = temp_target("state-lock");
+        let first = acquire_state_lock(&target).expect("the first claim");
+        let second = acquire_state_lock(&target);
+        let err = second.expect_err("a second claim refuses");
+        assert!(
+            err.to_string().contains("already served by another daemon"),
+            "the refusal names the situation: {err}"
+        );
+        assert!(
+            err.to_string().contains(&std::process::id().to_string()),
+            "the refusal names the holder's pid: {err}"
+        );
+        drop(first);
+        acquire_state_lock(&target).expect("the claim releases on drop");
     }
 
     pub(super) fn tree() -> MuxTree {

@@ -1608,6 +1608,15 @@ fn run_daemon(cli: Cli, path: std::path::PathBuf) -> std::io::Result<std::proces
     // old default, and the shape every programmatic spawner uses, because
     // a spawner that kills the child it spawned would orphan a detached
     // grandchild it can never name.
+    // Claim the state file before any serving half starts, detached or
+    // foreground: a second daemon on the same state raced the first's
+    // fixed-tmp saves into corruption (the 2026-10-27 crash loop), and
+    // bind's live-socket refusal cannot see a daemon that load stalled
+    // into unresponsiveness. The claim survives the fork (the serving
+    // child inherits the open file description, and a flock lives as
+    // long as any fd to that description does) and releases on exit, so
+    // the --stop/--restart handoff re-acquires inside the retry window.
+    let _state_lock = par_mux::mux::persist::acquire_state_lock(&state_path)?;
     #[cfg(unix)]
     if !cli.foreground {
         // The nested-daemon refusal, delivered on the terminal rather than

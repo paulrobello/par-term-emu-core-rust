@@ -3070,3 +3070,151 @@ fn a_following_client_reconstructs_the_switched_window_screen() {
         "the resync replay must render the switched window's screen in a real emulator"
     );
 }
+
+/// Criterion 1 (card 01a17f4438): a second daemon start on an occupied
+/// state file refuses instead of racing the first's saves. The lock fires
+/// before bind, so even a load-stalled first daemon — whose socket looks
+/// dead to a prober — cannot gain a twin writer; the refusal names the
+/// holder's pid and the first daemon keeps serving.
+#[ignore = "load-sensitive: PTY/timing suite; run via make test-rust-sensitive or checkall-ci"]
+#[test]
+#[cfg(unix)]
+fn second_daemon_refuses_an_occupied_state_file() {
+    let dir = tempfile::Builder::new()
+        .prefix("par-mux-stlock-")
+        .tempdir()
+        .expect("tempdir");
+    let socket = dir.path().join("stlock.sock");
+    let state_dir = dir.path().join("state");
+    let bin = env!("CARGO_BIN_EXE_par-mux");
+    let stderr_path = dir.path().join("refusal.stderr");
+
+    let serve = |stderr_to: &std::path::Path| {
+        std::process::Command::new(bin)
+            .args([
+                "--foreground",
+                "--socket",
+                socket.to_str().expect("utf8 socket"),
+                "--state-dir",
+                state_dir.to_str().expect("utf8 state"),
+            ])
+            .env_remove("PAR_MUX_ENV")
+            .stderr(std::fs::File::create(stderr_to).expect("stderr file"))
+            .stdout(std::process::Stdio::null())
+            .spawn()
+            .expect("the daemon spawns")
+    };
+
+    // The first daemon claims the state and serves.
+    let mut first = serve(&dir.path().join("first.stderr"));
+    wait_listening(&socket);
+    let stream = connect_local_stream(&socket).expect("the first daemon serves");
+    let mut writer = stream.try_clone().expect("clone");
+    let mut reader = BufReader::new(stream);
+    let reply = command(&mut writer, &mut reader, "new-session -s keepalive").join("");
+    assert!(!reply.contains("%error"), "keepalive session: {reply}");
+
+    // The second start on the same state refuses before binding anything.
+    let mut second = serve(&stderr_path);
+    let refusal = second.wait().expect("the refused start exits").code();
+    assert_eq!(refusal, Some(1), "the refusal exits non-zero: {refusal:?}");
+    let refused = std::fs::read_to_string(&stderr_path).expect("refusal stderr");
+    assert!(
+        refused.contains("already served by another daemon"),
+        "the refusal names the situation: {refused}"
+    );
+
+    // The first daemon never noticed: it still serves, and its state file
+    // has had exactly one writer throughout.
+    let reply = command(&mut writer, &mut reader, "list-sessions").join("");
+    assert!(
+        !reply.contains("%error") && reply.contains("keepalive"),
+        "the first daemon keeps serving through the refusal: {reply}"
+    );
+
+    // Teardown: stop the first daemon through its control socket.
+    let reply = command(&mut writer, &mut reader, "kill-server").join("");
+    assert!(!reply.contains("%error"), "kill-server: {reply}");
+    let _ = first.wait();
+}
+
+/// Criterion 3 (card 01a17f4438): every daemon exit logs its reason, so a
+/// death spiral like 2026-10-27's is a one-log-look diagnosis. A `--stop`
+/// records `stop request`; an empty daemon's self-exit records
+/// `exit-when-empty`.
+#[ignore = "load-sensitive: PTY/timing suite; run via make test-rust-sensitive or checkall-ci"]
+#[test]
+#[cfg(unix)]
+fn daemon_exits_log_their_reason() {
+    let dir = tempfile::Builder::new()
+        .prefix("par-mux-exitlog-")
+        .tempdir()
+        .expect("tempdir");
+    let bin = env!("CARGO_BIN_EXE_par-mux");
+
+    // `--stop`: the exit reason rides the daemon's stderr.
+    let socket = dir.path().join("reasons.sock");
+    let state_dir = dir.path().join("state");
+    let stderr_path = dir.path().join("stop.stderr");
+    let mut daemon = std::process::Command::new(bin)
+        .args([
+            "--foreground",
+            "--socket",
+            socket.to_str().expect("utf8 socket"),
+            "--state-dir",
+            state_dir.to_str().expect("utf8 state"),
+        ])
+        .stderr(std::fs::File::create(&stderr_path).expect("stderr file"))
+        .stdout(std::process::Stdio::null())
+        .env_remove("PAR_MUX_ENV")
+        .spawn()
+        .expect("the daemon spawns");
+    wait_listening(&socket);
+    let stop = std::process::Command::new(bin)
+        .args(["--socket", socket.to_str().expect("utf8 socket"), "--stop"])
+        .status()
+        .expect("--stop runs");
+    assert!(stop.success(), "--stop exits 0: {stop:?}");
+    let deadline = Instant::now() + Duration::from_secs(10);
+    while daemon.try_wait().expect("waitable").is_none() && Instant::now() < deadline {
+        std::thread::sleep(Duration::from_millis(50));
+    }
+    let logged = std::fs::read_to_string(&stderr_path).expect("stderr");
+    assert!(
+        logged.contains("daemon exiting (stop request)"),
+        "the stop reason is on the record: {logged}"
+    );
+
+    // exit-when-empty: a fresh daemon with no sessions self-exits after
+    // the grace, and its reason lands the same way.
+    let socket = dir.path().join("empty.sock");
+    let state_dir = dir.path().join("empty-state");
+    let stderr_path = dir.path().join("empty.stderr");
+    let mut daemon = std::process::Command::new(bin)
+        .args([
+            "--foreground",
+            "--socket",
+            socket.to_str().expect("utf8 socket"),
+            "--state-dir",
+            state_dir.to_str().expect("utf8 state"),
+        ])
+        .stderr(std::fs::File::create(&stderr_path).expect("stderr file"))
+        .stdout(std::process::Stdio::null())
+        .env_remove("PAR_MUX_ENV")
+        .spawn()
+        .expect("the empty daemon spawns");
+    wait_listening(&socket);
+    let deadline = Instant::now() + Duration::from_secs(15);
+    while daemon.try_wait().expect("waitable").is_none() && Instant::now() < deadline {
+        std::thread::sleep(Duration::from_millis(100));
+    }
+    assert!(
+        daemon.try_wait().expect("waitable").is_some(),
+        "an empty daemon self-exits after the grace"
+    );
+    let logged = std::fs::read_to_string(&stderr_path).expect("stderr");
+    assert!(
+        logged.contains("daemon exiting (exit-when-empty)"),
+        "the empty-exit reason is on the record: {logged}"
+    );
+}

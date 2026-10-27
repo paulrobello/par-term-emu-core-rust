@@ -2310,6 +2310,68 @@ fn persist_worker_coalesces_a_burst_to_the_newest_state() {
     );
 }
 
+/// Criterion 5 (card 01a17f4438, the load-tolerance rule): a failed save
+/// never stops the worker — it logs and keeps receiving, so the next
+/// mutation's save lands. A daemon under heavy host load must not die
+/// because one save hit a stall.
+#[test]
+fn persist_worker_survives_a_failed_write_and_completes_the_next() {
+    let (tx, rx) = channel::<(SaveOrigin, PersistState)>();
+    let attempts = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let ok_writes = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let stop = Arc::new(AtomicBool::new(false));
+
+    let attempts_cell = Arc::clone(&attempts);
+    let ok_cell = Arc::clone(&ok_writes);
+    let worker = std::thread::spawn(move || {
+        persist_worker_loop(
+            rx,
+            Path::new("/nonexistent-par-mux-worker-test"),
+            &stop,
+            move |_origin: SaveOrigin, state: &PersistState, _path| {
+                let attempt = attempts_cell.fetch_add(1, Ordering::Relaxed);
+                if attempt == 0 {
+                    return Err(crate::mux::persist::PersistError::Io(
+                        std::io::Error::other("the load-stall save that failed once"),
+                    ));
+                }
+                ok_cell.fetch_add(1, Ordering::Relaxed);
+                assert_eq!(state.saved_at_unix_ms, 2, "the retried save is the newest");
+                Ok(())
+            },
+        )
+    });
+
+    // The sends must land in SEPARATE coalescing windows: a burst would
+    // collapse to the newest state and never exercise the failure arm.
+    let state = |stamp: u64| PersistState {
+        workspaces: Vec::new(),
+        active_workspace: None,
+        format_version: crate::mux::persist::FORMAT_VERSION,
+        saved_at_unix_ms: stamp,
+        next_ids: (0, 0, 0, 0),
+        sessions: Vec::new(),
+        buffers: std::collections::HashMap::new(),
+    };
+    tx.send((SaveOrigin::Command, state(1)))
+        .expect("worker owns the receiver");
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+    while attempts.load(Ordering::Relaxed) == 0 && std::time::Instant::now() < deadline {
+        std::thread::sleep(std::time::Duration::from_millis(10));
+    }
+    assert_eq!(
+        attempts.load(Ordering::Relaxed),
+        1,
+        "the first (failing) save ran before the second send"
+    );
+    tx.send((SaveOrigin::Command, state(2)))
+        .expect("worker owns the receiver");
+    drop(tx);
+    worker.join().expect("the worker outlives the failed write");
+    assert_eq!(attempts.load(Ordering::Relaxed), 2, "both saves attempted");
+    assert_eq!(ok_writes.load(Ordering::Relaxed), 1, "the second landed");
+}
+
 /// ARC-011: a client whose queue fills (it stopped reading the socket)
 /// is evicted from the broadcast set, while a draining sibling still
 /// receives every line pushed past the eviction.
