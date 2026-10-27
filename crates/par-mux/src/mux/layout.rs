@@ -192,6 +192,17 @@ pub enum ExtentOutcome {
     SpansAxis,
 }
 
+/// A split's children's extents along its axis: `ratio` divides the
+/// extent when the split runs along it, otherwise both children inherit
+/// the extent whole. Shared by the extent setters' walks.
+fn child_extents(along_axis: bool, ratio: f32, extent: usize) -> (usize, usize) {
+    if !along_axis {
+        return (extent, extent);
+    }
+    let first = (((extent as f32) * ratio).round() as usize).min(extent);
+    (first, extent - first)
+}
+
 impl std::fmt::Display for NoSuchLeaf {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(f, "no such pane in layout: {}", self.0)
@@ -505,6 +516,188 @@ impl LayoutTree {
                 }
             }
         }
+    }
+
+    /// Move the divider on `target`'s pressed side so the target's
+    /// extent changes by `delta` (signed cells). The divider that moves
+    /// is the DEEPEST same-axis split whose boundary the target touches
+    /// on that side — the target sits in `first` when `target_in_first`,
+    /// in `second` otherwise — which is exactly the boundary the drag
+    /// grabbed and the arrow keys mean. The panes touching the moved
+    /// boundary absorb the whole delta (each level's far child keeps
+    /// its extent); panes beyond it never move. A target spanning the
+    /// pressed side — no split matches — is [`ExtentOutcome::SpansAxis`];
+    /// a cross-axis split on the path bubbles to its same-axis
+    /// descendant, and a cross-axis subtree on the absorbing side
+    /// rescales (its children inherit the changed extent, as the
+    /// absolute form has always done).
+    pub fn set_leaf_extent_toward(
+        &mut self,
+        target: PaneId,
+        axis: SplitDirection,
+        delta: i32,
+        axis_extent: usize,
+        target_in_first: bool,
+    ) -> Result<ExtentOutcome, NoSuchLeaf> {
+        match self {
+            LayoutTree::Pane(id) => {
+                if *id == target {
+                    // Nothing beneath; the parent split decides — the
+                    // deepest matching ancestor wins.
+                    Ok(ExtentOutcome::SpansAxis)
+                } else {
+                    Err(NoSuchLeaf(target))
+                }
+            }
+            LayoutTree::Split {
+                direction,
+                ratio,
+                first,
+                second,
+            } => {
+                let along_axis = *direction == axis;
+                let (first_extent, second_extent) = child_extents(along_axis, *ratio, axis_extent);
+                let in_first = first.contains(target);
+                let in_second = second.contains(target);
+                if !in_first && !in_second {
+                    return Err(NoSuchLeaf(target));
+                }
+                let child_extent = if in_first {
+                    first_extent
+                } else {
+                    second_extent
+                };
+                let child: &mut LayoutTree = if in_first { first } else { second };
+                match child.set_leaf_extent_toward(
+                    target,
+                    axis,
+                    delta,
+                    child_extent,
+                    target_in_first,
+                ) {
+                    Ok(ExtentOutcome::Adjusted) => Ok(ExtentOutcome::Adjusted),
+                    Err(err) => Err(err),
+                    Ok(ExtentOutcome::SpansAxis) => {
+                        if !along_axis || in_first != target_in_first {
+                            // Nothing beneath matches, and either this
+                            // split does not divide the axis or the
+                            // target is not on the pressed side of it.
+                            return Ok(ExtentOutcome::SpansAxis);
+                        }
+                        // This is the deepest matching split: its
+                        // boundary IS the target's edge on the pressed
+                        // side. The path side takes the delta, the other
+                        // side absorbs it, and this split's own extent
+                        // never changes.
+                        let path_is_first = in_first;
+                        let path_old = if path_is_first {
+                            first_extent
+                        } else {
+                            second_extent
+                        } as i64;
+                        let path_new = (path_old + delta as i64).clamp(1, axis_extent as i64);
+                        let off_new = axis_extent as i64 - path_new;
+                        let extent = axis_extent as f32;
+                        *ratio = if path_is_first {
+                            path_new as f32 / extent
+                        } else {
+                            off_new as f32 / extent
+                        };
+                        if path_is_first {
+                            first.set_leaf_extent_funnel(target, axis, delta, path_new as usize);
+                            second.absorb_delta(
+                                axis,
+                                -(delta as i64),
+                                off_new.max(0) as usize,
+                                true,
+                            );
+                        } else {
+                            second.set_leaf_extent_funnel(target, axis, delta, path_new as usize);
+                            first.absorb_delta(
+                                axis,
+                                -(delta as i64),
+                                off_new.max(0) as usize,
+                                false,
+                            );
+                        }
+                        Ok(ExtentOutcome::Adjusted)
+                    }
+                }
+            }
+        }
+    }
+
+    /// Run the moved boundary's delta down the path toward `target`:
+    /// every same-axis level keeps its off-path child's pre-move extent
+    /// (so panes beyond the moved boundary never move) and hands the
+    /// delta to the path child. Cross-axis levels keep their ratio and
+    /// inherit the changed extent (every pane there shares the moved
+    /// boundary).
+    fn set_leaf_extent_funnel(
+        &mut self,
+        target: PaneId,
+        axis: SplitDirection,
+        delta: i32,
+        extent: usize,
+    ) {
+        let LayoutTree::Split {
+            direction,
+            ratio,
+            first,
+            second,
+        } = self
+        else {
+            return;
+        };
+        let along_axis = *direction == axis;
+        // The caller's extent is the post-move one; this level's pre-move
+        // extent recovers the off-path child's pre-move extent.
+        let extent_old = (extent as i64 - delta as i64).max(0) as usize;
+        let (first_old, second_old) = child_extents(along_axis, *ratio, extent_old);
+        let in_first = first.contains(target);
+        let (keep_old, take_new) = if along_axis {
+            let keep_old = if in_first { second_old } else { first_old };
+            let take_new = (extent as i64 - keep_old as i64).max(0) as usize;
+            (keep_old, take_new)
+        } else {
+            (0, extent)
+        };
+        if along_axis {
+            let new_first = if in_first { take_new } else { keep_old };
+            *ratio = new_first as f32 / extent as f32;
+        }
+        let child_extent = if along_axis { take_new } else { extent };
+        let child = if in_first { first } else { second };
+        child.set_leaf_extent_funnel(target, axis, delta, child_extent);
+    }
+
+    /// Distribute the boundary's opposite-side delta (`delta` is this
+    /// subtree's own extent change) into the child touching the moved
+    /// boundary (`near_first`): every level's far child keeps its
+    /// pre-move extent. A cross-axis subtree rescales (its children
+    /// inherit the changed extent).
+    fn absorb_delta(&mut self, axis: SplitDirection, delta: i64, extent: usize, near_first: bool) {
+        let LayoutTree::Split {
+            direction,
+            ratio,
+            first,
+            second,
+        } = self
+        else {
+            return;
+        };
+        let along_axis = *direction == axis;
+        if !along_axis {
+            return;
+        }
+        let extent_old = (extent as i64 - delta).max(0) as usize;
+        let (first_old, second_old) = child_extents(along_axis, *ratio, extent_old);
+        let keep_old = if near_first { second_old } else { first_old };
+        let take_new = (extent as i64 - keep_old as i64).max(0) as usize;
+        let new_first = if near_first { take_new } else { keep_old };
+        *ratio = new_first as f32 / extent as f32;
+        let child = if near_first { first } else { second };
+        child.absorb_delta(axis, delta, take_new, near_first);
     }
 
     /// Compute the absolute geometry of every pane in the tree, given the
@@ -1021,6 +1214,130 @@ mod tests {
             tree.set_leaf_extent(PaneId(9), SplitDirection::Vertical, 40, 80),
             Err(NoSuchLeaf(PaneId(9)))
         );
+    }
+
+    /// The toward form moves ONLY the pressed boundary: in the tree
+    /// `Split{Split{0, 2}, 1}` (a split on the boundary's left side — the
+    /// shape where the old nearest-ancestor rule moved the wrong
+    /// divider), growing pane 2 rightward at the root boundary grows 2
+    /// and shrinks 1; pane 0, inside the boundary's split side, keeps
+    /// its extent.
+    #[test]
+    fn toward_grows_the_target_and_absorbs_at_the_boundary_neighbor() {
+        let mut tree = LayoutTree::leaf(PaneId(0));
+        tree.split_pane(PaneId(0), PaneId(1), SplitDirection::Vertical, 0.5)
+            .unwrap();
+        tree.split_pane(PaneId(0), PaneId(2), SplitDirection::Vertical, 0.5)
+            .unwrap();
+        assert_eq!(
+            tree.set_leaf_extent_toward(PaneId(2), SplitDirection::Vertical, 10, 80, true),
+            Ok(ExtentOutcome::Adjusted)
+        );
+        let geo = tree.geometry(0, 0, 80, 24);
+        let width_of = |pane| geo.iter().find(|g| g.pane == pane).unwrap().width;
+        assert_eq!(width_of(PaneId(0)), 20, "far pane keeps its extent");
+        assert_eq!(width_of(PaneId(2)), 30, "the target takes the delta");
+        assert_eq!(width_of(PaneId(1)), 30, "the other side absorbs the delta");
+    }
+
+    /// The same boundary from the keyboard's side: shrinking pane 1
+    /// leftward grows the boundary-adjacent pane 2; pane 0 keeps its
+    /// extent. Same end state as the grow form, opposite command.
+    #[test]
+    fn toward_shrink_absorbs_at_the_same_boundary_neighbor() {
+        let mut tree = LayoutTree::leaf(PaneId(0));
+        tree.split_pane(PaneId(0), PaneId(1), SplitDirection::Vertical, 0.5)
+            .unwrap();
+        tree.split_pane(PaneId(0), PaneId(2), SplitDirection::Vertical, 0.5)
+            .unwrap();
+        assert_eq!(
+            tree.set_leaf_extent_toward(PaneId(1), SplitDirection::Vertical, -10, 80, false),
+            Ok(ExtentOutcome::Adjusted)
+        );
+        let geo = tree.geometry(0, 0, 80, 24);
+        let width_of = |pane| geo.iter().find(|g| g.pane == pane).unwrap().width;
+        assert_eq!(width_of(PaneId(0)), 20);
+        assert_eq!(width_of(PaneId(2)), 30);
+        assert_eq!(width_of(PaneId(1)), 30);
+    }
+
+    /// A pane spanning the pressed side has no matching ancestor: the
+    /// rightmost pane cannot grow rightward.
+    #[test]
+    fn toward_on_a_spanning_side_is_spans_axis() {
+        let mut tree = LayoutTree::leaf(PaneId(0));
+        tree.split_pane(PaneId(0), PaneId(1), SplitDirection::Vertical, 0.5)
+            .unwrap();
+        assert_eq!(
+            tree.set_leaf_extent_toward(PaneId(1), SplitDirection::Vertical, 10, 80, true),
+            Ok(ExtentOutcome::SpansAxis)
+        );
+    }
+
+    /// A 4-pane same-axis chain: the delta lands on the boundary's two
+    /// touching panes; panes beyond it keep their extents.
+    #[test]
+    fn toward_keeps_far_panes_at_a_deeper_boundary() {
+        let mut tree = LayoutTree::leaf(PaneId(0));
+        tree.split_pane(PaneId(0), PaneId(1), SplitDirection::Vertical, 0.5)
+            .unwrap();
+        tree.split_pane(PaneId(1), PaneId(2), SplitDirection::Vertical, 0.5)
+            .unwrap();
+        tree.split_pane(PaneId(2), PaneId(3), SplitDirection::Vertical, 0.5)
+            .unwrap();
+        // Left-leaning [0, 1, 2, 3] at 80 cols: 0=40, 1=20, 2=10, 3=10.
+        assert_eq!(
+            tree.set_leaf_extent_toward(PaneId(2), SplitDirection::Vertical, 6, 80, true),
+            Ok(ExtentOutcome::Adjusted)
+        );
+        let geo = tree.geometry(0, 0, 80, 24);
+        let width_of = |pane| geo.iter().find(|g| g.pane == pane).unwrap().width;
+        assert_eq!(width_of(PaneId(0)), 40);
+        assert_eq!(width_of(PaneId(1)), 20);
+        assert_eq!(width_of(PaneId(2)), 16);
+        assert_eq!(width_of(PaneId(3)), 4);
+    }
+
+    /// The left-leaning three-pane keyboard case (today's correct
+    /// behavior, pinned): shrinking pane 2 grows pane 1; pane 0 and the
+    /// root boundary stay put.
+    #[test]
+    fn toward_matches_today_on_the_left_learning_tree() {
+        let mut tree = LayoutTree::leaf(PaneId(0));
+        tree.split_pane(PaneId(0), PaneId(1), SplitDirection::Vertical, 0.5)
+            .unwrap();
+        tree.split_pane(PaneId(1), PaneId(2), SplitDirection::Vertical, 0.5)
+            .unwrap();
+        assert_eq!(
+            tree.set_leaf_extent_toward(PaneId(2), SplitDirection::Vertical, -10, 80, false),
+            Ok(ExtentOutcome::Adjusted)
+        );
+        let geo = tree.geometry(0, 0, 80, 24);
+        let width_of = |pane| geo.iter().find(|g| g.pane == pane).unwrap().width;
+        assert_eq!(width_of(PaneId(0)), 40);
+        assert_eq!(width_of(PaneId(1)), 30);
+        assert_eq!(width_of(PaneId(2)), 10);
+    }
+
+    /// A cross-axis split on the path: the boundary's width change is
+    /// inherited by every pane of the moved side (they share the moved
+    /// boundary); the other side absorbs; no ratio below changes.
+    #[test]
+    fn toward_through_a_cross_axis_split_moves_the_shared_boundary() {
+        let mut tree = LayoutTree::leaf(PaneId(0));
+        tree.split_pane(PaneId(0), PaneId(1), SplitDirection::Vertical, 0.5)
+            .unwrap();
+        tree.split_pane(PaneId(1), PaneId(2), SplitDirection::Horizontal, 0.5)
+            .unwrap();
+        assert_eq!(
+            tree.set_leaf_extent_toward(PaneId(1), SplitDirection::Vertical, -10, 80, false),
+            Ok(ExtentOutcome::Adjusted)
+        );
+        let geo = tree.geometry(0, 0, 80, 24);
+        let width_of = |pane| geo.iter().find(|g| g.pane == pane).unwrap().width;
+        assert_eq!(width_of(PaneId(0)), 50, "the leaf side absorbs");
+        assert_eq!(width_of(PaneId(1)), 30, "panes on the moved side share it");
+        assert_eq!(width_of(PaneId(2)), 30);
     }
 
     #[test]

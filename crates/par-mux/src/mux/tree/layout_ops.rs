@@ -459,17 +459,17 @@ impl MuxTree {
     }
 
     /// Grow or shrink `pane` by `cells` (tmux's `-L`/`-R`/`-U`/`-D`): the
-    /// pane's extent along the pressed direction's axis changes by `cells`
-    /// (`-R`/`-D` grow, `-L`/`-U` shrink), absorbed by the innermost
-    /// enclosing split of that orientation — an ancestor at any depth, so
-    /// a pane nested under cross-orientation splits resizes on both axes
-    /// (the manual-pass report: with neighbors on both axes, arrows could
-    /// only resize along one).
-    ///
-    /// A pane already spanning the pressed axis — a lone pane, or a window
-    /// whose only splits run the other way — is an error, not a no-op.
-    /// Pane terminals are resized to the new geometry. The Ok payload is
-    /// the pane's window — the dispatcher's `%layout-change` target.
+    /// divider on the pressed side of the pane moves by `cells`
+    /// (`-R`/`-D` grow, `-L`/`-U` shrink), and the panes touching that
+    /// boundary absorb the whole delta — panes beyond it never move,
+    /// whatever split nesting the boundary's sides carry (the manual-pass
+    /// wrong-divider report: the old nearest-ancestor walk moved a
+    /// different split's divider in right-leaning trees). A pane spanning
+    /// the pressed side grows through its OPPOSITE divider instead (the
+    /// T4.C edge rule); only a pane with no divider at all on the axis
+    /// is an error, not a no-op. Pane terminals are resized to the new
+    /// geometry. The Ok payload is the pane's window — the dispatcher's
+    /// `%layout-change` target.
     pub fn resize_pane(
         &mut self,
         pane: PaneId,
@@ -486,32 +486,60 @@ impl MuxTree {
             let Some(rect) = rects.iter().find(|g| g.pane == pane) else {
                 return Err(MuxError::NoSuchPane(pane));
             };
-            let (cols, rows) = match direction {
-                ResizeDirection::Left => {
-                    (Some(rect.width.saturating_sub(cells as usize).max(1)), None)
-                }
+            let (axis, target_in_first, extent_new, extent_old) = match direction {
+                ResizeDirection::Left => (
+                    SplitDirection::Vertical,
+                    false,
+                    rect.width.saturating_sub(cells as usize).max(1),
+                    rect.width,
+                ),
                 ResizeDirection::Right => (
-                    Some((rect.width + cells as usize).min(window.cols as usize)),
-                    None,
+                    SplitDirection::Vertical,
+                    true,
+                    (rect.width + cells as usize).min(window.cols as usize),
+                    rect.width,
                 ),
                 ResizeDirection::Up => (
-                    None,
-                    Some(rect.height.saturating_sub(cells as usize).max(1)),
+                    SplitDirection::Horizontal,
+                    false,
+                    rect.height.saturating_sub(cells as usize).max(1),
+                    rect.height,
                 ),
                 ResizeDirection::Down => (
-                    None,
-                    Some((rect.height + cells as usize).min(window.rows as usize)),
+                    SplitDirection::Horizontal,
+                    true,
+                    (rect.height + cells as usize).min(window.rows as usize),
+                    rect.height,
                 ),
             };
+            // The pressed flag picks the boundary (the pane's edge on that
+            // side) and which way it moves; the toward walk moves only
+            // that boundary, and the panes touching it absorb the delta.
+            let delta = (extent_new as i64 - extent_old as i64) as i32;
+            let axis_extent = match axis {
+                SplitDirection::Vertical => window.cols as usize,
+                SplitDirection::Horizontal => window.rows as usize,
+            };
             let mut next = window.layout.clone();
-            Self::set_leaf_extents(
-                &mut next,
-                pane,
-                cols.map(|value| value as u16),
-                rows.map(|value| value as u16),
-                window.cols as usize,
-                window.rows as usize,
-            )?;
+            // The pressed side's divider first; a pane spanning the pressed
+            // side (its edge there is the window's) grows through its
+            // OPPOSITE divider instead — the T4.C rule the second-pane
+            // resize test pins, tmux's edge fallback.
+            let walked =
+                next.set_leaf_extent_toward(pane, axis, delta, axis_extent, target_in_first);
+            let walked = match walked {
+                Ok(crate::mux::layout::ExtentOutcome::SpansAxis) => {
+                    next.set_leaf_extent_toward(pane, axis, delta, axis_extent, !target_in_first)
+                }
+                other => other,
+            };
+            match walked {
+                Ok(crate::mux::layout::ExtentOutcome::Adjusted) => {}
+                Ok(crate::mux::layout::ExtentOutcome::SpansAxis) => {
+                    return Err(MuxError::PaneNotResizable(pane));
+                }
+                Err(_) => return Err(MuxError::NoSuchPane(pane)),
+            }
             window.layout = next;
             Ok(window_id)
         })
