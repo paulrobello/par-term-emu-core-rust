@@ -97,6 +97,7 @@ fn server_fixtures() -> Vec<AppServerMessage> {
                 data: vec![1, 2, 3, 4],
                 col: 12,
                 row: 34,
+                pane: Some("pane-3".into()),
             }],
         },
         S::Connected {
@@ -173,6 +174,7 @@ fn server_fixtures() -> Vec<AppServerMessage> {
         S::GraphicsAdded {
             row: 18,
             format: Some("sixel".into()),
+            pane: None,
         },
         S::HyperlinkAdded {
             url: "https://x".into(),
@@ -385,6 +387,7 @@ fn server_fixtures() -> Vec<AppServerMessage> {
             data: vec![1, 2, 3, 0xff],
             col: 12,
             row: 34,
+            pane: None,
         },
         S::InlineImage {
             image_id: 0,
@@ -395,6 +398,7 @@ fn server_fixtures() -> Vec<AppServerMessage> {
             data: vec![],
             col: 0,
             row: 0,
+            pane: None,
         },
     ]
 }
@@ -603,6 +607,7 @@ fn lossy_server_inputs() -> Vec<(&'static str, pb::ServerMessage)> {
                 height: 1,
                 col: 0,
                 row: 0,
+                pane: None,
                 data: vec![0u8; crate::streaming::protocol::MAX_INLINE_IMAGE_BYTES + 1],
             })),
         ),
@@ -629,6 +634,7 @@ fn lossy_server_inputs() -> Vec<(&'static str, pb::ServerMessage)> {
                     height: 1,
                     col: 0,
                     row: 0,
+                    pane: None,
                     data: vec![0u8; crate::streaming::protocol::MAX_INLINE_IMAGE_BYTES + 1],
                 }],
             })),

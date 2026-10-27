@@ -63,6 +63,7 @@ mod streaming_tests {
             vec![1, 2, 3, 0xff],
             12,
             34,
+            None,
         );
         assert!(matches!(
             &message,
@@ -97,6 +98,7 @@ mod streaming_tests {
             vec![0u8; MAX_INLINE_IMAGE_BYTES + 1],
             0,
             0,
+            None,
         );
         let err = encode_server_message(&oversized).unwrap_err();
         assert!(err.to_string().contains("8388608"));

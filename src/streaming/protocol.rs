@@ -678,6 +678,9 @@ pub enum ServerMessage {
         /// Graphics format ("sixel", "iterm2", "kitty")
         #[serde(skip_serializing_if = "Option::is_none")]
         format: Option<String>,
+        /// Serving session id (`pane-12`); absent = the streamed terminal itself
+        #[serde(skip_serializing_if = "Option::is_none")]
+        pane: Option<String>,
     },
 
     /// Hyperlink added (OSC 8)
@@ -1127,6 +1130,9 @@ pub enum ServerMessage {
         col: u32,
         /// Cell row of the image's top-left corner
         row: u32,
+        /// Serving session id (`pane-12`); absent = no pane attribution
+        #[serde(skip_serializing_if = "Option::is_none")]
+        pane: Option<String>,
     },
 
     /// A client upload began staging daemon-side; `upload_id` keys the
@@ -1193,6 +1199,9 @@ pub struct InlineImageFrame {
     pub col: u32,
     /// Cell row of the image's top-left corner
     pub row: u32,
+    /// Serving session id (`pane-12`); `None` = no pane attribution
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub pane: Option<String>,
 }
 
 impl From<InlineImageFrame> for ServerMessage {
@@ -1206,6 +1215,7 @@ impl From<InlineImageFrame> for ServerMessage {
             data: frame.data,
             col: frame.col,
             row: frame.row,
+            pane: frame.pane,
         }
     }
 }
@@ -1953,7 +1963,11 @@ impl ServerMessage {
 
     /// Create a graphics added message
     pub fn graphics_added(row: u16) -> Self {
-        Self::GraphicsAdded { row, format: None }
+        Self::GraphicsAdded {
+            row,
+            format: None,
+            pane: None,
+        }
     }
 
     /// Create a graphics added message with format
@@ -1961,6 +1975,16 @@ impl ServerMessage {
         Self::GraphicsAdded {
             row,
             format: Some(format),
+            pane: None,
+        }
+    }
+
+    /// Create a graphics added message with pane attribution
+    pub fn graphics_added_with_pane(row: u16, pane: Option<String>) -> Self {
+        Self::GraphicsAdded {
+            row,
+            format: None,
+            pane,
         }
     }
 
@@ -2030,6 +2054,7 @@ impl ServerMessage {
         data: Vec<u8>,
         col: u32,
         row: u32,
+        pane: Option<String>,
     ) -> Self {
         Self::InlineImage {
             image_id,
@@ -2040,6 +2065,7 @@ impl ServerMessage {
             data,
             col,
             row,
+            pane,
         }
     }
 

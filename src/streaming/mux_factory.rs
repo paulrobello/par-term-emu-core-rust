@@ -35,7 +35,7 @@ use crate::streaming::server::{
     SessionFactory, SessionFactoryResult, StreamingServer, UploadForwarder,
 };
 use crate::streaming::session::StreamSessionState;
-use crate::streaming::{apply_inline_image, inline_image_frame};
+use crate::streaming::{apply_inline_image, inline_image_frame_struct};
 use crate::terminal::{Terminal, TerminalEvent};
 use crate::tmux_control::{TmuxControlParser, TmuxNotification};
 use base64::Engine as _;
@@ -126,6 +126,12 @@ struct MirrorLink {
     /// and a future seed carrying graphics could re-raise an id — this is
     /// the once-only guard, so a graphic is sent once, never on every poll.
     sent_images: Mutex<HashSet<u64>>,
+    /// Pane attribution per graphics id in this mirror's store: seed
+    /// frames carry the seed request's pane, live frames the pane served
+    /// at placement time. Shared with the streaming session so
+    /// `build_connect_message` stamps `Connected.graphics`; a re-seed
+    /// replaces the entries of the frames it replaces.
+    graphics_panes: Arc<Mutex<HashMap<u64, String>>>,
     status: Mutex<Option<(ServerMessage, Vec<String>)>>,
     session: RwLock<Option<std::sync::Weak<StreamSessionState>>>,
 }
@@ -150,6 +156,11 @@ impl MirrorLink {
     fn set_target(&self, pane: u32, window: String) {
         *self.pane.lock() = pane;
         *self.window.lock() = window;
+    }
+
+    /// The session-style id (`pane-N`) of the pane served right now.
+    fn pane_label(&self) -> String {
+        format!("pane-{}", self.pane())
     }
 }
 
@@ -571,10 +582,18 @@ impl SessionFactory for MuxSessionFactory {
         // The daemon's pane answers terminal queries itself; the mirror's
         // copies would double every reply.
         terminal.drain_responses();
-        ingest_graphics_seed(&mut terminal, &seed_graphics);
+        let seed_ids = ingest_graphics_seed(&mut terminal, &seed_graphics);
         let terminal = Arc::new(RwLock::new(terminal));
 
         let writer = Arc::new(Mutex::new(Some(writer)));
+        let graphics_panes = Arc::new(Mutex::new(HashMap::new()));
+        let seed_pane = format!("pane-{pane}");
+        {
+            let mut map = graphics_panes.lock();
+            for id in seed_ids {
+                map.insert(id, seed_pane.clone());
+            }
+        }
         let link = Arc::new(MirrorLink {
             follows_active: session_id == ACTIVE_WORKSPACE_SESSION_ID,
             pane: Mutex::new(pane),
@@ -585,6 +604,7 @@ impl SessionFactory for MuxSessionFactory {
             closed: AtomicBool::new(false),
             sink: Mutex::new(Sink::Buffering(Vec::new())),
             sent_images: Mutex::new(HashSet::new()),
+            graphics_panes: Arc::clone(&graphics_panes),
             status: Mutex::new(info.first().and_then(|line| parse_viewer_status(line))),
             session: RwLock::new(None),
         });
@@ -628,6 +648,7 @@ impl SessionFactory for MuxSessionFactory {
         {
             let status = link.status.lock();
             *link.session.write() = Some(Arc::downgrade(session));
+            *session.graphics_panes.write() = Some(Arc::clone(&link.graphics_panes));
             if let Some((size, viewers)) = &*status {
                 session.update_mux_status(size.clone(), viewers.clone());
             }
@@ -818,20 +839,28 @@ fn spawn_drain(
                             if !link.claim_image(image_id) {
                                 continue;
                             }
-                            let Some(frame) = inline_image_frame(
+                            let pane_label = link.pane_label();
+                            link.graphics_panes
+                                .lock()
+                                .insert(image_id, pane_label.clone());
+                            let Some(mut frame) = inline_image_frame_struct(
                                 &link.terminal.read(),
                                 image_id,
                                 Some(link.pane()),
                             ) else {
                                 continue;
                             };
+                            frame.pane = Some(pane_label.clone());
                             if let Some(server) = server.as_ref().and_then(std::sync::Weak::upgrade)
                             {
                                 server.send_to_session(
                                     &session_id,
-                                    ServerMessage::graphics_added(row as u16),
+                                    ServerMessage::graphics_added_with_pane(
+                                        row as u16,
+                                        Some(pane_label),
+                                    ),
                                 );
-                                server.send_to_session(&session_id, frame);
+                                server.send_to_session(&session_id, ServerMessage::from(frame));
                             }
                         }
                     }
@@ -1027,8 +1056,10 @@ fn parse_seed_graphic(line: &str) -> Option<SeedGraphicFrame> {
 /// chronological and the connect replay (newest first) matches the
 /// daemon's own selection. Seed ids ride [`SEED_GRAPHICS_ID_OFFSET`]; a
 /// frame over the wire cap is skipped exactly like an oversize live
-/// frame.
-fn ingest_graphics_seed(terminal: &mut Terminal, frames: &[SeedGraphicFrame]) {
+/// frame. Returns the store ids actually ingested, so the caller can tag
+/// each with the seed's pane in its side map.
+fn ingest_graphics_seed(terminal: &mut Terminal, frames: &[SeedGraphicFrame]) -> Vec<u64> {
+    let mut ingested: Vec<u64> = Vec::new();
     for frame in frames.iter().rev() {
         if frame.data.len() > MAX_INLINE_IMAGE_BYTES {
             crate::debug_error!(
@@ -1049,9 +1080,12 @@ fn ingest_graphics_seed(terminal: &mut Terminal, frames: &[SeedGraphicFrame]) {
             frame.data.clone(),
             frame.col,
             frame.row,
+            None,
         );
         let _ = apply_inline_image(terminal, &message);
+        ingested.push(SEED_GRAPHICS_ID_OFFSET + frame.id);
     }
+    ingested
 }
 
 /// Re-resolve the daemon's active workspace pane and, when it moved,
@@ -1144,6 +1178,7 @@ fn apply_workspace_target(
     link.set_target(target.pane, target.window.clone());
     let mut batches = Vec::new();
     let mut resized = false;
+    let ingested: Vec<u64>;
     {
         let mut term = link.terminal.write();
         term.reset();
@@ -1153,7 +1188,18 @@ fn apply_workspace_target(
         }
         batches.push(term.process_deferred(target.screen.as_bytes()));
         term.drain_responses();
-        ingest_graphics_seed(&mut term, &target.graphics);
+        ingested = ingest_graphics_seed(&mut term, &target.graphics);
+    }
+    {
+        // The re-seed replaced the store: pane attribution follows it, so
+        // stale entries (old-pane seeds, pre-switch live frames) are
+        // dropped and the new seed's ids tag the NEW pane.
+        let pane_label = link.pane_label();
+        let mut map = link.graphics_panes.lock();
+        map.retain(|id, _| ingested.contains(id));
+        for id in &ingested {
+            map.insert(*id, pane_label.clone());
+        }
     }
     for batch in batches {
         batch.deliver();
@@ -1848,6 +1894,118 @@ mod tests {
         );
     }
 
+    /// A `workspace-active` retarget re-tags frames with the NEW pane:
+    /// the re-seed replaces the store (the old pane's frames and their
+    /// tags are gone), and a fresh `Connected.graphics` replay — stamped
+    /// from the factory's side map — carries the new pane's session id.
+    #[test]
+    fn a_workspace_reseed_tags_frames_with_the_new_pane() {
+        let rt = runtime();
+        let _entered = rt.enter();
+        let (_dir, socket, _serving, mut control, pane0) = daemon();
+        let pane0_num: u32 = pane0.trim_start_matches('%').parse().expect("pane number");
+
+        control
+            .send("new-workspace -n second")
+            .expect("new-workspace");
+        let second_pane = control
+            .send("list-panes -F '#{pane_id} #{session_name}'")
+            .expect("list-panes")
+            .into_iter()
+            .find(|l| l.trim().ends_with("second"))
+            .and_then(|l| {
+                l.split_whitespace()
+                    .next()
+                    .and_then(|p| p.trim_start_matches('%').parse::<u32>().ok())
+            })
+            .expect("the second workspace's pane");
+        let pane1 = format!("%{second_pane}");
+        control
+            .send("select-workspace -t main")
+            .expect("back to main");
+
+        // Pane 0 (the active workspace's pane) holds a graphic BEFORE the
+        // mirror attaches, so its replayed frame carries the OLD pane's tag.
+        let line =
+            b"printf '\\033_Ga=T,f=24,i=77,s=2,v=2;AAAAAAAAAAAAAAAA\\033\\\\'; echo GFX1-PLACED\r";
+        let hex: String = line
+            .iter()
+            .map(|b| format!("{b:02x} "))
+            .collect::<String>()
+            .trim_end()
+            .to_string();
+        control
+            .send(&format!("send-keys -t {pane0} -H {hex}"))
+            .expect("send-keys");
+        wait("GFX1-PLACED in pane0", || {
+            let text = control
+                .send(&format!("capture-pane -t {pane0}"))
+                .expect("capture")
+                .join("\n");
+            (!has_line(&text, "GFX1-PLACED")).then_some(text)
+        });
+
+        let server = streaming(&socket);
+        let session = mirror_session(&server, ACTIVE_WORKSPACE_SESSION_ID);
+        let connected = session.build_connect_message("late-joiner", false);
+        let ServerMessage::Connected { graphics, .. } = connected else {
+            panic!("expected a Connected message");
+        };
+        assert_eq!(
+            graphics.len(),
+            1,
+            "the pre-attach graphic replays to the late joiner: {graphics:?}"
+        );
+        assert_eq!(
+            graphics[0].pane.as_deref(),
+            Some(format!("pane-{pane0_num}").as_str()),
+            "the seed's frame carries the OLD pane's tag"
+        );
+
+        // Pane 1 holds its own graphic; the desktop switches workspaces
+        // and the mirror re-seeds IN PLACE.
+        let line =
+            b"printf '\\033_Ga=T,f=24,i=88,s=2,v=2;BBBBBBBBBBBBBBBB\\033\\\\'; echo GFX2-PLACED\r";
+        let hex: String = line
+            .iter()
+            .map(|b| format!("{b:02x} "))
+            .collect::<String>()
+            .trim_end()
+            .to_string();
+        control
+            .send(&format!("send-keys -t {pane1} -H {hex}"))
+            .expect("send-keys");
+        wait("GFX2-PLACED in pane1", || {
+            let text = control
+                .send(&format!("capture-pane -t {pane1}"))
+                .expect("capture")
+                .join("\n");
+            (!has_line(&text, "GFX2-PLACED")).then_some(text)
+        });
+
+        control.send("select-workspace -t second").expect("switch");
+        wait_mirror(&session, "GFX2-PLACED");
+
+        let connected = session.build_connect_message("late-joiner", false);
+        let ServerMessage::Connected { graphics, .. } = connected else {
+            panic!("expected a Connected message");
+        };
+        assert_eq!(
+            graphics.len(),
+            1,
+            "the re-seed replaced the store; the old pane's frame is gone: {graphics:?}"
+        );
+        assert!(
+            graphics[0].image_id >= SEED_GRAPHICS_ID_OFFSET,
+            "the surviving frame is a seed frame"
+        );
+        assert_eq!(
+            graphics[0].pane.as_deref(),
+            Some(format!("pane-{second_pane}").as_str()),
+            "the re-seeded frame carries the NEW pane's tag"
+        );
+    }
+
     #[test]
     fn a_mirror_is_seeded_from_the_pane_then_follows_its_output() {
         let rt = runtime();
@@ -1914,10 +2072,14 @@ mod tests {
         let deadline = Instant::now() + CEILING;
         let mut frames = Vec::new();
         let mut announces = 0usize;
+        let mut announce_panes: Vec<Option<String>> = Vec::new();
         loop {
             while let Ok(msg) = updates.try_recv() {
                 match msg {
-                    ServerMessage::GraphicsAdded { .. } => announces += 1,
+                    ServerMessage::GraphicsAdded { pane, .. } => {
+                        announces += 1;
+                        announce_panes.push(pane);
+                    }
                     ServerMessage::InlineImage { .. } => frames.push(msg),
                     _ => {}
                 }
@@ -1945,11 +2107,17 @@ mod tests {
             col,
             row,
             data,
+            pane,
         } = &frames[0]
         else {
             panic!("not an InlineImage frame");
         };
         assert_eq!(*pane_id, Some(pane_num), "the frame names its pane");
+        assert_eq!(
+            pane.as_deref(),
+            Some(format!("pane-{pane_num}").as_str()),
+            "the frame names its pane in session-id form"
+        );
         assert_eq!(format, "rgba", "store pixels are RGBA");
         assert_eq!((*width, *height), (2, 2));
         assert_eq!(data.len(), 16, "2x2 RGB decoded to RGBA");
@@ -1966,6 +2134,11 @@ mod tests {
             "the frame carries the graphic's placement"
         );
         assert!(announces >= 1, "the cheap announce rides along");
+        assert_eq!(
+            announce_panes.first(),
+            Some(&Some(format!("pane-{pane_num}"))),
+            "the GraphicsAdded announce names the serving pane"
+        );
 
         // Sent once: a bounded quiet window after the first frame sees no
         // second frame for the same placement.
@@ -2027,7 +2200,11 @@ mod tests {
         assert_eq!(frame.format, "rgba", "store pixels replay as RGBA");
         assert_eq!((frame.width, frame.height), (2, 2));
         assert_eq!(frame.data.len(), 16, "2x2 RGB decoded to RGBA");
-        assert_eq!(frame.pane_id, None, "replay frames tag no pane");
+        assert_eq!(
+            frame.pane.as_deref(),
+            Some(format!("pane-{pane_num}").as_str()),
+            "the replay names the pane the seed came from"
+        );
         assert!(
             frame.image_id >= SEED_GRAPHICS_ID_OFFSET,
             "seed ids ride the offset, out of the mirror counter's range"

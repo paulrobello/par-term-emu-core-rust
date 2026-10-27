@@ -231,6 +231,7 @@ message ModeChanged {
 message GraphicsAdded {
   uint32 row = 1;                   // Row where graphics were added
   optional string format = 2;       // Graphics format ("sixel", "iterm2", "kitty")
+  optional string pane = 3;         // Serving session id ("pane-12"); absent = the streamed terminal itself
 }
 
 // Inline image frame: one image delivered to a pane via OSC 1337 (or a
@@ -246,6 +247,7 @@ message InlineImage {
   bytes data = 6;                   // Encoded image bytes (<= 8 MiB)
   uint32 col = 7;                   // Cell column of the image's top-left corner
   uint32 row = 8;                   // Cell row of the image's top-left corner
+  optional string pane = 9;         // Serving session id ("pane-12"); absent = no pane attribution
 }
 
 // Hyperlink added (OSC 8)

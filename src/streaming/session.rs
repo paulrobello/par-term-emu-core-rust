@@ -23,6 +23,10 @@ use tokio::sync::{broadcast, mpsc};
 /// type, replacing its `#[allow(clippy::type_complexity)]`).
 type PtyWriterHandle = Arc<Mutex<Box<dyn std::io::Write + Send>>>;
 
+/// Graphics-id -> pane attribution a mux mirror factory shares with the
+/// session so `build_connect_message` can stamp `Connected.graphics`.
+type GraphicsPaneMap = Arc<Mutex<HashMap<u64, String>>>;
+
 /// Message capacity of the per-session PTY input queue (QA-131).
 /// cap: Client input chunks queued per session pending write to the PTY.
 const INPUT_QUEUE_MESSAGES: usize = 256;
@@ -151,6 +155,10 @@ pub struct StreamSessionState {
     pub(crate) theme: Option<ThemeInfo>,
     /// Whether to send initial screen content on connect
     pub(crate) send_initial_screen: bool,
+    /// Graphics-id -> pane attribution shared with a mux mirror factory:
+    /// `build_connect_message` stamps each replayed `Connected.graphics`
+    /// frame with its pane. `None` for direct-PTY sessions.
+    pub(crate) graphics_panes: RwLock<Option<GraphicsPaneMap>>,
     /// Per-session metrics
     pub metrics: SessionMetrics,
 }
@@ -193,6 +201,7 @@ impl StreamSessionState {
             shutdown: Arc::new(tokio::sync::Notify::new()),
             theme,
             send_initial_screen,
+            graphics_panes: RwLock::new(None),
             metrics: SessionMetrics::new(),
         }
     }
@@ -298,12 +307,14 @@ impl StreamSessionState {
     /// Graphics already on screen replay through `Connected.graphics`: every
     /// store graphic becomes a cap-checked frame (oversize logged and
     /// skipped) carrying its cell position, so a late joiner renders the
-    /// images it missed. Replayed frames tag no pane — they belong to this
-    /// session's own terminal. The replay itself is bounded twice over
-    /// (SECURITY.md's caps table): NEWEST graphics seed first — the ones
-    /// likeliest still on screen — and the walk stops at the first frame
-    /// that would bust the frame count or the aggregate byte budget; the
-    /// skipped tail is logged, never truncated.
+    /// images it missed. Mux-backed sessions stamp each frame with its
+    /// pane (the mirror factory's side map, keyed by graphics id; a
+    /// `workspace-active` re-seed retags the entries it replaces);
+    /// direct-PTY sessions replay untagged. The replay itself is bounded
+    /// twice over (SECURITY.md's caps table): NEWEST graphics seed first —
+    /// the ones likeliest still on screen — and the walk stops at the
+    /// first frame that would bust the frame count or the aggregate byte
+    /// budget; the skipped tail is logged, never truncated.
     pub fn build_connect_message(&self, client_id: &str, readonly: bool) -> ServerMessage {
         let terminal = self.terminal.write();
         let (cols, rows) = terminal.size();
@@ -320,15 +331,19 @@ impl StreamSessionState {
         let mok_mode = Some(terminal.modify_other_keys_mode() as u32);
 
         let store = terminal.all_graphics();
+        let graphics_panes = self.graphics_panes.read().clone();
         let mut graphics: Vec<InlineImageFrame> = Vec::new();
         let mut replay_bytes = 0usize;
         for graphic in store.iter().rev() {
             if graphics.len() >= MAX_CONNECT_REPLAY_FRAMES {
                 break;
             }
-            let Some(frame) = inline_image_frame_struct(&terminal, graphic.id, None) else {
+            let Some(mut frame) = inline_image_frame_struct(&terminal, graphic.id, None) else {
                 continue;
             };
+            if let Some(panes) = &graphics_panes {
+                frame.pane = panes.lock().get(&graphic.id).cloned();
+            }
             if replay_bytes + frame.data.len() > MAX_CONNECT_REPLAY_BYTES {
                 break;
             }

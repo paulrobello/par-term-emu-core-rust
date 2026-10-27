@@ -69,6 +69,7 @@ pub fn inline_image_frame_struct(
         data: graphic.pixels.as_ref().clone(),
         col,
         row,
+        pane: None,
     })
 }
 
@@ -184,12 +185,14 @@ mod tests {
             col,
             row,
             data,
+            pane,
         } = frame
         else {
             panic!("expected an InlineImage frame");
         };
         assert_eq!(image_id, id);
         assert_eq!(pane_id, None);
+        assert_eq!(pane, None);
         assert_eq!(format, "rgba");
         assert_eq!((width, height), (4, 2));
         assert_eq!((col, row), (3, 4), "the frame carries the stored placement");
@@ -261,6 +264,7 @@ mod tests {
             vec![9u8; 2 * 2 * 4],
             5,
             6,
+            None,
         );
         let store_id = apply_inline_image(&mut term, &message).expect("rgba frame ingests");
         assert_eq!(store_id, 42, "the frame's own id becomes the store id");
@@ -283,6 +287,7 @@ mod tests {
             vec![1u8; 3 * 4],
             0,
             2,
+            None,
         );
         apply_inline_image(&mut term, &replacement).expect("re-ingest");
         assert_eq!(term.all_graphics().iter().filter(|g| g.id == 42).count(), 1);
@@ -298,8 +303,17 @@ mod tests {
         );
 
         // A non-rgba frame is refused, not half-applied.
-        let png =
-            ServerMessage::inline_image(43, None, "png".to_string(), 1, 1, vec![0u8; 4], 0, 0);
+        let png = ServerMessage::inline_image(
+            43,
+            None,
+            "png".to_string(),
+            1,
+            1,
+            vec![0u8; 4],
+            0,
+            0,
+            None,
+        );
         assert!(apply_inline_image(&mut term, &png).is_none());
         assert!(!term.all_graphics().iter().any(|g| g.id == 43));
 
