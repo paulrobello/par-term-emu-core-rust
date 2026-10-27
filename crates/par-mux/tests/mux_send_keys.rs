@@ -187,3 +187,58 @@ fn quoted_pane_target_drives_the_pane_like_the_bare_form() {
         "the quoted target must drive the pane: {screen}"
     );
 }
+
+/// Card 01a17ec3c502: `send-keys -l` delivers control bytes to the pty
+/// byte-exact. The pane reads four raw bytes with echo off and dumps them
+/// in hex, so tty echo (which would show ESC as `^[`) cannot mask or fake
+/// the result.
+#[cfg(unix)]
+#[test]
+fn literal_control_bytes_reach_the_pty_byte_exact() {
+    let fixture = MuxFixture::new("skc");
+    let path = fixture.socket();
+    let server = MuxServer::bind(path).expect("bind");
+    thread::spawn(move || server.run());
+    common::wait_listening(path);
+
+    let stream = connect_local_stream(path).expect("connect");
+    let mut writer = stream.try_clone().expect("clone");
+    let mut reader = BufReader::new(stream);
+    command(&mut writer, &mut reader, "new-session -s skc");
+
+    command(
+        &mut writer,
+        &mut reader,
+        "send-keys -t %0 -l 'stty raw -echo; head -c 4 | od -An -tx1 | tr -d \" \"; stty sane'",
+    );
+    command(&mut writer, &mut reader, "send-keys -t %0 Enter");
+    // the shell must reach `head` before the probe bytes arrive.
+    thread::sleep(Duration::from_millis(500));
+    command(&mut writer, &mut reader, "send-keys -t %0 -l '\x1b]1\x07'");
+    wait_for(&mut writer, &mut reader, "capture-pane -t %0", "1b5d3107");
+}
+
+/// Card 01a17ec3c502: a backslash escape in the `-l` argument reaches the
+/// shell as typed, so the typed `printf 'ZZ\101ZZ\n'` prints `ZZAZZ`.
+#[cfg(unix)]
+#[test]
+fn literal_backslash_escape_reaches_the_shell() {
+    let fixture = MuxFixture::new("skb");
+    let path = fixture.socket();
+    let server = MuxServer::bind(path).expect("bind");
+    thread::spawn(move || server.run());
+    common::wait_listening(path);
+
+    let stream = connect_local_stream(path).expect("connect");
+    let mut writer = stream.try_clone().expect("clone");
+    let mut reader = BufReader::new(stream);
+    command(&mut writer, &mut reader, "new-session -s skb");
+
+    command(
+        &mut writer,
+        &mut reader,
+        r"send-keys -t %0 -l 'printf '\''ZZ\101ZZ\n'\'''",
+    );
+    command(&mut writer, &mut reader, "send-keys -t %0 Enter");
+    wait_for(&mut writer, &mut reader, "capture-pane -t %0", "ZZAZZ");
+}

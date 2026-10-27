@@ -3592,3 +3592,27 @@ fn quoted_start_tail_groups_like_tmux() {
         }
     }
 }
+
+#[test]
+fn send_keys_literal_carries_control_bytes_verbatim() {
+    assert_eq!(
+        encoded("send-keys -t %0 -l '\x1b]1337;x\x07'"),
+        b"\x1b]1337;x\x07"
+    );
+}
+
+#[test]
+fn send_keys_literal_keeps_backslashes_inside_double_quotes() {
+    assert_eq!(
+        encoded(r#"send-keys -t %0 -l "printf '\033]x'""#),
+        br"printf '\033]x'"
+    );
+}
+
+#[test]
+fn send_keys_literal_keeps_single_quoted_backslashes() {
+    assert_eq!(
+        encoded(r"send-keys -t %0 -l 'printf \033]x'"),
+        br"printf \033]x"
+    );
+}
