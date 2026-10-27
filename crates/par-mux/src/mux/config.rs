@@ -1895,15 +1895,35 @@ pub fn reload_report(applied: &mut EffectiveConfig, file: Option<&ConfigFile>) -
         }
         _ => "unchanged: daemon.remain-on-exit".to_string(),
     });
-    lines.push(
-        match file.daemon.exit_action.as_deref().map(ExitAction::parse) {
-            Some(Some(v)) if v != applied.exit_action => {
-                applied.exit_action = v;
-                "applied: daemon.exit-action".to_string()
+    // An explicit `exit-action` key wins; an unknown spelling resolves to
+    // remove, the same as the initial parse. With the key absent the fold
+    // derives from remain-on-exit — which the block above may have just
+    // flipped, so the derived value is recomputed here rather than merged.
+    let exit_action_line = match file.daemon.exit_action.as_deref() {
+        Some(v) => {
+            let parsed = ExitAction::parse(v).unwrap_or(ExitAction::Remove);
+            if parsed != applied.exit_action {
+                applied.exit_action = parsed;
+                "applied: daemon.exit-action"
+            } else {
+                "unchanged: daemon.exit-action"
             }
-            _ => "unchanged: daemon.exit-action".to_string(),
-        },
-    );
+        }
+        None => {
+            let folded = if applied.remain_on_exit {
+                ExitAction::Hold
+            } else {
+                ExitAction::Remove
+            };
+            if folded != applied.exit_action {
+                applied.exit_action = folded;
+                "applied: daemon.exit-action"
+            } else {
+                "unchanged: daemon.exit-action"
+            }
+        }
+    };
+    lines.push(exit_action_line.to_string());
     lines.push(match file.daemon.exit_empty {
         Some(v) if v != applied.exit_empty => {
             applied.exit_empty = v;

@@ -174,6 +174,13 @@ pub(super) fn cmd_set_option(ctx: &Ctx<'_>, key: &str, value: &str) -> Outcome {
         "remain-on-exit" => match parse_bool(value) {
             Some(on) => {
                 guard.remain_on_exit = on;
+                // The derived exit action follows the legacy boolean so the
+                // reaper never acts on a stale fold after a set-option flip.
+                guard.exit_action = if on {
+                    crate::mux::config::ExitAction::Hold
+                } else {
+                    crate::mux::config::ExitAction::Remove
+                };
                 Outcome::ok(ctx, "")
             }
             None => Outcome::err(ctx, "set-option: remain-on-exit expects on or off"),
