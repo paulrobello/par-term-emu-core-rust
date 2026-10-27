@@ -1398,9 +1398,9 @@ sections; the numbers live here.
 | `MAX_REPLY_LINE_BYTES` | 4 MiB | `crates/par-mux/src/mux/client.rs:33` | Bytes accumulated from one daemon reply or notification line before the client closes the connection. |
 | `NOTIFICATION_TITLE_MAX` | 80 | `crates/par-mux/src/mux/command/buffers.rs:181` | Characters of a `show-notification` title (herdr's 80); longer is truncated. |
 | `NOTIFICATION_BODY_MAX` | 240 | `crates/par-mux/src/mux/command/buffers.rs:184` | Characters of a `show-notification` body (herdr's 240); longer is truncated. |
-| `MAX_CLIENT_COLS` | 1,000 | `crates/par-mux/src/mux/command/mod.rs:893` | Columns a par-mux client may report for a window grid (`refresh-client -C`). |
-| `MAX_CLIENT_ROWS` | 500 | `crates/par-mux/src/mux/command/mod.rs:895` | Rows a par-mux client may report for a window grid (`refresh-client -C`). |
-| `MAX_CELL_PIXELS` | 512 | `crates/par-mux/src/mux/command/mod.rs:897` | Pixels per cell axis a par-mux client may report (`refresh-client -p`). |
+| `MAX_CLIENT_COLS` | 1,000 | `crates/par-mux/src/mux/command/mod.rs:912` | Columns a par-mux client may report for a window grid (`refresh-client -C`). |
+| `MAX_CLIENT_ROWS` | 500 | `crates/par-mux/src/mux/command/mod.rs:914` | Rows a par-mux client may report for a window grid (`refresh-client -C`). |
+| `MAX_CELL_PIXELS` | 512 | `crates/par-mux/src/mux/command/mod.rs:916` | Pixels per cell axis a par-mux client may report (`refresh-client -p`). |
 | `MAX_FOREGROUND_NAME_LEN` | 128 | `crates/par-mux/src/mux/foreground.rs:42` | Bytes of a pane's foreground command name served by pane-info. |
 | `MAX_REPORT_VALUE_LEN` | 4,096 | `crates/par-mux/src/mux/hooks/mod.rs:110` | Bytes accepted for one hook or agent report value sent from a pane. |
 | `MAX_GIT_BRANCH_LEN` | 128 | `crates/par-mux/src/mux/host_probe.rs:174` | Bytes of git branch name the host probe serves for one pane cwd. |
@@ -1462,10 +1462,10 @@ sections; the numbers live here.
 | `MAX_PASTE_PAYLOAD_BYTES` | 256 KiB | `src/streaming/server/mod.rs:57` | Bytes accepted in one Paste message payload from a streaming client. |
 | `MAX_COLS` | 1,000 | `src/streaming/server/mod.rs:95` | Columns a streaming client may request for its terminal. |
 | `MAX_ROWS` | 500 | `src/streaming/server/mod.rs:98` | Rows a streaming client may request for its terminal. |
-| `INPUT_QUEUE_MESSAGES` | 256 | `src/streaming/session.rs:27` | Client input chunks queued per session pending write to the PTY. |
-| `MAX_QUEUED_INPUT_BYTES` | 4 MiB | `src/streaming/session.rs:36` | Client input bytes queued per session pending write to the PTY. |
-| `MAX_CONNECT_REPLAY_FRAMES` | 24 | `src/streaming/session.rs:41` | Graphics frames replayed to one client in the connect handshake. |
-| `MAX_CONNECT_REPLAY_BYTES` | 8 MiB | `src/streaming/session.rs:47` | Aggregate replay payload bytes carried in one connect handshake. |
+| `INPUT_QUEUE_MESSAGES` | 256 | `src/streaming/session.rs:31` | Client input chunks queued per session pending write to the PTY. |
+| `MAX_QUEUED_INPUT_BYTES` | 4 MiB | `src/streaming/session.rs:40` | Client input bytes queued per session pending write to the PTY. |
+| `MAX_CONNECT_REPLAY_FRAMES` | 24 | `src/streaming/session.rs:45` | Graphics frames replayed to one client in the connect handshake. |
+| `MAX_CONNECT_REPLAY_BYTES` | 8 MiB | `src/streaming/session.rs:51` | Aggregate replay payload bytes carried in one connect handshake. |
 
 <!-- caps-table:end -->
 
