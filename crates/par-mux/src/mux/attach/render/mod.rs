@@ -36,6 +36,7 @@ mod input_route;
 mod kitty;
 mod modal;
 mod modal_help;
+mod modal_layouts;
 mod modal_menu;
 mod modal_picker;
 mod modal_prompt;
@@ -1113,6 +1114,8 @@ enum MenuAction {
     ExitAction(&'static str),
     Keybinds,
     Settings,
+    /// The command menu's `Layouts…`: the save/load-layout dialog.
+    Layouts,
     ReloadConfig,
     Detach,
     /// The armed group close: `kill-workspace -g` (see [`GroupCloseArm`]).
@@ -1172,6 +1175,8 @@ enum Modal {
     Picker(PickerState),
     /// The settings dialog (the command menu's `settings`).
     Settings(modal_settings::SettingsState),
+    /// The layouts dialog (the command menu's `Layouts…`).
+    Layouts(modal_layouts::LayoutsState),
     /// Sticky resize mode: arrows adjust the focused pane's edges; Enter,
     /// Escape, and `q` exit; any other key leaves the mode (consumed, so
     /// keys never leak into the pane during a modal chord).
@@ -1190,6 +1195,7 @@ impl Modal {
                 | Modal::Help(_)
                 | Modal::Picker(_)
                 | Modal::Settings(_)
+                | Modal::Layouts(_)
                 | Modal::Resize
         )
     }
@@ -2014,6 +2020,13 @@ impl WindowSession {
             }
             TmuxNotification::WindowRenamed { window_id, name } => {
                 self.on_window_renamed(&window_id, &name);
+                EventOutcome::Continue
+            }
+            // A layout load swaps the tree under every client: a dialog
+            // left up would act on panes that no longer exist.
+            TmuxNotification::SessionsChanged if matches!(self.modal, Modal::Layouts(_)) => {
+                self.leave_layouts();
+                self.status_dirty = true;
                 EventOutcome::Continue
             }
             TmuxNotification::SessionsChanged

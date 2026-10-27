@@ -66,6 +66,7 @@ pub(super) fn compose_menu_panel(
         MenuTarget::Workspace(_) => &ws_actions,
         MenuTarget::Commands => &[
             MenuAction::Settings,
+            MenuAction::Layouts,
             MenuAction::Keybinds,
             MenuAction::ReloadConfig,
             MenuAction::Detach,
@@ -99,7 +100,13 @@ pub(super) fn compose_menu_panel(
             "exit: hold",
             "exit: shell",
         ],
-        MenuTarget::Commands => &["settings", "keybinds", "reload config", "detach"],
+        MenuTarget::Commands => &[
+            "settings",
+            "Layouts…",
+            "keybinds",
+            "reload config",
+            "detach",
+        ],
     };
     let mut rows = Vec::new();
     let mut mapping = Vec::new();
@@ -391,6 +398,7 @@ impl WindowSession {
                 self.set_workspace_exit_action(conn, &workspace, value);
             }
             (MenuTarget::Commands, MenuAction::Settings) => self.enter_settings(),
+            (MenuTarget::Commands, MenuAction::Layouts) => self.enter_layouts(),
             (MenuTarget::Commands, MenuAction::Keybinds) => self.enter_help(),
             (MenuTarget::Commands, MenuAction::ReloadConfig) => self.reload_config(conn),
             (MenuTarget::Commands, MenuAction::Detach) => self.detach_requested = true,

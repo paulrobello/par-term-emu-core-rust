@@ -10,6 +10,8 @@ compile_error!("this test drives the par-mux binary: build it with --features mu
 
 mod common;
 
+#[cfg(unix)]
+use base64::Engine as _;
 use common::{command, pane_ids, wait_for, wait_listening, MuxFixture};
 #[cfg(unix)]
 use common::{rerun_isolated, REEXEC_MARKER};
@@ -3217,4 +3219,142 @@ fn daemon_exits_log_their_reason() {
         logged.contains("daemon exiting (exit-when-empty)"),
         "the empty-exit reason is on the record: {logged}"
     );
+}
+
+/// The named-layout verbs: a saved layout replaces a diverged live tree.
+// Unix-only: pane-info's `cmd=` token needs the process-table snapshot,
+// which is None on Windows, and the HOME/XDG_STATE_HOME isolation of the
+// layout store does not hold there (the layouts dir resolves to %APPDATA%).
+#[cfg(unix)]
+#[test]
+fn save_load_layout_round_trip() {
+    let fixture = MuxFixture::new("lay-rt");
+    let (_daemon, _layouts) = common::spawn_daemon_with_private_layouts(&fixture);
+    wait_listening(fixture.socket());
+    let mut client = MuxClient::connect(fixture.socket()).expect("connect");
+
+    client
+        .send("new-session -s s1 sleep 30")
+        .expect("new-session s1");
+    client.send("save-layout t1").expect("save-layout");
+    client.send("new-session -s s2").expect("new-session s2");
+    assert!(session_names(&mut client).contains("s2"));
+
+    client.send("load-layout t1 -f").expect("load-layout");
+    let sessions = session_names(&mut client);
+    assert!(sessions.contains("s1"), "s1 is restored: {sessions}");
+    assert!(!sessions.contains("s2"), "s2 is gone: {sessions}");
+    let panes = client.send("list-panes").expect("list-panes").join("\n");
+    let pane = pane_ids(&panes)
+        .into_iter()
+        .next()
+        .expect("a restored pane");
+    // pane-info reports the foreground command name base64-encoded, so a
+    // restored `sleep 30` pane shows `sleep` once the respawned child runs.
+    let expected = format!(
+        "cmd={}",
+        base64::engine::general_purpose::STANDARD.encode("sleep")
+    );
+    let deadline = Instant::now() + Duration::from_secs(10);
+    loop {
+        let info = client
+            .send(&format!("pane-info -t {pane}"))
+            .expect("pane-info")
+            .join("\n");
+        if info.contains(&expected) {
+            break;
+        }
+        assert!(
+            Instant::now() < deadline,
+            "the restored pane never ran its stored command: {info}"
+        );
+        std::thread::sleep(Duration::from_millis(50));
+    }
+}
+
+// Unix-only: pane-info's `cmd=` token needs the process-table snapshot,
+// which is None on Windows, and the HOME/XDG_STATE_HOME isolation of the
+// layout store does not hold there (the layouts dir resolves to %APPDATA%).
+#[cfg(unix)]
+#[test]
+fn load_layout_refuses_live_panes_without_force() {
+    let fixture = MuxFixture::new("lay-live");
+    let (_daemon, _layouts) = common::spawn_daemon_with_private_layouts(&fixture);
+    wait_listening(fixture.socket());
+    let mut client = MuxClient::connect(fixture.socket()).expect("connect");
+
+    client.send("new-session -s keep").expect("new-session");
+    client.send("save-layout t1").expect("save-layout");
+    client.send("new-session -s extra").expect("new-session");
+
+    let reply = client
+        .send_checked_timeout("load-layout t1", common::CEILING)
+        .expect("reply");
+    assert!(!reply.ok, "load without -f is refused: {:?}", reply.body);
+    assert!(
+        reply.body.join("\n").contains("-f"),
+        "the refusal tells the client to pass -f: {:?}",
+        reply.body
+    );
+    let sessions = session_names(&mut client);
+    assert!(
+        sessions.contains("keep") && sessions.contains("extra"),
+        "the tree is unchanged: {sessions}"
+    );
+}
+
+// Unix-only: pane-info's `cmd=` token needs the process-table snapshot,
+// which is None on Windows, and the HOME/XDG_STATE_HOME isolation of the
+// layout store does not hold there (the layouts dir resolves to %APPDATA%).
+#[cfg(unix)]
+#[test]
+fn load_layout_bad_file_errors_without_swap() {
+    let fixture = MuxFixture::new("lay-bad");
+    let (_daemon, layouts) = common::spawn_daemon_with_private_layouts(&fixture);
+    wait_listening(fixture.socket());
+    let mut client = MuxClient::connect(fixture.socket()).expect("connect");
+
+    client.send("new-session -s keep").expect("new-session");
+    client.send("save-layout bad").expect("save-layout");
+    std::fs::write(layouts.join("bad.json"), "{ not json").expect("corrupt the layout file");
+
+    let reply = client
+        .send_checked_timeout("load-layout bad -f", common::CEILING)
+        .expect("reply");
+    assert!(!reply.ok, "a corrupt layout is refused: {:?}", reply.body);
+    assert!(session_names(&mut client).contains("keep"), "no swap");
+    let listed = client.send("list-layouts").expect("daemon still answers");
+    assert_eq!(listed.join("\n"), "bad");
+
+    let missing = client
+        .send_checked_timeout("load-layout nope -f", common::CEILING)
+        .expect("reply");
+    assert!(!missing.ok);
+    assert!(
+        missing.body.join("\n").contains("no such layout: nope"),
+        "{:?}",
+        missing.body
+    );
+}
+
+// Unix-only: pane-info's `cmd=` token needs the process-table snapshot,
+// which is None on Windows, and the HOME/XDG_STATE_HOME isolation of the
+// layout store does not hold there (the layouts dir resolves to %APPDATA%).
+#[cfg(unix)]
+#[test]
+fn list_layouts_lists_and_kill_layout_removes() {
+    let fixture = MuxFixture::new("lay-list");
+    let (_daemon, _layouts) = common::spawn_daemon_with_private_layouts(&fixture);
+    wait_listening(fixture.socket());
+    let mut client = MuxClient::connect(fixture.socket()).expect("connect");
+
+    client.send("new-session -s s1").expect("new-session");
+    client.send("save-layout a").expect("save a");
+    client.send("save-layout b").expect("save b");
+    assert_eq!(
+        client.send("list-layouts").expect("list").join("\n"),
+        "a\nb"
+    );
+    client.send("kill-layout a").expect("kill a");
+    assert_eq!(client.send("list-layouts").expect("list").join("\n"), "b");
 }

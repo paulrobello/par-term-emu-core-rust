@@ -2042,19 +2042,21 @@ fn panel_up_menu_click_maps_raw_host_columns() {
 
 /// The command menu's pure mapping: no header (the box's ` menu `
 /// title already names it), one row per client command (settings,
-/// keybinds, reload config, detach), the footer.
+/// layouts, keybinds, reload config, detach), the footer.
 #[test]
 fn compose_command_menu_maps_rows_to_actions() {
     let (rows, mapping) = compose_menu_panel(&MenuTarget::Commands, None, false);
     assert_eq!(rows.len(), mapping.len(), "rows and mapping stay parallel");
     assert_eq!(rows[0].text, " settings ");
-    assert_eq!(rows[1].text, " keybinds ");
-    assert_eq!(rows[2].text, " reload config ");
-    assert_eq!(rows[3].text, " detach ");
+    assert_eq!(rows[1].text, " Layouts… ");
+    assert_eq!(rows[2].text, " keybinds ");
+    assert_eq!(rows[3].text, " reload config ");
+    assert_eq!(rows[4].text, " detach ");
     assert_eq!(
         mapping,
         vec![
             Some(MenuAction::Settings),
+            Some(MenuAction::Layouts),
             Some(MenuAction::Keybinds),
             Some(MenuAction::ReloadConfig),
             Some(MenuAction::Detach),
@@ -2169,7 +2171,7 @@ fn tab_menu_opens_under_the_clicked_tab() {
 #[test]
 fn command_menu_keybinds_opens_help() {
     let (_rx, mut conn, mut session) = command_menu_session("cmdmenu-help");
-    click_menu_row(&mut session, &mut conn, 1);
+    click_menu_row(&mut session, &mut conn, 2);
     assert!(session.menu().is_none(), "the menu closed");
     assert!(session.is_help(), "keybinds opened the help panel");
     assert_eq!(
@@ -2183,7 +2185,7 @@ fn command_menu_keybinds_opens_help() {
 #[test]
 fn command_menu_reload_sends_reload_config() {
     let (rx, mut conn, mut session) = command_menu_session("cmdmenu-reload");
-    click_menu_row(&mut session, &mut conn, 2);
+    click_menu_row(&mut session, &mut conn, 3);
     assert!(session.menu().is_none(), "the menu closed");
     assert_eq!(wait_recorded(&rx, "reload-config"), "reload-config");
     assert!(
@@ -2197,10 +2199,10 @@ fn command_menu_reload_sends_reload_config() {
 #[test]
 fn command_menu_detach_requests_exit() {
     let (_rx, mut conn, mut session) = command_menu_session("cmdmenu-detach");
-    click_menu_row(&mut session, &mut conn, 4);
+    click_menu_row(&mut session, &mut conn, 5);
     assert!(session.menu().is_some(), "the footer consumes the click");
     assert!(!session.detach_requested);
-    click_menu_row(&mut session, &mut conn, 3);
+    click_menu_row(&mut session, &mut conn, 4);
     assert!(session.menu().is_none(), "the menu closed");
     assert!(session.detach_requested, "detach was requested");
 }
@@ -2287,11 +2289,11 @@ fn menu_q_and_escape_still_close() {
 #[test]
 fn menu_hover_and_keys_share_one_selection() {
     let (_rx, mut conn, mut session) = command_menu_session("menu-keys-hover");
-    // No-button motion over the `reload config` row (row 2).
-    hover_menu_row(&mut session, &mut conn, 2);
+    // No-button motion over the `reload config` row (row 3).
+    hover_menu_row(&mut session, &mut conn, 3);
     assert_eq!(
         session.menu().expect("menu up").selected,
-        2,
+        3,
         "the hover wrote the selection"
     );
     session.route_key(
@@ -2303,13 +2305,13 @@ fn menu_hover_and_keys_share_one_selection() {
     );
     assert_eq!(
         session.menu().unwrap().selected,
-        3,
+        4,
         "the arrow moved relative to the hover"
     );
     assert_eq!(
         session.renderer.overlay_highlights,
         vec![(
-            3,
+            4,
             0,
             crate::mux::attach::text_input::display_width(" detach ")
         )],
@@ -6019,4 +6021,324 @@ fn a_timed_out_pane_info_never_adopts_the_pane_as_a_window() {
     let err = resolve_window_and_pane(&mut conn, Some("%1"))
         .expect_err("a timed-out pane-info is not a window");
     assert!(err.contains("pane-info failed"), "{err}");
+}
+
+/// Test-side reads of the layouts dialog's state.
+fn layouts_state(session: &WindowSession) -> &super::super::modal_layouts::LayoutsState {
+    match &session.modal {
+        Modal::Layouts(state) => state,
+        other => panic!("no layouts dialog up: {other:?}"),
+    }
+}
+
+/// The overlay's row texts, joined for substring asserts.
+fn layouts_overlay_text(session: &WindowSession) -> String {
+    session
+        .renderer
+        .overlay
+        .as_ref()
+        .map(|o| {
+            o.1.iter()
+                .map(|r| r.text.clone())
+                .collect::<Vec<_>>()
+                .join("\n")
+        })
+        .unwrap_or_default()
+}
+
+/// A scripted daemon answering `list-layouts` with `listed`, and a
+/// session with the layouts dialog already opened over it.
+fn layouts_conn(
+    tag: &str,
+    listed: &str,
+) -> (
+    std::sync::mpsc::Receiver<(String, String)>,
+    crate::mux::attach::conn::AttachConn,
+    WindowSession,
+) {
+    let mut replies = std::collections::HashMap::new();
+    replies.insert("list-layouts".to_string(), listed.to_string());
+    let (rx, conn) = scripted_conn(tag, replies);
+    let mut session = WindowSession::new(80, 24);
+    session.enter_layouts();
+    (rx, conn, session)
+}
+
+fn escape_key(session: &mut WindowSession, conn: &mut crate::mux::attach::conn::AttachConn) {
+    session.route_key(
+        conn,
+        &par_term_emu_core::keyboard::TermKeyEvent::functional(
+            par_term_emu_core::keyboard::TermKey::Escape,
+            0,
+        ),
+    );
+}
+
+/// The command menu carries a `Layouts…` row beside Settings; activating
+/// it opens the layouts dialog on its Choose state.
+#[test]
+fn command_menu_offers_layouts_entry() {
+    use super::super::modal_layouts::LayoutsState;
+    let (rows, mapping) = compose_menu_panel(&MenuTarget::Commands, None, false);
+    assert_eq!(rows[1].text, " Layouts… ");
+    assert_eq!(mapping[1], Some(MenuAction::Layouts));
+    let (_rx, mut conn, mut session) = command_menu_session("cmdmenu-layouts");
+    click_menu_row(&mut session, &mut conn, 1);
+    assert!(session.menu().is_none(), "the menu closed");
+    assert_eq!(
+        layouts_state(&session),
+        &LayoutsState::Choose { selected: 0 }
+    );
+}
+
+/// Save… -> type a name -> Enter sends `save-layout <name>` and closes.
+#[test]
+fn layouts_save_flow_prompts_then_sends() {
+    use super::super::modal_layouts::LayoutsState;
+    let (rx, mut conn, mut session) = layouts_conn("layouts-save", "");
+    session.route_stdin_bytes(&mut conn, b"\r");
+    assert!(matches!(
+        layouts_state(&session),
+        LayoutsState::SavePrompt { .. }
+    ));
+    session.route_stdin_bytes(&mut conn, b"dev");
+    session.route_stdin_bytes(&mut conn, b"\r");
+    settle(&mut session, &mut conn);
+    assert_eq!(wait_recorded(&rx, "save-layout"), "save-layout dev");
+    assert!(matches!(session.modal, Modal::None), "dialog closed");
+}
+
+/// A name that already exists asks before overwriting; Esc cancels back
+/// to the prompt without sending, Enter confirms and sends.
+#[test]
+fn layouts_save_existing_name_confirms_overwrite() {
+    use super::super::modal_layouts::LayoutsState;
+    let (rx, mut conn, mut session) = layouts_conn("layouts-overwrite", "dev\nprod");
+    session.route_stdin_bytes(&mut conn, b"\r");
+    session.route_stdin_bytes(&mut conn, b"dev");
+    session.route_stdin_bytes(&mut conn, b"\r");
+    assert_eq!(
+        layouts_state(&session),
+        &LayoutsState::SaveConfirmOverwrite {
+            name: "dev".to_string()
+        }
+    );
+    assert!(layouts_overlay_text(&session).contains("Overwrite"));
+    escape_key(&mut session, &mut conn);
+    assert!(matches!(
+        layouts_state(&session),
+        LayoutsState::SavePrompt { .. }
+    ));
+    settle(&mut session, &mut conn);
+    assert!(
+        !drained(&rx).iter().any(|l| l.starts_with("save-layout")),
+        "Esc sent nothing"
+    );
+    // Back on the prompt: Enter re-asks, Enter again confirms.
+    session.route_stdin_bytes(&mut conn, b"\r");
+    session.route_stdin_bytes(&mut conn, b"\r");
+    settle(&mut session, &mut conn);
+    assert_eq!(wait_recorded(&rx, "save-layout"), "save-layout dev");
+    assert!(matches!(session.modal, Modal::None));
+}
+
+/// Load… lists the saved layouts, a pick asks to replace the live panes,
+/// and the confirm sends `load-layout <name> -f`; Esc at the confirm
+/// sends nothing.
+#[test]
+fn layouts_load_flow_picks_confirms_sends_force() {
+    use super::super::modal_layouts::LayoutsState;
+    let (rx, mut conn, mut session) = layouts_conn("layouts-load", "dev\nprod");
+    session.route_stdin_bytes(&mut conn, b"j");
+    session.route_stdin_bytes(&mut conn, b"\r");
+    assert_eq!(
+        layouts_state(&session),
+        &LayoutsState::LoadPick {
+            names: vec!["dev".to_string(), "prod".to_string()],
+            selected: 0
+        }
+    );
+    session.route_stdin_bytes(&mut conn, b"\r");
+    assert_eq!(
+        layouts_state(&session),
+        &LayoutsState::LoadConfirm {
+            name: "dev".to_string()
+        }
+    );
+    assert!(layouts_overlay_text(&session).contains("Replace current panes"));
+    escape_key(&mut session, &mut conn);
+    assert!(matches!(
+        layouts_state(&session),
+        LayoutsState::LoadPick { .. }
+    ));
+    settle(&mut session, &mut conn);
+    assert!(
+        !drained(&rx).iter().any(|l| l.starts_with("load-layout")),
+        "Esc at the confirm sent nothing"
+    );
+    // Back on the pick: Enter re-asks, Enter again confirms.
+    session.route_stdin_bytes(&mut conn, b"\r");
+    session.route_stdin_bytes(&mut conn, b"\r");
+    settle(&mut session, &mut conn);
+    assert_eq!(wait_recorded(&rx, "load-layout"), "load-layout dev -f");
+    assert!(matches!(session.modal, Modal::None));
+}
+
+/// A load swaps the tree under every client: the sessions-changed push
+/// closes the dialog.
+#[test]
+fn layouts_modal_closes_on_sessions_changed() {
+    let (_rx, _conn, mut session) = layouts_conn("layouts-sc", "");
+    assert!(matches!(session.modal, Modal::Layouts(_)));
+    session.handle_event(TmuxNotification::SessionsChanged);
+    assert!(matches!(session.modal, Modal::None), "dialog closed");
+    assert!(session.renderer.overlay.is_none(), "overlay dropped");
+}
+
+/// A press on a load-list row selects it and moves to the confirm.
+#[test]
+fn layouts_pointer_click_on_list_row_asks_to_confirm() {
+    use super::super::modal_layouts::LayoutsState;
+    let (_rx, mut conn, mut session) = layouts_conn("layouts-click-row", "dev\nprod");
+    session.route_stdin_bytes(&mut conn, b"j");
+    session.route_stdin_bytes(&mut conn, b"\r");
+    click_menu_row(&mut session, &mut conn, 1);
+    assert_eq!(
+        layouts_state(&session),
+        &LayoutsState::LoadConfirm {
+            name: "prod".to_string()
+        }
+    );
+}
+
+/// The footer is an overlay row, not a list row: with more layouts than
+/// fit, pressing it must not pick one.
+#[test]
+fn layouts_pointer_click_on_footer_is_consumed() {
+    use super::super::modal_layouts::LayoutsState;
+    let names: Vec<String> = (0..12).map(|i| format!("l{i:02}")).collect();
+    let (rx, mut conn, mut session) = layouts_conn("layouts-click-footer", &names.join("\n"));
+    session.route_stdin_bytes(&mut conn, b"j");
+    session.route_stdin_bytes(&mut conn, b"\r");
+    let before = layouts_state(&session).clone();
+    assert!(matches!(before, LayoutsState::LoadPick { selected: 0, .. }));
+    click_menu_row(&mut session, &mut conn, 10);
+    assert_eq!(
+        layouts_state(&session),
+        &before,
+        "footer press changed state"
+    );
+    settle(&mut session, &mut conn);
+    assert!(!drained(&rx).iter().any(|l| l.contains("load-layout")));
+}
+
+/// A press outside the box closes the dialog.
+#[test]
+fn layouts_pointer_click_outside_closes() {
+    let (_rx, mut conn, mut session) = layouts_conn("layouts-click-out", "");
+    session.route_mouse(&mut conn, sgr(0, 1, 1, false));
+    assert!(matches!(session.modal, Modal::None));
+    assert!(session.renderer.overlay.is_none());
+}
+
+/// No saved layouts: the placeholder row renders, Enter only closes.
+#[test]
+fn layouts_empty_list_shows_placeholder_and_only_closes() {
+    use super::super::modal_layouts::LayoutsState;
+    let (rx, mut conn, mut session) = layouts_conn("layouts-empty", "");
+    session.route_stdin_bytes(&mut conn, b"j");
+    session.route_stdin_bytes(&mut conn, b"\r");
+    assert!(matches!(
+        layouts_state(&session),
+        LayoutsState::LoadPick { names, .. } if names.is_empty()
+    ));
+    assert!(layouts_overlay_text(&session).contains("(no saved layouts)"));
+    click_menu_row(&mut session, &mut conn, 0);
+    assert!(
+        matches!(session.modal, Modal::Layouts(_)),
+        "row click inert"
+    );
+    session.route_stdin_bytes(&mut conn, b"\r");
+    assert!(matches!(session.modal, Modal::None));
+    settle(&mut session, &mut conn);
+    assert!(!drained(&rx).iter().any(|l| l.contains("load-layout")));
+}
+
+/// An invalid name flashes and stays on the prompt with no round trip.
+#[test]
+fn layouts_invalid_name_flashes_without_round_trip() {
+    use super::super::modal_layouts::LayoutsState;
+    let (rx, mut conn, mut session) = layouts_conn("layouts-badname", "");
+    session.route_stdin_bytes(&mut conn, b"\r");
+    session.route_stdin_bytes(&mut conn, b"a/b");
+    session.route_stdin_bytes(&mut conn, b"\r");
+    assert!(matches!(
+        layouts_state(&session),
+        LayoutsState::SavePrompt { .. }
+    ));
+    assert!(session.chrome.flash_text().is_some(), "flash shown");
+    settle(&mut session, &mut conn);
+    let sent = drained(&rx);
+    assert!(
+        !sent.iter().any(|l| l.contains("layout")),
+        "no layout verb at all: {sent:?}"
+    );
+}
+
+/// The functional-key spellings: arrows move, Backspace edits, Enter
+/// and Esc act.
+#[test]
+fn layouts_key_spellings_navigate_and_edit() {
+    use super::super::modal_layouts::LayoutsState;
+    use par_term_emu_core::keyboard::{TermKey, TermKeyEvent};
+    let (_rx, mut conn, mut session) = layouts_conn("layouts-keys", "dev");
+    let key = TermKeyEvent::functional;
+    session.route_key(&mut conn, &key(TermKey::Down, 0));
+    assert_eq!(
+        layouts_state(&session),
+        &LayoutsState::Choose { selected: 1 }
+    );
+    session.route_key(&mut conn, &key(TermKey::Up, 0));
+    assert_eq!(
+        layouts_state(&session),
+        &LayoutsState::Choose { selected: 0 }
+    );
+    session.route_key(&mut conn, &key(TermKey::Enter, 0));
+    session.route_stdin_bytes(&mut conn, b"abc");
+    session.route_key(&mut conn, &key(TermKey::Backspace, 0));
+    assert_eq!(
+        layouts_state(&session),
+        &LayoutsState::SavePrompt {
+            text: "ab".to_string()
+        }
+    );
+    escape_key(&mut session, &mut conn);
+    assert_eq!(
+        layouts_state(&session),
+        &LayoutsState::Choose { selected: 0 }
+    );
+    escape_key(&mut session, &mut conn);
+    assert!(matches!(session.modal, Modal::None));
+}
+
+/// Esc at the load confirm backs out to the pick list (cursor on the
+/// layout) and sends nothing.
+#[test]
+fn layouts_escape_from_load_confirm_backs_out_without_sending() {
+    use super::super::modal_layouts::LayoutsState;
+    let (rx, mut conn, mut session) = layouts_conn("layouts-esc-confirm", "dev\nprod");
+    session.route_stdin_bytes(&mut conn, b"j");
+    session.route_stdin_bytes(&mut conn, b"\r");
+    session.route_stdin_bytes(&mut conn, b"j");
+    session.route_stdin_bytes(&mut conn, b"\r");
+    escape_key(&mut session, &mut conn);
+    assert_eq!(
+        layouts_state(&session),
+        &LayoutsState::LoadPick {
+            names: vec!["dev".to_string(), "prod".to_string()],
+            selected: 1
+        }
+    );
+    settle(&mut session, &mut conn);
+    assert!(!drained(&rx).iter().any(|l| l.starts_with("load-layout")));
 }

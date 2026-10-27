@@ -108,6 +108,11 @@ pub enum PersistError {
     Io(std::io::Error),
     /// Encoding the state failed.
     Serialize(serde_json::Error),
+    /// A layout name outside `[A-Za-z0-9._-]+` (or `.`/`..`).
+    InvalidLayoutName {
+        /// The rejected name.
+        name: String,
+    },
 }
 
 impl std::fmt::Display for PersistError {
@@ -122,6 +127,12 @@ impl std::fmt::Display for PersistError {
             PersistError::Mux(err) => write!(f, "restore failed: {err}"),
             PersistError::Io(err) => write!(f, "state file I/O failed: {err}"),
             PersistError::Serialize(err) => write!(f, "state encoding failed: {err}"),
+            PersistError::InvalidLayoutName { name } => {
+                write!(
+                    f,
+                    "invalid layout name {name:?} (allowed: A-Z a-z 0-9 . _ -)"
+                )
+            }
         }
     }
 }
@@ -1246,6 +1257,106 @@ pub fn acquire_state_lock(state_path: &Path) -> std::io::Result<StateLock> {
     }
 }
 
+/// Where named layouts live: `<base>/par-mux/layouts`. `base` is the same
+/// test seam as [`state_file_in`].
+#[must_use]
+pub fn layouts_dir_in(base: &Path) -> PathBuf {
+    base.join("par-mux").join("layouts")
+}
+
+/// [`layouts_dir_in`] under the platform state dir.
+#[must_use]
+pub fn layouts_dir() -> PathBuf {
+    layouts_dir_in(&platform_state_dir())
+}
+
+/// Whether `name` is a safe layout file stem: non-empty, only
+/// `[A-Za-z0-9._-]`, and not `.` or `..`.
+#[must_use]
+pub fn valid_layout_name(name: &str) -> bool {
+    !name.is_empty()
+        && name != "."
+        && name != ".."
+        && name
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | '_' | '-'))
+}
+
+/// The file for layout `name`; a rejected name never reaches the filesystem.
+pub fn layout_file_in(base: &Path, name: &str) -> Result<PathBuf, PersistError> {
+    if !valid_layout_name(name) {
+        return Err(PersistError::InvalidLayoutName {
+            name: name.to_string(),
+        });
+    }
+    Ok(layouts_dir_in(base).join(format!("{name}.json")))
+}
+
+/// Capture `tree` and write it as layout `name`, overwriting any previous
+/// layout of that name. This borrows `tree` across the file write, so a
+/// caller holding the tree lock should capture under it and call
+/// [`save_layout_state_in`] after dropping it.
+pub fn save_layout_in(base: &Path, tree: &MuxTree, name: &str) -> Result<PathBuf, PersistError> {
+    save_layout_state_in(base, &tree.to_persist_state(), name)
+}
+
+/// Write an already-captured `state` as layout `name`, overwriting any
+/// previous layout of that name. Touches no tree, so it is safe off-lock.
+pub fn save_layout_state_in(
+    base: &Path,
+    state: &PersistState,
+    name: &str,
+) -> Result<PathBuf, PersistError> {
+    let target = layout_file_in(base, name)?;
+    // `Reap` skips the last-good and snapshot-history siblings, which exist
+    // for the daemon's boot state and would litter the layouts dir.
+    write_job(SaveOrigin::Reap, state, &target)?;
+    Ok(target)
+}
+
+/// Read layout `name`. Unlike [`load_or_quarantine`], a bad file is
+/// reported and left in place: it is not the daemon's boot state.
+pub fn load_layout_in(base: &Path, name: &str) -> Result<PersistState, PersistError> {
+    let text = fs::read_to_string(layout_file_in(base, name)?)?;
+    let state: PersistState = serde_json::from_str(&text)?;
+    if state.format_version != FORMAT_VERSION {
+        return Err(PersistError::UnsupportedVersion {
+            found: state.format_version,
+            supported: FORMAT_VERSION,
+        });
+    }
+    Ok(state)
+}
+
+/// Sorted names of the saved layouts; a missing directory yields none.
+#[must_use]
+pub fn list_layouts_in(base: &Path) -> Vec<String> {
+    let Ok(entries) = fs::read_dir(layouts_dir_in(base)) else {
+        return Vec::new();
+    };
+    let mut names: Vec<String> = entries
+        .flatten()
+        .filter_map(|entry| {
+            let path = entry.path();
+            if path.extension().and_then(|e| e.to_str()) != Some("json") {
+                return None;
+            }
+            path.file_stem()
+                .and_then(|s| s.to_str())
+                .filter(|s| valid_layout_name(s))
+                .map(str::to_string)
+        })
+        .collect();
+    names.sort();
+    names
+}
+
+/// Delete layout `name`; a missing layout is the I/O not-found error.
+pub fn kill_layout_in(base: &Path, name: &str) -> Result<(), PersistError> {
+    fs::remove_file(layout_file_in(base, name)?)?;
+    Ok(())
+}
+
 /// Atomically persist `tree` to `target` (D3.3): serialize to
 /// `<target>.tmp`, fsync, then rename over the target — a crash mid-save
 /// leaves either the complete previous state or a leftover tmp the next
@@ -1843,6 +1954,90 @@ mod tests {
 
     pub(super) fn tree() -> MuxTree {
         MuxTree::new(Box::new(ShellPaneFactory::default()))
+    }
+
+    #[test]
+    fn layout_name_validation() {
+        for ok in ["dev", "work-1", "a.b_c"] {
+            assert!(valid_layout_name(ok), "{ok}");
+        }
+        for bad in ["", ".", "..", "a/b", "../x", "a b", "üñî"] {
+            assert!(!valid_layout_name(bad), "{bad:?}");
+        }
+    }
+
+    #[test]
+    fn layout_save_load_round_trip() {
+        let dir = tempfile::tempdir().unwrap();
+        let tree = populated_tree();
+        let path = save_layout_in(dir.path(), &tree, "dev").unwrap();
+        assert_eq!(path, layouts_dir_in(dir.path()).join("dev.json"));
+        let loaded = load_layout_in(dir.path(), "dev").unwrap();
+        // Live panes keep producing output, so a second capture of `tree`
+        // is not comparable; the file's own JSON is the captured state.
+        let on_disk: serde_json::Value =
+            serde_json::from_str(&fs::read_to_string(&path).unwrap()).unwrap();
+        assert_eq!(serde_json::to_value(&loaded).unwrap(), on_disk);
+        assert_eq!(loaded.format_version, FORMAT_VERSION);
+        let names: Vec<&str> = loaded.sessions.iter().map(|s| s.name.as_str()).collect();
+        assert!(names.contains(&"main") && names.contains(&"other"));
+        assert!(matches!(
+            load_layout_in(dir.path(), "nope"),
+            Err(PersistError::Io(_))
+        ));
+    }
+
+    #[test]
+    fn layout_save_overwrites() {
+        let dir = tempfile::tempdir().unwrap();
+        let tree = populated_tree();
+        save_layout_in(dir.path(), &tree, "dev").unwrap();
+        save_layout_in(dir.path(), &tree, "dev").unwrap();
+        assert_eq!(list_layouts_in(dir.path()), vec!["dev".to_string()]);
+    }
+
+    #[test]
+    fn layout_list_and_kill() {
+        let dir = tempfile::tempdir().unwrap();
+        assert!(list_layouts_in(dir.path()).is_empty());
+        let tree = populated_tree();
+        save_layout_in(dir.path(), &tree, "zed").unwrap();
+        save_layout_in(dir.path(), &tree, "alpha").unwrap();
+        assert_eq!(list_layouts_in(dir.path()), ["alpha", "zed"]);
+        kill_layout_in(dir.path(), "alpha").unwrap();
+        assert_eq!(list_layouts_in(dir.path()), ["zed"]);
+        assert!(kill_layout_in(dir.path(), "alpha").is_err());
+    }
+
+    #[test]
+    fn layout_load_rejects_corrupt_file() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = layout_file_in(dir.path(), "bad").unwrap();
+        fs::create_dir_all(path.parent().unwrap()).unwrap();
+        fs::write(&path, "{ not json").unwrap();
+        assert!(matches!(
+            load_layout_in(dir.path(), "bad"),
+            Err(PersistError::Serialize(_))
+        ));
+        assert!(path.exists(), "a bad layout file is left in place");
+    }
+
+    #[test]
+    fn layout_save_state_writes_captured_state() {
+        let dir = tempfile::tempdir().unwrap();
+        let state = populated_tree().to_persist_state();
+        save_layout_state_in(dir.path(), &state, "dev").unwrap();
+        let loaded = load_layout_in(dir.path(), "dev").unwrap();
+        assert_eq!(loaded.saved_at_unix_ms, state.saved_at_unix_ms);
+        assert!(save_layout_state_in(dir.path(), &state, "../x").is_err());
+    }
+
+    #[test]
+    fn layout_rejects_bad_name_without_io() {
+        let dir = tempfile::tempdir().unwrap();
+        let err = save_layout_in(dir.path(), &populated_tree(), "../x").unwrap_err();
+        assert!(matches!(err, PersistError::InvalidLayoutName { .. }));
+        assert_eq!(fs::read_dir(dir.path()).unwrap().count(), 0);
     }
 
     /// Commands restores handed the factory, in spawn order.

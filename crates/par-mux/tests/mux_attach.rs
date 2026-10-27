@@ -6179,8 +6179,9 @@ fn render_mode_settings_dialog_opens_from_the_panel_menu() {
         .expect("menu chip press");
     host.to_child.flush().ok();
     // `settings` is panel row 1 of the menu anchored beside its chip
-    // (x0 = 19, y0 = 3): frame row y0 + 2, host row y0 + 3, SGR y0 + 4.
-    let (x0, y0) = (19usize, 3usize);
+    // (x0 = 19, y0 = 2: the 9-row box with its `Layouts…` row): frame row
+    // y0 + 2, host row y0 + 3, SGR y0 + 4.
+    let (x0, y0) = (19usize, 2usize);
     expect_screen(
         &host,
         &mut got,
@@ -6254,7 +6255,7 @@ fn render_mode_settings_notify_delivery_cycles() {
         .write_all(b"\x1b[<0;17;12M")
         .expect("menu chip press");
     host.to_child.flush().ok();
-    let (x0, y0) = (19usize, 3usize);
+    let (x0, y0) = (19usize, 2usize);
     expect_screen(
         &host,
         &mut got,
@@ -8694,7 +8695,7 @@ fn render_mode_settings_keys_tab_lists_the_respawn_chord() {
         Duration::from_secs(10),
         "the chip opens the command menu",
     );
-    let (x0, y0) = (19usize, 3usize);
+    let (x0, y0) = (19usize, 2usize);
     host.to_child
         .write_all(format!("\x1b[<0;{};{}M", x0 + 5, y0 + 4).as_bytes())
         .expect("settings click");

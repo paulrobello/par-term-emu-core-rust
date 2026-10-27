@@ -115,6 +115,12 @@
       "synopsis": "-s <pane> -t <pane> [-h|-v] [-p 1-99]"
     },
     {
+      "name": "kill-layout",
+      "features": [],
+      "flags": [],
+      "synopsis": "<name>"
+    },
+    {
       "name": "kill-pane",
       "features": [],
       "flags": [
@@ -172,6 +178,12 @@
       "synopsis": "[-J]"
     },
     {
+      "name": "list-layouts",
+      "features": [],
+      "flags": [],
+      "synopsis": ""
+    },
+    {
       "name": "list-panes",
       "features": [
         "targeted",
@@ -220,6 +232,16 @@
       "features": [],
       "flags": [],
       "synopsis": ""
+    },
+    {
+      "name": "load-layout",
+      "features": [
+        "force"
+      ],
+      "flags": [
+        "-f"
+      ],
+      "synopsis": "[-f] <name>"
     },
     {
       "name": "move-window",
@@ -381,6 +403,12 @@
         "-t"
       ],
       "synopsis": "-t <pane> [-k] [-c dir] [--] [command] (flags before the command)"
+    },
+    {
+      "name": "save-layout",
+      "features": [],
+      "flags": [],
+      "synopsis": "<name>"
     },
     {
       "name": "select-pane",

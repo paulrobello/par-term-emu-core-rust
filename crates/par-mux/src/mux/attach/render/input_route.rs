@@ -44,6 +44,10 @@ pub(super) enum Hit {
     /// A wheel while a context menu is up: move the selection by the
     /// delta (the arrows' move).
     MenuMove(isize),
+    /// A press on the layouts dialog at overlay row `row`.
+    LayoutsRow(usize),
+    /// A press outside the layouts dialog: close it.
+    LayoutsClose,
     /// A press on the in-app toast: focus its agent's pane.
     ToastPress { pane: Option<u32> },
     /// The side panel's ` new ` chip: open the new-workspace prompt.
@@ -381,6 +385,7 @@ impl WindowSession {
                 Modal::Menu(_) => |s, conn, byte| s.menu_byte(conn, byte),
                 Modal::Help(_) => |s, _, byte| s.help_byte(byte),
                 Modal::Settings(_) => |s, conn, byte| s.settings_byte(conn, byte),
+                Modal::Layouts(_) => |s, conn, byte| s.layouts_byte(conn, byte),
                 Modal::Picker(_) => |s, conn, byte| s.picker_byte(conn, byte),
             };
         for &byte in bytes {
@@ -481,6 +486,7 @@ impl WindowSession {
             Modal::Menu(_) => return self.menu_key(conn, ev),
             Modal::Help(_) => return self.help_key(ev),
             Modal::Settings(_) => return self.settings_key(ev, conn),
+            Modal::Layouts(_) => return self.layouts_key(conn, ev),
             Modal::Picker(_) => return self.picker_key(conn, ev),
             Modal::Resize => return self.resize_key(conn, ev),
             Modal::None => {}
@@ -633,6 +639,8 @@ impl WindowSession {
             Hit::SettingsClose => self.leave_settings(),
             Hit::SettingsMove(delta) => self.settings_move_selection(delta),
             Hit::MenuMove(delta) => self.menu_move(delta),
+            Hit::LayoutsRow(row) => self.layouts_click(conn, row),
+            Hit::LayoutsClose => self.leave_layouts(),
             Hit::MenuClose => self.leave_menu(),
             Hit::ToastPress { pane } => {
                 self.notify.toast_until = None;
@@ -874,6 +882,19 @@ impl WindowSession {
                 _ => Hit::Consumed,
             };
         }
+        // The layouts dialog is modal for the pointer the same way: a
+        // press on a row acts, a press outside closes, the rest is consumed.
+        if matches!(self.modal, Modal::Layouts(_)) {
+            let is_press = !mouse.release
+                && !mouse.is_motion()
+                && !mouse.is_wheel_up()
+                && !mouse.is_wheel_down();
+            return match (is_press, self.renderer.overlay_row_at(x, y)) {
+                (true, Some(row)) => Hit::LayoutsRow(row),
+                (true, None) if !self.renderer.overlay_contains(x, y) => Hit::LayoutsClose,
+                _ => Hit::Consumed,
+            };
+        }
         // The in-app toast sits over the panes: a press on it focuses the
         // agent's pane and dismisses the card.
         if matches!(self.modal, Modal::None | Modal::Scroll)
@@ -948,7 +969,12 @@ impl WindowSession {
             Modal::Prompt(_) => return Hit::Consumed,
             Modal::Picker(picker) => return self.picker_hit(picker, mouse, x, y),
             Modal::Help(_) => return help_hit(mouse),
-            Modal::None | Modal::Scroll | Modal::Menu(_) | Modal::Settings(_) | Modal::Resize => {}
+            Modal::None
+            | Modal::Scroll
+            | Modal::Menu(_)
+            | Modal::Settings(_)
+            | Modal::Layouts(_)
+            | Modal::Resize => {}
         }
         if y < self.geometry.strip_rows {
             return self.tab_strip_hit(mouse, rx);

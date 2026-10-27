@@ -678,6 +678,25 @@ pub enum MuxCommand {
     },
     /// `list-worktrees`: one row per worktree-backed workspace.
     ListWorktrees,
+    /// `save-layout <name>`: write the live tree to the named layout store.
+    SaveLayout {
+        /// The layout name (`[A-Za-z0-9._-]+`, validated daemon-side).
+        name: String,
+    },
+    /// `load-layout [-f] <name>`: replace the live tree with a stored layout.
+    LoadLayout {
+        /// The layout name.
+        name: String,
+        /// `-f`: replace the tree even though it holds live panes.
+        force: bool,
+    },
+    /// `list-layouts`: the stored layout names, one per line.
+    ListLayouts,
+    /// `kill-layout <name>`: delete a stored layout.
+    KillLayout {
+        /// The layout name.
+        name: String,
+    },
     /// Report the daemon's build stamp — the `version` wire form of
     /// [`crate::mux::build_stamp`]. Read-only, tree-free: it exists so a
     /// client can compare the daemon's core build against its own linked
@@ -788,7 +807,10 @@ impl MuxCommand {
             | MuxCommand::KillWorkspace { .. }
             | MuxCommand::WorktreeCreate { .. }
             | MuxCommand::WorktreeOpen { .. }
-            | MuxCommand::WorktreeRemove { .. } => true,
+            | MuxCommand::WorktreeRemove { .. }
+            | MuxCommand::SaveLayout { .. }
+            | MuxCommand::LoadLayout { .. }
+            | MuxCommand::KillLayout { .. } => true,
             | MuxCommand::AgentStart { .. }
             | MuxCommand::AdoptPane { .. } => true,
             // The query form reads only.
@@ -805,6 +827,7 @@ impl MuxCommand {
             | MuxCommand::ListSessions { .. }
             | MuxCommand::ListWorkspaces
             | MuxCommand::ListWorktrees
+            | MuxCommand::ListLayouts
             | MuxCommand::KillServer
             | MuxCommand::SendKeys { .. }
             | MuxCommand::CapturePane { .. }
@@ -921,6 +944,7 @@ pub(crate) const MAX_CELL_PIXELS: u16 = 512;
 mod agents;
 mod buffers;
 mod keys;
+mod layouts;
 mod panes;
 mod sessions;
 mod streams;
@@ -932,6 +956,7 @@ pub use agents::{AGENT_START_DEFAULT_TIMEOUT_MS, AGENT_START_MAX_TIMEOUT_MS};
 use buffers::*;
 pub use buffers::{NOTIFICATION_BODY_MAX, NOTIFICATION_TITLE_MAX};
 use keys::*;
+use layouts::*;
 use panes::*;
 use sessions::*;
 use streams::*;
@@ -1602,6 +1627,10 @@ const COMMANDS: &[(&str, CommandParser, &[&str])] = &[
     ("worktree-open", parse_worktree_open, &[]),
     ("worktree-remove", parse_worktree_remove, &["force"]),
     ("list-worktrees", parse_list_worktrees, &[]),
+    ("save-layout", parse_save_layout, &[]),
+    ("load-layout", parse_load_layout, &["force"]),
+    ("list-layouts", parse_list_layouts, &[]),
+    ("kill-layout", parse_kill_layout, &[]),
     ("observe-pane", parse_observe_pane, &[]),
     ("control-pane", parse_control_pane, &[]),
 ];

@@ -281,7 +281,31 @@ pub fn spawn_daemon(fixture: &MuxFixture) -> DaemonGuard {
         fixture.socket(),
         Some(&fixture.config_path()),
         fixture.state_dir(),
+        &[],
     )
+}
+
+/// [`spawn_daemon`] with the daemon's HOME (and `XDG_STATE_HOME`) pointed
+/// inside the fixture, so the platform state dir the named-layout store
+/// writes under (`persist::layouts_dir`, which ignores `--state-dir`) is
+/// the fixture's, never the developer's. Returns the layouts directory.
+#[cfg(unix)]
+pub fn spawn_daemon_with_private_layouts(fixture: &MuxFixture) -> (DaemonGuard, PathBuf) {
+    write_fixture_config(fixture, true);
+    let home = fixture.dir().join("home");
+    std::fs::create_dir_all(&home).expect("create fixture home");
+    let guard = spawn_daemon_on(
+        fixture.socket(),
+        Some(&fixture.config_path()),
+        fixture.state_dir(),
+        &[("HOME", home.as_path()), ("XDG_STATE_HOME", home.as_path())],
+    );
+    let base = if cfg!(target_os = "macos") {
+        home.join("Library").join("Application Support")
+    } else {
+        home.clone()
+    };
+    (guard, par_mux::mux::persist::layouts_dir_in(&base))
 }
 
 /// [`spawn_daemon`] under the product default: `remain-on-exit = false` —
@@ -292,6 +316,7 @@ pub fn spawn_daemon_auto_remove(fixture: &MuxFixture) -> DaemonGuard {
         fixture.socket(),
         Some(&fixture.config_path()),
         fixture.state_dir(),
+        &[],
     )
 }
 
@@ -306,7 +331,12 @@ fn write_fixture_config(fixture: &MuxFixture, remain_on_exit: bool) {
 
 /// The spawn the two policy helpers share: `--socket`, `--state-dir`,
 /// `PAR_MUX_CONFIG` when given, null stdio.
-fn spawn_daemon_on(socket: &Path, config: Option<&Path>, state_dir: PathBuf) -> DaemonGuard {
+fn spawn_daemon_on(
+    socket: &Path,
+    config: Option<&Path>,
+    state_dir: PathBuf,
+    env: &[(&str, &Path)],
+) -> DaemonGuard {
     use std::process::Stdio;
     let mut command = std::process::Command::new(env!("CARGO_BIN_EXE_par-mux"));
     // --foreground: the guard kills the process it spawned, so the spawned
@@ -322,6 +352,9 @@ fn spawn_daemon_on(socket: &Path, config: Option<&Path>, state_dir: PathBuf) -> 
         command.env("PAR_MUX_CONFIG", config);
     } else {
         command.env_remove("PAR_MUX_CONFIG");
+    }
+    for (key, value) in env {
+        command.env(key, value);
     }
     let child = command
         // Test daemons are deliberate, not nested: strip the pane marker so

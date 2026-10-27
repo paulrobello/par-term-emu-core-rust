@@ -51,6 +51,7 @@ const DEFAULT_BUFFER: &str = "default";
 mod agents;
 mod buffers;
 mod client;
+mod layouts;
 mod panes;
 mod sessions;
 mod uploads;
@@ -59,6 +60,7 @@ mod worktrees;
 use agents::*;
 use buffers::*;
 use client::*;
+use layouts::*;
 use panes::*;
 use sessions::*;
 pub(crate) use sessions::{workspace_roster_changed, workspace_roster_fingerprint};
@@ -274,6 +276,10 @@ fn route_command(
         | MuxCommand::WorktreeOpen { .. }
         | MuxCommand::WorktreeRemove { .. }
         | MuxCommand::ListWorktrees) => route_worktree_command(ctx, command),
+        command @ (MuxCommand::SaveLayout { .. }
+        | MuxCommand::LoadLayout { .. }
+        | MuxCommand::ListLayouts
+        | MuxCommand::KillLayout { .. }) => route_layout_command(ctx, command),
         command @ (MuxCommand::AgentStart { .. }
         | MuxCommand::AgentPrompt { .. }
         | MuxCommand::AgentExplain { .. }

@@ -274,6 +274,10 @@ pub(crate) fn help_rows(
                 "panel menu".to_string(),
                 "settings, keybinds, reload, detach".to_string(),
             ),
+            (
+                "menu layouts".to_string(),
+                "save or load a named layout".to_string(),
+            ),
         ],
     );
     // The scroll viewport and its editor are render-mode-only bindings:
