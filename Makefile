@@ -328,7 +328,7 @@ test-rust-streaming:
 # Load-sensitive leg (2026-10-27): tests labeled `#[ignore = "load-sensitive ..."]`
 # are skipped by every default cargo/nextest run, so a loaded host can gate
 # load-insensitive changes. This target runs exactly the labeled set;
-# test-mux-ci's nextest legs carry --include-ignored, so checkall-ci keeps full
+# test-mux-ci's nextest legs carry --run-ignored all, so checkall-ci keeps full
 # coverage and stays the done gate for changes touching labeled tests.
 .PHONY: test-rust-sensitive
 test-rust-sensitive:
@@ -729,9 +729,9 @@ test-mux-ci:
 		echo "D1 violation: sim pulled tokio, portable-pty, subtle, zeroize, prost, axum, or swash"; \
 		exit 1; \
 	fi
-	cargo nextest run --profile ci --locked -p par-mux --features attach --include-ignored
-	cargo nextest run --profile ci --locked --no-default-features --features rust-only,mux-bin,serde,attach --include-ignored
-	cargo nextest run --profile ci --locked -p par-term-emu-core --features mux,serde --include-ignored
+	cargo nextest run --profile ci --locked -p par-mux --features attach --run-ignored all
+	cargo nextest run --profile ci --locked --no-default-features --features rust-only,mux-bin,serde,attach --run-ignored all
+	cargo nextest run --profile ci --locked -p par-term-emu-core --features mux,serde --run-ignored all
 	cargo nextest run --profile ci --locked --lib --no-default-features --features rust-only,streaming,mux,serde streaming::mux_factory
 
 # Windows MSVC cross-target checks: a misplaced #[cfg(unix)] broke the Windows
