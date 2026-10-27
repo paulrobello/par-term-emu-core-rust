@@ -1060,7 +1060,11 @@ fn roster_ws(control: &mut Control, pane: &str) -> String {
 /// (no `--state-dir`, socket `par-mux-default.sock`) writes the shared
 /// daemon log from boot, and a live hook report lands there as a debug
 /// line. HOME is redirected so the platform log and state dirs resolve
-/// inside the temp dir and the developer's real log is never touched.
+/// inside the temp dir and the developer's real log is never touched. The
+/// state is seeded (start, session, stop) first because exit-when-empty
+/// defaults on: a restart whose restore comes up empty exits before any
+/// report could land, and removing the seeded log afterwards keeps the
+/// boot-line assertion attributable to the restart's own daemon.
 #[test]
 fn restart_relaunch_writes_the_default_daemon_log_with_hook_debug_lines() {
     use std::process::{Command, Stdio};
@@ -1087,6 +1091,27 @@ fn restart_relaunch_writes_the_default_daemon_log_with_hook_debug_lines() {
             .status()
             .expect("par-mux runs")
     };
+    let status = run("--no-attach");
+    assert!(
+        status.success(),
+        "the seed start's parent half exits 0: {status:?}"
+    );
+    wait_listening(&socket);
+    {
+        let mut control = Control::connect(&socket);
+        control.command("new-session -s logs");
+    }
+    let seeded = run("--stop");
+    assert!(seeded.success(), "the seed stop exits 0: {seeded:?}");
+    let log_path = if cfg!(target_os = "macos") {
+        home.path().join("Library/Logs/par-mux/daemon.log")
+    } else {
+        home.path().join(".local/state/par-mux/daemon.log")
+    };
+    // The restart's daemon re-creates the log (fork_daemon appends/creates);
+    // without this the seed daemon's lines would satisfy the boot assert.
+    std::fs::remove_file(&log_path).ok();
+
     let status = run("--restart");
     assert!(
         status.success(),
@@ -1094,11 +1119,6 @@ fn restart_relaunch_writes_the_default_daemon_log_with_hook_debug_lines() {
     );
     wait_listening(&socket);
 
-    let log_path = if cfg!(target_os = "macos") {
-        home.path().join("Library/Logs/par-mux/daemon.log")
-    } else {
-        home.path().join(".local/state/par-mux/daemon.log")
-    };
     let mut control = Control::connect(&socket);
     control.command("new-session -s logs");
     let pane = pane_ids(&control.command("list-panes").join(""))
