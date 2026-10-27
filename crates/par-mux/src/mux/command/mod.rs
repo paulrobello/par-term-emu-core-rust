@@ -613,6 +613,18 @@ pub enum MuxCommand {
         /// `None` = query.
         change: Option<RespawnChange>,
     },
+    /// Set or read a workspace's exit action (`set-exit-action -t +N
+    /// [remove|hold|shell]`): what happens when a pane in it loses its
+    /// child — `remove` runs the kill-pane cascade, `hold` keeps the
+    /// pane dead for `respawn-pane`, `shell` respawns the user's shell
+    /// in place. Replies the resulting effective value; the bare form is
+    /// a read-only query.
+    SetExitAction {
+        /// Target workspace.
+        workspace: Target<WorkspaceId>,
+        /// `None` = query.
+        action: Option<crate::mux::config::ExitAction>,
+    },
     /// Kill a workspace and every session, window, and pane in it
     /// (`kill-workspace -t +N [-g]`). A repo workspace with open linked
     /// worktree workspaces is refused unless `-g` closes the whole group.
@@ -775,6 +787,7 @@ impl MuxCommand {
             | MuxCommand::AdoptPane { .. } => true,
             // The query form reads only.
             MuxCommand::SetWorkspaceRespawn { change, .. } => change.is_some(),
+            MuxCommand::SetExitAction { action, .. } => action.is_some(),
             MuxCommand::RefreshClient { size, .. } => size.is_some(),
             // The query form reads only; a switch moves persisted pointers.
             MuxCommand::SwitchClient { target } => target.is_some(),
@@ -1516,6 +1529,7 @@ const COMMANDS: &[(&str, CommandParser, &[&str])] = &[
     ("rename-workspace", parse_rename_workspace, &[]),
     ("kill-workspace", parse_kill_workspace, &["group"]),
     ("set-workspace-respawn", parse_set_workspace_respawn, &[]),
+    ("set-exit-action", parse_set_exit_action, &[]),
     ("list-panes", parse_list_panes, &["targeted", "format"]),
     ("list-agents", parse_list_agents, &[]),
     ("list-commands", parse_list_commands, &["schema"]),

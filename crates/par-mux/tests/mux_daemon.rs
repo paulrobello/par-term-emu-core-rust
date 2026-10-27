@@ -410,6 +410,80 @@ fn sigterm_saves_state_on_the_way_out() {
     }
 }
 
+/// A workspace whose exit action is `shell` (`set-exit-action`) respawns
+/// a dead pane into a fresh shell in place — `%pane-respawned` on the
+/// same pane id, the new shell taking input — where the default
+/// (`remove`) would have cascaded the pane away.
+#[test]
+fn exit_action_shell_respawns_the_dead_pane_into_a_shell() {
+    let fixture = MuxFixture::new("exitshell");
+    let path = fixture.socket();
+    let server = MuxServer::bind(path).expect("bind");
+    let _handle = std::thread::spawn(move || server.run());
+
+    let mut client = par_mux::mux::MuxClient::connect(path).expect("connect");
+    client.send("new-session -s shell").expect("new-session");
+    let set = client
+        .send("set-exit-action -t +0 shell")
+        .expect("set-exit-action")
+        .join("\n");
+    assert_eq!(set, "shell", "the verb stores and replies the value");
+
+    // Exit the shell: instead of the kill cascade the pane respawns a
+    // shell on the same id. The reaper's crash-loop guard holds a pane
+    // that dies within its first second, so the shell is given an age
+    // before the exit. One labeled wait loop — the timeout dump names
+    // the stage that stalled (exit7 / respawn / exit9) and the pane
+    // listing, separating "the child never died" from "the reaper never
+    // respawned".
+    std::thread::sleep(Duration::from_millis(1500));
+    client.send("send-keys -t %0 'exit 7' Enter").expect("exit");
+    use par_term_emu_core::tmux_control::TmuxNotification;
+    let deadline = Instant::now() + Duration::from_secs(15);
+    let (mut saw_exit_7, mut saw_respawn, mut saw_exit_9) = (false, false, false);
+    let mut exit9_sent = false;
+    while !(saw_exit_7 && saw_respawn && saw_exit_9) {
+        if Instant::now() > deadline {
+            let listed = client.send("list-panes").expect("list").join("\n");
+            let info = client
+                .send("pane-info -t %0")
+                .expect("pane-info")
+                .join("\n");
+            panic!(
+                "stuck at exit7={saw_exit_7} respawn={saw_respawn} exit9={saw_exit_9}; panes: {listed}; info: {info}"
+            );
+        }
+        if saw_exit_7 && saw_respawn && !exit9_sent {
+            // The respawned shell is live: it exits on request with the
+            // code we hand it (an interactive shell waits for input, so
+            // only a real shell satisfies this).
+            exit9_sent = true;
+            client
+                .send("send-keys -t %0 'exit 9' Enter")
+                .expect("exit 9");
+        }
+        if let Ok(note) = client
+            .notifications()
+            .recv_timeout(Duration::from_millis(250))
+        {
+            saw_exit_7 |= matches!(
+                &note,
+                TmuxNotification::PaneExited { pane_id, exit_code: Some(7) }
+                    if pane_id == "%0"
+            );
+            saw_respawn |= matches!(
+                &note,
+                TmuxNotification::PaneRespawned { pane_id } if pane_id == "%0"
+            );
+            saw_exit_9 |= matches!(
+                &note,
+                TmuxNotification::PaneExited { pane_id, exit_code: Some(9) }
+                    if pane_id == "%0"
+            );
+        }
+    }
+}
+
 /// A pane whose child exits is HELD (remain-on-exit), not removed: the
 /// reaper announces `%pane-exited` with the exit code, the pane keeps its
 /// id, window, and frozen screen, and `respawn-pane` restarts the

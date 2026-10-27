@@ -49,6 +49,9 @@ pub(super) fn compose_menu_panel(
         close,
         MenuAction::NewWorkspace,
         MenuAction::RespawnToggle,
+        MenuAction::ExitAction("remove"),
+        MenuAction::ExitAction("hold"),
+        MenuAction::ExitAction("shell"),
     ];
     let actions: &[MenuAction] = match target {
         MenuTarget::Tab(_) => &[
@@ -78,10 +81,24 @@ pub(super) fn compose_menu_panel(
             "move to start",
             "move to end",
         ],
-        MenuTarget::Workspace(_) if group_armed => {
-            &["rename", "close group", "new", "respawn on exit"]
-        }
-        MenuTarget::Workspace(_) => &["rename", "close", "new", "respawn on exit"],
+        MenuTarget::Workspace(_) if group_armed => &[
+            "rename",
+            "close group",
+            "new",
+            "respawn on exit",
+            "exit: remove",
+            "exit: hold",
+            "exit: shell",
+        ],
+        MenuTarget::Workspace(_) => &[
+            "rename",
+            "close",
+            "new",
+            "respawn on exit",
+            "exit: remove",
+            "exit: hold",
+            "exit: shell",
+        ],
         MenuTarget::Commands => &["settings", "keybinds", "reload config", "detach"],
     };
     let mut rows = Vec::new();
@@ -370,6 +387,9 @@ impl WindowSession {
             (MenuTarget::Workspace(workspace), MenuAction::RespawnToggle) => {
                 self.toggle_workspace_respawn(conn, &workspace);
             }
+            (MenuTarget::Workspace(workspace), MenuAction::ExitAction(value)) => {
+                self.set_workspace_exit_action(conn, &workspace, value);
+            }
             (MenuTarget::Commands, MenuAction::Settings) => self.enter_settings(),
             (MenuTarget::Commands, MenuAction::Keybinds) => self.enter_help(),
             (MenuTarget::Commands, MenuAction::ReloadConfig) => self.reload_config(conn),
@@ -443,6 +463,34 @@ impl WindowSession {
                 } else {
                     format!(
                         "respawn on exit: {}",
+                        reply.body.first().map(String::as_str).unwrap_or("failed")
+                    )
+                };
+                s.chrome.flash(text);
+                s.draw_status_row();
+            },
+        );
+    }
+
+    /// The workspace menu's `exit:` rows: set the workspace's on-exit
+    /// behavior (`set-exit-action -t {id} {value}`) and flash the
+    /// resulting state the daemon replies.
+    pub(super) fn set_workspace_exit_action(
+        &mut self,
+        conn: &mut crate::mux::attach::conn::AttachConn,
+        workspace: &str,
+        value: &'static str,
+    ) {
+        self.send_then(
+            conn,
+            &format!("set-exit-action -t {workspace} {value}"),
+            |s, _, reply| {
+                let text = if reply.ok {
+                    let state = reply.body.first().map(String::as_str).unwrap_or("?");
+                    format!("exit action: {state}")
+                } else {
+                    format!(
+                        "exit action: {}",
                         reply.body.first().map(String::as_str).unwrap_or("failed")
                     )
                 };

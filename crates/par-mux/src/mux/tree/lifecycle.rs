@@ -27,6 +27,7 @@ impl MuxTree {
                 sessions: Vec::new(),
                 active: 0,
                 respawn_last: false,
+                exit_action: None,
                 worktree: None,
             },
         );
@@ -60,6 +61,38 @@ impl MuxTree {
             .ok_or(MuxError::NoSuchWorkspace(workspace_id))?
             .respawn_last = on;
         Ok(())
+    }
+
+    /// Set a workspace's exit action ([`MuxWorkspace::exit_action`]) —
+    /// `set-exit-action`'s write. The verb offers the three spellings;
+    /// `None` (inherit the daemon default) is not a verb value, so the
+    /// setter takes the option for the tree-level completeness the
+    /// restore path needs.
+    pub fn set_workspace_exit_action(
+        &mut self,
+        workspace_id: WorkspaceId,
+        action: Option<crate::mux::config::ExitAction>,
+    ) -> Result<(), MuxError> {
+        self.workspaces
+            .get_mut(&workspace_id)
+            .ok_or(MuxError::NoSuchWorkspace(workspace_id))?
+            .exit_action = action;
+        Ok(())
+    }
+
+    /// The effective exit action for `pane`'s workspace: the workspace's
+    /// explicit `set-exit-action` choice, else `default` — the daemon's
+    /// folded `[daemon] exit-action` the caller resolves (the reaper
+    /// passes the applied config's value; restore passes `remove`).
+    pub fn workspace_exit_action_of(
+        &self,
+        pane: PaneId,
+        default: crate::mux::config::ExitAction,
+    ) -> crate::mux::config::ExitAction {
+        self.workspace_of_pane(pane)
+            .and_then(|id| self.workspaces.get(&id))
+            .and_then(|ws| ws.exit_action)
+            .unwrap_or(default)
     }
 
     /// Whether `pane` is its workspace's last pane AND that workspace

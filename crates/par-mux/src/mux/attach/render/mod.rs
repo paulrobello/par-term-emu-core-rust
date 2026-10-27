@@ -1108,6 +1108,9 @@ enum MenuAction {
     NewWorkspace,
     /// Toggle the workspace's keep-one-tab respawn option.
     RespawnToggle,
+    /// The workspace menu's exit-action rows: the value word sent as
+    /// `set-exit-action -t {id} {value}`.
+    ExitAction(&'static str),
     Keybinds,
     Settings,
     ReloadConfig,

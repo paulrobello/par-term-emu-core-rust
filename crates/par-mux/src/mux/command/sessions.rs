@@ -279,6 +279,22 @@ pub(super) fn parse_set_workspace_respawn(a: &Args<'_>) -> Result<MuxCommand, St
     Ok(MuxCommand::SetWorkspaceRespawn { workspace, change })
 }
 
+/// `set-exit-action -t +N [remove|hold|shell]` — at most one value
+/// word; none is the query form.
+pub(super) fn parse_set_exit_action(a: &Args<'_>) -> Result<MuxCommand, String> {
+    let (lead, positional) = target_then_words(a)?;
+    let raw = required_target(a, &lead)?;
+    let workspace = Target::parse(raw).map_err(|_| format!("invalid workspace target: {raw}"))?;
+    let action = match positional.as_slice() {
+        [] => None,
+        [value] => Some(crate::mux::config::ExitAction::parse(value).ok_or_else(|| {
+            format!("set-exit-action: expected remove, hold, or shell, got {value:?}")
+        })?),
+        _ => return Err("set-exit-action takes at most one value".to_string()),
+    };
+    Ok(MuxCommand::SetExitAction { workspace, action })
+}
+
 /// `kill-workspace -t +N [-g]`.
 pub(super) fn parse_kill_workspace(a: &Args<'_>) -> Result<MuxCommand, String> {
     let a = a.with_value_flags(&["-t"]);

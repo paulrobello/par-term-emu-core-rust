@@ -1330,6 +1330,32 @@ fn workspace_menu_respawn_row_toggles_and_flashes_the_state() {
     assert_eq!(session.chrome.flash_text(), Some("respawn on exit: on"));
 }
 
+/// The workspace menu's `exit:` rows send `set-exit-action -t {id}
+/// {value}` and flash the state the daemon replies; the click closes
+/// the menu like every row dispatch.
+#[test]
+fn workspace_menu_exit_rows_send_set_exit_action_and_flash() {
+    let mut replies = std::collections::HashMap::new();
+    replies.insert("set-exit-action -t +2 hold".to_string(), "hold".to_string());
+    let (rx, mut conn, mut session) = two_pane_session(
+        "menu-exit",
+        FakeScript {
+            replies,
+            ..FakeScript::default()
+        },
+    );
+    session.open_menu(MenuTarget::Workspace("+2".to_string()));
+    let text = overlay_text(&session);
+    assert_eq!(text[5].trim(), "exit: remove");
+    assert_eq!(text[6].trim(), "exit: hold");
+    assert_eq!(text[7].trim(), "exit: shell");
+    session.menu_click(&mut conn, 6);
+    assert!(session.menu().is_none(), "the click closes the menu");
+    settle(&mut session, &mut conn);
+    assert_eq!(drained(&rx), vec!["set-exit-action -t +2 hold".to_string()]);
+    assert_eq!(session.chrome.flash_text(), Some("exit action: hold"));
+}
+
 /// The tab and workspace menus' remaining rows open their prompts
 /// with the right target and seed; keys/bytes other than q/Escape
 /// leave the menu up.
@@ -2194,18 +2220,15 @@ fn picker_pointer_wheels_move_and_a_click_activates() {
     assert_eq!(drained(&rx)[0], "select-workspace -t +2");
 }
 
-/// With a context menu up, wheels, motion and releases are swallowed;
-/// a press outside the panel closes the menu without reaching the pane
-/// under it (click-away, like the settings dialog).
+/// With a context menu up, motion and releases are swallowed (wheels
+/// move the selection — the wheel test below); a press outside the
+/// panel closes the menu without reaching the pane under it
+/// (click-away, like the settings dialog).
 #[test]
 fn open_menu_swallows_non_press_pointer_events() {
     let (rx, mut conn, mut session) = two_pane_session("m-menu", FakeScript::default());
     session.open_menu(MenuTarget::Commands);
-    for event in [
-        sgr(64, 40, 12, false),
-        sgr(32, 40, 12, false),
-        sgr(0, 40, 12, true),
-    ] {
+    for event in [sgr(32, 40, 12, false), sgr(0, 40, 12, true)] {
         session.route_mouse(&mut conn, event);
     }
     assert!(session.menu().is_some(), "still up");
@@ -2214,6 +2237,67 @@ fn open_menu_swallows_non_press_pointer_events() {
     assert!(!session.detach_requested && !session.is_help());
     assert!(drained(&rx).is_empty());
     assert_eq!(session.renderer.focused(), Some(1), "no click-through");
+}
+
+/// A wheel while a context menu is up moves the selection the way the
+/// arrow keys do — the same cursor, wrapping at the ends — and the
+/// menu stays up.
+#[test]
+fn menu_pointer_wheel_moves_the_selection() {
+    let (rx, mut conn, mut session) = two_pane_session("m-menuwheel", FakeScript::default());
+    session.open_menu(MenuTarget::Commands);
+    let rows: Vec<usize> = session
+        .menu()
+        .unwrap()
+        .actions
+        .iter()
+        .enumerate()
+        .filter_map(|(row, action)| action.is_some().then_some(row))
+        .collect();
+    let start = session.menu().unwrap().selected;
+    assert_eq!(start, rows[0], "the menu opens on the first action row");
+    session.route_mouse(&mut conn, sgr(65, 40, 12, false));
+    assert_eq!(
+        session.menu().unwrap().selected,
+        rows[1],
+        "wheel down moves down"
+    );
+    session.route_mouse(&mut conn, sgr(64, 40, 12, false));
+    assert_eq!(
+        session.menu().unwrap().selected,
+        rows[0],
+        "wheel up moves back up"
+    );
+    session.route_mouse(&mut conn, sgr(64, 40, 12, false));
+    assert_eq!(
+        session.menu().unwrap().selected,
+        rows[rows.len() - 1],
+        "wheel up wraps to the last action row"
+    );
+    assert!(session.menu().is_some(), "the menu stays up");
+    assert!(drained(&rx).is_empty());
+}
+
+/// With no modal up, a wheel over a pane still scrolls the pane's
+/// client-side scrollback — the modal wheel arms must not steal it.
+#[test]
+fn pane_scrollback_still_takes_the_wheel_with_no_modal() {
+    let (rx, mut conn, mut session) = two_pane_session("m-panewheel", FakeScript::default());
+    for i in 0..30 {
+        session
+            .renderer
+            .feed_output(2, format!("hist-{i:02}\r\n").as_bytes());
+    }
+    // A wheel up over the right pane (%2): the client view scrolls.
+    session.route_mouse(&mut conn, sgr(64, 60, 12, false));
+    assert_eq!(session.renderer.scroll_offset_of(2), 3, "the pane scrolled");
+    session.route_mouse(&mut conn, sgr(65, 60, 12, false));
+    assert_eq!(
+        session.renderer.scroll_offset_of(2),
+        0,
+        "wheel down returns to live"
+    );
+    assert!(drained(&rx).is_empty());
 }
 
 /// The menus' selection highlight: a no-button motion over an action

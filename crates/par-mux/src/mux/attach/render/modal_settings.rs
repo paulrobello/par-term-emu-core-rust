@@ -970,7 +970,7 @@ impl WindowSession {
 
     /// Move the selection by `delta`, clamped to the section's rows, the
     /// body's window following the selection.
-    fn settings_move_selection(&mut self, delta: isize) {
+    pub(super) fn settings_move_selection(&mut self, delta: isize) {
         if let Modal::Settings(state) = &mut self.modal {
             let count = state.section.row_count() + state.popup_rows();
             if count > 0 {

@@ -38,6 +38,12 @@ pub(super) enum Hit {
     SettingsAt { row: usize, col: usize },
     /// A press outside the settings dialog: close it.
     SettingsClose,
+    /// A wheel while the settings dialog is up: move the selection by
+    /// the delta (the arrows' move, scroll-into-view included).
+    SettingsMove(isize),
+    /// A wheel while a context menu is up: move the selection by the
+    /// delta (the arrows' move).
+    MenuMove(isize),
     /// A press on the in-app toast: focus its agent's pane.
     ToastPress { pane: Option<u32> },
     /// The side panel's ` new ` chip: open the new-workspace prompt.
@@ -625,6 +631,8 @@ impl WindowSession {
             Hit::MenuRow(row) => self.menu_click(conn, row),
             Hit::SettingsAt { row, col } => self.settings_click(conn, row, col),
             Hit::SettingsClose => self.leave_settings(),
+            Hit::SettingsMove(delta) => self.settings_move_selection(delta),
+            Hit::MenuMove(delta) => self.menu_move(delta),
             Hit::MenuClose => self.leave_menu(),
             Hit::ToastPress { pane } => {
                 self.notify.toast_until = None;
@@ -841,8 +849,15 @@ impl WindowSession {
             return self.menu_hit(mouse, x, y);
         }
         // The settings dialog is modal for the pointer, like the menu:
-        // a press on a tab or a choice acts, everything else is consumed.
+        // wheels move the selection (the arrows' move), a press on a tab
+        // or a choice acts, everything else is consumed.
         if matches!(self.modal, Modal::Settings(_)) {
+            if mouse.is_wheel_up() {
+                return Hit::SettingsMove(-1);
+            }
+            if mouse.is_wheel_down() {
+                return Hit::SettingsMove(1);
+            }
             let is_press = !mouse.release
                 && !mouse.is_motion()
                 && !mouse.is_wheel_up()
@@ -943,12 +958,19 @@ impl WindowSession {
         self.pane_area_hit(mouse, x, content_y)
     }
 
-    /// The context menu is modal for the pointer: a press on an action
-    /// row dispatches it, a press outside the box closes it (click-away,
-    /// like the settings dialog), everything else is consumed while it is
-    /// up. The modal centers over the HOST width (the pane layout already
+    /// The context menu is modal for the pointer: wheels move the
+    /// selection (the arrows' move), a press on an action row dispatches
+    /// it, a press outside the box closes it (click-away, like the
+    /// settings dialog), everything else is consumed while it is up. The
+    /// modal centers over the HOST width (the pane layout already
     /// carries the strip offset), so the click maps by the raw column.
     fn menu_hit(&self, mouse: &SgrMouse, x: u16, y: u16) -> Hit {
+        if mouse.is_wheel_up() {
+            return Hit::MenuMove(-1);
+        }
+        if mouse.is_wheel_down() {
+            return Hit::MenuMove(1);
+        }
         if !mouse.release && !mouse.is_motion() && !mouse.is_wheel_up() && !mouse.is_wheel_down() {
             if let Some(row) = self.renderer.overlay_row_at(x, y) {
                 return Hit::MenuRow(row);

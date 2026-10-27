@@ -2434,6 +2434,52 @@ fn command_menu_settings_opens_the_dialog_and_applies() {
     assert!(session.renderer.overlay.is_none());
 }
 
+/// While the settings dialog is up, wheels move the selection with the
+/// arrows' scroll-into-view: walking past the body window's bottom
+/// follows the window (`top`), walking back returns it, and no wheel
+/// ever closes the dialog.
+#[test]
+fn settings_pointer_wheel_moves_selection_with_scroll_into_view() {
+    use super::super::modal_settings::SettingsSection;
+    let (_rx, mut conn, mut session) = command_menu_session("cmdmenu-wheel");
+    session.enter_settings();
+    // The borders tab, one Tab from the opening section.
+    session.route_stdin_bytes(&mut conn, b"\t");
+    let Modal::Settings(state) = &session.modal else {
+        panic!("dialog open");
+    };
+    assert_eq!(state.section, SettingsSection::Borders);
+    let count = state.section.row_count() + state.popup_rows();
+    assert!(
+        count > 8,
+        "the borders section must overflow the 8-row body window"
+    );
+    // Wheel down to the last row: the selection walks and the body's
+    // window follows it (the arrows' scroll-into-view).
+    for _ in 0..(count - 1) {
+        session.route_mouse(&mut conn, sgr(65, 40, 12, false));
+    }
+    let Modal::Settings(state) = &session.modal else {
+        panic!("dialog open");
+    };
+    assert_eq!(state.selected, count - 1, "clamped at the last row");
+    assert_eq!(state.top, count - 8, "the window followed the selection");
+    // Wheel up all the way: back to the first row, window back at the
+    // top.
+    for _ in 0..(count - 1) {
+        session.route_mouse(&mut conn, sgr(64, 40, 12, false));
+    }
+    let Modal::Settings(state) = &session.modal else {
+        panic!("dialog open");
+    };
+    assert_eq!(state.selected, 0);
+    assert_eq!(state.top, 0);
+    assert!(
+        matches!(session.modal, Modal::Settings(_)),
+        "wheels never close the dialog"
+    );
+}
+
 /// The row sections: a toggle writes its bool and the reload applies it
 /// live, and a choice row cycles (the borders tab's `line style` and the
 /// sidebar tab's `agent lines` preset).

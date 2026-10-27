@@ -199,6 +199,16 @@ pub struct PersistWorkspace {
         serde(default, skip_serializing_if = "std::ops::Not::not")
     )]
     pub respawn_last: bool,
+    /// The workspace's explicit exit action
+    /// ([`crate::mux::tree::MuxWorkspace::exit_action`], the
+    /// `set-exit-action` choice). Absent in files written before the
+    /// option existed, and omitted while unset so those files keep
+    /// their shape.
+    #[cfg_attr(
+        feature = "serde",
+        serde(default, skip_serializing_if = "Option::is_none")
+    )]
+    pub exit_action: Option<String>,
     /// The workspace's git-worktree backing
     /// ([`crate::mux::tree::MuxWorkspace::worktree`]). Absent in files
     /// written before worktree workspaces existed and omitted for an
@@ -456,6 +466,7 @@ struct WorkspaceCapture {
     active: usize,
     sessions: Vec<SessionId>,
     respawn_last: bool,
+    exit_action: Option<crate::mux::config::ExitAction>,
     worktree: Option<crate::mux::tree::WorktreeLink>,
 }
 
@@ -501,6 +512,7 @@ impl PersistCapture {
                 name: workspace.name,
                 active_session_index: workspace.active,
                 respawn_last: workspace.respawn_last,
+                exit_action: workspace.exit_action.map(|a| a.name().to_string()),
                 worktree: workspace.worktree.as_ref().map(PersistWorktreeLink::from),
                 sessions: workspace
                     .sessions
@@ -589,6 +601,7 @@ impl MuxTree {
                     active: workspace.active,
                     sessions: workspace.sessions.clone(),
                     respawn_last: workspace.respawn_last,
+                    exit_action: workspace.exit_action,
                     worktree: workspace.worktree.clone(),
                 })
                 .collect(),
@@ -805,6 +818,10 @@ impl MuxTree {
                     sessions,
                     active,
                     respawn_last: workspace.respawn_last,
+                    exit_action: workspace
+                        .exit_action
+                        .as_deref()
+                        .and_then(crate::mux::config::ExitAction::parse),
                     worktree: workspace
                         .worktree
                         .as_ref()

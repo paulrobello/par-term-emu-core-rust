@@ -1,5 +1,7 @@
 //! Dead-pane reaping: announce exits, then hold or remove each pane.
 
+use par_term_emu_core::pty_session::PtySession;
+
 use super::*;
 
 /// The keep-one-tab respawn's crash-loop guard: a last pane whose
@@ -52,6 +54,16 @@ pub(super) struct Removal {
 /// `respawn-pane` command itself, after the `%pane-exited` broadcast, so
 /// clients see the death, then `%pane-respawned`, on the same pane id. A
 /// pane that lived under [`RESPAWN_MIN_AGE`] is held dead instead.
+///
+/// Exit actions (`set-exit-action -t +N remove|hold|shell`, the
+/// `[daemon] exit-action` default): a workspace's choice overrides the
+/// daemon default per pane. `hold` keeps every of the workspace's dead
+/// panes (keep-one-tab still restarts its last); `shell` supersedes
+/// keep-one-tab by respawning EVERY dead pane into the user's default
+/// shell, past the same crash-loop guard. A workspace that never chose
+/// (`None`) rides the daemon default, so restart-resumed panes
+/// (`[daemon.agent-append]`) inherit whatever their workspace resolved
+/// to.
 pub(super) fn reap_dead_panes(
     tree: &Arc<Mutex<MuxTree>>,
     clients: &Clients,
@@ -66,9 +78,12 @@ pub(super) fn reap_dead_panes(
     // verb sweeps too; this tick is what eventually deletes an abandoned
     // upload whose client never sent another verb).
     crate::mux::uploads::sweep_expired();
-    let remain_on_exit = config
-        .map(|config| config.lock().remain_on_exit)
-        .unwrap_or(true);
+    // The daemon's folded exit-action default (`hold` for an embedded
+    // run() server with no published config — the historical held-dead
+    // behavior). Each pane's workspace may override it.
+    let default_exit_action = config
+        .map(|config| config.lock().exit_action)
+        .unwrap_or(crate::mux::config::ExitAction::Hold);
     let mut just_died: Vec<(PaneId, Option<i32>)> = Vec::new();
     {
         let mut guard = tree.lock();
@@ -90,17 +105,29 @@ pub(super) fn reap_dead_panes(
             }
         }
     }
-    // Auto-remove (remain-on-exit = false): the kill-pane contract runs
-    // after the deaths are known, so `%pane-exited` can be broadcast ahead
-    // of the geometry notifications — the same order an explicit kill-pane
-    // of a just-died pane produces. The pane is already dead, so the
-    // removal's kill is a no-op (SEC-125); the cascade handles the
-    // window/session/workspace chain.
+    // The exit-action Remove path (the default): the kill-pane contract
+    // runs after the deaths are known, so `%pane-exited` can be broadcast
+    // ahead of the geometry notifications — the same order an explicit
+    // kill-pane of a just-died pane produces. The pane is already dead,
+    // so the removal's kill is a no-op (SEC-125); the cascade handles the
+    // window/session/workspace chain. Hold and Shell workspaces skip the
+    // cascade: their panes stay dead in the tree.
     let mut removals: Vec<Removal> = Vec::new();
     let mut workspaces_changed = false;
-    if !remain_on_exit && !just_died.is_empty() {
+    if !just_died.is_empty() {
         let fingerprint = workspace_roster_fingerprint(tree);
         for &(pane_id, _) in &just_died {
+            // The pane's workspace exit action decides the path. Hold and
+            // Shell keep the pane dead (Shell for the in-place shell
+            // respawn below, Hold outright); Remove — the default — runs
+            // the kill-pane cascade.
+            if tree
+                .lock()
+                .workspace_exit_action_of(pane_id, default_exit_action)
+                != crate::mux::config::ExitAction::Remove
+            {
+                continue;
+            }
             // Keep-one-tab opt-in: a workspace with `respawn_last` on
             // holds its last pane dead (window, session, and workspace
             // stay; the respawn below restarts it). Every other pane —
@@ -173,23 +200,37 @@ pub(super) fn reap_dead_panes(
     if workspaces_changed {
         broadcast_notification(clients, &TmuxNotification::WorkspacesChanged);
     }
-    // Keep-one-tab respawn, evaluated after the removals: of two same-tick
-    // deaths the survivor is the last pane by now. Collected under one
-    // lock, dispatched after it drops (the command takes the tree itself).
-    let respawns: Vec<PaneId> = {
+    // In-place restarts, evaluated after the removals: keep-one-tab
+    // restarts its last pane's STORED command (a Remove workspace's
+    // kill-cascade path and a Hold workspace alike), an exit-action
+    // `shell` workspace respawns EVERY dead pane into the user's default
+    // shell — superseding keep-one-tab — and both ride the crash-loop
+    // guard (a process that died younger than [`RESPAWN_MIN_AGE`] is
+    // held dead instead of looped). Collected under one lock, dispatched
+    // after it drops (the command takes the tree itself).
+    let restarts: Vec<(PaneId, Option<String>)> = {
         let guard = tree.lock();
         just_died
             .iter()
-            .map(|&(pane_id, _)| pane_id)
-            .filter(|&pane_id| {
-                guard.respawns_as_workspace_last_pane(pane_id)
-                    && guard
-                        .pane(pane_id)
-                        .is_some_and(|pane| pane.age() >= RESPAWN_MIN_AGE)
+            .filter_map(|&(pane_id, _)| {
+                let action = guard.workspace_exit_action_of(pane_id, default_exit_action);
+                let old_enough = guard
+                    .pane(pane_id)
+                    .is_some_and(|pane| pane.age() >= RESPAWN_MIN_AGE);
+                if !old_enough {
+                    return None;
+                }
+                if action == crate::mux::config::ExitAction::Shell {
+                    Some((pane_id, Some(PtySession::get_default_shell())))
+                } else if guard.respawns_as_workspace_last_pane(pane_id) {
+                    Some((pane_id, None))
+                } else {
+                    None
+                }
             })
             .collect()
     };
-    for pane_id in respawns {
+    for (pane_id, command) in restarts {
         let ctx = Ctx {
             client_id: None,
             tree,
@@ -206,7 +247,7 @@ pub(super) fn reap_dead_panes(
                 pane: crate::mux::ids::Target::Id(pane_id),
                 kill: false,
                 start_dir: None,
-                command: None,
+                command,
             },
             &ctx,
             persist,

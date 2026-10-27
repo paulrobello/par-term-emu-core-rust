@@ -594,13 +594,13 @@ fn reload_config_reports_restart_required_per_changed_setting() {
     };
     // The dispatch re-reads the stamped path (above: absent), so the
     // reply is the all-unchanged shape no matter what the host's real
-    // config.toml holds: 7 daemon settings + one line per
+    // config.toml holds: 8 daemon settings + one line per
     // daemon.agent-append kind.
     let reply = dispatch_command(parse_command("reload-config").unwrap(), &ctx, None, None);
     let unchanged = reply.lines().filter(|l| l.contains("unchanged:")).count();
     assert_eq!(
         unchanged,
-        7 + crate::mux::config::AGENT_APPEND_KINDS.len(),
+        8 + crate::mux::config::AGENT_APPEND_KINDS.len(),
         "an absent file leaves every setting unchanged: {reply}"
     );
     // The pure report over a written file: the moved/flipped settings
@@ -627,6 +627,74 @@ fn reload_config_reports_restart_required_per_changed_setting() {
     assert!(
         report.contains("unchanged: daemon.socket"),
         "an unstated setting says unchanged: {report}"
+    );
+}
+
+/// `set-exit-action`: the query form on a workspace that never chose
+/// replies the daemon's folded default, the write form stores the
+/// workspace's choice and replies its name, the query then replies the
+/// workspace's own, and the choice survives into the persisted state the
+/// next start restores.
+#[test]
+fn set_exit_action_queries_replies_and_persists() {
+    let tree = Arc::new(Mutex::new(MuxTree::new(Box::new(
+        ShellPaneFactory::default(),
+    ))));
+    let clients = Arc::new(Mutex::new(Vec::new()));
+    // The applied copy names a folded default of `hold` — what the
+    // legacy `remain-on-exit = true` would resolve to.
+    let applied = Arc::new(Mutex::new(crate::mux::config::EffectiveConfig {
+        exit_action: crate::mux::config::ExitAction::Hold,
+        ..crate::mux::config::EffectiveConfig::default()
+    }));
+    let __output_epoch: crate::mux::server::OutputEpoch = std::sync::Arc::default();
+    let ctx = Ctx {
+        output_epoch: &__output_epoch,
+        client_id: None,
+        tree: &tree,
+        clients: &clients,
+        command_number: 1,
+        shutdown: None,
+        config: Some(&applied),
+    };
+    dispatch_command(parse_command("new-workspace").unwrap(), &ctx, None, None);
+    let reply = dispatch_command(
+        parse_command("set-exit-action -t +0").unwrap(),
+        &ctx,
+        None,
+        None,
+    );
+    assert!(
+        reply.lines().any(|l| l == "hold"),
+        "the query replies the daemon default: {reply}"
+    );
+    let reply = dispatch_command(
+        parse_command("set-exit-action -t +0 shell").unwrap(),
+        &ctx,
+        None,
+        None,
+    );
+    assert!(
+        reply.lines().any(|l| l == "shell"),
+        "the write replies the stored value: {reply}"
+    );
+    let reply = dispatch_command(
+        parse_command("set-exit-action -t +0").unwrap(),
+        &ctx,
+        None,
+        None,
+    );
+    assert!(
+        reply.lines().any(|l| l == "shell"),
+        "the query now replies the workspace's own: {reply}"
+    );
+    // The persisted state carries the choice (the save the next start
+    // restores).
+    let state = tree.lock().collect_persist_capture().capture();
+    assert_eq!(
+        state.workspaces[0].exit_action.as_deref(),
+        Some("shell"),
+        "the choice rides the state save"
     );
 }
 

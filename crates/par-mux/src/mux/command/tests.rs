@@ -2034,6 +2034,37 @@ fn parses_set_workspace_respawn_values_and_query() {
 }
 
 #[test]
+fn parses_set_exit_action_values_and_query() {
+    for (word, expected) in [
+        ("remove", crate::mux::config::ExitAction::Remove),
+        ("hold", crate::mux::config::ExitAction::Hold),
+        ("shell", crate::mux::config::ExitAction::Shell),
+    ] {
+        let command = parse_command(&format!("set-exit-action -t +1 {word}")).unwrap();
+        assert_eq!(
+            command,
+            MuxCommand::SetExitAction {
+                workspace: Target::Id(WorkspaceId(1)),
+                action: Some(expected),
+            }
+        );
+        assert!(command.mutates(), "{word} saves");
+    }
+    let query = parse_command("set-exit-action -t main").unwrap();
+    assert_eq!(
+        query,
+        MuxCommand::SetExitAction {
+            workspace: Target::Name("main".to_string()),
+            action: None,
+        }
+    );
+    assert!(!query.mutates(), "the query form reads only");
+    assert!(parse_command("set-exit-action").is_err(), "-t required");
+    assert!(parse_command("set-exit-action -t +1 maybe").is_err());
+    assert!(parse_command("set-exit-action -t +1 hold shell").is_err());
+}
+
+#[test]
 fn parses_list_sessions_with_and_without_a_workspace_filter() {
     assert_eq!(
         parse_command("list-sessions").unwrap(),

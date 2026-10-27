@@ -634,6 +634,16 @@ pub struct DaemonSection {
         skip_serializing_if = "Option::is_none"
     )]
     pub remain_on_exit: Option<bool>,
+    /// The default exit action for workspaces whose `set-exit-action`
+    /// has not chosen one: `remove` (the default), `hold`, or `shell`.
+    /// When this key is absent, a `remain-on-exit = true` file maps to
+    /// `hold`; any other spelling keeps `remove`.
+    #[serde(
+        default,
+        rename = "exit-action",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub exit_action: Option<String>,
     /// Exit the daemon once it holds no sessions (or only dead panes)
     /// for the 5 s grace (tmux's `exit-empty`); attached clients do not
     /// hold it. `true` (the default)
@@ -660,6 +670,48 @@ pub struct DaemonSection {
     /// [`AgentAppendFile`]); a key the file omits stays blank.
     #[serde(default, rename = "agent-append")]
     pub agent_append: AgentAppendFile,
+}
+
+/// What happens when a pane's child process exits on its own — the
+/// `[daemon] exit-action` default and, through `set-exit-action`, each
+/// workspace's own override of it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ExitAction {
+    /// The kill-pane cascade runs: the pane goes, its window closes when
+    /// it was the last pane, an emptied session cascades with it (the
+    /// default).
+    Remove,
+    /// The pane is held dead in the tree — the legacy `remain-on-exit`
+    /// behavior, scoped to the workspace — so `respawn-pane` can restart
+    /// it in place.
+    Hold,
+    /// The pane respawns the user's default shell in place once its
+    /// process has lived at least a second (the reaper's crash-loop
+    /// guard); a faster exit holds the pane dead instead.
+    Shell,
+}
+
+impl ExitAction {
+    /// The config-file and control-verb spelling.
+    #[must_use]
+    pub fn name(self) -> &'static str {
+        match self {
+            Self::Remove => "remove",
+            Self::Hold => "hold",
+            Self::Shell => "shell",
+        }
+    }
+
+    /// Parse the config-file and control-verb spelling.
+    #[must_use]
+    pub fn parse(value: &str) -> Option<Self> {
+        match value {
+            "remove" => Some(Self::Remove),
+            "hold" => Some(Self::Hold),
+            "shell" => Some(Self::Shell),
+            _ => None,
+        }
+    }
 }
 
 /// The fully resolved settings after flags > env > file > defaults.
@@ -692,6 +744,13 @@ pub struct EffectiveConfig {
     /// once (it takes effect at the next observed death), everything
     /// else is restart-required.
     pub remain_on_exit: bool,
+    /// The daemon's default exit action: what a workspace whose
+    /// `set-exit-action` never chose does when a pane's child exits.
+    /// Folded from the file's `exit-action` key, falling back to `hold`
+    /// while the legacy `remain-on-exit` boolean is set. The third live
+    /// daemon setting: `reload-config` applies a changed value at once
+    /// (it takes effect at the next observed death).
+    pub exit_action: ExitAction,
     /// Exit the daemon once it holds no sessions (or only dead panes)
     /// for the 5 s grace; attached clients do not hold it. The second
     /// live daemon setting: the accept
@@ -749,6 +808,7 @@ impl Default for EffectiveConfig {
             pane_endpoints: false,
             expose_control_socket: false,
             remain_on_exit: false,
+            exit_action: ExitAction::Remove,
             exit_empty: true,
             border_active_color: String::new(),
             border_color: String::new(),
@@ -891,6 +951,15 @@ pub fn resolve(file: &ConfigFile, o: &Overrides) -> EffectiveConfig {
     if let Some(v) = file.daemon.remain_on_exit {
         eff.remain_on_exit = v;
     }
+    // The exit-action default folds the legacy remain-on-exit boolean:
+    // an explicit key wins, an absent key maps `remain-on-exit = true`
+    // to `hold`, and an unknown spelling keeps `remove` (the
+    // split-start-dir rule).
+    eff.exit_action = match file.daemon.exit_action.as_deref() {
+        Some(v) => ExitAction::parse(v).unwrap_or(ExitAction::Remove),
+        None if eff.remain_on_exit => ExitAction::Hold,
+        None => ExitAction::Remove,
+    };
     if let Some(v) = file.daemon.exit_empty {
         eff.exit_empty = v;
     }
@@ -1097,6 +1166,7 @@ pub fn render(eff: &EffectiveConfig) -> String {
             pane_endpoints: Some(eff.pane_endpoints),
             expose_control_socket: Some(eff.expose_control_socket),
             remain_on_exit: Some(eff.remain_on_exit),
+            exit_action: Some(eff.exit_action.name().to_string()),
             exit_empty: Some(eff.exit_empty),
             split_start_dir: Some(eff.split_start_dir.clone()),
             agent_append: AgentAppendFile {
@@ -1771,6 +1841,7 @@ pub fn reload_report(applied: &mut EffectiveConfig, file: Option<&ConfigFile>) -
             "unchanged: daemon.pane-endpoints",
             "unchanged: daemon.expose-control-socket",
             "unchanged: daemon.remain-on-exit",
+            "unchanged: daemon.exit-action",
             "unchanged: daemon.exit-empty",
             "unchanged: daemon.split-start-dir",
         ]
@@ -1824,6 +1895,15 @@ pub fn reload_report(applied: &mut EffectiveConfig, file: Option<&ConfigFile>) -
         }
         _ => "unchanged: daemon.remain-on-exit".to_string(),
     });
+    lines.push(
+        match file.daemon.exit_action.as_deref().map(ExitAction::parse) {
+            Some(Some(v)) if v != applied.exit_action => {
+                applied.exit_action = v;
+                "applied: daemon.exit-action".to_string()
+            }
+            _ => "unchanged: daemon.exit-action".to_string(),
+        },
+    );
     lines.push(match file.daemon.exit_empty {
         Some(v) if v != applied.exit_empty => {
             applied.exit_empty = v;
@@ -2181,6 +2261,7 @@ remain-on-exit = true
             pane_endpoints: true,
             expose_control_socket: true,
             remain_on_exit: true,
+            exit_action: ExitAction::Hold,
             exit_empty: true,
             border_active_color: "#00ff00".into(),
             border_color: "#202020".into(),
@@ -2320,6 +2401,63 @@ remain-on-exit = true
         assert!(!eff.remain_on_exit);
     }
 
+    /// The exit-action default: `remove` for a file silent on the key,
+    /// `hold` while the legacy `remain-on-exit = true` stands, an
+    /// explicit key winning over the boolean, and an unknown spelling
+    /// keeping `remove` (the split-start-dir rule).
+    #[test]
+    fn exit_action_resolves_from_key_remain_on_exit_and_defaults() {
+        assert_eq!(EffectiveConfig::default().exit_action, ExitAction::Remove);
+        let eff = resolve(&ConfigFile::default(), &Overrides::default());
+        assert_eq!(eff.exit_action, ExitAction::Remove);
+        let file: ConfigFile = toml::from_str("[daemon]\nremain-on-exit = true").unwrap();
+        let eff = resolve(&file, &Overrides::default());
+        assert_eq!(
+            eff.exit_action,
+            ExitAction::Hold,
+            "the legacy boolean folds to hold"
+        );
+        for spelling in ["hold", "shell", "remove"] {
+            let file: ConfigFile = toml::from_str(&format!(
+                "[daemon]\nremain-on-exit = true\nexit-action = \"{spelling}\""
+            ))
+            .unwrap();
+            let eff = resolve(&file, &Overrides::default());
+            assert_eq!(
+                eff.exit_action,
+                ExitAction::parse(spelling).unwrap(),
+                "an explicit exit-action wins over remain-on-exit"
+            );
+        }
+        let file: ConfigFile = toml::from_str("[daemon]\nexit-action = \"nonsense\"").unwrap();
+        let eff = resolve(&file, &Overrides::default());
+        assert_eq!(
+            eff.exit_action,
+            ExitAction::Remove,
+            "an unknown spelling keeps remove"
+        );
+    }
+
+    /// exit-action is the third LIVE daemon setting: a stated difference
+    /// applies to the applied copy (`applied:`), the same value or an
+    /// absent key stays `unchanged:`.
+    #[test]
+    fn reload_applies_exit_action_live() {
+        let mut applied = EffectiveConfig::default();
+        let file: ConfigFile = toml::from_str("[daemon]\nexit-action = \"shell\"").unwrap();
+        let report = reload_report(&mut applied, Some(&file));
+        assert!(
+            report.contains("applied: daemon.exit-action"),
+            "a stated difference applies live: {report}"
+        );
+        assert_eq!(applied.exit_action, ExitAction::Shell);
+        let report = reload_report(&mut applied, Some(&file));
+        assert!(
+            report.contains("unchanged: daemon.exit-action"),
+            "the same value is unchanged: {report}"
+        );
+    }
+
     /// The default rendering carries every key a user can start from.
     #[test]
     fn default_render_spells_every_setting() {
@@ -2333,6 +2471,7 @@ remain-on-exit = true
             "pane-endpoints",
             "expose-control-socket",
             "remain-on-exit",
+            "exit-action",
             "exit-empty",
             "agent-append",
         ] {

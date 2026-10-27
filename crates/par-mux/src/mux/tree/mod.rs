@@ -165,6 +165,11 @@ pub struct MuxWorkspace {
     /// place (`respawn-pane` mechanics — same pane id, its stored command
     /// and cwd) instead of holding it dead. Off by default; persisted.
     pub respawn_last: bool,
+    /// The workspace's explicit exit action (`set-exit-action`): what
+    /// happens when any pane in it loses its child. `None` inherits the
+    /// daemon's `exit-action` default (itself `hold` while the legacy
+    /// `remain-on-exit` boolean is set). Persisted.
+    pub exit_action: Option<crate::mux::config::ExitAction>,
     /// The git worktree this workspace is backed by (`worktree-create` /
     /// `worktree-open`); `None` for an ordinary workspace. Persisted.
     pub worktree: Option<WorktreeLink>,
@@ -1012,6 +1017,7 @@ impl MuxTree {
                 sessions: Vec::new(),
                 active: 0,
                 respawn_last: false,
+                exit_action: None,
                 worktree: None,
             },
         );

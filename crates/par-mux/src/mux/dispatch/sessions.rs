@@ -44,6 +44,9 @@ pub(super) fn route_session_command(ctx: &Ctx<'_>, command: MuxCommand) -> Outco
         MuxCommand::SetWorkspaceRespawn { workspace, change } => {
             cmd_set_workspace_respawn(ctx, workspace, change)
         }
+        MuxCommand::SetExitAction { workspace, action } => {
+            cmd_set_exit_action(ctx, workspace, action)
+        }
         MuxCommand::KillServer => cmd_kill_server(ctx),
         other => unreachable!("route_command sent a non-session command: {other:?}"),
     }
@@ -592,6 +595,37 @@ pub(super) fn cmd_set_workspace_respawn(
         }
     }
     Outcome::ok(ctx, if next { "on" } else { "off" })
+}
+
+/// `set-exit-action`: apply the choice (if any) and reply the resulting
+/// EFFECTIVE action — the workspace's own when it has chosen one, the
+/// daemon's folded `exit-action` default when it has not (`hold` while
+/// the legacy `remain-on-exit` boolean stands; `hold` too for an
+/// embedded server with no published config).
+pub(super) fn cmd_set_exit_action(
+    ctx: &Ctx<'_>,
+    workspace: Target<WorkspaceId>,
+    action: Option<crate::mux::config::ExitAction>,
+) -> Outcome {
+    let mut guard = ctx.tree.lock();
+    let workspace = match guard.resolve_workspace_target(workspace) {
+        Ok(id) => id,
+        Err(err) => return Outcome::err(ctx, &err.to_string()),
+    };
+    if let Some(next) = action {
+        if let Err(err) = guard.set_workspace_exit_action(workspace, Some(next)) {
+            return Outcome::err(ctx, &err.to_string());
+        }
+    }
+    let effective = guard
+        .workspace(workspace)
+        .and_then(|ws| ws.exit_action)
+        .unwrap_or_else(|| {
+            ctx.config
+                .map(|config| config.lock().exit_action)
+                .unwrap_or(crate::mux::config::ExitAction::Hold)
+        });
+    Outcome::ok(ctx, effective.name())
 }
 
 pub(super) fn cmd_kill_workspace(
