@@ -1182,6 +1182,7 @@ pub struct StateLock {
 
 /// The lock file's first line names its holder's pid, so a refusal can
 /// point the operator at the process to stop.
+#[cfg(unix)]
 fn lock_holder_pid(lock_path: &Path) -> Option<u32> {
     fs::read_to_string(lock_path)
         .ok()?
@@ -1197,8 +1198,11 @@ fn lock_holder_pid(lock_path: &Path) -> Option<u32> {
 /// where the previous daemon is mid-exit and releases within a beat; a
 /// holder that outlasts it is refused by pid so the operator can act.
 pub fn acquire_state_lock(state_path: &Path) -> std::io::Result<StateLock> {
+    #[cfg(unix)]
     let mut os = state_path.as_os_str().to_os_string();
+    #[cfg(unix)]
     os.push(".lock");
+    #[cfg(unix)]
     let lock_path = PathBuf::from(os);
 
     #[cfg(unix)]
@@ -1250,8 +1254,9 @@ pub fn acquire_state_lock(state_path: &Path) -> std::io::Result<StateLock> {
     #[cfg(windows)]
     {
         log::warn!(
-            "par-mux: state locking is not implemented on Windows; two \
-             daemons on one state file would race their saves"
+            "par-mux: state locking is not implemented on Windows; \
+             daemons serving one state file ({}) would race their saves",
+            state_path.display()
         );
         Ok(StateLock { _file: None })
     }

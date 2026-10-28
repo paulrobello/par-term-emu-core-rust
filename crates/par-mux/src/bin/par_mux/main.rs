@@ -2028,6 +2028,7 @@ fn app_handoff_launcher(
     Some(launcher)
 }
 
+#[cfg(unix)]
 fn run_detached_parent(
     cli: &Cli,
     path: &std::path::Path,
@@ -2066,10 +2067,11 @@ fn run_detached_parent(
         return Ok(std::process::ExitCode::SUCCESS);
     }
     // SAFETY: isatty takes no arguments and cannot fail.
+    #[cfg(unix)]
     if unsafe { libc::isatty(0) } != 1 {
         return Ok(std::process::ExitCode::SUCCESS);
     }
-    #[cfg(feature = "attach")]
+    #[cfg(all(unix, feature = "attach"))]
     {
         use std::os::unix::process::CommandExt as _;
         let exe = std::env::current_exe()?;
@@ -2082,10 +2084,10 @@ fn run_detached_parent(
             .exec();
         Err(err)
     }
-    #[cfg(not(feature = "attach"))]
+    #[cfg(not(all(unix, feature = "attach")))]
     {
         eprintln!(
-            "par-mux: daemon running on {} (attach client not built)",
+            "par-mux: daemon running on {} (auto-attach unavailable here)",
             path.display()
         );
         Ok(std::process::ExitCode::SUCCESS)
