@@ -155,6 +155,13 @@ struct Cli {
     #[arg(long, hide = true)]
     par_mux_in_app_wrapper: bool,
 
+    /// Confirm a `--stop` typed inside a par-mux pane that targets the
+    /// hosting daemon: the stop would kill this shell and every sibling
+    /// pane, so the unconfirmed form refuses with an explanation. Also
+    /// accepted: `--force`.
+    #[arg(long)]
+    yes: bool,
+
     /// Daemon-only: daemonize to background as usual but skip the
     /// auto-attach of the invoking terminal (and the isatty fallback that
     /// skips attaching for scripted starts).
@@ -222,8 +229,10 @@ struct Cli {
     #[arg(long)]
     gen_config: bool,
 
-    /// With --gen-config: overwrite an existing config file.
-    #[arg(long, requires = "gen_config")]
+    /// With --gen-config: overwrite an existing config file. With --stop
+    /// inside a par-mux pane: confirm the stop (an alias of `--yes`).
+    /// Without either it is rejected at dispatch.
+    #[arg(long)]
     force: bool,
 
     /// Install the bundled par-mux agent skill into the Claude Code
@@ -1102,6 +1111,16 @@ use update_cli::run_update_command;
 fn main() -> std::process::ExitCode {
     let mut cli = Cli::parse();
 
+    // `--force` was gen-config-scoped under clap's `requires`; it is now
+    // also the --stop-inside-a-pane confirmation, so the old hard pairing
+    // moves here: --force means nothing without one of its two users.
+    if cli.force && !cli.gen_config && !cli.stop {
+        eprintln!(
+            "par-mux: --force requires --gen-config (or --stop to confirm a pane-internal stop)"
+        );
+        return std::process::ExitCode::from(2);
+    }
+
     if cli.print_schema {
         print!("{}", par_mux::mux::command::COMMAND_SCHEMA_JSON);
         return std::process::ExitCode::SUCCESS;
@@ -1549,6 +1568,42 @@ fn run_status(path: &std::path::Path) -> std::process::ExitCode {
 /// The daemon modes: --stop, --restart, and serving the socket — detached
 /// with an auto-attach by default (unix), or in the foreground with
 /// --foreground.
+/// The inside-a-pane stop guard (card 01a18000): `par-mux --stop` typed
+/// inside a pane kills the daemon hosting the caller's own shell — a
+/// session died exactly this way. Refuse while the caller sits in a pane
+/// whose exported socket is the daemon being stopped, unless the stop was
+/// confirmed with `--yes`/`--force`. An explicit `--socket` naming a
+/// DIFFERENT daemon is deliberate either way and never refuses; a pane
+/// with no socket export has nothing to match against.
+fn stop_inside_pane_guard(
+    inside_pane: bool,
+    target_socket: &std::path::Path,
+    pane_socket: Option<&str>,
+    pane_control_socket: Option<&str>,
+    unconfirmed: bool,
+) -> Option<String> {
+    if !inside_pane || !unconfirmed {
+        return None;
+    }
+    let target =
+        std::fs::canonicalize(target_socket).unwrap_or_else(|_| target_socket.to_path_buf());
+    for candidate in [pane_socket, pane_control_socket].into_iter().flatten() {
+        let candidate_path = std::path::Path::new(candidate);
+        let same = std::fs::canonicalize(candidate_path)
+            .map(|canonical| canonical == target)
+            .unwrap_or_else(|_| candidate == target_socket.to_str().unwrap_or(""));
+        if same {
+            return Some(
+                "refusing to stop the daemon hosting this pane (the stop would kill \
+                 this shell and every sibling pane); re-run with --yes or --force to \
+                 confirm, or run the stop from outside par-mux"
+                    .to_string(),
+            );
+        }
+    }
+    None
+}
+
 fn run_daemon(cli: Cli, path: std::path::PathBuf) -> std::io::Result<std::process::ExitCode> {
     // Windows: a pipe-path --socket (\\.\pipe\name) names the same pipe
     // as the bare stem — strip the prefix ONCE here so every consumer
@@ -1568,6 +1623,22 @@ fn run_daemon(cli: Cli, path: std::path::PathBuf) -> std::io::Result<std::proces
         dir => par_mux::mux::persist::state_file_in(std::path::Path::new(dir), &path),
     };
     if cli.stop || cli.restart {
+        // The suicide guard (card 01a18000): a --stop typed inside a pane
+        // kills the daemon hosting the caller's own shell. Refuse while
+        // the caller sits in the pane of the daemon being stopped, unless
+        // --yes/--force confirmed it. --restart keeps its deliberate
+        // exemption (tmux's kill-server shape).
+        if cli.stop {
+            if let Some(reason) = stop_inside_pane_guard(
+                std::env::var_os("PAR_MUX_ENV").is_some(),
+                &path,
+                std::env::var("PAR_MUX_SOCKET").ok().as_deref(),
+                std::env::var("PAR_MUX_CONTROL_SOCKET").ok().as_deref(),
+                !(cli.yes || cli.force),
+            ) {
+                return Err(std::io::Error::other(reason));
+            }
+        }
         if stop_daemon(&path)? {
             eprintln!("par-mux: stopped the daemon on {}", path.display());
         } else {
@@ -1625,26 +1696,51 @@ fn run_daemon(cli: Cli, path: std::path::PathBuf) -> std::io::Result<std::proces
     // The launcher forwards our argv verbatim and execs the resolved
     // par-mux binary in the app's context; PAR_MUX_NO_APP_WRAPPER=1 opts
     // out, and an exec failure degrades to the bare start below.
-    #[cfg(target_os = "macos")]
-    if !cli.foreground && !cli.par_mux_in_app_wrapper {
-        if let Ok(exe) = std::env::current_exe() {
-            let no_wrapper = std::env::var_os("PAR_MUX_NO_APP_WRAPPER").is_some_and(|v| v == "1");
-            if let Some(launcher) = app_handoff_launcher(
-                &exe,
-                std::path::Path::new("/Applications/Par-mux.app"),
-                no_wrapper,
-            ) {
-                log::info!(
-                    "par-mux: handing the daemon start to {}",
-                    launcher.display()
-                );
-                let mut cmd = std::process::Command::new(&launcher);
-                // The marker rides first so the handed-off start knows it
-                // is already in the wrapper and never hands off again.
-                cmd.arg("--par-mux-in-app-wrapper");
-                cmd.args(std::env::args_os().skip(1));
-                let err = std::os::unix::process::CommandExt::exec(&mut cmd);
-                log::warn!("par-mux: app hand-off failed ({err}); starting the bare daemon");
+    // The whole start path below is unix-gated (fork); the hand-off is
+    // additionally macOS-gated and never fires inside a pane — an
+    // inside-pane start keeps its deliberate serve-refusal and
+    // --restart-exemption semantics byte for byte.
+    #[cfg(unix)]
+    if !cli.foreground {
+        // The nested-daemon refusal first, on the terminal rather than
+        // buried in the daemon log (--restart stays exempt: it may be
+        // typed inside a pane deliberately; the guard below still runs in
+        // the serving child for the non-exempt paths).
+        let nested = par_mux::mux::nested_daemon_refusal();
+        if let (Some(reason), false) = (nested, cli.restart) {
+            return Err(std::io::Error::other(reason));
+        }
+        // The wrapper hand-off only for starts the refusal passed: a pane
+        // keeps its own semantics (a handed-off daemon would land OUTSIDE
+        // the pane's daemon, silently dodging the nested guard).
+        #[cfg(target_os = "macos")]
+        if !cli.par_mux_in_app_wrapper && nested.is_none() {
+            if let Ok(exe) = std::env::current_exe() {
+                let no_wrapper =
+                    std::env::var_os("PAR_MUX_NO_APP_WRAPPER").is_some_and(|v| v == "1");
+                if let Some(launcher) = app_handoff_launcher(
+                    &exe,
+                    std::path::Path::new("/Applications/Par-mux.app"),
+                    no_wrapper,
+                ) {
+                    log::info!(
+                        "par-mux: handing the daemon start to {}",
+                        launcher.display()
+                    );
+                    let mut cmd = std::process::Command::new(&launcher);
+                    // The marker rides first so the handed-off start knows it
+                    // is already in the wrapper and never hands off again.
+                    cmd.arg("--par-mux-in-app-wrapper");
+                    cmd.args(std::env::args_os().skip(1));
+                    let err = std::os::unix::process::CommandExt::exec(&mut cmd);
+                    log::warn!("par-mux: app hand-off failed ({err}); starting the bare daemon");
+                }
+            }
+        }
+        match fork_daemon(Some(&daemon_log_path(&state_path, state_dir_pinned)))? {
+            ForkOutcome::Child => {} // this process serves, detached
+            ForkOutcome::Parent => {
+                return run_detached_parent(&cli, &path, &state_path, state_dir_pinned);
             }
         }
     }
@@ -1660,24 +1756,6 @@ fn run_daemon(cli: Cli, path: std::path::PathBuf) -> std::io::Result<std::proces
     // releases on exit, so the --stop/--restart handoff re-acquires
     // inside the retry window.
     let _state_lock = par_mux::mux::persist::acquire_state_lock(&state_path)?;
-    #[cfg(unix)]
-    if !cli.foreground {
-        // The nested-daemon refusal, delivered on the terminal rather than
-        // buried in the daemon log (--restart stays exempt: it may be
-        // typed inside a pane deliberately; the guard below still runs in
-        // the serving child for the non-exempt paths).
-        if !cli.restart {
-            if let Some(reason) = par_mux::mux::nested_daemon_refusal() {
-                return Err(std::io::Error::other(reason));
-            }
-        }
-        match fork_daemon(Some(&daemon_log_path(&state_path, state_dir_pinned)))? {
-            ForkOutcome::Child => {} // this process serves, detached
-            ForkOutcome::Parent => {
-                return run_detached_parent(&cli, &path, &state_path, state_dir_pinned);
-            }
-        }
-    }
 
     // Nested-daemon guard, on the path that actually serves: a daemon
     // started from inside a pane (PAR_MUX_ENV=1) would shadow the outer
@@ -2124,6 +2202,39 @@ mod mode_group_tests {
     /// the bundle hands off to the installed wrapper's launcher; the
     /// bundle's own binary, a missing launcher, and the
     /// PAR_MUX_NO_APP_WRAPPER opt-out never do.
+    /// The inside-a-pane stop guard (card 01a18000): the refusal fires
+    /// only for an inside-pane caller, an unconfirmed stop, and a socket
+    /// that matches one of the pane's exports; the confirmation flags,
+    /// an outside caller, and a different socket all pass.
+    #[test]
+    fn stop_inside_pane_guard_branches() {
+        let target = std::path::Path::new("/tmp/par-mux-host.sock");
+        let host = Some("/tmp/par-mux-host.sock");
+        // Endpoint mode exports the host socket as PAR_MUX_CONTROL_SOCKET
+        // and the pane's own hook socket as PAR_MUX_SOCKET — either
+        // naming the target is a match.
+        let control = Some("/tmp/par-mux-host.sock");
+        let other = Some("/tmp/other.sock");
+        assert!(stop_inside_pane_guard(true, target, host, control, true)
+            .expect("unconfirmed match refuses")
+            .contains("refusing to stop the daemon hosting this pane"));
+        // Either export matching is enough (endpoint mode exports both).
+        assert!(stop_inside_pane_guard(true, target, None, control, true).is_some());
+        // The confirmations and the outside caller pass through.
+        assert!(stop_inside_pane_guard(true, target, host, control, false).is_none());
+        assert!(stop_inside_pane_guard(false, target, host, control, true).is_none());
+        // A different daemon's socket is a deliberate stop.
+        assert!(stop_inside_pane_guard(true, target, other, None, true).is_none());
+        // A pane with no socket export has nothing to match.
+        assert!(stop_inside_pane_guard(true, target, None, None, true).is_none());
+        // A stale host export (the daemon is gone) does not match a live
+        // target: canonicalize fails, the string compare disagrees.
+        assert!(
+            stop_inside_pane_guard(true, target, Some("/tmp/stale-host.sock"), None, true)
+                .is_none()
+        );
+    }
+
     #[cfg(target_os = "macos")]
     #[test]
     fn app_handoff_decision() {

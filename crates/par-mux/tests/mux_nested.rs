@@ -101,6 +101,10 @@ fn daemon_with_env(fixture: &MuxFixture, envs: &[(&str, &str)]) -> OwnedDaemon {
         .arg(fixture.state_dir())
         // OwnedDaemon kills this child: it must BE the daemon.
         .arg("--foreground")
+        // The suite may run from inside a par-mux pane; the developer's
+        // PAR_MUX_ENV would trip the nested-daemon refusal on a daemon
+        // this test intends to serve.
+        .env_remove("PAR_MUX_ENV")
         .stdout(Stdio::null())
         .stderr(Stdio::null());
     for (key, value) in envs {
@@ -379,4 +383,52 @@ fn auto_spawn_inside_a_pane_is_refused_fast() {
         connect_local_stream(fixture.socket()).is_err(),
         "nothing was spawned on the socket"
     );
+}
+
+/// The suicide guard (card 01a18000): `--stop` typed inside a pane whose
+/// exported socket names the target refuses until confirmed — the stop
+/// would kill the caller's own shell and every sibling pane. The daemon
+/// keeps serving through the refusal; `--yes` and `--force` each land it.
+#[test]
+fn stop_inside_a_pane_refuses_until_confirmed() {
+    let fixture = MuxFixture::new("stinside");
+    let socket = fixture.socket().to_string_lossy().into_owned();
+    let pane = [("PAR_MUX_ENV", "1"), ("PAR_MUX_SOCKET", socket.as_str())];
+
+    // Unconfirmed, inside the pane: refused, and the daemon never noticed.
+    let _daemon = daemon_with_env(&fixture, &[]);
+    wait_listening(fixture.socket());
+    let run = par_mux_env(&["--socket", &socket, "--stop"], &pane);
+    assert_ne!(
+        run.code,
+        Some(0),
+        "the unconfirmed inside-pane stop refuses: {:?}",
+        run.stderr
+    );
+    assert!(
+        run.stderr
+            .contains("refusing to stop the daemon hosting this pane"),
+        "the refusal names the situation: {:?}",
+        run.stderr
+    );
+    let alive = par_mux_env(&["--socket", &socket, "--cmd", "list-sessions"], &[]);
+    assert!(
+        !alive.stderr.contains("%error"),
+        "the daemon keeps serving through the refusal: {:?}",
+        alive.stderr
+    );
+
+    // `--yes` confirms: the stop lands and the socket stops accepting.
+    let run = par_mux_env(&["--socket", &socket, "--stop", "--yes"], &pane);
+    assert_eq!(run.code, Some(0), "--yes confirms: {:?}", run.stderr);
+    wait_not_listening(fixture.socket());
+    drop(_daemon);
+
+    // `--force` confirms the same way on a fresh daemon.
+    let _daemon = daemon_with_env(&fixture, &[]);
+    wait_listening(fixture.socket());
+    let run = par_mux_env(&["--socket", &socket, "--stop", "--force"], &pane);
+    assert_eq!(run.code, Some(0), "--force confirms: {:?}", run.stderr);
+    wait_not_listening(fixture.socket());
+    drop(_daemon);
 }
