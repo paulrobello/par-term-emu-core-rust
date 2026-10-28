@@ -3314,6 +3314,11 @@ fn load_layout_bad_file_errors_without_swap() {
         .send_checked_timeout("load-layout bad -f", common::CEILING)
         .expect("reply");
     assert!(!reply.ok, "a corrupt layout is refused: {:?}", reply.body);
+    assert!(
+        reply.body.join("\n").contains("corrupt layout: bad"),
+        "the refusal names the layout corrupt, not serde's text: {:?}",
+        reply.body
+    );
     assert!(session_names(&mut client).contains("keep"), "no swap");
     let listed = client.send("list-layouts").expect("daemon still answers");
     assert_eq!(listed.join("\n"), "bad");

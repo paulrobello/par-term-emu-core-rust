@@ -46,12 +46,15 @@ fn cmd_save_layout(ctx: &Ctx<'_>, name: &str) -> Outcome {
 }
 
 /// A missing layout file is the common mistake (a typo); name the layout
-/// instead of surfacing the raw I/O text. Other errors keep their Display.
+/// instead of surfacing the raw I/O text. A decode failure means the file
+/// is not a layout at all, so name it corrupt instead of quoting serde's
+/// encoding text. Other errors keep their Display.
 fn layout_error_message(err: &persist::PersistError, name: &str) -> String {
     match err {
         persist::PersistError::Io(io) if io.kind() == std::io::ErrorKind::NotFound => {
             format!("no such layout: {name}")
         }
+        persist::PersistError::Serialize(_) => format!("corrupt layout: {name}"),
         other => other.to_string(),
     }
 }
