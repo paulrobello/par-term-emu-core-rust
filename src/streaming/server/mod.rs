@@ -423,7 +423,10 @@ impl WsTransport for AxumTransport {
     }
 
     async fn send(&mut self, msg: ServerMessage) -> Result<()> {
+        let encode_started = std::time::Instant::now();
         let bytes = encode_server_message(&msg)?;
+        crate::streaming::metrics::Metrics::global()
+            .record_encode_latency_ms(encode_started.elapsed().as_secs_f64() * 1000.0);
         self.socket
             .send(axum::extract::ws::Message::Binary(bytes.into()))
             .await
@@ -519,6 +522,7 @@ impl StreamingServer {
 
         // Insert into registry
         let _ = sessions.insert("default".to_string(), Arc::clone(&default_session));
+        crate::streaming::metrics::Metrics::global().session_opened();
 
         Self {
             client_count: AtomicUsize::new(0),

@@ -295,6 +295,35 @@ async fn main() -> Result<()> {
         .with_thread_ids(false)
         .init();
 
+    // OpenTelemetry metrics (kanban 01a18331): installs the global meter
+    // provider when --otel-enabled / PAR_TERM_STREAMER_OTEL_ENABLED is set;
+    // otherwise zero OTLP exports. The guard must live for the whole
+    // process — it holds the provider and flushes on drop.
+    let otel_protocol =
+        par_term_emu_core_rust::streaming::metrics::OtelProtocol::parse(&args.otel_protocol)
+            .unwrap_or_else(|| {
+                eprintln!(
+                    "par-term-streamer: invalid --otel-protocol '{}' (expected grpc|http)",
+                    args.otel_protocol
+                );
+                std::process::exit(2);
+            });
+    let otel_headers =
+        par_term_emu_core_rust::streaming::metrics::parse_otlp_headers(&args.otel_headers);
+    let _otel_guard = par_term_emu_core_rust::streaming::metrics::init(
+        args.otel_enabled,
+        otel_protocol,
+        &args.otel_endpoint,
+        otel_headers,
+        &args.otel_service_name,
+    );
+    if _otel_guard.is_some() {
+        info!(
+            "OpenTelemetry OTLP metrics enabled ({})",
+            args.otel_endpoint
+        );
+    }
+
     info!("Starting terminal streaming server");
     info!("Version: {}", env!("CARGO_PKG_VERSION"));
 

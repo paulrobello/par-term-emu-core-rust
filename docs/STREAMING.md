@@ -30,6 +30,7 @@ mode the mux daemon continues owning the sessions.
 - [Server Implementation](#server-implementation)
   - [Rust Standalone Server](#rust-standalone-server)
   - [Command-Line Options and Environment Variables](#command-line-options-and-environment-variables)
+  - [OpenTelemetry Metrics](#opentelemetry-metrics)
   - [Python Integration](#python-integration)
   - [Configuration](#configuration)
 - [Web Frontend](#web-frontend)
@@ -339,6 +340,11 @@ par-term-streamer --enable-http
 | `PAR_TERM_MACRO_LOOP` | `--macro-loop` | Loop macro playback |
 | `PAR_TERM_MUX_SOCKET` | `--mux-socket` | Mirror par-mux panes from the daemon on this socket instead of spawning shells (needs a build with the `mux` feature; see [Mux-Backed Sessions](#mux-backed-sessions)) |
 | `PAR_TERM_ALLOWED_ORIGINS` | `--allowed-origins` | Allowed browser origins (CORS/WS, SEC-005) |
+| `PAR_TERM_STREAMER_OTEL_ENABLED` | `--otel-enabled` | Export OpenTelemetry metrics over OTLP (default off; zero OTLP calls when off) |
+| `PAR_TERM_STREAMER_OTEL_ENDPOINT` | `--otel-endpoint` | OTLP collector endpoint (default `http://127.0.0.1:4317` for gRPC; with `--otel-protocol http`, the full `/v1/metrics` URL) |
+| `PAR_TERM_STREAMER_OTEL_PROTOCOL` | `--otel-protocol` | OTLP exporter transport: `grpc` (default) or `http` (protobuf POSTed to the full endpoint URL, e.g. a CF-Access-fronted collector) |
+| `PAR_TERM_STREAMER_OTEL_HEADERS` | `--otel-headers` | Newline-separated `Key: Value` headers attached to HTTP OTLP exports (e.g. CF-Access service-token pair + `Authorization: Bearer`); never logged |
+| `PAR_TERM_STREAMER_OTEL_SERVICE_NAME` | `--otel-service-name` | OTel `service.name` resource attribute (default `par-term-streamer`) |
 | *(none)* | `--preset` | Shell preset in `name=command` form (repeatable, e.g. `--preset python=python3`). Clients connect with `?preset=name` to get a session running that command |
 
 **Download Web Frontend:**
@@ -374,6 +380,46 @@ before v0.58.1, which predate the checksum asset, download with a warning
 - `solarized-dark` - Solarized Dark color scheme
 
 > **Note:** Theme names are case-sensitive and must use lowercase with hyphens.
+
+### OpenTelemetry Metrics
+
+The streamer exports health metrics over OTLP gRPC for the fleet observability
+stack (par-obs). Off by default at two levels: the `otel` cargo feature must be
+compiled in, and `--otel-enabled` / `PAR_TERM_STREAMER_OTEL_ENABLED` must be
+set — a default build carries no OpenTelemetry code, and a feature build makes
+zero OTLP calls until enabled. The exporter ships every 15 s to
+`--otel-endpoint` (default `http://127.0.0.1:4317`).
+The transport is selected by `--otel-protocol` /
+`PAR_TERM_STREAMER_OTEL_PROTOCOL` (`grpc` default, or `http` = protobuf POSTed
+to the full endpoint URL — the transport CF-Access-fronted collectors like
+par-obs's obs-ingest expose), and `--otel-headers` /
+`PAR_TERM_STREAMER_OTEL_HEADERS` carries a newline-separated `Key: Value`
+header list for the HTTP transport (e.g. the CF-Access service-token pair
+plus `Authorization: Bearer`); parsed values are never logged.
+
+```bash
+# Build with metrics support
+cargo build --locked -p par-term-emu-core-rust --no-default-features \
+  --features rust-only,streaming-bin,otel
+
+# Run against a local collector
+par-term-streamer --mux-socket ... --otel-enabled --otel-endpoint http://127.0.0.1:4317
+```
+
+Series (all prefixed `ptec.streamer.`):
+
+| Series | Kind | Meaning |
+|---|---|---|
+| `ptec.streamer.connected_clients` | up-down counter | WebSocket clients currently connected |
+| `ptec.streamer.active_sessions` | up-down counter | sessions currently in the registry |
+| `ptec.streamer.event_send_latency` | histogram (ms) | dequeue of a pane event → written on the client socket |
+| `ptec.streamer.protobuf_encode_latency` | histogram (ms) | one `ServerMessage` → protobuf bytes |
+| `ptec.streamer.client_connections` | counter | accepted client connections, by `session` + `transport` |
+| `ptec.streamer.client_reconnects` | counter | connections whose session saw a client leave within the last 5 minutes |
+| `ptec.streamer.mux_socket_errors` | counter | par-mux control-socket errors, by `operation` |
+
+`service.name` defaults to `par-term-streamer` (`--otel-service-name` to
+change).
 
 ### Python Integration
 

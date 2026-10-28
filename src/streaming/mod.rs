@@ -80,6 +80,11 @@ mod roster_watcher;
 #[cfg(feature = "streaming")]
 pub mod auth_hash;
 
+// Env-gated OpenTelemetry metrics for the streamer (kanban 01a18331): a
+// no-op stub without the `otel` feature, real instruments with it.
+#[cfg(feature = "streaming")]
+pub mod metrics;
+
 // Hand-written escape hatches for the PyDictConvert derive (ARC-003).
 #[cfg(all(
     feature = "streaming",

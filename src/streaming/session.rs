@@ -83,6 +83,9 @@ pub struct SessionMetrics {
     pub dropped_messages: AtomicUsize,
     /// Last broadcast time (epoch millis)
     pub last_broadcast_time: AtomicU64,
+    /// Last client-disconnect time (epoch millis); 0 = no disconnect yet.
+    /// Drives the reconnect heuristic for `ptec.streamer.client_reconnects`.
+    pub last_disconnect_time: AtomicU64,
 }
 
 impl SessionMetrics {
@@ -95,6 +98,7 @@ impl SessionMetrics {
             errors: AtomicUsize::new(0),
             dropped_messages: AtomicUsize::new(0),
             last_broadcast_time: AtomicU64::new(0),
+            last_disconnect_time: AtomicU64::new(0),
         }
     }
 }

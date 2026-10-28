@@ -85,11 +85,29 @@ impl StreamingServer {
         struct ViewerGuard(Arc<StreamSessionState>, uuid::Uuid);
         impl Drop for ViewerGuard {
             fn drop(&mut self) {
+                self.0
+                    .metrics
+                    .last_disconnect_time
+                    .store(now_millis(), Ordering::Relaxed);
                 self.0.viewer_leave(self.1);
+                crate::streaming::metrics::Metrics::global().client_disconnected(&self.0.id);
             }
         }
         session.viewer_join(client_id, "web");
         let _viewer = ViewerGuard(Arc::clone(&session), client_id);
+
+        // Reconnect heuristic: the session's previous client left within the
+        // reconnect window (kanban 01a18331). The wire has no stable client
+        // identity, so the session is the identity.
+        let last_leave = session.metrics.last_disconnect_time.load(Ordering::Relaxed);
+        let reconnect = last_leave > 0
+            && now_millis().saturating_sub(last_leave)
+                <= crate::streaming::metrics::RECONNECT_WINDOW_MS;
+        crate::streaming::metrics::Metrics::global().client_connected(
+            &session.id,
+            transport_label,
+            reconnect,
+        );
 
         // Send initial connection message
         let connect_msg = session.build_connect_message(&client_id.to_string(), read_only);
@@ -201,10 +219,15 @@ impl StreamingServer {
                         }
                         Err(tokio::sync::broadcast::error::RecvError::Closed) => break,
                     };
-                    if should_send(&msg, &subscriptions)
-                        && client.send(msg).await.is_err() {
+                    if should_send(&msg, &subscriptions) {
+                        let send_started = std::time::Instant::now();
+                        if client.send(msg).await.is_err() {
                             break;
                         }
+                        crate::streaming::metrics::Metrics::global().record_send_latency_ms(
+                            send_started.elapsed().as_secs_f64() * 1000.0,
+                        );
+                    }
                 }
 
                 _ = async {

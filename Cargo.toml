@@ -121,6 +121,26 @@ headers = { version = "0.4.1", optional = true }
 # System resource monitoring
 sysinfo = { version = "0.39.3", optional = true }
 
+# OpenTelemetry OTLP metrics for the streamer (kanban 01a18331), following
+# par-rt-db ENH-018: feature-gated build (default off — the default build
+# carries no OpenTelemetry code or deps) with a second runtime env gate
+# (PAR_TERM_STREAMER_OTEL_ENABLED) so a feature-built binary still makes zero
+# OTLP calls unless an operator opts in. The opentelemetry / opentelemetry_sdk
+# / opentelemetry-otlp trio releases in lockstep and breaks across minors, so
+# all three pins must move together — verify with `cargo tree -d` (no
+# duplicate opentelemetry tree).
+opentelemetry = { version = "0.33", default-features = false, optional = true }
+opentelemetry_sdk = { version = "0.33", default-features = false, features = [
+    "metrics",
+], optional = true }
+opentelemetry-otlp = { version = "0.33", default-features = false, features = [
+    "metrics",
+    "grpc-tonic",
+    "http-proto",
+    "reqwest-blocking-client",
+    "reqwest-rustls",
+], optional = true }
+
 parking_lot = "0.12.5"
 # Streaming-only: constant-time credential compares and zeroizing drops
 # (src/streaming/config.rs, auth paths). Optional so headless profiles
@@ -153,6 +173,10 @@ tower = { version = "0.5", features = ["util"] }
 # unless `rust-only` is enabled, so checkall never runs benchmarks.
 criterion = { version = "0.7", features = ["html_reports"] }
 
+# Test-only: the SDK's InMemoryMetricExporter (feature `testing`) for the otel
+# metrics unit test — feature-unified into test builds only, never shipped.
+opentelemetry_sdk = { version = "0.33", features = ["testing"] }
+
 # VTE throughput benchmarks (ENH-007). `required-features` keeps the target out
 # of everyday `cargo test` runs; run via `make bench`
 # (cargo bench --no-default-features --features rust-only).
@@ -177,6 +201,15 @@ required-features = ["ffi"]
 name = "pty_geometry"
 harness = false
 required-features = ["pty_session"]
+
+# Per-event metrics-recording overhead on the streamer's send path (kanban
+# 01a18331). Compiled with and without `otel` and interleaved to A/B the
+# recording cost against the no-op stub; run via
+# `cargo bench --bench streaming_otel --features streaming[,otel]`.
+[[bench]]
+name = "streaming_otel"
+harness = false
+required-features = ["streaming"]
 
 [features]
 default = ["python"]
@@ -206,6 +239,14 @@ streaming = ["par-term-emu-derive", "tokio", "tokio-tungstenite", "axum", "tower
 # deps the library streaming module never uses. Depends on `streaming`.
 self-update = ["par-term-emu-core/self-update"]
 streaming-bin = ["self-update", "streaming", "clap", "anyhow", "tracing", "tracing-subscriber", "reqwest", "tar", "sha2", "pty_session", "macro-yaml"]
+
+# OpenTelemetry OTLP metrics for the streaming server (kanban 01a18331,
+# patterned on par-rt-db's ENH-018). Default off everywhere — never enabled by
+# `python`, `streaming`, `streaming-bin`, or `full` — so the default build
+# compiles no OpenTelemetry code. Implies `streaming` because the instrumented
+# paths live in the streaming server. The runtime gate is
+# PAR_TERM_STREAMER_OTEL_ENABLED (see src/streaming/metrics.rs).
+otel = ["streaming", "dep:opentelemetry", "dep:opentelemetry_sdk", "dep:opentelemetry-otlp"]
 
 # Terminal multiplexer (par-mux): the `par-mux` workspace member, re-exported
 # as `crate::mux` (ARC-007 O2 Phase 2). Needs real PTYs and a local socket, so

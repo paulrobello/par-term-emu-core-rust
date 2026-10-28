@@ -97,6 +97,7 @@ impl StreamingServer {
     /// 0.61.x).
     pub fn close_session(&self, session_id: &str, reason: String) -> bool {
         if let Some(session) = self.sessions.remove(session_id) {
+            crate::streaming::metrics::Metrics::global().session_closed();
             session.shutdown(reason);
             if let Some(ref factory) = self.session_factory {
                 if factory.close_on_last_disconnect() {
@@ -197,6 +198,7 @@ impl StreamingServer {
             // Insert into registry
             self.sessions
                 .insert(session_id.clone(), Arc::clone(&session))?;
+            crate::streaming::metrics::Metrics::global().session_opened();
 
             // Setup session (spawn background tasks, etc.)
             factory.setup_session(session_id, &session)?;

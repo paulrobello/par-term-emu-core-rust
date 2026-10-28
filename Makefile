@@ -572,6 +572,17 @@ env-docs-check:
 	python3 scripts/check_env_docs.py
 	python3 scripts/check_env_docs.py --self-test
 
+# Kanban 01a18331: the streamer's OTLP metrics ride the opt-in `otel` feature,
+# which no other gate compiles — keep the feature build green and the default
+# build OTel-free (criterion 1).
+otel-check:
+	cargo check --locked --no-default-features --features rust-only,streaming,otel
+	@count=$$(cargo tree --no-default-features --features rust-only -e normal | grep -ci "^opentelemetry"); \
+	if [ "$$count" != "0" ]; then echo "ERROR: default build pulls opentelemetry ($$count refs)"; exit 1; fi
+	@dup=$$(cargo tree -d | grep -cE "^opentelemetry"); \
+	if [ "$$dup" != "0" ]; then echo "ERROR: duplicate opentelemetry tree"; exit 1; fi
+	python3 scripts/check_env_docs.py --self-test
+
 # ARC-008: the main crate's par-term-emu-derive dependency spec must name
 # derive/Cargo.toml's version (publish strips `path`, so crates.io resolves
 # the spec). Pure python3 stdlib; also runs from release-check.
@@ -685,7 +696,7 @@ audit-deps:
 	uvx --python-preference only-system pip-audit --strict -r $$reqs; \
 	status=$$?; rm -f $$reqs; exit $$status
 
-checkall: extensions-check ffi-header-check ffi-surface-check derive-version-check core-version-check doc-hidden-check api-surface-check mux-docs-check mux-schema-check completions-check env-docs-check pinned-tests-check stub-docs-check mux-package-check rustdoc-check doc-links-check test-rust test-rust-streaming lint-check stub-check test-python test-web caps-table-check
+checkall: extensions-check ffi-header-check ffi-surface-check derive-version-check core-version-check doc-hidden-check api-surface-check mux-docs-check mux-schema-check completions-check env-docs-check otel-check pinned-tests-check stub-docs-check mux-package-check rustdoc-check doc-links-check test-rust test-rust-streaming lint-check stub-check test-python test-web caps-table-check
 	@echo ""
 	@echo "======================================================================"
 	@echo "  All code quality checks passed!"

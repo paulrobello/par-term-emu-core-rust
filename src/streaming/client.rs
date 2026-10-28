@@ -49,7 +49,10 @@ where
 
     /// Send a message to this client using binary protobuf encoding
     pub async fn send(&mut self, msg: ServerMessage) -> Result<()> {
+        let encode_started = std::time::Instant::now();
         let data = encode_server_message(&msg)?;
+        crate::streaming::metrics::Metrics::global()
+            .record_encode_latency_ms(encode_started.elapsed().as_secs_f64() * 1000.0);
         self.ws
             .send(Message::Binary(data.into()))
             .await

@@ -338,6 +338,38 @@ pub struct Args {
     )]
     pub kitty_file_media: FileMediaMode,
 
+    /// Export OpenTelemetry metrics over OTLP (default off; zero OTLP calls
+    /// when off — kanban 01a18331)
+    #[arg(long, default_value = "false", env = "PAR_TERM_STREAMER_OTEL_ENABLED")]
+    pub otel_enabled: bool,
+
+    /// OTLP gRPC collector endpoint for the metrics exporter
+    #[arg(
+        long,
+        default_value = "http://127.0.0.1:4317",
+        env = "PAR_TERM_STREAMER_OTEL_ENDPOINT"
+    )]
+    pub otel_endpoint: String,
+
+    /// OTLP exporter transport: `grpc` (default) or `http` (protobuf POSTed
+    /// to the full endpoint URL — the transport CF-Access-fronted collectors
+    /// like par-obs's obs-ingest expose)
+    #[arg(long, default_value = "grpc", env = "PAR_TERM_STREAMER_OTEL_PROTOCOL")]
+    pub otel_protocol: String,
+
+    /// Newline-separated `Key: Value` headers attached to HTTP OTLP exports
+    /// (e.g. CF-Access service-token pairs). Parsed values are never logged.
+    #[arg(long, default_value = "", env = "PAR_TERM_STREAMER_OTEL_HEADERS")]
+    pub otel_headers: String,
+
+    /// OTel service.name resource attribute for exported metrics
+    #[arg(
+        long,
+        default_value = "par-term-streamer",
+        env = "PAR_TERM_STREAMER_OTEL_SERVICE_NAME"
+    )]
+    pub otel_service_name: String,
+
     /// Enable system resource statistics collection (CPU, memory, disk, network)
     #[arg(long, env = "PAR_TERM_ENABLE_SYSTEM_STATS")]
     pub enable_system_stats: bool,

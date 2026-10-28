@@ -548,6 +548,7 @@ impl SessionFactory for MuxSessionFactory {
         _shell_command: Option<&str>,
     ) -> Result<SessionFactoryResult, StreamingError> {
         let fail = |what: &str, err: io::Error| {
+            crate::streaming::metrics::Metrics::global().mux_socket_error(what);
             StreamingError::ServerError(format!(
                 "mux session '{session_id}': {what} on {}: {err}",
                 self.socket.display()
@@ -1311,7 +1312,9 @@ struct UploadWorker {
 
 impl UploadWorker {
     fn connect(&mut self) -> io::Result<PipeConn> {
-        let stream = connect_local_stream(&self.socket)?;
+        let stream = connect_local_stream(&self.socket).inspect_err(|_| {
+            crate::streaming::metrics::Metrics::global().mux_socket_error("upload-connect");
+        })?;
         let writer = stream.try_clone()?;
         let reader = MuxLines::spawn(stream)?;
         Ok(PipeConn { writer, reader })
