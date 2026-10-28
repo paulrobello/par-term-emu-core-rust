@@ -11,9 +11,13 @@
 
    Before exec it fires the TCC prompts pane children inherit from the bundle:
    Screen Recording (screencapture), Accessibility (keyboard/event control),
-   Microphone, and Local Network. Screen Recording and Accessibility have no
-   Info.plist usage key — macOS only prompts when something calls the request
-   API, so the launcher is that something. Each request is preflighted (silent
+   and Local Network. Screen Recording and Accessibility have no Info.plist
+   usage key — macOS only prompts when something calls the request API, so the
+   launcher is that something. Microphone is read as status-only and never
+   requested: the request aborts this process when the responsible bundle
+   lacks NSMicrophoneUsageDescription (TCC privacy-violation abort — every
+   pane-launched start died "Abort trap: 6" on 2026-10-27, and under pane/GUI
+   attribution the responsible bundle is par-term.app, which has no such key). Each request is preflighted (silent
    once granted) and the prompts are presented and owned by the system, so they
    outlive this process exec'ing into the daemon. Full Disk Access, Developer
    Tools, and per-target Automation have no prompt API and stay manual grants
@@ -32,8 +36,9 @@
 #include <sys/stat.h>
 #include <unistd.h>
 
-/* Microphone is requestable only through AVFoundation (Obj-C): app/permissions.m. */
-extern int par_mux_request_microphone_access(void);
+/* Microphone STATUS read only — the request aborts the process under TCC
+   (see header): AVFoundation is Obj-C, so the read lives in app/permissions.m. */
+extern int par_mux_microphone_status(void);
 
 /* Local Network has no preflight or status API: the prompt fires the first time
    the bundle's own binary touches the LAN through a CONNECT — a bare UDP sendto
@@ -89,12 +94,12 @@ static void request_permissions(void) {
     int accessibility = AXIsProcessTrustedWithOptions(opts);
     CFRelease(opts);
 
-    int microphone = par_mux_request_microphone_access();
+    int microphone = par_mux_microphone_status();
     int local_network = request_local_network_access();
     fprintf(stderr, "par-mux-app: permissions screen=%s accessibility=%s microphone=%s local_network=%s\n",
             screen ? "granted" : "asked",
             accessibility ? "granted" : "asked",
-            microphone < 0 ? "asked" : (microphone ? "granted" : "denied"),
+            microphone < 0 ? "undetermined" : (microphone ? "granted" : "denied"),
             local_network ? "probed" : "skipped");
 }
 
