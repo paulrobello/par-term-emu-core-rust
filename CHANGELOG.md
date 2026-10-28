@@ -7,6 +7,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+- **par-mux attach: reconnecting after a daemon restart no longer draws inside the dead session's scroll region** (`crates/par-mux/src/mux/attach/{mod.rs,pump.rs,render/sink.rs}`): a pane app's DECSTBM reaches the host terminal through passthrough bytes and outlives the daemon that pane ran under — the attach client cleared the screen (`ESC[2J ESC[H`) but reset the scroll region, origin mode, SGR, cursor visibility, and autowrap only on pump exit, so a reconnect (restart or not) drew the seed replay, the status row, and every later scroll inside a region sized for the pre-restart screen; render mode never reset it at all. One shared reset (`ESC[r ESC[?6l ESC[0m ESC[?25h ESC[?7h`) now precedes the clear at the guard's enter/drop, the resync replay, and render's full repaint, leaving the host shell a default terminal on detach as well. Pinned by `attach_entry_resets_stale_host_terminal_state` (both modes), red-proven against the old entry path.
+
 ## [0.70.0] - 2026-10-28
 
 ### Added

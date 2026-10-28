@@ -1038,6 +1038,13 @@ pub(crate) fn write_all_blocking<W: std::io::Write>(
     Ok(())
 }
 
+/// Host terminal state a pane app (or a killed session) may have left
+/// borrowed: scroll region, origin mode, SGR attributes, cursor visibility,
+/// autowrap. A DECSTBM sized for a pre-restart screen survives `ESC[2J` and
+/// displaces everything later drawn, scrolled, or wrapped inside it, so
+/// every clear this client writes is prefixed with the reset.
+pub(crate) const HOST_TERMINAL_RESET: &[u8] = b"\x1b[r\x1b[?6l\x1b[0m\x1b[?25h\x1b[?7h";
+
 /// RAII raw-mode guard: enters raw mode on construction, restores on drop —
 /// including on error/panic unwind, so a failed attach never leaves the
 /// host terminal in raw mode.
@@ -1061,6 +1068,7 @@ impl TerminalGuard {
         // pane apps painted outlives the session.
         if entered {
             let mut stdout = std::io::stdout().lock();
+            let _ = write_all_blocking(&mut stdout, HOST_TERMINAL_RESET);
             let _ = write_all_blocking(&mut stdout, b"\x1b[2J\x1b[H");
             let _ = stdout.flush();
         }
@@ -1077,6 +1085,7 @@ impl Drop for TerminalGuard {
     fn drop(&mut self) {
         if self.entered {
             let mut stdout = std::io::stdout().lock();
+            let _ = write_all_blocking(&mut stdout, HOST_TERMINAL_RESET);
             let _ = write_all_blocking(&mut stdout, b"\x1b[2J\x1b[H");
             let _ = stdout.flush();
             let _ = crossterm::terminal::disable_raw_mode();

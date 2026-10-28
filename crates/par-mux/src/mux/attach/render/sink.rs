@@ -35,7 +35,11 @@ impl FlushSink for StdoutSink {
     fn repaint_all(&mut self) {
         super::trace_input(format_args!("repaint_all (clear screen)"));
         let mut stdout = std::io::stdout().lock();
-        // Clear, home, hide the cursor — the renderer owns the screen.
+        // Reset whatever a pane app's passthrough bytes (or a previous
+        // session) left borrowed on the host — a DECSTBM sized for a
+        // pre-restart screen displaces every later scroll — then clear,
+        // home, hide the cursor: the renderer owns the screen.
+        let _ = stdout.write_all(crate::mux::attach::HOST_TERMINAL_RESET);
         let _ = stdout.write_all(b"\x1b[2J\x1b[H\x1b[?25l");
         let _ = stdout.flush();
     }

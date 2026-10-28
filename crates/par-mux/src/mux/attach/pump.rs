@@ -65,7 +65,10 @@ impl Session {
         // Clear before the replay: a switch lands here too, and the new
         // pane's screen must not mix with the previous pane's leftovers
         // (rows the last pane never wrote). The guard cleared at attach;
-        // this re-clears per pane-show.
+        // this re-clears per pane-show. The reset rides along: a pane app's
+        // DECSTBM reaches the host through passthrough bytes and outlives
+        // the daemon that pane ran under — the clear alone leaves it set.
+        let _ = write_all_blocking(&mut stdout, HOST_TERMINAL_RESET);
         let _ = write_all_blocking(&mut stdout, b"\x1b[2J\x1b[H");
         for line in &reply.body {
             let _ = write_all_blocking(&mut stdout, line.as_bytes());
@@ -270,10 +273,11 @@ impl Session {
         outcome
     }
 
-    /// Reset the scroll region and cursor state the status line borrowed.
+    /// Reset the host terminal state the session (or the pane app's own
+    /// passthrough bytes) left borrowed, on every exit path.
     pub(super) fn restore_region(&self) {
         let mut stdout = std::io::stdout().lock();
-        let _ = write_all_blocking(&mut stdout, b"\x1b[r\x1b[?25h");
+        let _ = write_all_blocking(&mut stdout, HOST_TERMINAL_RESET);
         let _ = stdout.flush();
     }
 

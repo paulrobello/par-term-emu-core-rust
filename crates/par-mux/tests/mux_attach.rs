@@ -1074,6 +1074,42 @@ fn detach_restores_the_terminal_region() {
     }
 }
 
+/// The restart-reattach contract (2026-10-28 garble report): a pane app's
+/// DECSTBM and the other modes its passthrough bytes set on the host
+/// outlive the daemon that pane ran under, and `ESC[2J` does not touch a
+/// scroll region. Everything the reconnect then draws — the seed replay,
+/// the status row, the renderer's frames — scrolled or wrapped inside the
+/// stale region, sized for the pre-restart screen. Every entry path must
+/// reset the borrowed state before the clear, in both modes.
+#[cfg(unix)]
+#[ignore = "load-sensitive: PTY/timing suite; run via make test-rust-sensitive or checkall-ci"]
+#[test]
+fn attach_entry_resets_stale_host_terminal_state() {
+    for mode in ["passthrough", "render"] {
+        let (fixture, _daemon, _client) = fixture_with_session("stale-region");
+        let (mut host, stderr) = match mode {
+            "passthrough" => spawn_attach(&fixture, &[]),
+            _ => spawn_attach_render(&fixture, &[]),
+        };
+        let startup = wait_for_output(&host, b"\x1b[2J", Duration::from_secs(10));
+        let reset: &[u8] = b"\x1b[r\x1b[?6l\x1b[0m\x1b[?25h\x1b[?7h";
+        assert!(
+            startup.windows(reset.len()).any(|w| w == reset),
+            "{mode} attach must reset the host terminal state (DECSTBM, origin \
+             mode, SGR, cursor visibility, autowrap) at entry: {:?}\nstderr: {}",
+            String::from_utf8_lossy(&startup),
+            stderr.lock().unwrap()
+        );
+        assert!(
+            startup.windows(reset.len()).position(|w| w == reset)
+                < startup.windows(4).position(|w| w == b"\x1b[2J"),
+            "{mode} attach must reset before the clear: {:?}",
+            String::from_utf8_lossy(&startup)
+        );
+        host.killer.kill().ok();
+    }
+}
+
 /// Acceptance criterion 3: prefix pane switching issues a daemon-side
 /// select and a resync redraw. Split the pane, then prefix o; the client's
 /// output shows the NEW pane's content (the resync of the other pane).
