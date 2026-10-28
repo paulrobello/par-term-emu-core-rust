@@ -840,9 +840,10 @@ impl WindowSession {
     }
 
     /// What one host mouse report hits, in the router's precedence order:
-    /// the context menu, the side panel's strip, a drag in flight, the
-    /// prompt, the picker, the help panel, the tab strip row, then the
-    /// pane area. Reads state only — [`Self::route_mouse`] applies it.
+    /// an in-flight text drag's release, the context menu, the side
+    /// panel's strip, a drag in flight, the prompt, the picker, the help
+    /// panel, the tab strip row, then the pane area. Reads state only —
+    /// [`Self::route_mouse`] applies it.
     pub(super) fn mouse_hit(&self, mouse: &SgrMouse) -> Hit {
         // Window-relative, 0-based host coordinates.
         let Some(x) = mouse.col.checked_sub(1) else {
@@ -853,6 +854,25 @@ impl WindowSession {
         };
         let strip = self.renderer.sidebar_width();
 
+        // A text-selection drag in flight ends at its RELEASE, above
+        // every other branch: the press armed it and the release is its
+        // match, and each full-pointer modal (menu, settings, layouts)
+        // consumes every event while it is up, so a release landing
+        // there used to be swallowed and the drag stayed armed until the
+        // next release after the modal closed. Motion stays modal-gated:
+        // a modal that owns the pointer takes precedence over a stale
+        // armed drag.
+        if self.text_drag.is_some()
+            && (mouse.release
+                || (mouse.is_motion() && matches!(self.modal, Modal::None | Modal::Scroll)))
+        {
+            let (x, content_y) = self.geometry.host_to_content_clamped(x, y);
+            return Hit::TextDrag {
+                x,
+                y: content_y,
+                release: mouse.release,
+            };
+        }
         if matches!(self.modal, Modal::Menu(_)) {
             return self.menu_hit(mouse, x, y);
         }
@@ -945,22 +965,6 @@ impl WindowSession {
         // strip row saturates to content row 0.
         if self.drag.is_some() && (mouse.release || mouse.is_motion()) {
             return Hit::Drag {
-                x,
-                y: content_y,
-                release: mouse.release,
-            };
-        }
-        // A text-selection drag in flight follows the pointer the same
-        // way, and a RELEASE always ends it — the press armed it and the
-        // release is its match; a release swallowed by another branch
-        // left the drag armed: every wheel consumed, the selection
-        // sweeping on hover. Motion stays modal-gated: a modal that owns
-        // the pointer takes precedence over a stale armed drag.
-        if self.text_drag.is_some()
-            && (mouse.release
-                || (mouse.is_motion() && matches!(self.modal, Modal::None | Modal::Scroll)))
-        {
-            return Hit::TextDrag {
                 x,
                 y: content_y,
                 release: mouse.release,

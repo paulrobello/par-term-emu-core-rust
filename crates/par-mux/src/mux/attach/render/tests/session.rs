@@ -785,6 +785,108 @@ fn text_selection_release_over_the_sidebar_ends_the_selection() {
     );
 }
 
+/// A text-selection drag armed BEFORE a full-pointer modal (settings
+/// here; the menu and the layouts dialog route identically) ends at its
+/// release even while the modal is up: each of those modals consumes
+/// every event, so the release used to be swallowed and the drag stayed
+/// armed until the next release after the modal closed. Motion while
+/// the modal is up stays modal-gated — it neither sweeps nor scrolls.
+#[test]
+fn text_selection_release_under_a_full_pointer_modal_ends_the_selection() {
+    let (rx, mut conn) = recording_conn("text-modal");
+    let mut session = WindowSession::new(80, 25);
+    session
+        .renderer
+        .apply_layout(parse_layout(TWO_PANE_LAYOUT).expect("parses"));
+    while rx
+        .recv_timeout(std::time::Duration::from_millis(150))
+        .is_ok()
+    {}
+    for i in 0..6 {
+        session
+            .renderer
+            .feed_output(1, format!("pane one line {i}\r\n").as_bytes());
+    }
+
+    // Press in pane 1 (mouse Off → the press arms a selection drag),
+    // motion inside the pane activates it.
+    session.route_mouse(
+        &mut conn,
+        SgrMouse {
+            cb: 0,
+            col: 30,
+            row: 6,
+            release: false,
+        },
+    );
+    assert!(
+        matches!(session.text_drag, Some(TextDrag::Pending { .. })),
+        "the press arms a selection drag"
+    );
+    session.route_mouse(
+        &mut conn,
+        SgrMouse {
+            cb: 32,
+            col: 34,
+            row: 7,
+            release: false,
+        },
+    );
+    assert!(
+        matches!(session.text_drag, Some(TextDrag::Active { .. })),
+        "the motion activates the selection"
+    );
+    let swept = session.renderer.selection;
+
+    // Open the settings dialog — a full-pointer modal — while the drag
+    // is armed.
+    session.enter_settings();
+    assert!(matches!(session.modal, Modal::Settings(_)));
+
+    // Motion under the modal is consumed by it: the drag neither
+    // extends nor scrolls.
+    session.route_mouse(
+        &mut conn,
+        SgrMouse {
+            cb: 32,
+            col: 60,
+            row: 12,
+            release: false,
+        },
+    );
+    assert_eq!(
+        session.renderer.selection, swept,
+        "motion under the modal must not extend the selection"
+    );
+    assert!(
+        matches!(session.text_drag, Some(TextDrag::Active { .. })),
+        "the modal-up motion leaves the drag armed"
+    );
+
+    // The first release ends the selection even under the modal.
+    session.route_mouse(
+        &mut conn,
+        SgrMouse {
+            cb: 0,
+            col: 40,
+            row: 10,
+            release: true,
+        },
+    );
+    assert!(
+        session.text_drag.is_none(),
+        "the release under the modal must end the selection"
+    );
+    assert!(
+        session.renderer.selection.is_none(),
+        "the release copies what was swept and clears it"
+    );
+    assert!(
+        matches!(session.modal, Modal::Settings(_)),
+        "the release is the drag's alone: the dialog stays up"
+    );
+}
+
 /// The drag's resize steps are throttled: one `resize-pane` per
 /// interval at most, the unapplied remainder held back while motions
 /// keep arriving faster, and the release flushes what is left so the
