@@ -159,6 +159,14 @@ pub struct StreamSessionState {
     /// `build_connect_message` stamps each replayed `Connected.graphics`
     /// frame with its pane. `None` for direct-PTY sessions.
     pub(crate) graphics_panes: RwLock<Option<GraphicsPaneMap>>,
+    /// Current pane of a workspace-active mirror, shared by its factory
+    /// (`follows_active` links only) so `build_connect_message` reports the
+    /// resolved `pane-N` as `Connected.session_id` — a client dialing
+    /// `?session=workspace-active` learns which pane landed without a
+    /// control round-trip. Retargets write this mutex (`set_target`), so a
+    /// later handshake names the pane being mirrored right now. `None` for
+    /// every other session: the requested id echoes verbatim.
+    pub(crate) connected_pane: RwLock<Option<Arc<Mutex<u32>>>>,
     /// Per-session metrics
     pub metrics: SessionMetrics,
 }
@@ -202,6 +210,7 @@ impl StreamSessionState {
             theme,
             send_initial_screen,
             graphics_panes: RwLock::new(None),
+            connected_pane: RwLock::new(None),
             metrics: SessionMetrics::new(),
         }
     }
@@ -310,7 +319,10 @@ impl StreamSessionState {
     /// images it missed. Mux-backed sessions stamp each frame with its
     /// pane (the mirror factory's side map, keyed by graphics id; a
     /// `workspace-active` re-seed retags the entries it replaces);
-    /// direct-PTY sessions replay untagged. The replay itself is bounded
+    /// direct-PTY sessions replay untagged. A workspace-active dial's
+    /// `session_id` is the resolved `pane-N` of the pane being mirrored at
+    /// handshake time, not the sentinel; every other id echoes verbatim.
+    /// The replay itself is bounded
     /// twice over (SECURITY.md's caps table): NEWEST graphics seed first —
     /// the ones likeliest still on screen — and the walk stops at the
     /// first frame that would bust the frame count or the aggregate byte
@@ -359,7 +371,12 @@ impl StreamSessionState {
             );
         }
 
-        ServerMessage::connected_builder(cols as u16, rows as u16, self.id.clone())
+        let handshake_id = match &*self.connected_pane.read() {
+            Some(pane) => format!("pane-{}", *pane.lock()),
+            None => self.id.clone(),
+        };
+
+        ServerMessage::connected_builder(cols as u16, rows as u16, handshake_id)
             .initial_screen(initial_screen)
             .theme(self.theme.clone())
             .badge(badge)

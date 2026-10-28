@@ -1645,7 +1645,7 @@ par-term-streamer --mux-socket /path/to/par-mux-default.sock --enable-http
 # active workspace shows (re-resolved on every desktop switch-workspace)
 ```
 
-The session id selects the pane: `pane-N` mirrors pane `%N`; `workspace-active` follows the daemon's active workspace; any other id mirrors the daemon's first pane (`list-panes`). From Rust, build the server with `MuxSessionFactory::new(socket, MuxPaneSelector::FromSessionId)` (or `MuxPaneSelector::Pane(n)` for a fixed pane) through `StreamingServer::with_factory`; it needs the `streaming` and `mux` features together.
+The session id selects the pane: `pane-N` mirrors pane `%N`; `workspace-active` follows the daemon's active workspace; any other id mirrors the daemon's first pane (`list-panes`). The connect handshake reports which pane a session landed on: a `workspace-active` dial's `Connected.session_id` is the resolved `pane-N` (the pane being mirrored right now, re-resolved after every follow), so the client can label the pane without a second control round-trip; every other id echoes the requested id verbatim. From Rust, build the server with `MuxSessionFactory::new(socket, MuxPaneSelector::FromSessionId)` (or `MuxPaneSelector::Pane(n)` for a fixed pane) through `StreamingServer::with_factory`; it needs the `streaming` and `mux` features together.
 
 | Concern | Behavior |
 |---------|----------|

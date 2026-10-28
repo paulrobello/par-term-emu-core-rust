@@ -104,8 +104,10 @@ pub struct MuxSessionFactory {
 struct MirrorLink {
     /// The pane this mirror serves. `workspace-active` mirrors retarget it
     /// when the daemon's active workspace moves; input and size
-    /// contributions read it at call time so they follow.
-    pane: Mutex<u32>,
+    /// contributions read it at call time so they follow. Shared with the
+    /// session (`setup_session`, follows-active links only) so the
+    /// Connected handshake names the pane being mirrored right now.
+    pane: Arc<Mutex<u32>>,
     /// The pane's window (`@W`), which its layout changes and close name.
     /// Retargeted together with `pane` so the pair stays consistent.
     window: Mutex<String>,
@@ -596,7 +598,7 @@ impl SessionFactory for MuxSessionFactory {
         }
         let link = Arc::new(MirrorLink {
             follows_active: session_id == ACTIVE_WORKSPACE_SESSION_ID,
-            pane: Mutex::new(pane),
+            pane: Arc::new(Mutex::new(pane)),
             window: Mutex::new(window),
             terminal: Arc::clone(&terminal),
             writer: Arc::clone(&writer),
@@ -649,6 +651,9 @@ impl SessionFactory for MuxSessionFactory {
             let status = link.status.lock();
             *link.session.write() = Some(Arc::downgrade(session));
             *session.graphics_panes.write() = Some(Arc::clone(&link.graphics_panes));
+            if link.follows_active {
+                *session.connected_pane.write() = Some(Arc::clone(&link.pane));
+            }
             if let Some((size, viewers)) = &*status {
                 session.update_mux_status(size.clone(), viewers.clone());
             }
@@ -1891,6 +1896,83 @@ mod tests {
         assert!(
             !has_line(&old, "FOLLOW-INPUT"),
             "post-switch input must reach the new pane only:\n{old}"
+        );
+    }
+
+    /// Card 01a18391648f7679948a984246785911: a `workspace-active` dial's
+    /// Connected handshake reports the RESOLVED pane id (`pane-N`), not the
+    /// sentinel — at attach and again after a desktop workspace switch —
+    /// while any other id keeps echoing verbatim.
+    #[test]
+    fn a_workspace_active_handshake_names_the_resolved_pane() {
+        let rt = runtime();
+        let _entered = rt.enter();
+        let (_dir, socket, _serving, mut control, pane0) = daemon();
+        let pane0_num: u32 = pane0.trim_start_matches('%').parse().expect("pane number");
+
+        // A second workspace; `new-workspace` selects it, so switch back
+        // to `main` before the viewer attaches.
+        control
+            .send("new-workspace -n second")
+            .expect("new-workspace");
+        let second_pane = control
+            .send("list-panes -F '#{pane_id} #{session_name}'")
+            .expect("list-panes")
+            .into_iter()
+            .find(|l| l.trim().ends_with("second"))
+            .and_then(|l| {
+                l.split_whitespace()
+                    .next()
+                    .and_then(|p| p.trim_start_matches('%').parse::<u32>().ok())
+            })
+            .expect("the second workspace's pane");
+        let pane1 = format!("%{second_pane}");
+        control
+            .send("select-workspace -t main")
+            .expect("back to main");
+
+        let server = streaming(&socket);
+        let session = mirror_session(&server, ACTIVE_WORKSPACE_SESSION_ID);
+
+        // The handshake names the pane the mirror landed on, not the
+        // sentinel the client dialed.
+        let connected = session.build_connect_message("dialer", false);
+        let ServerMessage::Connected { session_id, .. } = connected else {
+            panic!("expected a Connected message");
+        };
+        assert_eq!(
+            session_id,
+            format!("pane-{pane0_num}"),
+            "the workspace-active handshake names the resolved pane"
+        );
+
+        // Any other id echoes verbatim (here: the first-pane fallback).
+        let fallback = mirror_session(&server, "fallback");
+        let connected = fallback.build_connect_message("dialer", false);
+        let ServerMessage::Connected { session_id, .. } = connected else {
+            panic!("expected a Connected message");
+        };
+        assert_eq!(
+            session_id, "fallback",
+            "non-sentinel ids keep the verbatim echo"
+        );
+
+        // After a desktop workspace switch a fresh handshake names the
+        // pane being mirrored NOW: the retarget wrote the shared pane.
+        control
+            .send(&format!("send-keys -t {pane1} 'echo WS2-MARKER' Enter"))
+            .expect("send-keys");
+        wait_pane(&mut control, &pane1, "WS2-MARKER");
+        control.send("select-workspace -t second").expect("switch");
+        wait_mirror(&session, "WS2-MARKER");
+        let connected = session.build_connect_message("late-joiner", false);
+        let ServerMessage::Connected { session_id, .. } = connected else {
+            panic!("expected a Connected message");
+        };
+        assert_eq!(
+            session_id,
+            format!("pane-{second_pane}"),
+            "the handshake follows the retarget"
         );
     }
 
