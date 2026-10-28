@@ -1714,7 +1714,13 @@ fn run_daemon(cli: Cli, path: std::path::PathBuf) -> std::io::Result<std::proces
         // keeps its own semantics (a handed-off daemon would land OUTSIDE
         // the pane's daemon, silently dodging the nested guard).
         #[cfg(target_os = "macos")]
-        if !cli.par_mux_in_app_wrapper && nested.is_none() {
+        // Only a real start hands off: with a daemon already serving, the
+        // attach below must keep the invoking terminal's stdio, which the
+        // launcher's daemon.log redirect would swallow (2026-10-27).
+        if !cli.par_mux_in_app_wrapper
+            && nested.is_none()
+            && par_mux::mux::connect_local_stream(&path).is_err()
+        {
             if let Ok(exe) = std::env::current_exe() {
                 let no_wrapper =
                     std::env::var_os("PAR_MUX_NO_APP_WRAPPER").is_some_and(|v| v == "1");
