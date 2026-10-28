@@ -544,7 +544,7 @@ impl WindowSession {
                     .flatten()
                     .map(|row| row.window);
                 match window {
-                    Some(window) if window != s.window => s.land_window(c, &window),
+                    Some(window) if window != s.window => s.land_window_focused(c, &window, pane),
                     _ => s.status_dirty = true,
                 }
             },
@@ -878,6 +878,29 @@ impl WindowSession {
         conn: &mut crate::mux::attach::conn::AttachConn,
         window: &str,
     ) {
+        Self::land_window_inner(self, conn, window, None);
+    }
+
+    /// `land_window` for a roster click: the landing carries the clicked
+    /// pane, so the re-seed focuses it instead of the window's first pane
+    /// (the second-click-required roster report). The daemon-side select
+    /// already happened in `focus_pane`, so `switch-client` lands on a
+    /// window whose active pane is the clicked one.
+    pub(super) fn land_window_focused(
+        &mut self,
+        conn: &mut crate::mux::attach::conn::AttachConn,
+        window: &str,
+        pane: u32,
+    ) {
+        Self::land_window_inner(self, conn, window, Some(pane));
+    }
+
+    fn land_window_inner(
+        &mut self,
+        conn: &mut crate::mux::attach::conn::AttachConn,
+        window: &str,
+        focus: Option<u32>,
+    ) {
         let gen = self.begin_nav();
         let expected = self.window.clone();
         let target = window.to_string();
@@ -889,7 +912,7 @@ impl WindowSession {
                     return;
                 }
                 if reply.ok {
-                    s.reseed_window(c, &target);
+                    s.reseed_window_focused(c, &target, focus);
                     return;
                 }
                 s.send_then(
@@ -897,7 +920,7 @@ impl WindowSession {
                     &format!("select-window -t {target}"),
                     move |s, c, reply| {
                         if reply.ok && s.nav_current(gen, &expected) {
-                            s.reseed_window(c, &target);
+                            s.reseed_window_focused(c, &target, focus);
                         }
                     },
                 );
@@ -923,8 +946,33 @@ impl WindowSession {
         conn: &mut crate::mux::attach::conn::AttachConn,
         window: &str,
     ) -> bool {
+        Self::reseed_window_inner(self, conn, window, None)
+    }
+
+    /// `reseed_window` landing from a roster click: `focus` is the clicked
+    /// pane — it seeds the view and keeps the focus after the layout
+    /// install. Without it the landing fell back to the window's first
+    /// pane (the second-click-required roster report).
+    pub(super) fn reseed_window_focused(
+        &mut self,
+        conn: &mut crate::mux::attach::conn::AttachConn,
+        window: &str,
+        focus: Option<u32>,
+    ) -> bool {
+        Self::reseed_window_inner(self, conn, window, focus)
+    }
+
+    fn reseed_window_inner(
+        &mut self,
+        conn: &mut crate::mux::attach::conn::AttachConn,
+        window: &str,
+        focus: Option<u32>,
+    ) -> bool {
         super::trace_input(format_args!("reseed_window {window}"));
-        let pane = self.focused_pane_or_first(conn, window);
+        let pane = match focus {
+            Some(p) => format!("%{p}"),
+            None => self.focused_pane_or_first(conn, window),
+        };
         // Re-fit at the CURRENT renderer's frame extent — the host grid
         // the seed and resize_to derived — then report the renderer's
         // window_size: that size is the reported extent (the grid less
@@ -960,6 +1008,12 @@ impl WindowSession {
                 let replay = self.install_layout(layout, &race);
                 self.replay_panes(conn, &replay);
             }
+        }
+        // A roster-click landing keeps the clicked pane focused: the layout
+        // install above falls back to the window's first pane because the
+        // renderer's focus still names the previous window's pane.
+        if let Some(p) = focus {
+            self.renderer.focus(p);
         }
         // The re-seed re-laid the panes: the next frame's diff repaints
         // what moved, and the cursor guard must reset so a

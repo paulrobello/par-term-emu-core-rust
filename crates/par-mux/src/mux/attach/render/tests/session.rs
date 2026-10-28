@@ -5922,6 +5922,50 @@ fn focus_pane_on_another_window_selects_looks_up_and_lands() {
     assert_eq!(panes, vec![5, 6], "re-seeded onto the new window's panes");
 }
 
+/// The cross-window landing focuses the CLICKED pane: a click on the
+/// second pane of the target window must not land with the window's
+/// first pane focused (the re-seed used to fall back to
+/// `focused_pane_or_first`, which returns the new window's first pane
+/// because the renderer's focus is still the old window's).
+#[test]
+fn focus_pane_on_another_window_lands_focused_on_the_clicked_pane() {
+    let layout = "0000,80x23,0,0{40x23,0,0,5,40x23,40,0,6}";
+    let mut notify = std::collections::HashMap::new();
+    notify.insert(
+        "refresh-client -t %6 -C 80x23".to_string(),
+        format!("%layout-change @1 {layout} {layout} *"),
+    );
+    let mut replies = std::collections::HashMap::new();
+    replies.insert("pane-info -t %6".to_string(), "%6 @1 40x23".to_string());
+    reseed_replies(&mut replies, "@0 main\n@1 * other", "@1", "%5\n%6");
+    let (rx, mut conn, mut session) = two_pane_session(
+        "roster-second-pane",
+        FakeScript {
+            replies,
+            notify,
+            ..FakeScript::default()
+        },
+    );
+    session.focus_pane(&mut conn, 6);
+    settle(&mut session, &mut conn);
+    let lines = drained(&rx);
+    assert_eq!(
+        &lines[..3],
+        &[
+            "select-pane -t %6",
+            "pane-info -t %6",
+            "switch-client -t @1"
+        ],
+        "wire: {lines:?}"
+    );
+    assert_eq!(session.window, "@1", "the view landed on the pane's window");
+    assert_eq!(
+        session.renderer.focused(),
+        Some(6),
+        "the landing focuses the clicked pane, not the window's first"
+    );
+}
+
 /// Same-window click: select + lookup only, no landing; the status is
 /// marked so the throttled refresh repaints the highlight (QA-245).
 #[test]
