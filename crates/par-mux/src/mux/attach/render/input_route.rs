@@ -925,9 +925,6 @@ impl WindowSession {
                 release: mouse.release,
             };
         }
-        if strip > 0 && y > 0 && x < strip {
-            return self.sidebar_hit(mouse, x, y);
-        }
         // Pane coordinates are layout coordinates: the host x less the
         // side panel's strip width. The TOP row is exempt — the strip
         // paints the panel's title at 0..strip when the panel is up and
@@ -940,9 +937,12 @@ impl WindowSession {
         let (x, content_y) = self.geometry.host_to_content_clamped(x, y);
 
         // A drag in flight continues over motion/release regardless of
-        // where the pointer is (a pointer that wanders onto the strip
-        // row must not strand it); the drag's press stored content
-        // coordinates, so the strip row saturates to content row 0.
+        // where the pointer is — BEFORE the side panel's branch, whose
+        // hit-test consumes motion and release for its own rows: a drag
+        // whose release landed there stayed armed forever, eating every
+        // later wheel (the pane-area guard) and re-driving `resize-pane`
+        // on motion. The drag's press stored content coordinates, so the
+        // strip row saturates to content row 0.
         if self.drag.is_some() && (mouse.release || mouse.is_motion()) {
             return Hit::Drag {
                 x,
@@ -951,17 +951,23 @@ impl WindowSession {
             };
         }
         // A text-selection drag in flight follows the pointer the same
-        // way — but a modal that owns the pointer (menu, settings,
-        // prompt…) takes precedence over a stale armed drag.
+        // way, and a RELEASE always ends it — the press armed it and the
+        // release is its match; a release swallowed by another branch
+        // left the drag armed: every wheel consumed, the selection
+        // sweeping on hover. Motion stays modal-gated: a modal that owns
+        // the pointer takes precedence over a stale armed drag.
         if self.text_drag.is_some()
-            && matches!(self.modal, Modal::None | Modal::Scroll)
-            && (mouse.release || mouse.is_motion())
+            && (mouse.release
+                || (mouse.is_motion() && matches!(self.modal, Modal::None | Modal::Scroll)))
         {
             return Hit::TextDrag {
                 x,
                 y: content_y,
                 release: mouse.release,
             };
+        }
+        if strip > 0 && y > 0 && rx < strip {
+            return self.sidebar_hit(mouse, rx, y);
         }
         match &self.modal {
             // The rename prompt is modal for the pointer too: every event

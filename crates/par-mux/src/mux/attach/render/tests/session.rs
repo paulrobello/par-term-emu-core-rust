@@ -622,6 +622,169 @@ fn a_press_beside_the_divider_is_a_pane_click_not_a_drag() {
     assert!(session.drag.is_none());
 }
 
+/// A divider drag whose RELEASE lands over the visible side panel ends
+/// the drag. The panel's strip branch used to run first and
+/// `sidebar_hit` consumes motion and release, so the drag stayed armed
+/// forever: every later wheel was eaten by the pane-area guard (the
+/// held button "owns" the pointer) and every motion re-drove
+/// `resize-pane` — the "mouse stopped working until reconnect" wedge.
+#[test]
+fn divider_drag_release_over_the_sidebar_ends_the_drag() {
+    let (rx, mut conn) = recording_conn("drag-side");
+    let mut session = WindowSession::new(80, 25);
+    session
+        .renderer
+        .apply_layout(parse_layout(TWO_PANE_LAYOUT).expect("parses"));
+    show_sidebar(&mut session);
+    while rx
+        .recv_timeout(std::time::Duration::from_millis(150))
+        .is_ok()
+    {}
+
+    // Scrollback on pane 1 so a wheel has something to move.
+    for i in 0..60 {
+        session
+            .renderer
+            .feed_output(1, format!("pane one line {i:03}\r\n").as_bytes());
+    }
+
+    // Press on the divider (content col 39 = host col 60 with the
+    // panel up), motion +5 to activate, then release OVER THE PANEL
+    // (host col 5, inside the panel's 20-col strip).
+    session.route_mouse(
+        &mut conn,
+        SgrMouse {
+            cb: 0,
+            col: 60,
+            row: 6,
+            release: false,
+        },
+    );
+    assert!(
+        matches!(session.drag, Some(DragState::Pending { .. })),
+        "the press starts a pending drag"
+    );
+    session.route_mouse(
+        &mut conn,
+        SgrMouse {
+            cb: 32,
+            col: 65,
+            row: 6,
+            release: false,
+        },
+    );
+    assert_eq!(
+        session.renderer.drag_divider,
+        Some((true, 1, 2)),
+        "the drag activates"
+    );
+
+    session.route_mouse(
+        &mut conn,
+        SgrMouse {
+            cb: 0,
+            col: 5,
+            row: 6,
+            release: true,
+        },
+    );
+    assert!(
+        session.drag.is_none(),
+        "the release over the side panel must end the drag"
+    );
+    assert_eq!(
+        session.renderer.drag_divider, None,
+        "the divider highlight clears with the drag"
+    );
+
+    // And the wheel works again: pane 1 does not own mouse tracking,
+    // so the wheel scrolls its client-side viewport.
+    session.route_mouse(
+        &mut conn,
+        SgrMouse {
+            cb: 64,
+            col: 30,
+            row: 6,
+            release: false,
+        },
+    );
+    assert_eq!(
+        session.renderer.scroll_offset_of(1),
+        3,
+        "the wheel scrolls pane 1 once the drag is gone"
+    );
+}
+
+/// A text-selection drag whose release lands over the visible side
+/// panel ends the selection the same way: the panel's strip branch must
+/// not swallow the release, or `text_drag` stays armed — every later
+/// wheel consumed, every hover extending the selection.
+#[test]
+fn text_selection_release_over_the_sidebar_ends_the_selection() {
+    let (rx, mut conn) = recording_conn("text-side");
+    let mut session = WindowSession::new(80, 25);
+    session
+        .renderer
+        .apply_layout(parse_layout(TWO_PANE_LAYOUT).expect("parses"));
+    show_sidebar(&mut session);
+    while rx
+        .recv_timeout(std::time::Duration::from_millis(150))
+        .is_ok()
+    {}
+    for i in 0..6 {
+        session
+            .renderer
+            .feed_output(1, format!("pane one line {i}\r\n").as_bytes());
+    }
+
+    // Press in pane 1 (mouse Off → the press arms a selection drag),
+    // motion inside the pane activates it, release over the panel.
+    session.route_mouse(
+        &mut conn,
+        SgrMouse {
+            cb: 0,
+            col: 30,
+            row: 6,
+            release: false,
+        },
+    );
+    assert!(
+        matches!(session.text_drag, Some(TextDrag::Pending { .. })),
+        "the press arms a selection drag"
+    );
+    session.route_mouse(
+        &mut conn,
+        SgrMouse {
+            cb: 32,
+            col: 34,
+            row: 7,
+            release: false,
+        },
+    );
+    assert!(
+        matches!(session.text_drag, Some(TextDrag::Active { .. })),
+        "the motion activates the selection"
+    );
+
+    session.route_mouse(
+        &mut conn,
+        SgrMouse {
+            cb: 0,
+            col: 5,
+            row: 6,
+            release: true,
+        },
+    );
+    assert!(
+        session.text_drag.is_none(),
+        "the release over the side panel must end the selection"
+    );
+    assert!(
+        session.renderer.selection.is_none(),
+        "the sweep over the panel copies nothing"
+    );
+}
+
 /// The drag's resize steps are throttled: one `resize-pane` per
 /// interval at most, the unapplied remainder held back while motions
 /// keep arriving faster, and the release flushes what is left so the
