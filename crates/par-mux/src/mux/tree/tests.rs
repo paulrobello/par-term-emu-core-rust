@@ -2594,6 +2594,7 @@ fn layout_resize_observer_events_arrive_after_the_tree_lock_drops() {
     let clients: crate::mux::server::Clients = Arc::default();
     let __output_epoch: crate::mux::server::OutputEpoch = std::sync::Arc::default();
     let ctx = crate::mux::dispatch::Ctx {
+        layouts_dir: None,
         output_epoch: &__output_epoch,
         client_id: None,
         tree: &tree,
@@ -2741,6 +2742,7 @@ fn start_dir_note_observer_events_arrive_after_the_tree_lock_drops() {
     let clients: crate::mux::server::Clients = Arc::default();
     let __output_epoch: crate::mux::server::OutputEpoch = std::sync::Arc::default();
     let ctx = crate::mux::dispatch::Ctx {
+        layouts_dir: None,
         output_epoch: &__output_epoch,
         client_id: None,
         tree: &tree,

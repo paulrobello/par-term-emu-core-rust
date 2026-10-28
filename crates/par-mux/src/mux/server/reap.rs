@@ -238,6 +238,7 @@ pub(super) fn reap_dead_panes(
             command_number: 0,
             shutdown: None,
             config: config.map(|config| &**config),
+            layouts_dir: None,
             output_epoch: epoch,
         };
         // The reply has no reader; the command broadcasts

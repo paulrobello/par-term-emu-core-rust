@@ -384,6 +384,14 @@ impl MuxServer {
             crate::mux::plugins::set_engine_from(dir.to_path_buf());
         }
 
+        // Named-layout commands resolve the store beside the state file, so
+        // a `--state-dir` daemon keeps layouts out of the platform state
+        // dir (card 01a1792e655b752cbcccab2276134eca).
+        let layouts_dir: Option<PathBuf> = state_path
+            .as_ref()
+            .and_then(|path| path.parent())
+            .map(|dir| dir.join("layouts"));
+
         // Card 01a0e3f1205371619309073eb5f803d6: the host-probe sweep
         // (disk + git per pane cwd) owns its own thread — its
         // deadline-bounded git invocations must never stall the accept
@@ -460,6 +468,7 @@ impl MuxServer {
                     let shutdown = Arc::clone(&self.shutdown);
                     let config = self.config.clone();
                     let output_epoch = Arc::clone(&self.output_epoch);
+                    let layouts_dir = layouts_dir.clone();
                     std::thread::spawn(move || {
                         handle_client(
                             stream,
@@ -470,6 +479,7 @@ impl MuxServer {
                             abort,
                             config,
                             output_epoch,
+                            layouts_dir,
                         )
                     });
                 }
@@ -886,6 +896,7 @@ fn dispatch_issued(
                 shutdown: None,
                 config: None,
                 client_id: None,
+                layouts_dir: None,
                 output_epoch: &output_epoch,
             };
             dispatch_command(command, &ctx, persist, issuer)

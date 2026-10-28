@@ -102,6 +102,12 @@ pub(super) struct Ctx<'a> {
     /// configured server: `reload-config` then reports every setting
     /// restart-required (there is no applied copy to diff or update).
     pub(super) config: Option<&'a Mutex<crate::mux::config::EffectiveConfig>>,
+    /// The daemon's layouts dir — the state file's directory + `layouts`,
+    /// set when the server runs persisting, so `--state-dir` relocates the
+    /// named-layout store beside the state file. `None` for embedders and
+    /// tests that dispatch without a persisting server: the store keeps
+    /// the platform default (`persist::layouts_dir`).
+    pub(super) layouts_dir: Option<&'a std::path::Path>,
     /// The daemon-wide output epoch — the pane-stream seed's race check
     /// (see [`crate::mux::server`]'s `pane_output_sink`).
     pub(super) output_epoch: &'a OutputEpoch,

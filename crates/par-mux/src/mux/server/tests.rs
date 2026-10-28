@@ -38,6 +38,7 @@ fn held_state_replay_reports_held_panes_and_zoomed_windows() {
     let clients = Arc::new(Mutex::new(Vec::new()));
     let __output_epoch: crate::mux::server::OutputEpoch = std::sync::Arc::default();
     let ctx = Ctx {
+        layouts_dir: None,
         output_epoch: &__output_epoch,
         tree: &tree,
         clients: &clients,
@@ -108,6 +109,7 @@ fn registration_after_a_death_delivers_the_held_exit_once() {
     let clients = Arc::new(Mutex::new(Vec::new()));
     let __output_epoch: crate::mux::server::OutputEpoch = std::sync::Arc::default();
     let ctx = Ctx {
+        layouts_dir: None,
         output_epoch: &__output_epoch,
         tree: &tree,
         clients: &clients,
@@ -2682,6 +2684,7 @@ fn an_evicted_clients_connection_closes() {
                 abort,
                 None,
                 std::sync::Arc::default(),
+                None,
             ),
             Err(err) => panic!("accept_connection failed: {err}"),
         },
@@ -2782,6 +2785,7 @@ fn a_pane_streams_exit_closes_the_connection_while_the_client_stays_silent() {
     let created = dispatch_command(
         parse_command("new-session -s s").expect("parses"),
         &Ctx {
+            layouts_dir: None,
             output_epoch: &__output_epoch,
             tree: &tree,
             clients: &clients,
@@ -2807,6 +2811,7 @@ fn a_pane_streams_exit_closes_the_connection_while_the_client_stays_silent() {
                 abort,
                 None,
                 std::sync::Arc::default(),
+                None,
             ),
             Err(err) => panic!("accept_connection failed: {err}"),
         },
@@ -2874,6 +2879,7 @@ fn a_pane_streams_exit_closes_the_connection_while_the_client_stays_silent() {
     let killed = dispatch_command(
         parse_command("kill-pane -t %0").expect("parses"),
         &Ctx {
+            layouts_dir: None,
             output_epoch: &__output_epoch,
             tree: &tree,
             clients: &clients,
@@ -2925,6 +2931,7 @@ fn a_panicking_command_yields_an_error_block_and_the_next_command_survives() {
     crate::mux::dispatch::PANIC_ON_COMMAND.with(|flag| flag.set(true));
     let __output_epoch: crate::mux::server::OutputEpoch = std::sync::Arc::default();
     let ctx = Ctx {
+        layouts_dir: None,
         output_epoch: &__output_epoch,
         tree: &tree,
         clients: &clients,
@@ -2945,6 +2952,7 @@ fn a_panicking_command_yields_an_error_block_and_the_next_command_survives() {
     // The tree lock unwound free; the next command on the same
     // connection dispatches normally.
     let ctx = Ctx {
+        layouts_dir: None,
         output_epoch: &__output_epoch,
         tree: &tree,
         clients: &clients,

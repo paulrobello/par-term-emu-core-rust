@@ -4,6 +4,17 @@
 
 use super::*;
 use crate::mux::persist;
+use std::path::PathBuf;
+
+/// The layouts store this daemon serves: beside the state file when the
+/// server runs persisting, so `--state-dir` relocates the store; the
+/// platform default for embedders and tests that dispatch without a
+/// persisting server.
+fn layouts_dir(ctx: &Ctx<'_>) -> PathBuf {
+    ctx.layouts_dir
+        .map(std::path::Path::to_path_buf)
+        .unwrap_or_else(persist::layouts_dir)
+}
 
 /// The layout group's router; `route_command` sends only this group's
 /// variants here.
@@ -13,7 +24,7 @@ pub(super) fn route_layout_command(ctx: &Ctx<'_>, command: MuxCommand) -> Outcom
         MuxCommand::LoadLayout { name, force } => cmd_load_layout(ctx, &name, force),
         MuxCommand::ListLayouts => Outcome::ok(
             ctx,
-            &persist::list_layouts_in(&persist::platform_state_dir()).join("\n"),
+            &persist::list_layouts_in_dir(&layouts_dir(ctx)).join("\n"),
         ),
         MuxCommand::KillLayout { name } => cmd_kill_layout(ctx, &name),
         other => unreachable!("route_command sent a non-layout command: {other:?}"),
@@ -28,7 +39,7 @@ fn cmd_save_layout(ctx: &Ctx<'_>, name: &str) -> Outcome {
     }
     let capture = ctx.tree.lock().collect_persist_capture();
     let state = capture.capture();
-    match persist::save_layout_state_in(&persist::platform_state_dir(), &state, name) {
+    match persist::save_layout_state_in_dir(&layouts_dir(ctx), &state, name) {
         Ok(_) => Outcome::ok(ctx, &format!("layout saved: {name}")),
         Err(err) => Outcome::err(ctx, &err.to_string()),
     }
@@ -46,7 +57,7 @@ fn layout_error_message(err: &persist::PersistError, name: &str) -> String {
 }
 
 fn cmd_kill_layout(ctx: &Ctx<'_>, name: &str) -> Outcome {
-    match persist::kill_layout_in(&persist::platform_state_dir(), name) {
+    match persist::kill_layout_in_dir(&layouts_dir(ctx), name) {
         Ok(()) => Outcome::ok(ctx, &format!("layout killed: {name}")),
         Err(err) => Outcome::err(ctx, &layout_error_message(&err, name)),
     }
@@ -56,7 +67,7 @@ fn cmd_kill_layout(ctx: &Ctx<'_>, name: &str) -> Outcome {
 /// Refuses while any pane is alive unless `force`, because the swap kills
 /// their processes.
 fn cmd_load_layout(ctx: &Ctx<'_>, name: &str, force: bool) -> Outcome {
-    let state = match persist::load_layout_in(&persist::platform_state_dir(), name) {
+    let state = match persist::load_layout_in_dir(&layouts_dir(ctx), name) {
         Ok(state) => state,
         Err(err) => return Outcome::err(ctx, &layout_error_message(&err, name)),
     };

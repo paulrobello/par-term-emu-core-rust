@@ -1282,14 +1282,23 @@ pub fn valid_layout_name(name: &str) -> bool {
             .all(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | '_' | '-'))
 }
 
-/// The file for layout `name`; a rejected name never reaches the filesystem.
-pub fn layout_file_in(base: &Path, name: &str) -> Result<PathBuf, PersistError> {
+/// The layouts file for `name` under an explicit layouts directory — the
+/// seam a persisting daemon dispatches through, so a `--state-dir` daemon
+/// keeps the store beside its state file. A rejected name never reaches
+/// the filesystem, exactly like the base-based [`layout_file_in`].
+pub fn layout_file_in_dir(dir: &Path, name: &str) -> Result<PathBuf, PersistError> {
     if !valid_layout_name(name) {
         return Err(PersistError::InvalidLayoutName {
             name: name.to_string(),
         });
     }
-    Ok(layouts_dir_in(base).join(format!("{name}.json")))
+    Ok(dir.join(format!("{name}.json")))
+}
+
+/// The file for layout `name` under the base whose layouts dir is
+/// `<base>/par-mux/layouts`; a rejected name never reaches the filesystem.
+pub fn layout_file_in(base: &Path, name: &str) -> Result<PathBuf, PersistError> {
+    layout_file_in_dir(&layouts_dir_in(base), name)
 }
 
 /// Capture `tree` and write it as layout `name`, overwriting any previous
@@ -1300,6 +1309,20 @@ pub fn save_layout_in(base: &Path, tree: &MuxTree, name: &str) -> Result<PathBuf
     save_layout_state_in(base, &tree.to_persist_state(), name)
 }
 
+/// Write an already-captured `state` as layout `name` under an explicit
+/// layouts directory. Touches no tree, so it is safe off-lock.
+pub fn save_layout_state_in_dir(
+    dir: &Path,
+    state: &PersistState,
+    name: &str,
+) -> Result<PathBuf, PersistError> {
+    let target = layout_file_in_dir(dir, name)?;
+    // `Reap` skips the last-good and snapshot-history siblings, which exist
+    // for the daemon's boot state and would litter the layouts dir.
+    write_job(SaveOrigin::Reap, state, &target)?;
+    Ok(target)
+}
+
 /// Write an already-captured `state` as layout `name`, overwriting any
 /// previous layout of that name. Touches no tree, so it is safe off-lock.
 pub fn save_layout_state_in(
@@ -1307,17 +1330,14 @@ pub fn save_layout_state_in(
     state: &PersistState,
     name: &str,
 ) -> Result<PathBuf, PersistError> {
-    let target = layout_file_in(base, name)?;
-    // `Reap` skips the last-good and snapshot-history siblings, which exist
-    // for the daemon's boot state and would litter the layouts dir.
-    write_job(SaveOrigin::Reap, state, &target)?;
-    Ok(target)
+    save_layout_state_in_dir(&layouts_dir_in(base), state, name)
 }
 
-/// Read layout `name`. Unlike [`load_or_quarantine`], a bad file is
-/// reported and left in place: it is not the daemon's boot state.
-pub fn load_layout_in(base: &Path, name: &str) -> Result<PersistState, PersistError> {
-    let text = fs::read_to_string(layout_file_in(base, name)?)?;
+/// Read layout `name` from an explicit layouts directory; unlike
+/// [`load_or_quarantine`], a bad file is reported and left in place: it is
+/// not the daemon's boot state.
+pub fn load_layout_in_dir(dir: &Path, name: &str) -> Result<PersistState, PersistError> {
+    let text = fs::read_to_string(layout_file_in_dir(dir, name)?)?;
     let state: PersistState = serde_json::from_str(&text)?;
     if state.format_version != FORMAT_VERSION {
         return Err(PersistError::UnsupportedVersion {
@@ -1328,10 +1348,17 @@ pub fn load_layout_in(base: &Path, name: &str) -> Result<PersistState, PersistEr
     Ok(state)
 }
 
-/// Sorted names of the saved layouts; a missing directory yields none.
+/// Read layout `name` under the base whose layouts dir is
+/// `<base>/par-mux/layouts`.
+pub fn load_layout_in(base: &Path, name: &str) -> Result<PersistState, PersistError> {
+    load_layout_in_dir(&layouts_dir_in(base), name)
+}
+
+/// Sorted names of the saved layouts under an explicit layouts directory;
+/// a missing directory yields none.
 #[must_use]
-pub fn list_layouts_in(base: &Path) -> Vec<String> {
-    let Ok(entries) = fs::read_dir(layouts_dir_in(base)) else {
+pub fn list_layouts_in_dir(dir: &Path) -> Vec<String> {
+    let Ok(entries) = fs::read_dir(dir) else {
         return Vec::new();
     };
     let mut names: Vec<String> = entries
@@ -1351,10 +1378,24 @@ pub fn list_layouts_in(base: &Path) -> Vec<String> {
     names
 }
 
-/// Delete layout `name`; a missing layout is the I/O not-found error.
-pub fn kill_layout_in(base: &Path, name: &str) -> Result<(), PersistError> {
-    fs::remove_file(layout_file_in(base, name)?)?;
+/// Sorted names of the saved layouts under the base whose layouts dir is
+/// `<base>/par-mux/layouts`; a missing directory yields none.
+#[must_use]
+pub fn list_layouts_in(base: &Path) -> Vec<String> {
+    list_layouts_in_dir(&layouts_dir_in(base))
+}
+
+/// Delete layout `name` from an explicit layouts directory; a missing
+/// layout is the I/O not-found error.
+pub fn kill_layout_in_dir(dir: &Path, name: &str) -> Result<(), PersistError> {
+    fs::remove_file(layout_file_in_dir(dir, name)?)?;
     Ok(())
+}
+
+/// Delete layout `name` under the base whose layouts dir is
+/// `<base>/par-mux/layouts`; a missing layout is the I/O not-found error.
+pub fn kill_layout_in(base: &Path, name: &str) -> Result<(), PersistError> {
+    kill_layout_in_dir(&layouts_dir_in(base), name)
 }
 
 /// Atomically persist `tree` to `target` (D3.3): serialize to

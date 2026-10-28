@@ -285,27 +285,20 @@ pub fn spawn_daemon(fixture: &MuxFixture) -> DaemonGuard {
     )
 }
 
-/// [`spawn_daemon`] with the daemon's HOME (and `XDG_STATE_HOME`) pointed
-/// inside the fixture, so the platform state dir the named-layout store
-/// writes under (`persist::layouts_dir`, which ignores `--state-dir`) is
-/// the fixture's, never the developer's. Returns the layouts directory.
-#[cfg(unix)]
+/// [`spawn_daemon`] returning the daemon's named-layout store directory.
+/// The dispatch serves a `--state-dir` daemon under the state file's
+/// directory (card 01a1792e655b752cbcccab2276134eca), so the fixture's
+/// state dir keeps the store out of the developer's platform state dir on
+/// every platform — no HOME games needed.
 pub fn spawn_daemon_with_private_layouts(fixture: &MuxFixture) -> (DaemonGuard, PathBuf) {
     write_fixture_config(fixture, true);
-    let home = fixture.dir().join("home");
-    std::fs::create_dir_all(&home).expect("create fixture home");
     let guard = spawn_daemon_on(
         fixture.socket(),
         Some(&fixture.config_path()),
         fixture.state_dir(),
-        &[("HOME", home.as_path()), ("XDG_STATE_HOME", home.as_path())],
+        &[],
     );
-    let base = if cfg!(target_os = "macos") {
-        home.join("Library").join("Application Support")
-    } else {
-        home.clone()
-    };
-    (guard, par_mux::mux::persist::layouts_dir_in(&base))
+    (guard, fixture.state_dir().join("par-mux").join("layouts"))
 }
 
 /// [`spawn_daemon`] under the product default: `remain-on-exit = false` —

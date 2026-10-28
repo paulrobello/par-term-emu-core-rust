@@ -12,7 +12,7 @@ mod common;
 
 #[cfg(unix)]
 use base64::Engine as _;
-use common::{command, pane_ids, wait_for, wait_listening, MuxFixture};
+use common::{command, pane_ids, spawn_daemon, wait_for, wait_listening, MuxFixture};
 #[cfg(unix)]
 use common::{rerun_isolated, REEXEC_MARKER};
 use interprocess::TryClone as _;
@@ -3222,9 +3222,9 @@ fn daemon_exits_log_their_reason() {
 }
 
 /// The named-layout verbs: a saved layout replaces a diverged live tree.
-// Unix-only: pane-info's `cmd=` token needs the process-table snapshot,
-// which is None on Windows, and the HOME/XDG_STATE_HOME isolation of the
-// layout store does not hold there (the layouts dir resolves to %APPDATA%).
+// Unix-only: pane-info's `cmd=` token reads the process-table snapshot,
+// which is None on Windows; the layout store itself is platform-neutral
+// (the daemon serves it beside the --state-dir the fixture passes).
 #[cfg(unix)]
 #[test]
 fn save_load_layout_round_trip() {
@@ -3272,10 +3272,6 @@ fn save_load_layout_round_trip() {
     }
 }
 
-// Unix-only: pane-info's `cmd=` token needs the process-table snapshot,
-// which is None on Windows, and the HOME/XDG_STATE_HOME isolation of the
-// layout store does not hold there (the layouts dir resolves to %APPDATA%).
-#[cfg(unix)]
 #[test]
 fn load_layout_refuses_live_panes_without_force() {
     let fixture = MuxFixture::new("lay-live");
@@ -3303,10 +3299,6 @@ fn load_layout_refuses_live_panes_without_force() {
     );
 }
 
-// Unix-only: pane-info's `cmd=` token needs the process-table snapshot,
-// which is None on Windows, and the HOME/XDG_STATE_HOME isolation of the
-// layout store does not hold there (the layouts dir resolves to %APPDATA%).
-#[cfg(unix)]
 #[test]
 fn load_layout_bad_file_errors_without_swap() {
     let fixture = MuxFixture::new("lay-bad");
@@ -3337,10 +3329,6 @@ fn load_layout_bad_file_errors_without_swap() {
     );
 }
 
-// Unix-only: pane-info's `cmd=` token needs the process-table snapshot,
-// which is None on Windows, and the HOME/XDG_STATE_HOME isolation of the
-// layout store does not hold there (the layouts dir resolves to %APPDATA%).
-#[cfg(unix)]
 #[test]
 fn list_layouts_lists_and_kill_layout_removes() {
     let fixture = MuxFixture::new("lay-list");
@@ -3357,4 +3345,29 @@ fn list_layouts_lists_and_kill_layout_removes() {
     );
     client.send("kill-layout a").expect("kill a");
     assert_eq!(client.send("list-layouts").expect("list").join("\n"), "b");
+}
+
+/// Card 01a1792e655b752cbcccab2276134eca: a `--state-dir` daemon serves
+/// its named layouts beside the state file, so test (and Windows) store
+/// isolation rides the flag rather than HOME env games.
+#[test]
+fn save_layout_lands_beside_the_state_file() {
+    let fixture = MuxFixture::new("lay-dir");
+    let _daemon = spawn_daemon(&fixture);
+    wait_listening(fixture.socket());
+    let mut client = MuxClient::connect(fixture.socket()).expect("connect");
+
+    client.send("save-layout d1").expect("save-layout");
+    let stored = fixture
+        .state_dir()
+        .join("par-mux")
+        .join("layouts")
+        .join("d1.json");
+    assert!(
+        stored.exists(),
+        "the layout sits beside the state file: {:?}",
+        stored
+    );
+    let listed = client.send("list-layouts").expect("list").join("\n");
+    assert_eq!(listed, "d1");
 }

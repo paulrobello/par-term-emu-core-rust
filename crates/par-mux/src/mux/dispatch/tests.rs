@@ -19,6 +19,7 @@ fn clear_history_wipes_scrollback_and_screen() {
     let clients = Arc::new(Mutex::new(Vec::new()));
     let __output_epoch: crate::mux::server::OutputEpoch = std::sync::Arc::default();
     let ctx = Ctx {
+        layouts_dir: None,
         output_epoch: &__output_epoch,
         tree: &tree,
         clients: &clients,
@@ -83,6 +84,7 @@ fn target_less_refresh_client_sizes_the_newest_active_window() {
     let clients = Arc::new(Mutex::new(Vec::new()));
     let __output_epoch: crate::mux::server::OutputEpoch = std::sync::Arc::default();
     let ctx = Ctx {
+        layouts_dir: None,
         output_epoch: &__output_epoch,
         tree: &tree,
         clients: &clients,
@@ -202,6 +204,7 @@ fn size_reports_take_the_minimum_and_wake_only_on_a_move() {
         |client_id: u64, line: &str, issuer: &std::sync::mpsc::SyncSender<String>| -> String {
             let __output_epoch: crate::mux::server::OutputEpoch = std::sync::Arc::default();
             let ctx = Ctx {
+                layouts_dir: None,
                 output_epoch: &__output_epoch,
                 tree: &tree,
                 clients: &clients,
@@ -310,6 +313,7 @@ fn target_less_refresh_client_with_no_sessions_errors_cleanly() {
     let clients = Arc::new(Mutex::new(Vec::new()));
     let __output_epoch: crate::mux::server::OutputEpoch = std::sync::Arc::default();
     let ctx = Ctx {
+        layouts_dir: None,
         output_epoch: &__output_epoch,
         tree: &tree,
         clients: &clients,
@@ -341,6 +345,7 @@ fn target_less_refresh_client_never_replays_a_screen() {
     let clients = Arc::new(Mutex::new(Vec::new()));
     let __output_epoch: crate::mux::server::OutputEpoch = std::sync::Arc::default();
     let ctx = Ctx {
+        layouts_dir: None,
         output_epoch: &__output_epoch,
         tree: &tree,
         clients: &clients,
@@ -381,6 +386,7 @@ fn refresh_client_seed_with_graphics_carries_a_placement_manifest() {
     let clients = Arc::new(Mutex::new(Vec::new()));
     let __output_epoch: crate::mux::server::OutputEpoch = std::sync::Arc::default();
     let ctx = Ctx {
+        layouts_dir: None,
         output_epoch: &__output_epoch,
         tree: &tree,
         clients: &clients,
@@ -481,6 +487,7 @@ fn a_failed_respawn_keeps_the_live_panes_output_forwarding() {
     let clients = Arc::new(Mutex::new(Vec::new()));
     let __output_epoch: crate::mux::server::OutputEpoch = std::sync::Arc::default();
     let ctx = Ctx {
+        layouts_dir: None,
         output_epoch: &__output_epoch,
         tree: &tree,
         clients: &clients,
@@ -655,6 +662,7 @@ fn reload_config_reports_restart_required_per_changed_setting() {
     }));
     let __output_epoch: crate::mux::server::OutputEpoch = std::sync::Arc::default();
     let ctx = Ctx {
+        layouts_dir: None,
         output_epoch: &__output_epoch,
         client_id: None,
         tree: &tree,
@@ -720,6 +728,7 @@ fn set_exit_action_queries_replies_and_persists() {
     }));
     let __output_epoch: crate::mux::server::OutputEpoch = std::sync::Arc::default();
     let ctx = Ctx {
+        layouts_dir: None,
         output_epoch: &__output_epoch,
         client_id: None,
         tree: &tree,
@@ -794,6 +803,7 @@ fn reload_config_reads_the_applied_copys_stamped_path() {
     }));
     let __output_epoch: crate::mux::server::OutputEpoch = std::sync::Arc::default();
     let ctx = Ctx {
+        layouts_dir: None,
         output_epoch: &__output_epoch,
         client_id: None,
         tree: &tree,
@@ -833,6 +843,7 @@ fn reload_config_without_an_applied_copy_errors() {
     let clients = Arc::new(Mutex::new(Vec::new()));
     let __output_epoch: crate::mux::server::OutputEpoch = std::sync::Arc::default();
     let ctx = Ctx {
+        layouts_dir: None,
         output_epoch: &__output_epoch,
         tree: &tree,
         clients: &clients,
@@ -857,6 +868,7 @@ fn reload_config_broadcasts_config_changed_only_on_success() {
     let applied = Arc::new(Mutex::new(crate::mux::config::EffectiveConfig::default()));
     let __output_epoch: crate::mux::server::OutputEpoch = std::sync::Arc::default();
     let ctx = Ctx {
+        layouts_dir: None,
         output_epoch: &__output_epoch,
         client_id: None,
         tree: &h.tree,
@@ -920,6 +932,7 @@ fn unknown_typed_ids_are_rejected_as_missing_not_misreported() {
     let clients = Arc::new(Mutex::new(Vec::new()));
     let __output_epoch: crate::mux::server::OutputEpoch = std::sync::Arc::default();
     let ctx = Ctx {
+        layouts_dir: None,
         output_epoch: &__output_epoch,
         tree: &tree,
         clients: &clients,
@@ -1029,6 +1042,7 @@ impl Harness {
     fn run_as(&self, client_id: Option<u64>, line: &str) -> String {
         let __output_epoch: crate::mux::server::OutputEpoch = std::sync::Arc::default();
         let ctx = Ctx {
+            layouts_dir: None,
             output_epoch: &__output_epoch,
             tree: &self.tree,
             clients: &self.clients,
@@ -1839,6 +1853,7 @@ fn snapshot_with_gate(
     let epoch: crate::mux::server::OutputEpoch = std::sync::Arc::default();
     let window = h.windows_of(h.session_named("main"))[0];
     let ctx = Ctx {
+        layouts_dir: None,
         output_epoch: &epoch,
         tree: &h.tree,
         clients: &h.clients,
@@ -2060,6 +2075,7 @@ fn split_window_start_dir_previous_pane_dir_and_explicit_c_wins() {
     let run = |line: &str| {
         let __output_epoch: crate::mux::server::OutputEpoch = std::sync::Arc::default();
         let ctx = Ctx {
+            layouts_dir: None,
             output_epoch: &__output_epoch,
             tree: &h.tree,
             clients: &h.clients,
@@ -2132,6 +2148,7 @@ fn split_window_start_dir_workspace_dir_and_unknown_value_fall_back() {
     let run = |line: &str| {
         let __output_epoch: crate::mux::server::OutputEpoch = std::sync::Arc::default();
         let ctx = Ctx {
+            layouts_dir: None,
             output_epoch: &__output_epoch,
             tree: &h.tree,
             clients: &h.clients,
@@ -2171,6 +2188,7 @@ fn split_window_start_dir_workspace_dir_and_unknown_value_fall_back() {
     let run = |line: &str| {
         let __output_epoch: crate::mux::server::OutputEpoch = std::sync::Arc::default();
         let ctx = Ctx {
+            layouts_dir: None,
             output_epoch: &__output_epoch,
             tree: &h.tree,
             clients: &h.clients,
@@ -2214,6 +2232,7 @@ fn set_option_and_show_options_round_trip_the_live_booleans() {
     let run = |line: &str| {
         let __output_epoch: crate::mux::server::OutputEpoch = std::sync::Arc::default();
         let ctx = Ctx {
+            layouts_dir: None,
             output_epoch: &__output_epoch,
             tree: &h.tree,
             clients: &h.clients,
@@ -2701,6 +2720,7 @@ fn wait_output_times_out_on_a_live_pane_and_rejects_unknown_targets() {
     let clients = Arc::new(Mutex::new(Vec::new()));
     let __output_epoch: crate::mux::server::OutputEpoch = std::sync::Arc::default();
     let ctx = Ctx {
+        layouts_dir: None,
         output_epoch: &__output_epoch,
         tree: &tree,
         clients: &clients,
@@ -2746,6 +2766,7 @@ fn wait_output_holds_no_lock_and_ends_when_the_pane_closes() {
     let clients = Arc::new(Mutex::new(Vec::new()));
     let __output_epoch: crate::mux::server::OutputEpoch = std::sync::Arc::default();
     let ctx = |n: u32| Ctx {
+        layouts_dir: None,
         output_epoch: &__output_epoch,
         tree: &tree,
         clients: &clients,
@@ -2794,6 +2815,7 @@ fn wait_output_ends_when_its_client_disconnects() {
     let run = |client_id: Option<u64>, line: &str| {
         let __output_epoch: crate::mux::server::OutputEpoch = std::sync::Arc::default();
         let ctx = Ctx {
+            layouts_dir: None,
             output_epoch: &__output_epoch,
             tree: &tree,
             clients: &clients,
@@ -2858,4 +2880,46 @@ fn list_commands_j_replies_with_the_embedded_schema() {
         lines.iter().any(|l| l == "list-commands schema"),
         "{lines:?}"
     );
+}
+
+/// Named-layout commands serve the dispatch layouts dir when one is set —
+/// the persisting server's `--state-dir` seam — and never the platform
+/// state dir in that case. `None` keeps the platform default, the shape
+/// embedders dispatch with.
+#[test]
+fn layout_verbs_serve_the_dispatch_layouts_dir() {
+    let store = tempfile::tempdir().expect("tempdir");
+    let dir = store.path().to_path_buf();
+    let tree = Arc::new(Mutex::new(MuxTree::new(Box::new(DeadPaneFactory))));
+    let clients = Arc::new(Mutex::new(Vec::new()));
+    let __output_epoch: crate::mux::server::OutputEpoch = std::sync::Arc::default();
+    let ctx = Ctx {
+        layouts_dir: Some(&dir),
+        output_epoch: &__output_epoch,
+        tree: &tree,
+        clients: &clients,
+        command_number: 1,
+        shutdown: None,
+        config: None,
+        client_id: None,
+    };
+    let run = |line: &str| dispatch_command(parse_command(line).unwrap(), &ctx, None, None);
+
+    let reply = run("save-layout unit");
+    assert!(!reply.contains("%error"), "save-layout: {reply}");
+    let saved = dir.join("unit.json");
+    assert!(
+        saved.exists(),
+        "the layout landed in the dispatch dir: {dir:?}"
+    );
+
+    let reply = run("list-layouts");
+    assert!(
+        reply.contains("unit"),
+        "list-layouts sees the store: {reply}"
+    );
+
+    let reply = run("kill-layout unit");
+    assert!(!reply.contains("%error"), "kill-layout: {reply}");
+    assert!(!saved.exists(), "kill-layout removed the file");
 }

@@ -100,6 +100,7 @@ pub(super) fn handle_client(
     abort: ConnectionAbort,
     config: Option<Arc<Mutex<EffectiveConfig>>>,
     output_epoch: OutputEpoch,
+    layouts_dir: Option<PathBuf>,
 ) {
     use interprocess::local_socket::traits::Stream as _;
 
@@ -154,6 +155,7 @@ pub(super) fn handle_client(
         persist,
         shutdown,
         config,
+        layouts_dir,
         tx,
         queued: Arc::clone(&queued),
         evicted,
@@ -386,6 +388,9 @@ struct Connection {
     persist: Option<Sender<(SaveOrigin, PersistState)>>,
     shutdown: Option<Arc<AtomicBool>>,
     config: Option<Arc<Mutex<EffectiveConfig>>>,
+    /// The daemon's layouts dir (the state dir's `layouts` sibling); `None`
+    /// without a persisting server — the store keeps the platform default.
+    layouts_dir: Option<PathBuf>,
     tx: SyncSender<String>,
     queued: Arc<AtomicUsize>,
     evicted: Arc<AtomicBool>,
@@ -517,6 +522,7 @@ impl Connection {
             shutdown: self.shutdown.as_deref(),
             config: self.config.as_deref(),
             client_id: Some(client_id),
+            layouts_dir: self.layouts_dir.as_deref(),
             output_epoch: &self.output_epoch,
         };
         let dispatch_started = std::time::Instant::now();
