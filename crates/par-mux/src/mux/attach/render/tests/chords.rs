@@ -874,6 +874,18 @@ fn prompt_keys_append_chars_and_swallow_the_mouse() {
     assert!(!session.is_prompt());
 }
 
+/// Shifted CSI-u text — `ESC[64;2u` decodes to Char '@' carrying the
+/// shift bit — lands in the rename prompt's buffer (card 01a18127).
+#[test]
+fn csi_u_shifted_chars_land_in_the_rename_prompt_buffer() {
+    let (_rx, mut conn, mut session) = two_pane_session("prompt-shift", FakeScript::default());
+    session.enter_prompt(PromptTarget::Pane);
+    session.prompt_mut().text.clear();
+    session.route_stdin_bytes(&mut conn, b"\x1b[64;2u\x1b[65;2u");
+    assert_eq!(session.prompt().text, "@A");
+    assert!(session.is_prompt(), "typing left the prompt up");
+}
+
 /// The new-tab prompt seeds the next free index; its commit creates
 /// the window (quoted name), selects it, and lands the view there.
 /// With no session known it cancels without sending.

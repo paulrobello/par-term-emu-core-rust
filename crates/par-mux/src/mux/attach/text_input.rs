@@ -7,6 +7,7 @@
 //! Those bytes arrive one at a time through the byte routers, so a
 //! multi-byte character needs reassembly before it can be judged.
 
+use par_term_emu_core::keyboard::TermKeyEvent;
 use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 
 /// One [`Utf8Assembler::push`] outcome.
@@ -73,6 +74,18 @@ impl Utf8Assembler {
             _ => None,
         }
     }
+}
+
+/// The character a prompt's text buffer takes from one key event: a
+/// Char codepoint regardless of the shift bit — a shifted CSI-u report
+/// arrives as `ESC[64;2u`, codepoint 64 plus shift — and never a
+/// ctrl/alt chord.
+pub(crate) fn prompt_text_char(ev: &TermKeyEvent) -> Option<char> {
+    use par_term_emu_core::keyboard::{modifiers, TermKey};
+    if ev.key() != TermKey::Char || ev.modifiers & (modifiers::CTRL | modifiers::ALT) != 0 {
+        return None;
+    }
+    char::from_u32(ev.codepoint)
 }
 
 /// The ASCII byte a fullwidth form (U+FF01..=U+FF5E) stands for. A CJK

@@ -805,6 +805,23 @@ mod tests {
         }
     }
 
+    /// A shifted text codepoint — `ESC [ 64 ; 2 u` is '@' with the shift
+    /// bit — decodes as a Char key carrying SHIFT, the form the prompts'
+    /// text fields must accept rather than drop (card 01a18127).
+    #[test]
+    fn csi_u_shifted_text_codepoint_decodes_as_char_with_shift() {
+        let mut p = InputParser::default();
+        let tokens = feed_str(&mut p, "\x1b[64;2u");
+        match &tokens[0] {
+            Token::Key(ev) => {
+                assert_eq!(ev.key(), TermKey::Char);
+                assert_eq!(ev.codepoint, u32::from('@'));
+                assert_eq!(ev.modifiers, modifiers::SHIFT);
+            }
+            other => panic!("expected a Key token, got {other:?}"),
+        }
+    }
+
     /// The point of the decode: a pane that never negotiated kitty still
     /// receives a form its input state speaks — LF, the convention claude
     /// accepts for Shift+Enter.

@@ -9,6 +9,7 @@ use crate::mux::attach::panels::{
     PROMPT_PANE_OVERLAY_TITLE, PROMPT_SETTING_OVERLAY_TITLE, PROMPT_WINDOW_OVERLAY_TITLE,
     PROMPT_WORKSPACE_OVERLAY_TITLE,
 };
+use crate::mux::attach::text_input::prompt_text_char;
 use par_term_emu_core::keyboard::TermKeyEvent;
 
 impl WindowSession {
@@ -137,9 +138,7 @@ impl WindowSession {
         use par_term_emu_core::keyboard::TermKey;
         match ev.key() {
             TermKey::Char => {
-                if let (Some(ch), Modal::Prompt(prompt)) =
-                    (char::from_u32(ev.codepoint), &mut self.modal)
-                {
+                if let (Some(ch), Modal::Prompt(prompt)) = (prompt_text_char(ev), &mut self.modal) {
                     prompt.text.push(ch);
                 }
             }

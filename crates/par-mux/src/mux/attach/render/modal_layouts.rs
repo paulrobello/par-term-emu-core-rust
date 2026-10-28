@@ -8,7 +8,7 @@
 use super::{Modal, WindowSession};
 use crate::mux::attach::conn::AttachConn;
 use crate::mux::attach::panels::{compose_prompt_panel, HelpRow};
-use crate::mux::attach::text_input::display_width;
+use crate::mux::attach::text_input::{display_width, prompt_text_char};
 use par_term_emu_core::keyboard::TermKeyEvent;
 
 /// The dialog's overlay title.
@@ -360,10 +360,8 @@ impl WindowSession {
                 }
                 self.refresh_layouts();
             }
-            (TermKey::Char, 0) if typing => {
-                if let (Some(ch), Some(text)) =
-                    (char::from_u32(ev.codepoint), self.layouts_text_mut())
-                {
+            (TermKey::Char, _) if typing => {
+                if let (Some(ch), Some(text)) = (prompt_text_char(ev), self.layouts_text_mut()) {
                     text.push(ch);
                     self.refresh_layouts();
                 }

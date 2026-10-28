@@ -6484,6 +6484,29 @@ fn layouts_key_spellings_navigate_and_edit() {
     assert!(matches!(session.modal, Modal::None));
 }
 
+/// Shifted CSI-u text — `ESC[64;2u` decodes to Char '@' carrying the
+/// shift bit, `ESC[65;2u` to 'A' — lands in the save-name prompt's
+/// buffer instead of being dropped by the bare-modifier gate (card
+/// 01a18127).
+#[test]
+fn layouts_save_prompt_accepts_shifted_csi_u_chars() {
+    use super::super::modal_layouts::LayoutsState;
+    use par_term_emu_core::keyboard::{TermKey, TermKeyEvent};
+    let (_rx, mut conn, mut session) = layouts_conn("layouts-shift", "");
+    session.route_key(&mut conn, &TermKeyEvent::functional(TermKey::Enter, 0));
+    assert!(matches!(
+        layouts_state(&session),
+        LayoutsState::SavePrompt { .. }
+    ));
+    session.route_stdin_bytes(&mut conn, b"\x1b[64;2u\x1b[65;2u");
+    assert_eq!(
+        layouts_state(&session),
+        &LayoutsState::SavePrompt {
+            text: "@A".to_string()
+        }
+    );
+}
+
 /// Esc at the load confirm backs out to the pick list (cursor on the
 /// layout) and sends nothing.
 #[test]
