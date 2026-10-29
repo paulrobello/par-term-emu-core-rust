@@ -107,12 +107,14 @@ pub(super) const PAYLOAD_COMMANDS: &[&str] = &["send-keys", "set-buffer"];
 
 /// A command line reduced for logging. A [`PAYLOAD_COMMANDS`] line keeps
 /// only its name, a leading `-t` target and its size, so it is safe to log
-/// whether or not it parses; any other line keeps its head and size, cut on
-/// a char boundary.
+/// whether or not it parses; an environment-setting line keeps its variable
+/// names with every value redacted (SEC-006); any other line keeps its head
+/// and size, cut on a char boundary.
 pub(super) fn summarize_line(line: &str) -> String {
     const HEAD: usize = 120;
     let mut tokens = line.split_whitespace();
-    if let Some(name) = tokens.next().filter(|name| PAYLOAD_COMMANDS.contains(name)) {
+    let name = tokens.next();
+    if let Some(name) = name.filter(|name| PAYLOAD_COMMANDS.contains(name)) {
         // The target is read only from the leading flag, so a `-t` quoted
         // inside a payload can never pull a payload token into the log.
         let target = match (tokens.next(), tokens.next()) {
@@ -120,6 +122,9 @@ pub(super) fn summarize_line(line: &str) -> String {
             _ => String::new(),
         };
         return format!("{name}{target} [payload redacted, {} bytes]", line.len());
+    }
+    if let Some(redacted) = name.and_then(|name| redact_env_values(name, line)) {
+        return redacted;
     }
     if line.len() <= HEAD {
         return line.to_string();
@@ -131,6 +136,57 @@ pub(super) fn summarize_line(line: &str) -> String {
         .last()
         .unwrap_or(0);
     format!("{}... ({} bytes total)", &line[..cut], line.len())
+}
+
+/// Log form of a line that can carry environment values (SEC-006), or
+/// `None` for any other command. Words are split with the parser's own
+/// quoting grammar so a quoted value never leaks a fragment.
+///
+/// - `set-environment`: flags and the variable name survive; every word
+///   after the name is replaced.
+/// - `new-session`: each `-e NAME=VALUE` keeps `NAME=` with the value
+///   replaced; an `-e` word without `=` is replaced whole.
+fn redact_env_values(name: &str, line: &str) -> Option<String> {
+    const REDACTED: &str = "[redacted]";
+    let words = crate::mux::command::shell_split(line);
+    let mut out: Vec<String> = Vec::with_capacity(words.len());
+    match name {
+        "set-environment" => {
+            let mut iter = words.into_iter();
+            out.extend(iter.next());
+            let mut seen_name = false;
+            while let Some(word) = iter.next() {
+                if seen_name {
+                    out.push(REDACTED.to_string());
+                } else if word == "-t" {
+                    out.push(word);
+                    out.extend(iter.next());
+                } else if word.starts_with('-') {
+                    out.push(word);
+                } else {
+                    out.push(word);
+                    seen_name = true;
+                }
+            }
+        }
+        "new-session" => {
+            let mut iter = words.into_iter();
+            while let Some(word) = iter.next() {
+                let is_env = word == "-e";
+                out.push(word);
+                if is_env {
+                    if let Some(assignment) = iter.next() {
+                        out.push(match assignment.split_once('=') {
+                            Some((key, _)) => format!("{key}={REDACTED}"),
+                            None => REDACTED.to_string(),
+                        });
+                    }
+                }
+            }
+        }
+        _ => return None,
+    }
+    Some(format!("{} ({} bytes)", out.join(" "), line.len()))
 }
 
 /// Write one line, tolerating send-timeout wakes: a healthy slow consumer's

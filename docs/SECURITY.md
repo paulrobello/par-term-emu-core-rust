@@ -1201,10 +1201,12 @@ The daemon logs to two independent sinks (`crates/par-term-emu-core/src/debug.rs
 the control-command summary logs them as the command name, a leading `-t`
 target, and the byte count, never their payload. This applies whether or
 not the line parses. Every other command is logged as its first 120 bytes
-plus its total size. **`set-environment` values and `new-session -e`
-values are still logged verbatim**: in the level-3 file for every such
-command, and on stderr whenever one is rejected. An API token attached to
-a session this way can appear in either.
+plus its total size, except that `set-environment` and `new-session -e`
+lines keep their variable names and replace every value with
+`[redacted]` (SEC-006), in the level-3 file and in the stderr rejection
+record alike; a malformed `-e` word (no `=`) is reported by length only.
+`PTY_SPAWN` records log the command and its arguments, never the pane's
+environment values (dropped variables are listed by name only).
 
 The command summary is not the only record of input. **At
 `DEBUG_LEVEL>=3`, every byte written to a pane's PTY is logged as hex**
@@ -1214,8 +1216,8 @@ or 2 on a daemon that receives passwords or secrets.
 
 The log is `<temp>/par_term_emu_core_rust_debug_rust_<pid>.log`, created
 with mode `0600` and `O_NOFOLLOW` (`crates/par-term-emu-core/src/debug.rs`). It still records
-command names, targets, and environment values, so review it before
-attaching it to a bug report.
+command names, targets, environment variable names, and (at level 3)
+PTY input bytes, so review it before attaching it to a bug report.
 
 ### On-Disk State
 
