@@ -397,6 +397,7 @@ impl GraphicsStore {
             self.scrollback.remove(0);
         }
         self.scrollback.push(graphic);
+        self.enforce_placement_budget();
     }
 
     /// Restore a complete animation from serialized state
@@ -416,7 +417,18 @@ impl GraphicsStore {
         anim.loop_count = sa.loop_count;
         anim.loops_completed = sa.loops_completed;
 
+        // A restored animation counts against the same store budget as a
+        // live one (SEC-001): replace any prior state, then make room.
+        self.remove_animation(sa.image_id);
+        let bytes = anim
+            .frames
+            .values()
+            .fold(0usize, |acc, f| acc.saturating_add(f.pixels.len()));
+        if !self.make_kitty_room(sa.image_id, bytes) {
+            return;
+        }
         self.animations.insert(sa.image_id, anim);
+        self.resync_kitty_entry(sa.image_id);
     }
 }
 

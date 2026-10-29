@@ -729,6 +729,12 @@ logger = logging.getLogger(__name__)
 
 `decode_pixels()` in `crates/par-term-emu-core/src/graphics/kitty/` decodes the Kitty graphics protocol's raw `Rgba`/`Rgb` pixel formats, where `width`/`height` are attacker-controlled `u32` values taken directly from the escape sequence. Computing the expected buffer size as `width * height * (3 or 4)` can wrap `usize` on overflow, which would bypass the size check that follows it and could yield a `TerminalGraphic` claiming huge dimensions over a tiny backing buffer (out-of-bounds read / panic DoS on later access). The fix uses `checked_mul` for every multiplication in that size calculation and returns a `GraphicsError::KittyError` on overflow instead of silently wrapping. The Kitty PNG decode path is separately guarded by a `MAX_IMAGE_PIXELS` product cap on the decoded width × height.
 
+Encoded images (kitty `f=100` and iTerm2 inline images) are probed for their declared dimensions before decoding and refused when either axis exceeds `MAX_IMAGE_DIMENSION` or the product exceeds `MAX_IMAGE_PIXELS`, so a small decompression-bomb payload never allocates its declared size (SEC-002). The decoder's allocation ceiling is also held to `MAX_IMAGE_PIXELS * 4` bytes instead of the image crate's 512 MiB default.
+
+### Retained Graphics Memory Budget (SEC-001)
+
+Kitty images transmitted with an image ID (`a=t`/`a=T` with `i=`) and animation frames (`a=f`) are retained in the `GraphicsStore` beyond the placement that displays them. Their decoded pixel bytes count against a store-wide budget, `GraphicsLimits::max_total_memory` (default `DEFAULT_MAX_GRAPHICS_MEMORY_BYTES`), and the number of retained image IDs is capped at `MAX_KITTY_IMAGES`. When an insert would exceed either bound, the oldest image ID (its stored image and animation together) is evicted first, the way kitty itself evicts; an image or frame that cannot fit on its own is dropped. Each animation keeps at most `MAX_ANIMATION_FRAMES` frames, and at most `MAX_VIRTUAL_PLACEMENTS` distinct `U=1` virtual placements are kept (existing keys still update). Evictions and drops increment `GraphicsStore::dropped_count()`. Visible placements already hold their own reference to the pixels, so eviction never blanks an image on screen. Placements are bounded separately: by count (`max_graphics_count` visible, `max_scrollback_graphics` scrollback) and by the same `max_total_memory` byte budget over their pixel buffers (a buffer shared by several placements counts once), evicting the oldest scrollback graphic first, then the oldest visible placement. The store's worst-case retained pixel memory is therefore twice `max_total_memory`. Numbers: [Resource Limits Reference](#resource-limits-reference).
+
 ### Best Practices for Graphics Protocol
 
 1. ✅ **Run as non-root** - Limits file access to user's own files
@@ -927,18 +933,31 @@ connected client can execute arbitrary commands as the user running the server.
   include the key via the `Authorization: Bearer <key>` or `X-API-Key`
   header, or the `?api_key=` URL param (the latter is disabled by default —
   `--allow-api-key-in-query` logs the key in proxy/browser history, and the
-  server warns at startup when it is enabled). The key and password
+  server warns at startup when it is enabled). **Bundled web frontend
+  residual (SEC-004):** the browser WebSocket API cannot set request
+  headers, so the bundled frontend (`web-terminal-frontend/app/page.tsx`)
+  authenticates only by copying `?api_key=` from its page URL into the
+  WebSocket URL. Using it against an `--api-key` server therefore requires
+  `--allow-api-key-in-query`, and the key then sits in the browser history
+  (page URL) and in any proxy or access log that records request URLs.
+  Prefer HTTP Basic Auth (`--http-user`, which the browser sends as a
+  header) for browser access, use the API key for programmatic clients that
+  can send `Authorization`/`X-API-Key`, keep TLS on, and rotate a key that
+  has been used in a URL. The key and password
   arguments declare `hide_env_values`, so values supplied through
   `PAR_TERM_API_KEY`, `PAR_TERM_HTTP_PASSWORD`, and
   `PAR_TERM_HTTP_PASSWORD_HASH` are never echoed by `--help`.
 - **HTTP Basic Auth** (`--http-user` / `--http-password[-hash|-file]`):
   htpasswd-format hashes verified via maintained RustCrypto crates (bcrypt,
   `$apr1$`, `$1$` MD5-crypt, `{SHA}`). See `src/streaming/auth_hash.rs`.
-  A cleartext password or a legacy `{SHA}`/MD5-crypt hash logs a startup
-  warning; prefer a bcrypt hash from `htpasswd -nB <user>`.
+  A legacy `{SHA}` (unsalted SHA-1) or `$1$`/`$apr1$` (MD5-crypt) hash is
+  refused at startup by default (SEC-003); `--allow-legacy-hash`
+  (`PAR_TERM_ALLOW_LEGACY_HASH`) accepts it with a startup warning for
+  deployments that cannot regenerate yet. A cleartext password logs a
+  startup warning; prefer a bcrypt hash from `htpasswd -nB <user>`.
   `--require-bcrypt` (`PAR_TERM_REQUIRE_BCRYPT`) refuses to start unless the
-  credential is a bcrypt hash; it is off by default, and legacy formats will
-  stop being accepted by default in a later minor release.
+  credential is a bcrypt hash, rejecting cleartext too. The library-level
+  `verify_htpasswd_hash` still verifies every format for embedders.
 - **Default**: auth is **disabled**. The binary binds to `127.0.0.1` by
   default and warns loudly if binding a public interface without auth (SEC-002).
 
@@ -1182,10 +1201,12 @@ The daemon logs to two independent sinks (`crates/par-term-emu-core/src/debug.rs
 the control-command summary logs them as the command name, a leading `-t`
 target, and the byte count, never their payload. This applies whether or
 not the line parses. Every other command is logged as its first 120 bytes
-plus its total size. **`set-environment` values and `new-session -e`
-values are still logged verbatim**: in the level-3 file for every such
-command, and on stderr whenever one is rejected. An API token attached to
-a session this way can appear in either.
+plus its total size, except that `set-environment` and `new-session -e`
+lines keep their variable names and replace every value with
+`[redacted]` (SEC-006), in the level-3 file and in the stderr rejection
+record alike; a malformed `-e` word (no `=`) is reported by length only.
+`PTY_SPAWN` records log the command and its arguments, never the pane's
+environment values (dropped variables are listed by name only).
 
 The command summary is not the only record of input. **At
 `DEBUG_LEVEL>=3`, every byte written to a pane's PTY is logged as hex**
@@ -1195,8 +1216,8 @@ or 2 on a daemon that receives passwords or secrets.
 
 The log is `<temp>/par_term_emu_core_rust_debug_rust_<pid>.log`, created
 with mode `0600` and `O_NOFOLLOW` (`crates/par-term-emu-core/src/debug.rs`). It still records
-command names, targets, and environment values, so review it before
-attaching it to a bug report.
+command names, targets, environment variable names, and (at level 3)
+PTY input bytes, so review it before attaching it to a bug report.
 
 ### On-Disk State
 
@@ -1419,12 +1440,16 @@ sections; the numbers live here.
 | `MAX_CONCURRENT_UPLOADS` | 8 | `crates/par-mux/src/mux/uploads.rs:43` | Uploads staged concurrently daemon-wide. |
 | `MAX_UPLOAD_NAME_BYTES` | 200 | `crates/par-mux/src/mux/uploads.rs:46` | Bytes of one `upload-begin` filename (a bare file name, never a |
 | `MAX_BADGE_FORMAT_LENGTH` | 4 KiB | `crates/par-term-emu-core/src/badge.rs:189` | Badge format bytes accepted from one OSC 1337 SetBadgeFormat payload. |
+| `MAX_ANIMATION_FRAMES` | 1,024 | `crates/par-term-emu-core/src/graphics/animation.rs:18` | Frames retained per kitty animation from escape payloads. |
 | `MAX_IMAGE_DATA_SIZE` | 100 MiB | `crates/par-term-emu-core/src/graphics/iterm.rs:17` | Base64 image bytes accepted from one iTerm2 inline-image sequence. |
 | `MAX_FILE_SIZE` | 100 MiB | `crates/par-term-emu-core/src/graphics/kitty/decode.rs:155` | Bytes read from one kitty file medium named by an escape payload. |
 | `MAX_KITTY_PAYLOAD_BYTES` | 64 MiB | `crates/par-term-emu-core/src/graphics/kitty/mod.rs:21` | Decoded bytes one kitty transmission may accumulate across chunks |
 | `MAX_KITTY_DECOMPRESSED_BYTES` | `MAX_IMAGE_PIXELS * 4` | `crates/par-term-emu-core/src/graphics/kitty/mod.rs:26` | Upper bound on one kitty zlib stream's decompressed output |
-| `MAX_IMAGE_DIMENSION` | 16 KiB | `crates/par-term-emu-core/src/graphics/mod.rs:37` | Width or height accepted for a graphic decoded from a protocol payload. |
-| `MAX_IMAGE_PIXELS` | 67,108,864 | `crates/par-term-emu-core/src/graphics/mod.rs:44` | Total pixels accepted for a graphic decoded from a protocol payload. |
+| `MAX_IMAGE_DIMENSION` | 16 KiB | `crates/par-term-emu-core/src/graphics/mod.rs:40` | Width or height accepted for a graphic decoded from a protocol payload. |
+| `MAX_IMAGE_PIXELS` | 67,108,864 | `crates/par-term-emu-core/src/graphics/mod.rs:47` | Total pixels accepted for a graphic decoded from a protocol payload. |
+| `DEFAULT_MAX_GRAPHICS_MEMORY_BYTES` | 256 MiB | `crates/par-term-emu-core/src/graphics/mod.rs:55` | Bytes of decoded kitty image and animation-frame pixels retained store-wide. |
+| `MAX_KITTY_IMAGES` | 4,096 | `crates/par-term-emu-core/src/graphics/mod.rs:60` | Kitty image IDs (stored images plus animations) retained store-wide. |
+| `MAX_VIRTUAL_PLACEMENTS` | 4,096 | `crates/par-term-emu-core/src/graphics/mod.rs:65` | Distinct kitty virtual placements retained from escape payloads. |
 | `MAX_EVICTED_ZONES` | 10,000 | `crates/par-term-emu-core/src/grid/zone.rs:11` | Evicted zones buffered per grid before they become events. |
 | `SIXEL_HARD_MAX_WIDTH` | 4 KiB | `crates/par-term-emu-core/src/sixel.rs:25` | Hard ceiling on sixel raster width from payload geometry or user config. |
 | `SIXEL_HARD_MAX_HEIGHT` | 4 KiB | `crates/par-term-emu-core/src/sixel.rs:28` | Hard ceiling on sixel raster height from payload geometry or user config. |

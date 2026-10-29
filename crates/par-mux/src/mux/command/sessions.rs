@@ -49,9 +49,14 @@ pub(super) fn parse_new_session(a: &Args<'_>) -> Result<MuxCommand, String> {
         .quoted_values("-e")
         .into_iter()
         .map(|assignment| {
-            let (name, value) = assignment
-                .split_once('=')
-                .ok_or_else(|| format!("new-session: -e expects NAME=VALUE, got: {assignment}"))?;
+            // The rejected word is not echoed: it may be a secret value
+            // missing its NAME= (the error reaches the daemon log, SEC-006).
+            let (name, value) = assignment.split_once('=').ok_or_else(|| {
+                format!(
+                    "new-session: -e expects NAME=VALUE, got a {}-byte word with no '='",
+                    assignment.len()
+                )
+            })?;
             validate_env_name(name, a.name)?;
             Ok((name.to_string(), value.to_string()))
         })
