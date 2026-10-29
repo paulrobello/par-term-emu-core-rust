@@ -940,11 +940,14 @@ connected client can execute arbitrary commands as the user running the server.
 - **HTTP Basic Auth** (`--http-user` / `--http-password[-hash|-file]`):
   htpasswd-format hashes verified via maintained RustCrypto crates (bcrypt,
   `$apr1$`, `$1$` MD5-crypt, `{SHA}`). See `src/streaming/auth_hash.rs`.
-  A cleartext password or a legacy `{SHA}`/MD5-crypt hash logs a startup
-  warning; prefer a bcrypt hash from `htpasswd -nB <user>`.
+  A legacy `{SHA}` (unsalted SHA-1) or `$1$`/`$apr1$` (MD5-crypt) hash is
+  refused at startup by default (SEC-003); `--allow-legacy-hash`
+  (`PAR_TERM_ALLOW_LEGACY_HASH`) accepts it with a startup warning for
+  deployments that cannot regenerate yet. A cleartext password logs a
+  startup warning; prefer a bcrypt hash from `htpasswd -nB <user>`.
   `--require-bcrypt` (`PAR_TERM_REQUIRE_BCRYPT`) refuses to start unless the
-  credential is a bcrypt hash; it is off by default, and legacy formats will
-  stop being accepted by default in a later minor release.
+  credential is a bcrypt hash, rejecting cleartext too. The library-level
+  `verify_htpasswd_hash` still verifies every format for embedders.
 - **Default**: auth is **disabled**. The binary binds to `127.0.0.1` by
   default and warns loudly if binding a public interface without auth (SEC-002).
 

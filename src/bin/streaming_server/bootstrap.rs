@@ -919,6 +919,20 @@ pub fn resolve_http_basic_auth(args: &Args) -> Result<Option<HttpBasicAuthConfig
                 }
             }
         }
+    } else if !args.allow_legacy_hash {
+        // SEC-003: legacy formats are refused by default; --allow-legacy-hash
+        // is the explicit opt-out for deployments that cannot regenerate yet.
+        if let PasswordConfig::Hash(h) = &auth.password {
+            if let Some(format) = legacy_hash_format(h) {
+                anyhow::bail!(
+                    "HTTP Basic Auth for user '{}' uses legacy hash format {format}, which is \
+                     refused by default; regenerate it with `htpasswd -nB {}` or pass \
+                     --allow-legacy-hash (PAR_TERM_ALLOW_LEGACY_HASH) to accept it",
+                    auth.username,
+                    auth.username
+                );
+            }
+        }
     }
 
     Ok(Some(auth))
@@ -1073,13 +1087,42 @@ mod require_bcrypt_tests {
         assert!(auth.is_some());
     }
 
+    /// SEC-003: legacy hashes are refused by default, without echoing them.
     #[test]
-    fn require_bcrypt_off_keeps_legacy_hashes_accepted() {
+    fn legacy_hashes_are_refused_by_default() {
         for hash in LEGACY {
-            let auth = resolve_http_basic_auth(&args(&["--http-password-hash", hash]))
-                .expect("legacy hash accepted by default");
+            let err = resolve_http_basic_auth(&args(&["--http-password-hash", hash]))
+                .expect_err("legacy hash refused by default");
+            let msg = format!("{err:#}");
+            assert!(msg.contains("--allow-legacy-hash"), "{msg}");
+            assert!(!msg.contains(hash), "error leaked the hash: {msg}");
+        }
+    }
+
+    #[test]
+    fn allow_legacy_hash_keeps_legacy_hashes_accepted() {
+        for hash in LEGACY {
+            let auth = resolve_http_basic_auth(&args(&[
+                "--http-password-hash",
+                hash,
+                "--allow-legacy-hash",
+            ]))
+            .expect("legacy hash accepted with the opt-out");
             assert!(auth.is_some());
         }
+    }
+
+    #[test]
+    fn default_still_accepts_cleartext_and_bcrypt() {
+        assert!(resolve_http_basic_auth(&args(&["--http-password", "pw"]))
+            .expect("cleartext accepted by default")
+            .is_some());
+        let hash = bcrypt::hash("pw", 4).expect("bcrypt hash");
+        assert!(
+            resolve_http_basic_auth(&args(&["--http-password-hash", &hash]))
+                .expect("bcrypt accepted by default")
+                .is_some()
+        );
     }
 
     #[test]

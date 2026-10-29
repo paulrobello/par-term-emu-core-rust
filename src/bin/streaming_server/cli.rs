@@ -296,9 +296,20 @@ pub struct Args {
 
     /// Refuse to start unless HTTP Basic Auth uses a bcrypt hash.
     /// Rejects cleartext passwords and legacy {SHA} / $1$ / $apr1$ hashes.
-    /// Off by default; legacy formats are accepted with a warning otherwise.
+    /// Off by default (cleartext is accepted with a warning).
     #[arg(long, env = "PAR_TERM_REQUIRE_BCRYPT", requires = "http_user")]
     pub require_bcrypt: bool,
+
+    /// Accept a legacy {SHA} (unsalted SHA-1) / $1$ / $apr1$ (MD5-crypt)
+    /// HTTP Basic Auth hash. These are refused at startup by default since
+    /// they are cheap to brute-force; regenerate with `htpasswd -nB <user>`.
+    #[arg(
+        long,
+        env = "PAR_TERM_ALLOW_LEGACY_HASH",
+        requires = "http_user",
+        conflicts_with = "require_bcrypt"
+    )]
+    pub allow_legacy_hash: bool,
 
     // Multi-session options
     /// Maximum number of concurrent terminal sessions
@@ -462,5 +473,22 @@ mod tests {
                 .unwrap()
                 .require_bcrypt
         );
+    }
+
+    #[test]
+    fn allow_legacy_hash_requires_http_user_and_excludes_require_bcrypt() {
+        assert!(parse(&["--allow-legacy-hash"]).is_err());
+        assert!(
+            parse(&["--http-user", "admin", "--allow-legacy-hash"])
+                .unwrap()
+                .allow_legacy_hash
+        );
+        assert!(parse(&[
+            "--http-user",
+            "admin",
+            "--allow-legacy-hash",
+            "--require-bcrypt"
+        ])
+        .is_err());
     }
 }
