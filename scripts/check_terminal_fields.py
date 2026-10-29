@@ -21,14 +21,12 @@ and a missing struct, then requires the real file to pass.
 from __future__ import annotations
 
 import argparse
-import contextlib
-import io
 import re
 import tempfile
 from pathlib import Path
-from typing import NoReturn
 
-ROOT = Path(__file__).resolve().parent.parent
+from _gate_common import ROOT, expect_failure, fail
+
 TERMINAL_REL = "crates/par-term-emu-core/src/terminal/mod.rs"
 
 # The recorded ceiling. Lower it when fields are extracted.
@@ -36,11 +34,6 @@ BASELINE = 52
 
 STRUCT_START_RE = re.compile(r"^pub struct Terminal \{\s*$", re.MULTILINE)
 FIELD_RE = re.compile(r"^    (?:pub(?:\([a-z]+\))? )?([a-z_][a-z0-9_]*):", re.MULTILINE)
-
-
-def fail(msg: str) -> NoReturn:
-    print(msg)
-    raise SystemExit(1)
 
 
 def count_fields(path: Path) -> int:
@@ -74,18 +67,6 @@ def check(path: Path, baseline: int) -> None:
     print(f"terminal fields ok: {n} (at baseline)")
 
 
-def _expect_failure(path: Path, baseline: int, needle: str) -> None:
-    buf = io.StringIO()
-    try:
-        with contextlib.redirect_stdout(buf):
-            check(path, baseline)
-    except SystemExit:
-        if needle not in buf.getvalue():
-            fail(f"self-test: failure output lacks {needle!r}: {buf.getvalue()}")
-        return
-    fail(f"self-test: expected a failure mentioning {needle!r}, got a pass")
-
-
 def self_test() -> None:
     synthetic = (
         "pub struct Other {\n    pub(crate) x: u8,\n}\n"
@@ -108,15 +89,15 @@ def self_test() -> None:
             synthetic.replace("    pending_wrap", "    extra: u8,\n    pending_wrap"),
             encoding="utf-8",
         )
-        _expect_failure(path, 3, "above the frozen baseline")
+        expect_failure(lambda: check(path, 3), "above the frozen baseline")
 
         path.write_text(
             synthetic.replace("    pending_wrap: bool,\n", ""), encoding="utf-8"
         )
-        _expect_failure(path, 3, "lower BASELINE")
+        expect_failure(lambda: check(path, 3), "lower BASELINE")
 
         path.write_text("pub struct Other {}\n", encoding="utf-8")
-        _expect_failure(path, 3, "parsed nothing")
+        expect_failure(lambda: check(path, 3), "parsed nothing")
 
     check(ROOT / TERMINAL_REL, BASELINE)
     print("self-test ok: growth, unratcheted shrink, and a missing struct reported")
