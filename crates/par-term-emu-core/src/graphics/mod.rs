@@ -65,6 +65,53 @@ pub const MAX_KITTY_IMAGES: usize = 4096;
 /// cap: Distinct kitty virtual placements retained from escape payloads.
 pub const MAX_VIRTUAL_PLACEMENTS: usize = 4096;
 
+/// Decode an encoded image (PNG, JPEG, GIF, ...) to RGBA under the shared
+/// size caps, rejecting oversized images from the header before any pixel
+/// buffer is allocated (SEC-002).
+///
+/// The declared dimensions are probed first and refused when either axis
+/// exceeds [`MAX_IMAGE_DIMENSION`] or the product exceeds
+/// [`MAX_IMAGE_PIXELS`]; the decoder's own allocation ceiling is then held
+/// to the same `MAX_IMAGE_PIXELS * 4` bytes, so a bomb whose header lies
+/// still cannot drive the image crate's 512 MiB default.
+pub(crate) fn decode_bounded_rgba(data: &[u8]) -> Result<image::RgbaImage, GraphicsError> {
+    let limits = || {
+        let mut limits = image::Limits::default();
+        limits.max_image_width = Some(MAX_IMAGE_DIMENSION as u32);
+        limits.max_image_height = Some(MAX_IMAGE_DIMENSION as u32);
+        limits.max_alloc = Some((MAX_IMAGE_PIXELS * 4) as u64);
+        limits
+    };
+    let reader = || {
+        image::ImageReader::new(std::io::Cursor::new(data))
+            .with_guessed_format()
+            .map_err(|e| GraphicsError::ImageError(e.to_string()))
+            .map(|mut reader| {
+                reader.limits(limits());
+                reader
+            })
+    };
+
+    let (w, h) = reader()?
+        .into_dimensions()
+        .map_err(|e| GraphicsError::ImageError(e.to_string()))?;
+    let (w, h) = (w as usize, h as usize);
+    if w > MAX_IMAGE_DIMENSION || h > MAX_IMAGE_DIMENSION {
+        return Err(GraphicsError::ImageTooLarge(w.max(h), MAX_IMAGE_DIMENSION));
+    }
+    let pixels = w
+        .checked_mul(h)
+        .ok_or_else(|| GraphicsError::ImageError("Image dimensions overflow usize".to_string()))?;
+    if pixels > MAX_IMAGE_PIXELS {
+        return Err(GraphicsError::ImageTooLarge(pixels, MAX_IMAGE_PIXELS));
+    }
+
+    let img = reader()?
+        .decode()
+        .map_err(|e| GraphicsError::ImageError(e.to_string()))?;
+    Ok(img.to_rgba8())
+}
+
 /// Image display mode for rendering
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
 pub enum ImageDisplayMode {

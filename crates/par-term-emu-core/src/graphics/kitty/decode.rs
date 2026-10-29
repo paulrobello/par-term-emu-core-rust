@@ -196,20 +196,10 @@ impl KittyParser {
     ) -> Result<(usize, usize, Vec<u8>), GraphicsError> {
         match self.format {
             KittyFormat::Png => {
-                // Decode PNG via a size-limited reader so the decoder refuses
-                // to allocate before hitting MAX_IMAGE_DIMENSION, guarding
-                // against decompression-bomb PNGs (small input, huge output).
-                let mut reader = image::ImageReader::new(std::io::Cursor::new(data))
-                    .with_guessed_format()
-                    .map_err(|e| GraphicsError::ImageError(e.to_string()))?;
-                let mut limits = image::Limits::default();
-                limits.max_image_width = Some(MAX_IMAGE_DIMENSION as u32);
-                limits.max_image_height = Some(MAX_IMAGE_DIMENSION as u32);
-                reader.limits(limits);
-                let img = reader
-                    .decode()
-                    .map_err(|e| GraphicsError::ImageError(e.to_string()))?;
-                let rgba = img.to_rgba8();
+                // Header-probed, allocation-capped decode: a decompression
+                // bomb (small input, huge declared output) is refused before
+                // any pixel buffer is allocated (SEC-002).
+                let rgba = crate::graphics::decode_bounded_rgba(data)?;
                 let width = rgba.width() as usize;
                 let height = rgba.height() as usize;
                 // Also cap the total pixel product: two dimensions can each

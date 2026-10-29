@@ -1725,6 +1725,43 @@ fn test_decode_pixels_png_rejects_oversized_dimensions() {
     assert!(result.is_err(), "oversized PNG dimensions must be rejected");
 }
 
+/// SEC-002: a tiny PNG whose header declares a pixel product above
+/// MAX_IMAGE_PIXELS (each axis within MAX_IMAGE_DIMENSION) is refused by
+/// the header probe with the pixel-product error, before any decode.
+#[test]
+fn png_pixel_bomb_is_rejected_from_header() {
+    let img = image::RgbaImage::from_pixel(1, 1, image::Rgba([0, 0, 0, 0]));
+    let mut png = Vec::new();
+    img.write_to(&mut std::io::Cursor::new(&mut png), image::ImageFormat::Png)
+        .unwrap();
+    let (w, h): (u32, u32) = (16_384, 8_192);
+    png[16..20].copy_from_slice(&w.to_be_bytes());
+    png[20..24].copy_from_slice(&h.to_be_bytes());
+    fn crc32(bytes: &[u8]) -> u32 {
+        let mut crc: u32 = 0xFFFF_FFFF;
+        for &b in bytes {
+            crc ^= b as u32;
+            for _ in 0..8 {
+                let mask = (crc & 1).wrapping_neg();
+                crc = (crc >> 1) ^ (0xEDB8_8320 & mask);
+            }
+        }
+        !crc
+    }
+    let crc = crc32(&png[12..29]);
+    png[29..33].copy_from_slice(&crc.to_be_bytes());
+
+    let mut parser = KittyParser::new();
+    parser.format = KittyFormat::Png;
+    match parser.decode_pixels(&png) {
+        Err(GraphicsError::ImageTooLarge(pixels, max)) => {
+            assert_eq!(pixels, 16_384 * 8_192);
+            assert_eq!(max, crate::graphics::MAX_IMAGE_PIXELS);
+        }
+        other => panic!("expected header-probe ImageTooLarge, got {other:?}"),
+    }
+}
+
 // --- build_graphic: Frame action ---
 
 #[test]
