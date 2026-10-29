@@ -63,8 +63,8 @@ impl Perform for Terminal {
                 // Also increment in session variables for badge evaluation
                 self.badge_state.session_variables.increment_bell_count();
                 // Add bell event based on volume settings
-                let event = if self.warning_bell_volume > 0 {
-                    BellEvent::WarningBell(self.warning_bell_volume)
+                let event = if self.bell_volumes.warning > 0 {
+                    BellEvent::WarningBell(self.bell_volumes.warning)
                 } else {
                     BellEvent::VisualBell
                 };

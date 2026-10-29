@@ -12,12 +12,12 @@ impl Terminal {
 
     /// Get the warning bell volume (0=off, 1-8=volume levels)
     pub fn warning_bell_volume(&self) -> u8 {
-        self.warning_bell_volume
+        self.bell_volumes.warning
     }
 
     /// Get the margin bell volume (0=off, 1-8=volume levels)
     pub fn margin_bell_volume(&self) -> u8 {
-        self.margin_bell_volume
+        self.bell_volumes.margin
     }
 
     /// Set the host-configured conformance level.
@@ -39,7 +39,7 @@ impl Terminal {
     pub fn set_warning_bell_volume(&mut self, volume: u8) {
         let volume = volume.min(8);
         self.host.configured_warning_bell_volume = volume;
-        self.warning_bell_volume = volume;
+        self.bell_volumes.warning = volume;
     }
 
     /// Set the host-configured margin bell volume (0=off, 1-8; larger
@@ -51,7 +51,7 @@ impl Terminal {
     pub fn set_margin_bell_volume(&mut self, volume: u8) {
         let volume = volume.min(8);
         self.host.configured_margin_bell_volume = volume;
-        self.margin_bell_volume = volume;
+        self.bell_volumes.margin = volume;
     }
 
     /// Set pixel dimensions for XTWINOPS reporting
