@@ -397,6 +397,7 @@ impl GraphicsStore {
             self.scrollback.remove(0);
         }
         self.scrollback.push(graphic);
+        self.enforce_placement_budget();
     }
 
     /// Restore a complete animation from serialized state

@@ -749,6 +749,36 @@ impl GraphicsStore {
             self.dropped_count += 1;
         }
         self.placements.push(graphic);
+        self.enforce_placement_budget();
+    }
+
+    /// Pixel bytes held by visible and scrollback placements, counting a
+    /// buffer shared by several placements once.
+    pub fn placement_retained_bytes(&self) -> usize {
+        let mut seen = std::collections::HashSet::new();
+        self.placements
+            .iter()
+            .chain(self.scrollback.iter())
+            .filter(|g| seen.insert(Arc::as_ptr(&g.pixels)))
+            .fold(0usize, |acc, g| acc.saturating_add(g.pixels.len()))
+    }
+
+    /// Hold placement pixel bytes to `max_total_memory` (SEC-001): evict the
+    /// oldest scrollback graphic first, then the oldest visible placement,
+    /// never the newest placement. Kept separate from the kitty image budget,
+    /// so the store's worst case is twice `max_total_memory`.
+    fn enforce_placement_budget(&mut self) {
+        let budget = self.limits.max_total_memory;
+        while self.placement_retained_bytes() > budget {
+            if !self.scrollback.is_empty() {
+                self.scrollback.remove(0);
+            } else if self.placements.len() > 1 {
+                self.placements.remove(0);
+            } else {
+                break;
+            }
+            self.dropped_count += 1;
+        }
     }
 
     /// Remove a graphic by ID
@@ -1682,6 +1712,46 @@ mod tests {
         assert_eq!(store.kitty_retained_bytes(), 600);
         assert!(store.get_animation(4).is_some());
         assert!(store.get_kitty_image(4).is_some());
+    }
+
+    /// SEC-001: placements with distinct buffers (a=T with incrementing IDs,
+    /// iTerm2 inline images) are held to the byte budget, oldest first.
+    #[test]
+    fn placement_bytes_are_budgeted_oldest_first() {
+        let mut store = budget_store(1000);
+        for id in 1..=10u64 {
+            store.add_graphic(TerminalGraphic::new(
+                id,
+                GraphicProtocol::Kitty,
+                (0, 0),
+                10,
+                10,
+                vec![0; 400],
+            ));
+            assert!(store.placement_retained_bytes() <= 1000);
+        }
+        let ids: Vec<u64> = store.all_graphics().iter().map(|g| g.id).collect();
+        assert_eq!(ids, vec![9, 10]);
+        assert_eq!(store.dropped_count(), 8);
+    }
+
+    /// SEC-001: one buffer displayed many times is counted once.
+    #[test]
+    fn shared_placement_buffer_is_counted_once() {
+        let mut store = budget_store(1000);
+        let pixels = Arc::new(vec![0u8; 600]);
+        for id in 1..=10u64 {
+            store.add_graphic(TerminalGraphic::with_shared_pixels(
+                id,
+                GraphicProtocol::Kitty,
+                (0, 0),
+                15,
+                10,
+                pixels.clone(),
+            ));
+        }
+        assert_eq!(store.graphics_count(), 10);
+        assert_eq!(store.placement_retained_bytes(), 600);
     }
 
     /// SEC-001: distinct virtual placements are capped; an existing key
