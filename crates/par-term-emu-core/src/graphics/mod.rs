@@ -23,7 +23,10 @@ use std::sync::Arc;
 use serde::{Deserialize, Serialize};
 
 // Re-export for convenience
-pub use animation::{Animation, AnimationControl, AnimationFrame, AnimationState, CompositionMode};
+pub use animation::{
+    Animation, AnimationControl, AnimationFrame, AnimationState, CompositionMode,
+    MAX_ANIMATION_FRAMES,
+};
 pub use iterm::ITermParser;
 pub use placeholder::{
     create_placeholder_with_diacritics, number_to_diacritic, PlaceholderInfo, PLACEHOLDER_CHAR,
@@ -43,6 +46,71 @@ pub const MAX_IMAGE_DIMENSION: usize = 16384;
 /// MiB) even when width and height individually pass `MAX_IMAGE_DIMENSION`.
 /// cap: Total pixels accepted for a graphic decoded from a protocol payload.
 pub const MAX_IMAGE_PIXELS: usize = 64 * 1024 * 1024;
+
+/// Default store-wide budget for retained kitty pixel data
+/// (`GraphicsLimits::max_total_memory`).
+///
+/// Shared images and animation frames count against it; when an insert
+/// would exceed it the oldest kitty image ID is evicted first (SEC-001).
+/// cap: Bytes of decoded kitty image and animation-frame pixels retained store-wide.
+pub const DEFAULT_MAX_GRAPHICS_MEMORY_BYTES: usize = 256 * 1024 * 1024;
+
+/// Maximum number of kitty image IDs (stored images and animations)
+/// retained at once; the oldest ID is evicted first (SEC-001).
+/// cap: Kitty image IDs (stored images plus animations) retained store-wide.
+pub const MAX_KITTY_IMAGES: usize = 4096;
+
+/// Maximum number of distinct kitty virtual (`U=1`) placements retained;
+/// new keys past the cap are dropped, existing keys still update (SEC-001).
+/// cap: Distinct kitty virtual placements retained from escape payloads.
+pub const MAX_VIRTUAL_PLACEMENTS: usize = 4096;
+
+/// Decode an encoded image (PNG, JPEG, GIF, ...) to RGBA under the shared
+/// size caps, rejecting oversized images from the header before any pixel
+/// buffer is allocated (SEC-002).
+///
+/// The declared dimensions are probed first and refused when either axis
+/// exceeds [`MAX_IMAGE_DIMENSION`] or the product exceeds
+/// [`MAX_IMAGE_PIXELS`]; the decoder's own allocation ceiling is then held
+/// to the same `MAX_IMAGE_PIXELS * 4` bytes, so a bomb whose header lies
+/// still cannot drive the image crate's 512 MiB default.
+pub(crate) fn decode_bounded_rgba(data: &[u8]) -> Result<image::RgbaImage, GraphicsError> {
+    let limits = || {
+        let mut limits = image::Limits::default();
+        limits.max_image_width = Some(MAX_IMAGE_DIMENSION as u32);
+        limits.max_image_height = Some(MAX_IMAGE_DIMENSION as u32);
+        limits.max_alloc = Some((MAX_IMAGE_PIXELS * 4) as u64);
+        limits
+    };
+    let reader = || {
+        image::ImageReader::new(std::io::Cursor::new(data))
+            .with_guessed_format()
+            .map_err(|e| GraphicsError::ImageError(e.to_string()))
+            .map(|mut reader| {
+                reader.limits(limits());
+                reader
+            })
+    };
+
+    let (w, h) = reader()?
+        .into_dimensions()
+        .map_err(|e| GraphicsError::ImageError(e.to_string()))?;
+    let (w, h) = (w as usize, h as usize);
+    if w > MAX_IMAGE_DIMENSION || h > MAX_IMAGE_DIMENSION {
+        return Err(GraphicsError::ImageTooLarge(w.max(h), MAX_IMAGE_DIMENSION));
+    }
+    let pixels = w
+        .checked_mul(h)
+        .ok_or_else(|| GraphicsError::ImageError("Image dimensions overflow usize".to_string()))?;
+    if pixels > MAX_IMAGE_PIXELS {
+        return Err(GraphicsError::ImageTooLarge(pixels, MAX_IMAGE_PIXELS));
+    }
+
+    let img = reader()?
+        .decode()
+        .map_err(|e| GraphicsError::ImageError(e.to_string()))?;
+    Ok(img.to_rgba8())
+}
 
 /// Image display mode for rendering
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
@@ -245,8 +313,8 @@ impl Default for GraphicsLimits {
         Self {
             max_width: 10000,
             max_height: 10000,
-            max_pixels: 25_000_000,              // 25MP
-            max_total_memory: 256 * 1024 * 1024, // 256MB
+            max_pixels: 25_000_000, // 25MP
+            max_total_memory: DEFAULT_MAX_GRAPHICS_MEMORY_BYTES,
             max_graphics_count: 1000,
             max_scrollback_graphics: 500,
         }
@@ -618,6 +686,25 @@ pub struct GraphicsStore {
 
     /// Count of graphics dropped due to limits
     dropped_count: usize,
+
+    /// Pixel bytes retained by `shared_images` plus `animations`, counted
+    /// once per buffer (a frame sharing its image's `Arc` is not re-counted)
+    kitty_bytes: usize,
+
+    /// Budget bookkeeping per kitty image ID; the lowest `seq` is evicted first
+    kitty_entries: HashMap<u32, KittyEntry>,
+
+    /// Next insertion sequence handed out for `kitty_entries`
+    kitty_seq: u64,
+}
+
+/// Budget bookkeeping for one kitty image ID (SEC-001).
+#[derive(Debug, Clone, Copy)]
+struct KittyEntry {
+    /// Insertion sequence; lower is older
+    seq: u64,
+    /// Bytes this ID contributes to `GraphicsStore::kitty_bytes`
+    bytes: usize,
 }
 
 impl GraphicsStore {
@@ -662,6 +749,36 @@ impl GraphicsStore {
             self.dropped_count += 1;
         }
         self.placements.push(graphic);
+        self.enforce_placement_budget();
+    }
+
+    /// Pixel bytes held by visible and scrollback placements, counting a
+    /// buffer shared by several placements once.
+    pub fn placement_retained_bytes(&self) -> usize {
+        let mut seen = std::collections::HashSet::new();
+        self.placements
+            .iter()
+            .chain(self.scrollback.iter())
+            .filter(|g| seen.insert(Arc::as_ptr(&g.pixels)))
+            .fold(0usize, |acc, g| acc.saturating_add(g.pixels.len()))
+    }
+
+    /// Hold placement pixel bytes to `max_total_memory` (SEC-001): evict the
+    /// oldest scrollback graphic first, then the oldest visible placement,
+    /// never the newest placement. Kept separate from the kitty image budget,
+    /// so the store's worst case is twice `max_total_memory`.
+    fn enforce_placement_budget(&mut self) {
+        let budget = self.limits.max_total_memory;
+        while self.placement_retained_bytes() > budget {
+            if !self.scrollback.is_empty() {
+                self.scrollback.remove(0);
+            } else if self.placements.len() > 1 {
+                self.placements.remove(0);
+            } else {
+                break;
+            }
+            self.dropped_count += 1;
+        }
     }
 
     /// Remove a graphic by ID
@@ -728,12 +845,30 @@ impl GraphicsStore {
     // --- Kitty image management ---
 
     /// Store a Kitty image for later reuse
+    ///
+    /// The store-wide `max_total_memory` budget and the `MAX_KITTY_IMAGES`
+    /// count cap are enforced here: older kitty image IDs are evicted to
+    /// make room, and an image that cannot fit on its own is dropped
+    /// (counted in [`dropped_count`](Self::dropped_count)).
     pub fn store_kitty_image(
         &mut self,
         image_id: u32,
         width: usize,
         height: usize,
         pixels: Vec<u8>,
+    ) {
+        self.store_kitty_image_shared(image_id, width, height, Arc::new(pixels));
+    }
+
+    /// [`store_kitty_image`](Self::store_kitty_image) for a buffer that is
+    /// already shared (an animation's first frame), so it is retained and
+    /// budgeted once.
+    pub(crate) fn store_kitty_image_shared(
+        &mut self,
+        image_id: u32,
+        width: usize,
+        height: usize,
+        pixels: Arc<Vec<u8>>,
     ) {
         // Kitty spec (lines 547-550): retransmitting an existing image ID
         // deletes the old image and all its placements before storing new data.
@@ -745,9 +880,28 @@ impl GraphicsStore {
             self.scrollback
                 .retain(|g| g.kitty_image_id != Some(image_id));
             self.animations.remove(&image_id);
+            self.shared_images.remove(&image_id);
+            self.resync_kitty_entry(image_id);
         }
-        self.shared_images
-            .insert(image_id, (width, height, Arc::new(pixels)));
+        let already_retained = self.animations.get(&image_id).is_some_and(|anim| {
+            anim.frames
+                .values()
+                .any(|frame| Arc::ptr_eq(&frame.pixels, &pixels))
+        });
+        let incoming = if already_retained { 0 } else { pixels.len() };
+        if !self.make_kitty_room(image_id, incoming) {
+            self.dropped_count += 1;
+            debug_log!(
+                "GRAPHICS",
+                "Dropped kitty image_id={}: {} bytes exceed the {} byte store budget",
+                image_id,
+                incoming,
+                self.limits.max_total_memory
+            );
+            return;
+        }
+        self.shared_images.insert(image_id, (width, height, pixels));
+        self.resync_kitty_entry(image_id);
     }
 
     /// Get a stored Kitty image
@@ -758,6 +912,92 @@ impl GraphicsStore {
     /// Remove a Kitty image
     pub fn remove_kitty_image(&mut self, image_id: u32) {
         self.shared_images.remove(&image_id);
+        self.resync_kitty_entry(image_id);
+    }
+
+    /// Pixel bytes currently retained by stored kitty images and animation
+    /// frames (the quantity bounded by `max_total_memory`).
+    pub fn kitty_retained_bytes(&self) -> usize {
+        self.kitty_bytes
+    }
+
+    /// Bytes one kitty image ID retains: its shared image plus every
+    /// animation frame that does not share that image's buffer.
+    fn kitty_id_bytes(&self, image_id: u32) -> usize {
+        let shared = self.shared_images.get(&image_id).map(|(_, _, p)| p);
+        let mut bytes = shared.map_or(0, |p| p.len());
+        if let Some(anim) = self.animations.get(&image_id) {
+            for frame in anim.frames.values() {
+                if !shared.is_some_and(|p| Arc::ptr_eq(p, &frame.pixels)) {
+                    bytes = bytes.saturating_add(frame.pixels.len());
+                }
+            }
+        }
+        bytes
+    }
+
+    /// Recompute one image ID's contribution to `kitty_bytes` after its
+    /// shared image or animation changed (or vanished).
+    fn resync_kitty_entry(&mut self, image_id: u32) {
+        let old = self.kitty_entries.get(&image_id).map_or(0, |e| e.bytes);
+        self.kitty_bytes = self.kitty_bytes.saturating_sub(old);
+        if !self.shared_images.contains_key(&image_id) && !self.animations.contains_key(&image_id) {
+            self.kitty_entries.remove(&image_id);
+            return;
+        }
+        let bytes = self.kitty_id_bytes(image_id);
+        self.kitty_bytes = self.kitty_bytes.saturating_add(bytes);
+        let next_seq = &mut self.kitty_seq;
+        self.kitty_entries
+            .entry(image_id)
+            .or_insert_with(|| {
+                let seq = *next_seq;
+                *next_seq += 1;
+                KittyEntry { seq, bytes: 0 }
+            })
+            .bytes = bytes;
+    }
+
+    /// Drop a kitty image ID's shared image and animation. Placements keep
+    /// their own `Arc` and stay visible until they are replaced or deleted.
+    fn evict_kitty_id(&mut self, image_id: u32) {
+        self.shared_images.remove(&image_id);
+        self.animations.remove(&image_id);
+        self.resync_kitty_entry(image_id);
+        self.dropped_count += 1;
+        debug_log!(
+            "GRAPHICS",
+            "Evicted kitty image_id={} to stay within the store budget",
+            image_id
+        );
+    }
+
+    /// Evict the oldest kitty image IDs (never `protect`) until `incoming`
+    /// more bytes fit the memory budget and a new ID fits the count cap.
+    /// Returns false when `protect`'s bytes plus `incoming` alone exceed
+    /// the budget.
+    fn make_kitty_room(&mut self, protect: u32, incoming: usize) -> bool {
+        let budget = self.limits.max_total_memory;
+        let protected_bytes = self.kitty_entries.get(&protect).map_or(0, |e| e.bytes);
+        if protected_bytes.saturating_add(incoming) > budget {
+            return false;
+        }
+        let is_new = !self.kitty_entries.contains_key(&protect);
+        while self.kitty_bytes.saturating_add(incoming) > budget
+            || (is_new && self.kitty_entries.len() >= MAX_KITTY_IMAGES)
+        {
+            let Some(oldest) = self
+                .kitty_entries
+                .iter()
+                .filter(|(id, _)| **id != protect)
+                .min_by_key(|(_, e)| e.seq)
+                .map(|(id, _)| *id)
+            else {
+                break;
+            };
+            self.evict_kitty_id(oldest);
+        }
+        true
     }
 
     /// Delete graphics by Kitty criteria
@@ -797,8 +1037,21 @@ impl GraphicsStore {
         graphic.is_virtual = true;
         let image_id = graphic.kitty_image_id.unwrap_or(0);
         let placement_id = graphic.kitty_placement_id.unwrap_or(0);
-        self.virtual_placements
-            .insert((image_id, placement_id), graphic);
+        let key = (image_id, placement_id);
+        if !self.virtual_placements.contains_key(&key)
+            && self.virtual_placements.len() >= MAX_VIRTUAL_PLACEMENTS
+        {
+            self.dropped_count += 1;
+            debug_log!(
+                "GRAPHICS",
+                "Dropped virtual placement image_id={} placement_id={}: cap {} reached",
+                image_id,
+                placement_id,
+                MAX_VIRTUAL_PLACEMENTS
+            );
+            return;
+        }
+        self.virtual_placements.insert(key, graphic);
     }
 
     /// Get a virtual placement
@@ -839,8 +1092,37 @@ impl GraphicsStore {
     }
 
     /// Add a frame to an animation
+    ///
+    /// Bounded by `MAX_ANIMATION_FRAMES` per animation (a new frame number
+    /// past the cap is dropped; an existing one is still replaced) and by
+    /// the store-wide `max_total_memory` budget, which evicts older kitty
+    /// image IDs first.
     pub fn add_animation_frame(&mut self, image_id: u32, frame: AnimationFrame) {
         let frame_num = frame.frame_number;
+        if self.animations.get(&image_id).is_some_and(|anim| {
+            anim.frames.len() >= MAX_ANIMATION_FRAMES && !anim.frames.contains_key(&frame_num)
+        }) {
+            self.dropped_count += 1;
+            debug_log!(
+                "GRAPHICS",
+                "Dropped animation frame {} for image_id={}: {} frame cap reached",
+                frame_num,
+                image_id,
+                MAX_ANIMATION_FRAMES
+            );
+            return;
+        }
+        if !self.make_kitty_room(image_id, frame.pixels.len()) {
+            self.dropped_count += 1;
+            debug_log!(
+                "GRAPHICS",
+                "Dropped animation frame {} for image_id={}: store budget {} exceeded",
+                frame_num,
+                image_id,
+                self.limits.max_total_memory
+            );
+            return;
+        }
         let default_delay = frame.delay_ms.max(100); // Default to 100ms if not specified
         let anim = self.get_or_create_animation(image_id, default_delay);
         anim.add_frame(frame);
@@ -851,6 +1133,7 @@ impl GraphicsStore {
             image_id,
             anim.frame_count()
         );
+        self.resync_kitty_entry(image_id);
     }
 
     /// Apply animation control to an image
@@ -899,6 +1182,7 @@ impl GraphicsStore {
     /// Remove animation for an image
     pub fn remove_animation(&mut self, image_id: u32) {
         self.animations.remove(&image_id);
+        self.resync_kitty_entry(image_id);
     }
 
     /// Get all animations
@@ -1320,6 +1604,173 @@ mod tests {
         g2.kitty_placement_id = Some(200);
         store.add_graphic(g2);
         assert_eq!(store.graphics_count(), 1);
+    }
+
+    fn budget_store(max_total_memory: usize) -> GraphicsStore {
+        GraphicsStore::with_limits(GraphicsLimits {
+            max_total_memory,
+            ..GraphicsLimits::default()
+        })
+    }
+
+    /// SEC-001: transmitting with incrementing image IDs must stay within
+    /// the store budget, evicting the oldest IDs first.
+    #[test]
+    fn kitty_store_budget_evicts_oldest_image_ids() {
+        let mut store = budget_store(1000);
+        for id in 1..=10u32 {
+            store.store_kitty_image(id, 10, 10, vec![0; 400]);
+            assert!(store.kitty_retained_bytes() <= 1000);
+        }
+        assert_eq!(store.kitty_retained_bytes(), 800);
+        assert!(store.get_kitty_image(8).is_none());
+        assert!(store.get_kitty_image(9).is_some());
+        assert!(store.get_kitty_image(10).is_some());
+        assert_eq!(store.dropped_count(), 8);
+    }
+
+    /// SEC-001: one image larger than the whole budget is dropped without
+    /// evicting anything else.
+    #[test]
+    fn kitty_store_drops_image_larger_than_budget() {
+        let mut store = budget_store(1000);
+        store.store_kitty_image(1, 10, 10, vec![0; 400]);
+        store.store_kitty_image(2, 20, 20, vec![0; 1600]);
+        assert!(store.get_kitty_image(1).is_some());
+        assert!(store.get_kitty_image(2).is_none());
+        assert_eq!(store.kitty_retained_bytes(), 400);
+    }
+
+    /// SEC-001: retransmitting the same ID replaces its bytes rather than
+    /// accumulating them.
+    #[test]
+    fn kitty_store_retransmit_replaces_budgeted_bytes() {
+        let mut store = budget_store(1000);
+        for _ in 0..5 {
+            store.store_kitty_image(7, 10, 10, vec![0; 400]);
+        }
+        assert_eq!(store.kitty_retained_bytes(), 400);
+        store.remove_kitty_image(7);
+        assert_eq!(store.kitty_retained_bytes(), 0);
+    }
+
+    /// SEC-001: the image-ID count cap holds even for tiny images.
+    #[test]
+    fn kitty_store_caps_image_id_count() {
+        let mut store = GraphicsStore::new();
+        for id in 0..(MAX_KITTY_IMAGES as u32 + 10) {
+            store.store_kitty_image(id, 1, 1, vec![0; 4]);
+        }
+        assert_eq!(store.kitty_entries.len(), MAX_KITTY_IMAGES);
+        assert!(store.get_kitty_image(0).is_none());
+        assert!(store.get_kitty_image(MAX_KITTY_IMAGES as u32 + 9).is_some());
+    }
+
+    /// SEC-001: animation frames count against the budget, and new IDs'
+    /// animations evict older ones.
+    #[test]
+    fn kitty_store_budget_covers_animation_frames() {
+        let mut store = budget_store(1000);
+        for id in 1..=5u32 {
+            for n in 1..=2u32 {
+                store.add_animation_frame(id, AnimationFrame::new(n, vec![0; 200], 5, 10));
+            }
+            assert!(store.kitty_retained_bytes() <= 1000);
+        }
+        assert!(store.get_animation(3).is_none());
+        assert_eq!(store.get_animation(4).map(|a| a.frame_count()), Some(2));
+        assert_eq!(store.get_animation(5).map(|a| a.frame_count()), Some(2));
+        assert_eq!(store.kitty_retained_bytes(), 800);
+    }
+
+    /// SEC-001: an animation never grows past MAX_ANIMATION_FRAMES, but an
+    /// existing frame number can still be replaced.
+    #[test]
+    fn animation_frame_count_is_capped() {
+        let mut store = GraphicsStore::new();
+        for n in 1..=(MAX_ANIMATION_FRAMES as u32 + 5) {
+            store.add_animation_frame(3, AnimationFrame::new(n, vec![0; 4], 1, 1));
+        }
+        let anim = store.get_animation(3).unwrap();
+        assert_eq!(anim.frame_count(), MAX_ANIMATION_FRAMES);
+        store.add_animation_frame(3, AnimationFrame::new(1, vec![9; 4], 1, 1));
+        assert_eq!(
+            store.get_animation(3).unwrap().get_frame(1).unwrap().pixels[0],
+            9
+        );
+    }
+
+    /// SEC-001: a frame's buffer shared with its stored image is budgeted
+    /// once, and inserting an image never evicts its own animation.
+    #[test]
+    fn shared_first_frame_is_budgeted_once() {
+        let mut store = budget_store(1000);
+        let frame = AnimationFrame::new(1, vec![0; 600], 15, 10);
+        let pixels = frame.pixels.clone();
+        store.add_animation_frame(4, frame);
+        store.store_kitty_image_shared(4, 15, 10, pixels);
+        assert_eq!(store.kitty_retained_bytes(), 600);
+        assert!(store.get_animation(4).is_some());
+        assert!(store.get_kitty_image(4).is_some());
+    }
+
+    /// SEC-001: placements with distinct buffers (a=T with incrementing IDs,
+    /// iTerm2 inline images) are held to the byte budget, oldest first.
+    #[test]
+    fn placement_bytes_are_budgeted_oldest_first() {
+        let mut store = budget_store(1000);
+        for id in 1..=10u64 {
+            store.add_graphic(TerminalGraphic::new(
+                id,
+                GraphicProtocol::Kitty,
+                (0, 0),
+                10,
+                10,
+                vec![0; 400],
+            ));
+            assert!(store.placement_retained_bytes() <= 1000);
+        }
+        let ids: Vec<u64> = store.all_graphics().iter().map(|g| g.id).collect();
+        assert_eq!(ids, vec![9, 10]);
+        assert_eq!(store.dropped_count(), 8);
+    }
+
+    /// SEC-001: one buffer displayed many times is counted once.
+    #[test]
+    fn shared_placement_buffer_is_counted_once() {
+        let mut store = budget_store(1000);
+        let pixels = Arc::new(vec![0u8; 600]);
+        for id in 1..=10u64 {
+            store.add_graphic(TerminalGraphic::with_shared_pixels(
+                id,
+                GraphicProtocol::Kitty,
+                (0, 0),
+                15,
+                10,
+                pixels.clone(),
+            ));
+        }
+        assert_eq!(store.graphics_count(), 10);
+        assert_eq!(store.placement_retained_bytes(), 600);
+    }
+
+    /// SEC-001: distinct virtual placements are capped; an existing key
+    /// still updates in place.
+    #[test]
+    fn virtual_placements_are_capped() {
+        let mut store = GraphicsStore::new();
+        for pid in 0..(MAX_VIRTUAL_PLACEMENTS as u32 + 3) {
+            let mut g = TerminalGraphic::new(1, GraphicProtocol::Kitty, (0, 0), 1, 1, vec![]);
+            g.kitty_image_id = Some(1);
+            g.kitty_placement_id = Some(pid);
+            store.add_virtual_placement(g);
+        }
+        assert_eq!(store.all_virtual_placements().len(), MAX_VIRTUAL_PLACEMENTS);
+        let mut g = TerminalGraphic::new(2, GraphicProtocol::Kitty, (3, 3), 1, 1, vec![]);
+        g.kitty_image_id = Some(1);
+        g.kitty_placement_id = Some(0);
+        store.add_virtual_placement(g);
+        assert_eq!(store.get_virtual_placement(1, 0).unwrap().position, (3, 3));
     }
 
     #[test]

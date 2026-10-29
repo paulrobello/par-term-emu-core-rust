@@ -51,7 +51,7 @@ make lint-python  # Python ruff format + check + pyright
 ```
 
 - `make mux-docs-check` fails until a new mux command, notification or notification type is listed in MUX.md and API_REFERENCE, and when MUX.md, a par-mux `[Unreleased]` CHANGELOG bullet, or `config.rs` rustdoc names a `--flag` that `par-mux`'s clap surface does not define (another program's flag goes in `FOREIGN_FLAGS` with a reason).
-- Cite regression tests as `pinned by `<test_fn>`. `pinned-tests-check` fails when the named test no longer exists, so a rename must update its citation in the same change.
+- Cite regression tests as "pinned by `<test_fn>`". `pinned-tests-check` fails when the named test no longer exists, so a rename must update its citation in the same change.
 - `make audit-deps` runs the dependency audits (cargo deny, `bun audit`, `pip-audit`) across the Rust graph, the web frontend and the Python environment. It needs network, is not part of `checkall`, and runs weekly in CI (`.github/workflows/deps-audit.yml`); accepted advisories and their reasons live in `deny.toml`.
 
 Do not push until `make checkall` passes cleanly. When fixing a failing test, confirm you are fixing the actual bug and not papering over a real issue in the code.
@@ -98,15 +98,28 @@ Seeds live in `fuzz/corpus/<target>/*.seed` and are committed; everything else t
 
 ## Version Sync
 
-When bumping the project version, update all three files to the same value in one commit:
+The root crate and both workspace members version in lockstep. To bump the project version, run `make set-version VERSION=X.Y.Z` and commit the result in one commit. The script rewrites the whole train atomically:
 
-1. `Cargo.toml` (`version = "X.Y.Z"`)
-2. `pyproject.toml` (`version = "X.Y.Z"`)
-3. `python/par_term_emu_core_rust/__init__.py` (`__version__ = "X.Y.Z"`)
+1. The versions in `Cargo.toml`, `pyproject.toml`, `python/par_term_emu_core_rust/__init__.py`, `crates/par-term-emu-core/Cargo.toml` and `crates/par-mux/Cargo.toml`
+2. The three exact `=X.Y.Z` pins on the in-workspace dependency edges, because publishing strips `path` and crates.io resolves the spec: the root's `par-term-emu-core` and `par-mux`, and `crates/par-mux/Cargo.toml`'s `par-term-emu-core`
+3. The matching `Cargo.lock` entries
+
+It writes nothing if any site has drifted, and it never touches `derive/Cargo.toml`, which versions independently: bump it only when the derive code changes, and keep the root's `par-term-emu-derive` dependency spec matching it.
+
+The gates:
+
+- `make core-version-check` fails when either member's version or any of the three pins drifts from the root version.
+- `make derive-version-check` fails when the root's `par-term-emu-derive` spec drifts from `derive/Cargo.toml`.
+- Both run in `make checkall` and `make release-check`. Agreement among the root's three files (`Cargo.toml`, `pyproject.toml`, `__init__.py`) is enforced in CI by the `version-check` job, not by a local target.
+
+Crates publish in dependency order: `par-term-emu-derive` (if bumped), then `par-term-emu-core`, then `par-mux`, then the root.
 
 Also update `CHANGELOG.md` and note breaking changes in both `CHANGELOG.md` and the README "What's New" section.
 
-Before tagging, run `python3 scripts/check_release_notes.py --write` (compare links), then `make release-check`, which must pass. It also lints the checked CHANGELOG section's structure: one subsection per Keep-a-Changelog type, no detached bullets, no `` `<this>` `` placeholders, existing paths, and an `[Unreleased]` link based on the newest version.
+Before tagging:
+
+1. Refresh the "Last verified against" banner at the top of [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) to the release version and date. Re-check the sections the banner names (crate layout, module lists, dependency lists, CI summary) against the tree first, and fix any drift.
+2. Run `python3 scripts/check_release_notes.py --write` (compare links), then `make release-check`, which must pass. It also lints the checked CHANGELOG section's structure: one subsection per Keep-a-Changelog type, no detached bullets, no `` `<this>` `` placeholders, existing paths, and an `[Unreleased]` link based on the newest version.
 
 ## Rust to Python Binding Sync
 

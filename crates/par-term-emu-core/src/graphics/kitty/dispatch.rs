@@ -144,10 +144,11 @@ impl KittyParser {
 
         let (width, height, pixels) =
             self.decode_payload(raw_data, "Shared memory transmission not supported")?;
+        let pixels = std::sync::Arc::new(pixels);
 
         // Store for reuse if image_id is specified
         if let Some(image_id) = self.image_id {
-            store.store_kitty_image(image_id, width, height, pixels.clone());
+            store.store_kitty_image_shared(image_id, width, height, pixels.clone());
         }
 
         // Create graphic if TransmitDisplay, or virtual placement if U=1
@@ -182,7 +183,7 @@ impl KittyParser {
                     rows,
                 })
             } else {
-                let mut graphic = TerminalGraphic::new(
+                let mut graphic = TerminalGraphic::with_shared_pixels(
                     next_graphic_id(),
                     GraphicProtocol::Kitty,
                     position,
@@ -237,7 +238,8 @@ impl KittyParser {
 
         // Create frame
         let frame_num = self.frame_number.unwrap_or(1);
-        let mut frame = AnimationFrame::new(frame_num, pixels.clone(), width, height);
+        let mut frame = AnimationFrame::new(frame_num, pixels, width, height);
+        let frame_pixels = frame.pixels.clone();
 
         if let Some(delay) = self.frame_delay_ms {
             frame = frame.with_delay(delay);
@@ -258,17 +260,18 @@ impl KittyParser {
 
         // Frame 1 creates both animation entry AND a placement for display
         if frame_num == 1 {
-            // Store as shared image so it can be referenced by Put commands
-            store.store_kitty_image(image_id, width, height, pixels.clone());
+            // Store as shared image so it can be referenced by Put commands;
+            // the frame's buffer is shared so it is retained (and budgeted) once.
+            store.store_kitty_image_shared(image_id, width, height, frame_pixels.clone());
 
             // Create placement to display the animation
-            let mut graphic = TerminalGraphic::new(
+            let mut graphic = TerminalGraphic::with_shared_pixels(
                 next_graphic_id(),
                 GraphicProtocol::Kitty,
                 position,
                 width,
                 height,
-                pixels,
+                frame_pixels,
             );
             graphic.kitty_image_id = Some(image_id);
             graphic.kitty_placement_id = self.placement_id;

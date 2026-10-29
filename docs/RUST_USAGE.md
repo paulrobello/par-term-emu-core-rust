@@ -4,6 +4,7 @@ A comprehensive guide for using the par-term-emu-core-rust library in pure Rust 
 
 ## Table of Contents
 - [Overview](#overview)
+  - [Which Crate Path to Import](#which-crate-path-to-import)
 - [Quick Start](#quick-start)
   - [Feature Combinations](#feature-combinations)
   - [Build Commands](#build-commands)
@@ -25,6 +26,16 @@ A comprehensive guide for using the par-term-emu-core-rust library in pure Rust 
 This library provides full VT100/VT220/VT320/VT420/VT520 terminal emulation in pure Rust with Python 3.12+ bindings. It can be used with or without Python bindings, making it suitable for pure Rust applications, embedded terminals, and CLI tools.
 
 > **Note:** The `Cell` struct implements `Clone` but not `Copy` to support variable-length grapheme cluster storage (combining characters, emoji sequences). All cell copy operations require explicit `.clone()` calls. Python bindings are unaffected.
+
+### Which Crate Path to Import
+
+Depend on `par-term-emu-core-rust` and import through `par_term_emu_core_rust::…`. That is the canonical embedder path, and every example in this guide uses it: `use par_term_emu_core_rust::prelude::*;` for the core types, then module paths (`par_term_emu_core_rust::terminal::…`, `::pty_session::…`, `::streaming::…`, `::mux::…`) for the rest.
+
+The same core types are also reachable as `par_term_emu_core::…`, because the terminal core lives in the `par-term-emu-core` workspace member and the root crate re-exports it whole (`crates/par-term-emu-core/DESIGN.md`, invariant 1). That second path is an implementation boundary, not a second API:
+
+- Write new code and docs against `par_term_emu_core_rust::…`. Both paths name the same types, so mixing them compiles, but one spelling keeps code searchable.
+- Depend on `par-term-emu-core` directly only when you want the terminal core without the root crate's streaming, Python, and FFI dependency tree, and you need none of those modules. It versions in lockstep with the root (`=X.Y.Z` pins), so the two never disagree.
+- `par-mux` (the multiplexer member) follows the same rule: reach it as `par_term_emu_core_rust::mux::…` with the `mux` feature.
 
 ### Architecture Overview
 

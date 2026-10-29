@@ -109,20 +109,10 @@ impl ITermParser {
             base64::Engine::decode(&base64::engine::general_purpose::STANDARD, &self.data)
                 .map_err(|e| GraphicsError::Base64Error(e.to_string()))?;
 
-        // Decode image using a size-limited reader so the decoder refuses to
-        // allocate before hitting MAX_IMAGE_DIMENSION (decompression-bomb guard).
-        let mut reader = image::ImageReader::new(std::io::Cursor::new(&decoded))
-            .with_guessed_format()
-            .map_err(|e| GraphicsError::ImageError(e.to_string()))?;
-        let mut limits = image::Limits::default();
-        limits.max_image_width = Some(MAX_IMAGE_DIMENSION as u32);
-        limits.max_image_height = Some(MAX_IMAGE_DIMENSION as u32);
-        reader.limits(limits);
-        let img = reader
-            .decode()
-            .map_err(|e| GraphicsError::ImageError(e.to_string()))?;
-
-        let rgba = img.to_rgba8();
+        // Header-probed, allocation-capped decode: a decompression bomb
+        // (small input, huge declared output) is refused before any pixel
+        // buffer is allocated (SEC-002).
+        let rgba = crate::graphics::decode_bounded_rgba(&decoded)?;
         let width = rgba.width() as usize;
         let height = rgba.height() as usize;
 

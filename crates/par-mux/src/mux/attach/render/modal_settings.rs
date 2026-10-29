@@ -106,311 +106,11 @@ impl SettingsSection {
     /// keep their own shapes).
     fn rows(self) -> &'static [SettingSpec] {
         match self {
-            Self::Sidebar => &[
-                SettingSpec {
-                    key: "sidebar-on-launch",
-                    label: "show on attach",
-                    kind: SettingKind::Toggle,
-                },
-                SettingSpec {
-                    key: "sidebar-width",
-                    label: "width",
-                    kind: SettingKind::Number { min: 6, max: 60 },
-                },
-                SettingSpec {
-                    key: "git-poll-secs",
-                    label: "git poll secs",
-                    kind: SettingKind::Number { min: 0, max: 600 },
-                },
-                SettingSpec {
-                    key: "agent-rows",
-                    label: "agent lines",
-                    kind: SettingKind::Choice(&["default", "compact", "detailed", "verbose"]),
-                },
-                SettingSpec {
-                    key: "agents-sort",
-                    label: "agents sort",
-                    kind: SettingKind::Choice(&["grouped", "priority"]),
-                },
-            ],
-            Self::Borders => &[
-                SettingSpec {
-                    key: "border-lines",
-                    label: "line style",
-                    kind: SettingKind::Choice(&["herdr", "unicode", "double", "heavy", "ascii"]),
-                },
-                SettingSpec {
-                    key: "pane-borders",
-                    label: "pane boxes",
-                    kind: SettingKind::Toggle,
-                },
-                SettingSpec {
-                    key: "show-label-in-border",
-                    label: "labels in border",
-                    kind: SettingKind::Toggle,
-                },
-                SettingSpec {
-                    key: "pane-gaps",
-                    label: "pane gaps",
-                    kind: SettingKind::Number { min: 0, max: 8 },
-                },
-                SettingSpec {
-                    key: "border-active-color",
-                    label: "focus color",
-                    kind: SettingKind::Hex,
-                },
-                SettingSpec {
-                    key: "border-color",
-                    label: "border color",
-                    kind: SettingKind::Hex,
-                },
-                SettingSpec {
-                    key: "theme",
-                    label: "theme",
-                    kind: SettingKind::Choice(crate::mux::theme::THEME_NAMES),
-                },
-                SettingSpec {
-                    key: "theme-dark",
-                    label: "auto: dark host",
-                    kind: SettingKind::Choice(crate::mux::theme::PRESET_NAMES),
-                },
-                SettingSpec {
-                    key: "theme-light",
-                    label: "auto: light host",
-                    kind: SettingKind::Choice(crate::mux::theme::PRESET_NAMES),
-                },
-            ],
-            Self::General => &[
-                SettingSpec {
-                    key: "mode",
-                    label: "attach mode",
-                    kind: SettingKind::Choice(&["render", "passthrough"]),
-                },
-                SettingSpec {
-                    key: "scrollbar-gutter",
-                    label: "scroll gutter",
-                    kind: SettingKind::Toggle,
-                },
-                SettingSpec {
-                    key: "change-cursor-shape",
-                    label: "change cursor shape",
-                    kind: SettingKind::Toggle,
-                },
-                SettingSpec {
-                    key: "resize-step",
-                    label: "resize step",
-                    kind: SettingKind::Number { min: 1, max: 99 },
-                },
-                SettingSpec {
-                    key: "tab-width-min",
-                    label: "tab min width",
-                    kind: SettingKind::Number { min: 0, max: 60 },
-                },
-                SettingSpec {
-                    key: "tab-width-max",
-                    label: "tab max width",
-                    kind: SettingKind::Number { min: 0, max: 120 },
-                },
-                SettingSpec {
-                    key: "kitty-graphics",
-                    label: "kitty graphics",
-                    kind: SettingKind::Toggle,
-                },
-                SettingSpec {
-                    key: "session-picker",
-                    label: "session picker",
-                    kind: SettingKind::Toggle,
-                },
-                SettingSpec {
-                    key: "git-status",
-                    label: "git status badge",
-                    kind: SettingKind::Toggle,
-                },
-            ],
-            Self::Notify => &[
-                SettingSpec {
-                    key: "notify-delivery",
-                    label: "delivery",
-                    kind: SettingKind::Choice(crate::mux::config::NOTIFY_DELIVERIES),
-                },
-                SettingSpec {
-                    key: "sound",
-                    label: "sounds",
-                    kind: SettingKind::Toggle,
-                },
-                SettingSpec {
-                    key: "sound-done",
-                    label: "done sound",
-                    kind: SettingKind::Text,
-                },
-                SettingSpec {
-                    key: "sound-blocked",
-                    label: "blocked sound",
-                    kind: SettingKind::Text,
-                },
-                SettingSpec {
-                    key: "sound-mute",
-                    label: "muted agents",
-                    kind: SettingKind::List,
-                },
-                SettingSpec {
-                    key: "sound-player",
-                    label: "sound player",
-                    kind: SettingKind::Text,
-                },
-            ],
-            Self::Keys => &[
-                SettingSpec {
-                    key: "prefix",
-                    label: "prefix",
-                    kind: SettingKind::Chord,
-                },
-                SettingSpec {
-                    key: "reload",
-                    label: "reload config",
-                    kind: SettingKind::ReloadChord,
-                },
-                SettingSpec {
-                    key: "split-right",
-                    label: "split right",
-                    kind: SettingKind::Chord,
-                },
-                SettingSpec {
-                    key: "split-down",
-                    label: "split down",
-                    kind: SettingKind::Chord,
-                },
-                SettingSpec {
-                    key: "kill-pane",
-                    label: "kill pane",
-                    kind: SettingKind::Chord,
-                },
-                SettingSpec {
-                    key: "break-pane",
-                    label: "break pane out",
-                    kind: SettingKind::Chord,
-                },
-                SettingSpec {
-                    key: "join-pane",
-                    label: "join pane into tab",
-                    kind: SettingKind::Chord,
-                },
-                SettingSpec {
-                    key: "palette",
-                    label: "command palette",
-                    kind: SettingKind::Chord,
-                },
-                SettingSpec {
-                    key: "new-window",
-                    label: "new window",
-                    kind: SettingKind::Chord,
-                },
-                SettingSpec {
-                    key: "resize",
-                    label: "resize mode",
-                    kind: SettingKind::Chord,
-                },
-                SettingSpec {
-                    key: "swap-prev",
-                    label: "swap prev pane",
-                    kind: SettingKind::Chord,
-                },
-                SettingSpec {
-                    key: "move-window-left",
-                    label: "move tab left",
-                    kind: SettingKind::Chord,
-                },
-                SettingSpec {
-                    key: "move-window-right",
-                    label: "move tab right",
-                    kind: SettingKind::Chord,
-                },
-                SettingSpec {
-                    key: "tab-strip-left",
-                    label: "tab strip left",
-                    kind: SettingKind::Chord,
-                },
-                SettingSpec {
-                    key: "tab-strip-right",
-                    label: "tab strip right",
-                    kind: SettingKind::Chord,
-                },
-                SettingSpec {
-                    key: "swap-next",
-                    label: "swap next pane",
-                    kind: SettingKind::Chord,
-                },
-                SettingSpec {
-                    key: "workspace-next",
-                    label: "next workspace",
-                    kind: SettingKind::Chord,
-                },
-                SettingSpec {
-                    key: "workspace-prev",
-                    label: "prev workspace",
-                    kind: SettingKind::Chord,
-                },
-                SettingSpec {
-                    key: "help",
-                    label: "keybinds",
-                    kind: SettingKind::Chord,
-                },
-                SettingSpec {
-                    key: "picker",
-                    label: "window picker",
-                    kind: SettingKind::Chord,
-                },
-                SettingSpec {
-                    key: "zoom",
-                    label: "zoom pane",
-                    kind: SettingKind::Chord,
-                },
-                SettingSpec {
-                    key: "rename-window",
-                    label: "rename window",
-                    kind: SettingKind::Chord,
-                },
-                SettingSpec {
-                    key: "rename-pane",
-                    label: "rename pane",
-                    kind: SettingKind::Chord,
-                },
-                SettingSpec {
-                    key: "border-cycle",
-                    label: "cycle borders",
-                    kind: SettingKind::Chord,
-                },
-                SettingSpec {
-                    key: "label-toggle",
-                    label: "toggle labels",
-                    kind: SettingKind::Chord,
-                },
-                SettingSpec {
-                    key: "workspace-picker",
-                    label: "workspace picker",
-                    kind: SettingKind::Chord,
-                },
-                SettingSpec {
-                    key: "sidebar",
-                    label: "toggle sidebar",
-                    kind: SettingKind::Chord,
-                },
-                SettingSpec {
-                    key: "status-bar",
-                    label: "toggle status bar",
-                    kind: SettingKind::Chord,
-                },
-                SettingSpec {
-                    key: "notify-jump",
-                    label: "jump to notification",
-                    kind: SettingKind::Chord,
-                },
-                SettingSpec {
-                    key: "respawn",
-                    label: "respawn dead pane",
-                    kind: SettingKind::Chord,
-                },
-            ],
+            Self::Sidebar => SIDEBAR_ROWS,
+            Self::Borders => BORDERS_ROWS,
+            Self::General => GENERAL_ROWS,
+            Self::Notify => NOTIFY_ROWS,
+            Self::Keys => KEYS_ROWS,
             Self::States | Self::Integrations => &[],
         }
     }
@@ -451,13 +151,402 @@ pub(super) enum SettingKind {
     Popup(usize),
 }
 
-/// One editable `[client]` key.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+/// Reads one row's value in force out of [`SettingsValues`]; the second
+/// argument is the file's `mode`, which has no live mirror.
+type FieldGetter = fn(&SettingsValues, &str) -> FieldVal;
+
+/// The value a choice row writes for its chosen word.
+type ChoiceEncoder = fn(String) -> SettingValue;
+
+/// One editable `[client]` key, a settings-registry row (QA-703): the
+/// key, its label and kind, and how its value is read and written, so a
+/// key string lives once beside the code that reads and writes it.
+#[derive(Debug, Clone, Copy)]
 pub(super) struct SettingSpec {
     pub(super) key: &'static str,
     pub(super) label: &'static str,
     pub(super) kind: SettingKind,
+    /// The value in force.
+    get: FieldGetter,
+    /// What an empty text value reads as.
+    empty: &'static str,
+    /// The written value for a choice row's chosen word.
+    encode_choice: ChoiceEncoder,
 }
+
+impl SettingSpec {
+    const fn new(
+        key: &'static str,
+        label: &'static str,
+        kind: SettingKind,
+        get: FieldGetter,
+    ) -> Self {
+        Self {
+            key,
+            label,
+            kind,
+            get,
+            empty: "built-in",
+            encode_choice: SettingValue::Str,
+        }
+    }
+
+    /// A prompt-edited row with no value in force of its own (a popup
+    /// entry, whose seed comes from the entry).
+    pub(super) const fn prompt_only(
+        key: &'static str,
+        label: &'static str,
+        kind: SettingKind,
+    ) -> Self {
+        Self::new(key, label, kind, |_, _| FieldVal::Text(String::new()))
+    }
+
+    const fn empty_reads(self, empty: &'static str) -> Self {
+        Self { empty, ..self }
+    }
+
+    const fn encodes_choice(self, encode_choice: ChoiceEncoder) -> Self {
+        Self {
+            encode_choice,
+            ..self
+        }
+    }
+
+    /// The row's value in force (`file_mode` covers `mode`).
+    fn value(&self, values: &SettingsValues, file_mode: &str) -> FieldVal {
+        (self.get)(values, file_mode)
+    }
+}
+
+/// A chord row's value: the bound byte in the tmux spelling.
+fn chord(byte: u8) -> FieldVal {
+    FieldVal::Text(spell_key(byte))
+}
+
+/// The sidebar section's rows.
+const SIDEBAR_ROWS: &[SettingSpec] = &[
+    SettingSpec::new(
+        "sidebar-on-launch",
+        "show on attach",
+        SettingKind::Toggle,
+        |v, _| FieldVal::Bool(v.sidebar_on_launch),
+    ),
+    SettingSpec::new(
+        "sidebar-width",
+        "width",
+        SettingKind::Number { min: 6, max: 60 },
+        |v, _| FieldVal::Num(v.sidebar_width as u32),
+    ),
+    SettingSpec::new(
+        "git-poll-secs",
+        "git poll secs",
+        SettingKind::Number { min: 0, max: 600 },
+        |v, _| FieldVal::Num(u32::try_from(v.git_poll_secs).unwrap_or(600)),
+    ),
+    SettingSpec::new(
+        "agent-rows",
+        "agent lines",
+        SettingKind::Choice(&["default", "compact", "detailed", "verbose"]),
+        |v, _| FieldVal::Text(v.agent_rows_preset()),
+    )
+    .encodes_choice(|name| SettingValue::Rows(SettingsValues::preset_rows(&name))),
+    SettingSpec::new(
+        "agents-sort",
+        "agents sort",
+        SettingKind::Choice(&["grouped", "priority"]),
+        |v, _| FieldVal::Text(v.agents_sort.clone()),
+    ),
+];
+
+/// The borders section's rows: the border look, then the theme.
+const BORDERS_ROWS: &[SettingSpec] = &[
+    SettingSpec::new(
+        "border-lines",
+        "line style",
+        SettingKind::Choice(&["herdr", "unicode", "double", "heavy", "ascii"]),
+        |v, _| FieldVal::Text(v.border_lines.clone()),
+    ),
+    SettingSpec::new("pane-borders", "pane boxes", SettingKind::Toggle, |v, _| {
+        FieldVal::Bool(v.pane_borders)
+    }),
+    SettingSpec::new(
+        "show-label-in-border",
+        "labels in border",
+        SettingKind::Toggle,
+        |v, _| FieldVal::Bool(v.show_label_in_border),
+    ),
+    SettingSpec::new(
+        "pane-gaps",
+        "pane gaps",
+        SettingKind::Number { min: 0, max: 8 },
+        |v, _| FieldVal::Num(v.pane_gaps as u32),
+    ),
+    SettingSpec::new(
+        "border-active-color",
+        "focus color",
+        SettingKind::Hex,
+        |v, _| FieldVal::Text(v.border_active_color.clone()),
+    ),
+    SettingSpec::new("border-color", "border color", SettingKind::Hex, |v, _| {
+        FieldVal::Text(v.border_color.clone())
+    }),
+    SettingSpec::new(
+        "theme",
+        "theme",
+        SettingKind::Choice(crate::mux::theme::THEME_NAMES),
+        |v, _| {
+            let configured = theme_spelling(&v.theme.theme);
+            if configured == "auto" {
+                FieldVal::TextWithHint(configured, format!("({})", v.theme.effective()))
+            } else {
+                FieldVal::Text(configured)
+            }
+        },
+    ),
+    SettingSpec::new(
+        "theme-dark",
+        "auto: dark host",
+        SettingKind::Choice(crate::mux::theme::PRESET_NAMES),
+        |v, _| FieldVal::Text(theme_spelling(&v.theme.dark)),
+    ),
+    SettingSpec::new(
+        "theme-light",
+        "auto: light host",
+        SettingKind::Choice(crate::mux::theme::PRESET_NAMES),
+        |v, _| FieldVal::Text(theme_spelling(&v.theme.light)),
+    ),
+];
+
+/// The general section's rows (the popups follow as trailing rows).
+const GENERAL_ROWS: &[SettingSpec] = &[
+    SettingSpec::new(
+        "mode",
+        "attach mode",
+        SettingKind::Choice(&["render", "passthrough"]),
+        |_, file_mode| FieldVal::Text(file_mode.to_string()),
+    ),
+    SettingSpec::new(
+        "scrollbar-gutter",
+        "scroll gutter",
+        SettingKind::Toggle,
+        |v, _| FieldVal::Bool(v.scrollbar_gutter),
+    ),
+    SettingSpec::new(
+        "change-cursor-shape",
+        "change cursor shape",
+        SettingKind::Toggle,
+        |v, _| FieldVal::Bool(v.change_cursor_shape),
+    ),
+    SettingSpec::new(
+        "resize-step",
+        "resize step",
+        SettingKind::Number { min: 1, max: 99 },
+        |v, _| FieldVal::Num(v.resize_step),
+    ),
+    SettingSpec::new(
+        "tab-width-min",
+        "tab min width",
+        SettingKind::Number { min: 0, max: 60 },
+        |v, _| FieldVal::Num(v.tab_width_min as u32),
+    ),
+    SettingSpec::new(
+        "tab-width-max",
+        "tab max width",
+        SettingKind::Number { min: 0, max: 120 },
+        |v, _| FieldVal::Num(v.tab_width_max as u32),
+    ),
+    SettingSpec::new(
+        "kitty-graphics",
+        "kitty graphics",
+        SettingKind::Toggle,
+        |v, _| FieldVal::Bool(v.kitty_graphics),
+    ),
+    SettingSpec::new(
+        "session-picker",
+        "session picker",
+        SettingKind::Toggle,
+        |v, _| FieldVal::Bool(v.session_picker),
+    ),
+    SettingSpec::new(
+        "git-status",
+        "git status badge",
+        SettingKind::Toggle,
+        |v, _| FieldVal::Bool(v.git_status),
+    ),
+];
+
+/// The notify section's rows: delivery, then the sound keys.
+const NOTIFY_ROWS: &[SettingSpec] = &[
+    SettingSpec::new(
+        "notify-delivery",
+        "delivery",
+        SettingKind::Choice(crate::mux::config::NOTIFY_DELIVERIES),
+        |v, _| FieldVal::Text(v.notify_delivery.clone()),
+    ),
+    SettingSpec::new("sound", "sounds", SettingKind::Toggle, |v, _| {
+        FieldVal::Bool(v.sound.enabled)
+    }),
+    SettingSpec::new("sound-done", "done sound", SettingKind::Text, |v, _| {
+        FieldVal::Text(v.sound.done.clone())
+    }),
+    SettingSpec::new(
+        "sound-blocked",
+        "blocked sound",
+        SettingKind::Text,
+        |v, _| FieldVal::Text(v.sound.blocked.clone()),
+    ),
+    SettingSpec::new("sound-mute", "muted agents", SettingKind::List, |v, _| {
+        FieldVal::Text(v.sound.mute.join(", "))
+    })
+    .empty_reads("none"),
+    SettingSpec::new("sound-player", "sound player", SettingKind::Text, |v, _| {
+        FieldVal::Text(v.sound.player.clone())
+    })
+    .empty_reads("os default"),
+];
+
+/// The keys section's rows: the prefix, the reload chord, then every
+/// management chord.
+const KEYS_ROWS: &[SettingSpec] = &[
+    SettingSpec::new("prefix", "prefix", SettingKind::Chord, |v, _| {
+        chord(v.prefix)
+    }),
+    SettingSpec::new(
+        "reload",
+        "reload config",
+        SettingKind::ReloadChord,
+        |v, _| FieldVal::Text(format!("{} {}", spell_key(v.prefix), spell_key(v.reload))),
+    ),
+    SettingSpec::new("split-right", "split right", SettingKind::Chord, |v, _| {
+        chord(v.management.split_right)
+    }),
+    SettingSpec::new("split-down", "split down", SettingKind::Chord, |v, _| {
+        chord(v.management.split_down)
+    }),
+    SettingSpec::new("kill-pane", "kill pane", SettingKind::Chord, |v, _| {
+        chord(v.management.kill_pane)
+    }),
+    SettingSpec::new(
+        "break-pane",
+        "break pane out",
+        SettingKind::Chord,
+        |v, _| chord(v.management.break_pane),
+    ),
+    SettingSpec::new(
+        "join-pane",
+        "join pane into tab",
+        SettingKind::Chord,
+        |v, _| chord(v.management.join_pane),
+    ),
+    SettingSpec::new("palette", "command palette", SettingKind::Chord, |v, _| {
+        chord(v.management.palette)
+    }),
+    SettingSpec::new("new-window", "new window", SettingKind::Chord, |v, _| {
+        chord(v.management.new_window)
+    }),
+    SettingSpec::new("resize", "resize mode", SettingKind::Chord, |v, _| {
+        chord(v.management.resize)
+    }),
+    SettingSpec::new("swap-prev", "swap prev pane", SettingKind::Chord, |v, _| {
+        chord(v.management.swap_prev)
+    }),
+    SettingSpec::new(
+        "move-window-left",
+        "move tab left",
+        SettingKind::Chord,
+        |v, _| chord(v.management.move_window_left),
+    ),
+    SettingSpec::new(
+        "move-window-right",
+        "move tab right",
+        SettingKind::Chord,
+        |v, _| chord(v.management.move_window_right),
+    ),
+    SettingSpec::new(
+        "tab-strip-left",
+        "tab strip left",
+        SettingKind::Chord,
+        |v, _| chord(v.management.tab_strip_left),
+    ),
+    SettingSpec::new(
+        "tab-strip-right",
+        "tab strip right",
+        SettingKind::Chord,
+        |v, _| chord(v.management.tab_strip_right),
+    ),
+    SettingSpec::new("swap-next", "swap next pane", SettingKind::Chord, |v, _| {
+        chord(v.management.swap_next)
+    }),
+    SettingSpec::new(
+        "workspace-next",
+        "next workspace",
+        SettingKind::Chord,
+        |v, _| chord(v.management.workspace_next),
+    ),
+    SettingSpec::new(
+        "workspace-prev",
+        "prev workspace",
+        SettingKind::Chord,
+        |v, _| chord(v.management.workspace_prev),
+    ),
+    SettingSpec::new("help", "keybinds", SettingKind::Chord, |v, _| {
+        chord(v.management.help)
+    }),
+    SettingSpec::new("picker", "window picker", SettingKind::Chord, |v, _| {
+        chord(v.management.picker)
+    }),
+    SettingSpec::new("zoom", "zoom pane", SettingKind::Chord, |v, _| {
+        chord(v.management.zoom)
+    }),
+    SettingSpec::new(
+        "rename-window",
+        "rename window",
+        SettingKind::Chord,
+        |v, _| chord(v.management.rename_window),
+    ),
+    SettingSpec::new("rename-pane", "rename pane", SettingKind::Chord, |v, _| {
+        chord(v.management.rename_pane)
+    }),
+    SettingSpec::new(
+        "border-cycle",
+        "cycle borders",
+        SettingKind::Chord,
+        |v, _| chord(v.management.border_cycle),
+    ),
+    SettingSpec::new(
+        "label-toggle",
+        "toggle labels",
+        SettingKind::Chord,
+        |v, _| chord(v.management.label_toggle),
+    ),
+    SettingSpec::new(
+        "workspace-picker",
+        "workspace picker",
+        SettingKind::Chord,
+        |v, _| chord(v.management.workspace_picker),
+    ),
+    SettingSpec::new("sidebar", "toggle sidebar", SettingKind::Chord, |v, _| {
+        chord(v.management.sidebar)
+    }),
+    SettingSpec::new(
+        "status-bar",
+        "toggle status bar",
+        SettingKind::Chord,
+        |v, _| chord(v.management.status_bar),
+    ),
+    SettingSpec::new(
+        "notify-jump",
+        "jump to notification",
+        SettingKind::Chord,
+        |v, _| chord(v.management.notify_jump),
+    ),
+    SettingSpec::new(
+        "respawn",
+        "respawn dead pane",
+        SettingKind::Chord,
+        |v, _| chord(v.management.respawn),
+    ),
+];
 
 /// A prompt-edited row handed to the prompt modal: what to validate and
 /// write on commit, plus the dialog state to restore when the prompt
@@ -541,85 +630,6 @@ enum FieldVal {
 }
 
 impl SettingsValues {
-    /// The value in force for `key` (`file_mode` covers `mode`, which
-    /// has no live mirror).
-    fn field(&self, key: &str, file_mode: &str) -> FieldVal {
-        let m = &self.management;
-        match key {
-            "sidebar-on-launch" => FieldVal::Bool(self.sidebar_on_launch),
-            "sidebar-width" => FieldVal::Num(self.sidebar_width as u32),
-            "git-poll-secs" => FieldVal::Num(u32::try_from(self.git_poll_secs).unwrap_or(600)),
-            "agent-rows" => FieldVal::Text(self.agent_rows_preset()),
-            "agents-sort" => FieldVal::Text(self.agents_sort.clone()),
-            "border-lines" => FieldVal::Text(self.border_lines.clone()),
-            "pane-borders" => FieldVal::Bool(self.pane_borders),
-            "show-label-in-border" => FieldVal::Bool(self.show_label_in_border),
-            "pane-gaps" => FieldVal::Num(self.pane_gaps as u32),
-            "border-active-color" => FieldVal::Text(self.border_active_color.clone()),
-            "border-color" => FieldVal::Text(self.border_color.clone()),
-            "theme" => {
-                let configured = theme_spelling(&self.theme.theme);
-                if configured == "auto" {
-                    FieldVal::TextWithHint(configured, format!("({})", self.theme.effective()))
-                } else {
-                    FieldVal::Text(configured)
-                }
-            }
-            "theme-dark" => FieldVal::Text(theme_spelling(&self.theme.dark)),
-            "theme-light" => FieldVal::Text(theme_spelling(&self.theme.light)),
-            "mode" => FieldVal::Text(file_mode.to_string()),
-            "scrollbar-gutter" => FieldVal::Bool(self.scrollbar_gutter),
-            "change-cursor-shape" => FieldVal::Bool(self.change_cursor_shape),
-            "kitty-graphics" => FieldVal::Bool(self.kitty_graphics),
-            "session-picker" => FieldVal::Bool(self.session_picker),
-            "git-status" => FieldVal::Bool(self.git_status),
-            "resize-step" => FieldVal::Num(self.resize_step),
-            "tab-width-min" => FieldVal::Num(self.tab_width_min as u32),
-            "tab-width-max" => FieldVal::Num(self.tab_width_max as u32),
-            "notify-delivery" => FieldVal::Text(self.notify_delivery.clone()),
-            "sound" => FieldVal::Bool(self.sound.enabled),
-            "sound-done" => FieldVal::Text(self.sound.done.clone()),
-            "sound-blocked" => FieldVal::Text(self.sound.blocked.clone()),
-            "sound-mute" => FieldVal::Text(self.sound.mute.join(", ")),
-            "sound-player" => FieldVal::Text(self.sound.player.clone()),
-            "prefix" => FieldVal::Text(spell_key(self.prefix)),
-            "reload" => FieldVal::Text(format!(
-                "{} {}",
-                spell_key(self.prefix),
-                spell_key(self.reload)
-            )),
-            "split-right" => FieldVal::Text(spell_key(m.split_right)),
-            "split-down" => FieldVal::Text(spell_key(m.split_down)),
-            "kill-pane" => FieldVal::Text(spell_key(m.kill_pane)),
-            "break-pane" => FieldVal::Text(spell_key(m.break_pane)),
-            "join-pane" => FieldVal::Text(spell_key(m.join_pane)),
-            "palette" => FieldVal::Text(spell_key(m.palette)),
-            "new-window" => FieldVal::Text(spell_key(m.new_window)),
-            "resize" => FieldVal::Text(spell_key(m.resize)),
-            "swap-prev" => FieldVal::Text(spell_key(m.swap_prev)),
-            "move-window-left" => FieldVal::Text(spell_key(m.move_window_left)),
-            "move-window-right" => FieldVal::Text(spell_key(m.move_window_right)),
-            "tab-strip-left" => FieldVal::Text(spell_key(m.tab_strip_left)),
-            "tab-strip-right" => FieldVal::Text(spell_key(m.tab_strip_right)),
-            "swap-next" => FieldVal::Text(spell_key(m.swap_next)),
-            "workspace-next" => FieldVal::Text(spell_key(m.workspace_next)),
-            "workspace-prev" => FieldVal::Text(spell_key(m.workspace_prev)),
-            "help" => FieldVal::Text(spell_key(m.help)),
-            "picker" => FieldVal::Text(spell_key(m.picker)),
-            "zoom" => FieldVal::Text(spell_key(m.zoom)),
-            "rename-window" => FieldVal::Text(spell_key(m.rename_window)),
-            "rename-pane" => FieldVal::Text(spell_key(m.rename_pane)),
-            "border-cycle" => FieldVal::Text(spell_key(m.border_cycle)),
-            "label-toggle" => FieldVal::Text(spell_key(m.label_toggle)),
-            "workspace-picker" => FieldVal::Text(spell_key(m.workspace_picker)),
-            "sidebar" => FieldVal::Text(spell_key(m.sidebar)),
-            "status-bar" => FieldVal::Text(spell_key(m.status_bar)),
-            "respawn" => FieldVal::Text(spell_key(m.respawn)),
-            "notify-jump" => FieldVal::Text(spell_key(m.notify_jump)),
-            _ => FieldVal::Text(String::new()),
-        }
-    }
-
     /// The preset name the live `agent-rows` matches (`custom` when it
     /// matches none — a hand-edited layout the dialog leaves alone
     /// until a preset is chosen).
@@ -682,17 +692,12 @@ fn row(text: String, accent: bool, footer: bool) -> HelpRow {
 /// the text itself otherwise (an empty value reads `built-in`, `none`
 /// for the mute list, `os default` for the player). Text wider than the
 /// value column keeps its tail (a path's file name) behind `…`.
-fn field_display(key: &str, field: &FieldVal) -> String {
+fn field_display(spec: &SettingSpec, field: &FieldVal) -> String {
     let text = match field {
         FieldVal::Bool(on) => if *on { "on" } else { "off" }.to_string(),
         FieldVal::Num(n) => n.to_string(),
         FieldVal::TextWithHint(text, hint) => format!("{text} {hint}"),
-        FieldVal::Text(text) if text.is_empty() => match key {
-            "sound-mute" => "none",
-            "sound-player" => "os default",
-            _ => "built-in",
-        }
-        .to_string(),
+        FieldVal::Text(text) if text.is_empty() => spec.empty.to_string(),
         FieldVal::Text(text) => text.clone(),
     };
     let width = PANEL_WIDTH - 4 - LABEL_WIDTH;
@@ -773,7 +778,7 @@ pub(super) fn compose_settings(state: &SettingsState, values: &SettingsValues) -
                     } else {
                         " "
                     };
-                    let value = field_display(spec.key, &values.field(spec.key, &state.file_mode));
+                    let value = field_display(spec, &spec.value(values, &state.file_mode));
                     format!(
                         " {} {:<width$} {:>vwidth$}",
                         pointer,
@@ -1047,13 +1052,13 @@ impl WindowSession {
                 let values = self.settings_values();
                 match spec.kind {
                     SettingKind::Toggle => {
-                        let FieldVal::Bool(on) = values.field(spec.key, &file_mode) else {
+                        let FieldVal::Bool(on) = spec.value(&values, &file_mode) else {
                             return;
                         };
                         self.settings_write_and_reload(conn, spec.key, SettingValue::Bool(!on));
                     }
                     SettingKind::Choice(choices) => {
-                        let current = match values.field(spec.key, &file_mode) {
+                        let current = match spec.value(&values, &file_mode) {
                             FieldVal::Text(text) => text,
                             FieldVal::TextWithHint(text, _) => text,
                             _ => return,
@@ -1065,11 +1070,7 @@ impl WindowSession {
                             }
                             None => choices[delta.rem_euclid(len) as usize].to_string(),
                         };
-                        let value = if spec.key == "agent-rows" {
-                            SettingValue::Rows(SettingsValues::preset_rows(&next))
-                        } else {
-                            SettingValue::Str(next)
-                        };
+                        let value = (spec.encode_choice)(next);
                         self.settings_write_and_reload(conn, spec.key, value);
                     }
                     kind @ (SettingKind::Number { .. }
@@ -1079,7 +1080,7 @@ impl WindowSession {
                     | SettingKind::Text
                     | SettingKind::List
                     | SettingKind::Popup(_)) => {
-                        let seed = match values.field(spec.key, &file_mode) {
+                        let seed = match spec.value(&values, &file_mode) {
                             FieldVal::Text(text) => text,
                             FieldVal::TextWithHint(text, _) => text,
                             FieldVal::Num(n) => n.to_string(),
@@ -1358,6 +1359,72 @@ mod tests {
             file_mode: "render".to_string(),
             popups: Vec::new(),
         }
+    }
+
+    /// The registry row for `key`, across every section.
+    fn lookup(key: &str) -> SettingSpec {
+        SettingsSection::ALL
+            .iter()
+            .flat_map(|section| section.rows())
+            .find(|spec| spec.key == key)
+            .copied()
+            .unwrap_or_else(|| panic!("no registry row for {key}"))
+    }
+
+    /// Every key appears once across the registry: a duplicate would
+    /// paint twice and write the same config key from two rows.
+    #[test]
+    fn registry_keys_are_unique() {
+        let mut keys: Vec<&str> = SettingsSection::ALL
+            .iter()
+            .flat_map(|section| section.rows())
+            .map(|spec| spec.key)
+            .collect();
+        let total = keys.len();
+        keys.sort_unstable();
+        keys.dedup();
+        assert_eq!(keys.len(), total, "a registry key repeats");
+    }
+
+    /// The empty-value spellings and the agent-rows writer are registry
+    /// data: the mute list reads `none`, the player `os default`, any
+    /// other text `built-in`, and an agent-rows choice writes token lines.
+    #[test]
+    fn registry_rows_carry_their_empty_spelling_and_writer() {
+        assert_eq!(lookup("sound-mute").empty, "none");
+        assert_eq!(lookup("sound-player").empty, "os default");
+        assert_eq!(lookup("sound-done").empty, "built-in");
+        assert_eq!(
+            (lookup("agent-rows").encode_choice)("compact".to_string()),
+            SettingValue::Rows(SettingsValues::preset_rows("compact"))
+        );
+        assert_eq!(
+            (lookup("agents-sort").encode_choice)("priority".to_string()),
+            SettingValue::Str("priority".to_string())
+        );
+    }
+
+    /// Every keys-section row resolves to its bound chord: a getter
+    /// reading the wrong field, or none, would paint as `built-in`.
+    #[test]
+    fn every_keys_row_resolves_to_a_bound_chord() {
+        let values = values();
+        for spec in SettingsSection::Keys.rows() {
+            assert!(
+                matches!(spec.value(&values, "render"), FieldVal::Text(ref t) if !t.is_empty()),
+                "{} has no value",
+                spec.key
+            );
+        }
+        let m = Management::default();
+        assert_eq!(
+            lookup("split-right").value(&values, "render"),
+            FieldVal::Text(spell_key(m.split_right))
+        );
+        assert_eq!(
+            lookup("notify-jump").value(&values, "render"),
+            FieldVal::Text(spell_key(m.notify_jump))
+        );
     }
 
     /// The integrations tab's footer names its button: Enter (or `u`)

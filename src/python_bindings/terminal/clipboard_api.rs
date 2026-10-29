@@ -1,7 +1,8 @@
 //! Clipboard integration and OSC 52 sync API methods for `PyTerminal`
 //! (ARC-002: split out of the monolithic `#[pymethods]` block in `mod.rs`). Pure
 //! relocation — no Python API or behavior change; these methods remain on the same
-//! `Terminal` Python class.
+//! `Terminal` Python class. The `TerminalClipboard` facade at the bottom of this
+//! file exposes the clipboard-history family as its own class (ARC-002).
 
 use pyo3::exceptions::PyValueError;
 use pyo3::prelude::*;
@@ -510,5 +511,238 @@ impl PyTerminal {
     fn set_max_clipboard_sync_history(&mut self, max: usize) -> PyResult<()> {
         self.inner.set_max_clipboard_sync_history(max);
         Ok(())
+    }
+}
+
+/// Feature-scoped clipboard-history facade over a `Terminal` (ARC-002).
+///
+/// The flat `Terminal` class is frozen (ARC-001 surface freeze); feature
+/// areas are reachable as their own cohesive classes instead. This class is
+/// constructed from a terminal and delegates every call to it, so both
+/// spellings operate on the same state:
+/// `TerminalClipboard(term).history("clipboard")` is
+/// `term.get_clipboard_history("clipboard")`. The flat methods stay for
+/// compatibility.
+#[pyclass(name = "TerminalClipboard", unsendable)]
+pub struct PyTerminalClipboard {
+    terminal: Py<PyTerminal>,
+}
+
+#[pymethods]
+impl PyTerminalClipboard {
+    /// Create a clipboard-history facade bound to `terminal`
+    ///
+    /// Args:
+    ///     terminal: The Terminal whose clipboard history this facade reads
+    ///         and writes
+    ///
+    /// Example:
+    ///     ```python
+    ///     term = Terminal(80, 24)
+    ///     clip = TerminalClipboard(term)
+    ///     clip.add("clipboard", "hello")
+    ///     ```
+    #[new]
+    fn new(terminal: Py<PyTerminal>) -> Self {
+        Self { terminal }
+    }
+
+    /// The Terminal this facade delegates to
+    ///
+    /// Returns:
+    ///     Terminal: The bound terminal (the same object passed to the constructor)
+    ///
+    /// Example:
+    ///     ```python
+    ///     term = Terminal(80, 24)
+    ///     assert TerminalClipboard(term).terminal is term
+    ///     ```
+    #[getter]
+    fn terminal(&self, py: Python<'_>) -> Py<PyTerminal> {
+        self.terminal.clone_ref(py)
+    }
+
+    /// Add content to a slot's clipboard history
+    ///
+    /// Same as `Terminal.add_to_clipboard_history`.
+    ///
+    /// Args:
+    ///     slot: Clipboard slot name — one of "primary", "clipboard",
+    ///         "selection", or "custom0".."custom9" (case-insensitive)
+    ///     content: Text content to store
+    ///     label: Optional description for this entry (default: None)
+    ///
+    /// Raises:
+    ///     ValueError: If `slot` is not a recognized slot name
+    ///
+    /// Example:
+    ///     ```python
+    ///     TerminalClipboard(Terminal(80, 24)).add("clipboard", "hello", label="greeting")
+    ///     ```
+    #[pyo3(signature = (slot, content, label=None))]
+    fn add(
+        &self,
+        py: Python<'_>,
+        slot: &str,
+        content: String,
+        label: Option<String>,
+    ) -> PyResult<()> {
+        self.terminal
+            .try_borrow_mut(py)?
+            .add_to_clipboard_history(slot, content, label)
+    }
+
+    /// Get a slot's clipboard history
+    ///
+    /// Same as `Terminal.get_clipboard_history`.
+    ///
+    /// Args:
+    ///     slot: Clipboard slot name (see `add`)
+    ///
+    /// Returns:
+    ///     list[ClipboardEntry]: Entries oldest-first; empty if the slot has
+    ///     never had content added
+    ///
+    /// Raises:
+    ///     ValueError: If `slot` is not a recognized slot name
+    ///
+    /// Example:
+    ///     ```python
+    ///     entries = TerminalClipboard(Terminal(80, 24)).history("clipboard")
+    ///     ```
+    fn history(
+        &self,
+        py: Python<'_>,
+        slot: &str,
+    ) -> PyResult<Vec<crate::python_bindings::types::PyClipboardEntry>> {
+        self.terminal.try_borrow(py)?.get_clipboard_history(slot)
+    }
+
+    /// Get the most recent entry for a slot
+    ///
+    /// Same as `Terminal.get_latest_clipboard`.
+    ///
+    /// Args:
+    ///     slot: Clipboard slot name (see `add`)
+    ///
+    /// Returns:
+    ///     ClipboardEntry | None: The newest entry, or None if the slot has
+    ///     no history
+    ///
+    /// Raises:
+    ///     ValueError: If `slot` is not a recognized slot name
+    ///
+    /// Example:
+    ///     ```python
+    ///     entry = TerminalClipboard(Terminal(80, 24)).latest("clipboard")
+    ///     ```
+    fn latest(
+        &self,
+        py: Python<'_>,
+        slot: &str,
+    ) -> PyResult<Option<crate::python_bindings::types::PyClipboardEntry>> {
+        self.terminal.try_borrow(py)?.get_latest_clipboard(slot)
+    }
+
+    /// Clear one slot's history, or every slot's when `slot` is None
+    ///
+    /// Same as `Terminal.clear_clipboard_history` /
+    /// `Terminal.clear_all_clipboard_history`.
+    ///
+    /// Args:
+    ///     slot: Clipboard slot name (see `add`), or None for all slots
+    ///         (default: None)
+    ///
+    /// Raises:
+    ///     ValueError: If `slot` is given but not a recognized slot name
+    ///
+    /// Example:
+    ///     ```python
+    ///     TerminalClipboard(Terminal(80, 24)).clear("clipboard")
+    ///     ```
+    #[pyo3(signature = (slot=None))]
+    fn clear(&self, py: Python<'_>, slot: Option<&str>) -> PyResult<()> {
+        let mut term = self.terminal.try_borrow_mut(py)?;
+        match slot {
+            Some(slot) => term.clear_clipboard_history(slot),
+            None => term.clear_all_clipboard_history(),
+        }
+    }
+
+    /// Set a slot's content, recording it in that slot's history
+    ///
+    /// Same as `Terminal.set_clipboard_with_slot`.
+    ///
+    /// Args:
+    ///     content: Text content to store
+    ///     slot: Clipboard slot name (see `add`); defaults to "clipboard"
+    ///         (default: None)
+    ///
+    /// Raises:
+    ///     ValueError: If `slot` is given but not a recognized slot name
+    ///
+    /// Example:
+    ///     ```python
+    ///     TerminalClipboard(Terminal(80, 24)).set("hello", slot="primary")
+    ///     ```
+    #[pyo3(signature = (content, slot=None))]
+    fn set(&self, py: Python<'_>, content: String, slot: Option<String>) -> PyResult<()> {
+        self.terminal
+            .try_borrow_mut(py)?
+            .set_clipboard_with_slot(content, slot)
+    }
+
+    /// Get a slot's most recent content
+    ///
+    /// Same as `Terminal.get_clipboard_from_slot`.
+    ///
+    /// Args:
+    ///     slot: Clipboard slot name (see `add`); defaults to "clipboard"
+    ///         (default: None)
+    ///
+    /// Returns:
+    ///     str | None: The latest content, or None if the slot has no history
+    ///
+    /// Raises:
+    ///     ValueError: If `slot` is given but not a recognized slot name
+    ///
+    /// Example:
+    ///     ```python
+    ///     content = TerminalClipboard(Terminal(80, 24)).get(slot="primary")
+    ///     ```
+    #[pyo3(signature = (slot=None))]
+    fn get(&self, py: Python<'_>, slot: Option<String>) -> PyResult<Option<String>> {
+        self.terminal.try_borrow(py)?.get_clipboard_from_slot(slot)
+    }
+
+    /// Search history for entries containing a substring
+    ///
+    /// Same as `Terminal.search_clipboard_history`.
+    ///
+    /// Args:
+    ///     query: Substring to search for (case-sensitive)
+    ///     slot: Slot to restrict the search to, or None for all slots
+    ///         (default: None)
+    ///
+    /// Returns:
+    ///     list[ClipboardEntry]: Matching entries across the searched slot(s)
+    ///
+    /// Raises:
+    ///     ValueError: If `slot` is given but not a recognized slot name
+    ///
+    /// Example:
+    ///     ```python
+    ///     matches = TerminalClipboard(Terminal(80, 24)).search("world")
+    ///     ```
+    #[pyo3(signature = (query, slot=None))]
+    fn search(
+        &self,
+        py: Python<'_>,
+        query: &str,
+        slot: Option<String>,
+    ) -> PyResult<Vec<crate::python_bindings::types::PyClipboardEntry>> {
+        self.terminal
+            .try_borrow(py)?
+            .search_clipboard_history(query, slot)
     }
 }

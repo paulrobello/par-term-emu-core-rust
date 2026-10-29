@@ -9271,6 +9271,170 @@ class Terminal:
             via `set_window_position()`
         """
 
+class TerminalClipboard:
+    """Feature-scoped clipboard-history facade over a `Terminal` (ARC-002).
+
+    The flat `Terminal` class is frozen (ARC-001 surface freeze); feature
+    areas are reachable as their own cohesive classes instead. This class is
+    constructed from a terminal and delegates every call to it, so both
+    spellings operate on the same state:
+    `TerminalClipboard(term).history("clipboard")` is
+    `term.get_clipboard_history("clipboard")`. The flat methods stay for
+    compatibility.
+    """
+    def __init__(self, terminal: Any) -> None: ...
+    def add(self, slot: Any, content: Any, label: Any = None) -> Any:
+        """Add content to a slot's clipboard history
+
+        Same as `Terminal.add_to_clipboard_history`.
+
+        Args:
+            slot: Clipboard slot name — one of "primary", "clipboard",
+                "selection", or "custom0".."custom9" (case-insensitive)
+            content: Text content to store
+            label: Optional description for this entry (default: None)
+
+        Raises:
+            ValueError: If `slot` is not a recognized slot name
+
+        Example:
+            ```python
+            TerminalClipboard(Terminal(80, 24)).add("clipboard", "hello", label="greeting")
+            ```
+        """
+    def clear(self, slot: Any = None) -> Any:
+        """Clear one slot's history, or every slot's when `slot` is None
+
+        Same as `Terminal.clear_clipboard_history` /
+        `Terminal.clear_all_clipboard_history`.
+
+        Args:
+            slot: Clipboard slot name (see `add`), or None for all slots
+                (default: None)
+
+        Raises:
+            ValueError: If `slot` is given but not a recognized slot name
+
+        Example:
+            ```python
+            TerminalClipboard(Terminal(80, 24)).clear("clipboard")
+            ```
+        """
+    def get(self, slot: Any = None) -> str | None:
+        """Get a slot's most recent content
+
+        Same as `Terminal.get_clipboard_from_slot`.
+
+        Args:
+            slot: Clipboard slot name (see `add`); defaults to "clipboard"
+                (default: None)
+
+        Returns:
+            str | None: The latest content, or None if the slot has no history
+
+        Raises:
+            ValueError: If `slot` is given but not a recognized slot name
+
+        Example:
+            ```python
+            content = TerminalClipboard(Terminal(80, 24)).get(slot="primary")
+            ```
+        """
+    def history(self, slot: Any) -> list[ClipboardEntry]:
+        """Get a slot's clipboard history
+
+        Same as `Terminal.get_clipboard_history`.
+
+        Args:
+            slot: Clipboard slot name (see `add`)
+
+        Returns:
+            list[ClipboardEntry]: Entries oldest-first; empty if the slot has
+            never had content added
+
+        Raises:
+            ValueError: If `slot` is not a recognized slot name
+
+        Example:
+            ```python
+            entries = TerminalClipboard(Terminal(80, 24)).history("clipboard")
+            ```
+        """
+    def latest(self, slot: Any) -> ClipboardEntry | None:
+        """Get the most recent entry for a slot
+
+        Same as `Terminal.get_latest_clipboard`.
+
+        Args:
+            slot: Clipboard slot name (see `add`)
+
+        Returns:
+            ClipboardEntry | None: The newest entry, or None if the slot has
+            no history
+
+        Raises:
+            ValueError: If `slot` is not a recognized slot name
+
+        Example:
+            ```python
+            entry = TerminalClipboard(Terminal(80, 24)).latest("clipboard")
+            ```
+        """
+    def search(self, query: Any, slot: Any = None) -> list[ClipboardEntry]:
+        """Search history for entries containing a substring
+
+        Same as `Terminal.search_clipboard_history`.
+
+        Args:
+            query: Substring to search for (case-sensitive)
+            slot: Slot to restrict the search to, or None for all slots
+                (default: None)
+
+        Returns:
+            list[ClipboardEntry]: Matching entries across the searched slot(s)
+
+        Raises:
+            ValueError: If `slot` is given but not a recognized slot name
+
+        Example:
+            ```python
+            matches = TerminalClipboard(Terminal(80, 24)).search("world")
+            ```
+        """
+    def set(self, content: Any, slot: Any = None) -> Any:
+        """Set a slot's content, recording it in that slot's history
+
+        Same as `Terminal.set_clipboard_with_slot`.
+
+        Args:
+            content: Text content to store
+            slot: Clipboard slot name (see `add`); defaults to "clipboard"
+                (default: None)
+
+        Raises:
+            ValueError: If `slot` is given but not a recognized slot name
+
+        Example:
+            ```python
+            TerminalClipboard(Terminal(80, 24)).set("hello", slot="primary")
+            ```
+        """
+    @property
+    def terminal(self) -> Any:
+        """The Terminal this facade delegates to
+
+        Returns:
+            Terminal: The bound terminal (the same object passed to the constructor)
+
+        Example:
+            ```python
+            term = Terminal(80, 24)
+            assert TerminalClipboard(term).terminal is term
+            ```
+        """
+    @terminal.setter
+    def terminal(self, value: Any) -> None: ...
+
 class TmuxNotification:
     """Tmux control protocol notification"""
     @property

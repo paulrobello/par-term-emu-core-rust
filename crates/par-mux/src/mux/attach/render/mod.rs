@@ -1246,7 +1246,7 @@ struct PickerState {
     /// `(id, name, active)` roster its rows compose from.
     workspaces: Option<Vec<(String, String, bool)>>,
     /// When set, this is the COMMAND palette: `(action index, label)`
-    /// rows over [`super::super::panels::PALETTE_ACTIONS`], filterable
+    /// rows over [`crate::mux::attach::panels::PALETTE_ACTIONS`], filterable
     /// like any picker list.
     commands: Option<Vec<(usize, String)>>,
 }
@@ -1439,37 +1439,8 @@ impl WindowSession {
                 return Ok(());
             }
 
-            // 6a. A panel agent with no project yet: the host probe fills it
-            //     on its 30 s sweep and broadcasts nothing, so re-query
-            //     the roster on a slow cadence until every agent has one.
-            if self.project_poll_due(std::time::Instant::now()) {
-                self.status_dirty = true;
-            }
-
-            // 6b. The git badge: the status stream carries no event when
-            //     a repo's branch or ahead/behind changes, so re-query on
-            //     a slow cadence while the panel is up and the key is on
-            //     (the daemon serves the rows from the refresher
-            //     thread's cache — no git in the reply).
-            if self.git_poll_due(std::time::Instant::now()) {
-                self.status_dirty = true;
-            }
-
-            // 6. Status: the throttled re-query. Any %sessions-changed /
-            //     %window-add / %window-close (and the other events whose
-            //     payload lacks the fact) marked the state stale; one
-            //     re-query per burst serves them all. A gone view lands up
-            //     the tree (docs/MUX.md's %sessions-changed client
-            //     contract): the shown window gone lands on the session's
-            //     active window, the session gone on its workspace's
-            //     landing session, the workspace gone on the daemon's
-            //     active workspace. Only nothing left to show ends it —
-            //     through the return value on the legacy path, through
-            //     `status_end` on the async path (the snapshot reply's
-            //     continuation raises it on the tick the reply arrives).
-            if self.status_end
-                || (self.status_dirty && self.refresh_status(conn) == EventOutcome::End)
-            {
+            // 6. Status: the slow-cadence polls, then the throttled re-query.
+            if self.pump_status(conn).is_break() {
                 return Ok(());
             }
 
@@ -1481,33 +1452,75 @@ impl WindowSession {
             //    cadence — one resize-pane per unapplied cell.
             self.apply_drag(conn);
 
-            // 9. Frame whatever accumulated (panes + the status row's own
-            //    diff), then wait for the next push — the frame cadence
-            //    floods coalesce into. But hold the frame while pushes
-            //    keep arriving: a burst still streaming (htop's dialog
-            //    redraw lands as dozens of chunks) framed a partial state
-            //    and re-framed a millisecond later — the whole-screen
-            //    flash-and-repaint of the manual-pass report. The extra
-            //    drain costs one try_recv when idle; the 8 ms bound keeps
-            //    a firehose pane from starving frames entirely.
-            let mut handled = false;
-            let flow = self.drain_pushes_counting(conn, &mut handled);
-            if flow.is_break() {
-                return Ok(());
-            }
-            let hold = *self
-                .frame_hold_since
-                .get_or_insert_with(std::time::Instant::now);
-            if handled && hold.elapsed() < std::time::Duration::from_millis(8) {
-                continue; // the loop re-runs every step against the new events
-            }
-            self.frame_hold_since = None;
-            self.bridge_pane_clipboard();
-            self.frame(sink);
-            if self.wait_next_push(conn).is_break() {
+            // 9. Frame whatever accumulated, then wait for the next push.
+            if self.pump_frame(conn, sink).is_break() {
                 return Ok(());
             }
         }
+    }
+
+    /// Pump step 6. 6a: a panel agent with no project yet — the host
+    /// probe fills it on its 30 s sweep and broadcasts nothing, so
+    /// re-query the roster on a slow cadence until every agent has one.
+    /// 6b: the git badge — the status stream carries no event when a
+    /// repo's branch or ahead/behind changes, so re-query on a slow
+    /// cadence while the panel is up and the key is on (the daemon serves
+    /// the rows from the refresher thread's cache — no git in the reply).
+    ///
+    /// Then the throttled re-query. Any %sessions-changed / %window-add /
+    /// %window-close (and the other events whose payload lacks the fact)
+    /// marked the state stale; one re-query per burst serves them all. A
+    /// gone view lands up the tree (docs/MUX.md's %sessions-changed
+    /// client contract): the shown window gone lands on the session's
+    /// active window, the session gone on its workspace's landing
+    /// session, the workspace gone on the daemon's active workspace. Only
+    /// nothing left to show ends it — through the return value on the
+    /// legacy path, through `status_end` on the async path (the snapshot
+    /// reply's continuation raises it on the tick the reply arrives).
+    fn pump_status(
+        &mut self,
+        conn: &mut crate::mux::attach::conn::AttachConn,
+    ) -> std::ops::ControlFlow<()> {
+        if self.project_poll_due(std::time::Instant::now()) {
+            self.status_dirty = true;
+        }
+        if self.git_poll_due(std::time::Instant::now()) {
+            self.status_dirty = true;
+        }
+        if self.status_end || (self.status_dirty && self.refresh_status(conn) == EventOutcome::End)
+        {
+            return std::ops::ControlFlow::Break(());
+        }
+        std::ops::ControlFlow::Continue(())
+    }
+
+    /// Pump step 9: frame whatever accumulated (panes + the status row's
+    /// own diff), then wait for the next push — the frame cadence floods
+    /// coalesce into. But hold the frame while pushes keep arriving: a
+    /// burst still streaming (htop's dialog redraw lands as dozens of
+    /// chunks) framed a partial state and re-framed a millisecond later —
+    /// the whole-screen flash-and-repaint of the manual-pass report. The
+    /// extra drain costs one try_recv when idle; the 8 ms bound keeps a
+    /// firehose pane from starving frames entirely. A held frame returns
+    /// `Continue` without framing or waiting, so the loop re-runs every
+    /// step against the new events.
+    fn pump_frame(
+        &mut self,
+        conn: &mut crate::mux::attach::conn::AttachConn,
+        sink: &mut dyn FlushSink,
+    ) -> std::ops::ControlFlow<()> {
+        let mut handled = false;
+        self.drain_pushes_counting(conn, &mut handled)?;
+        let hold = *self
+            .frame_hold_since
+            .get_or_insert_with(std::time::Instant::now);
+        if handled && hold.elapsed() < std::time::Duration::from_millis(8) {
+            return std::ops::ControlFlow::Continue(());
+        }
+        self.frame_hold_since = None;
+        self.bridge_pane_clipboard();
+        self.frame(sink);
+        self.wait_next_push(conn)
     }
 
     /// Bridge the focused pane's OSC 52 clipboard writes to the host
@@ -1554,10 +1567,7 @@ impl WindowSession {
         conn: &mut crate::mux::attach::conn::AttachConn,
     ) -> std::ops::ControlFlow<()> {
         let mut handled = false;
-        match self.drain_pushes_counting(conn, &mut handled) {
-            std::ops::ControlFlow::Break(()) => std::ops::ControlFlow::Break(()),
-            std::ops::ControlFlow::Continue(()) => std::ops::ControlFlow::Continue(()),
-        }
+        self.drain_pushes_counting(conn, &mut handled)
     }
 
     /// [`Self::drain_pushes`] reporting whether any event was handled —
@@ -1927,6 +1937,29 @@ impl WindowSession {
         }
     }
 
+    /// A `%window-pane-changed`: an external focus move on the shown
+    /// window re-points the local highlight; on any other window it is
+    /// chrome-only.
+    fn on_window_pane_changed(&mut self, window_id: &str, pane_id: &str) {
+        if window_id == self.window {
+            if let Some(pane) = pane_id.strip_prefix('%').and_then(|p| p.parse().ok()) {
+                self.renderer.focus(pane);
+            }
+        }
+        self.status_dirty = true;
+    }
+
+    /// A `%session-window-changed`: the shared selection moved this
+    /// session to another window — park the follow; the pump performs
+    /// the reseed (the handler runs in the nonblocking drain, where the
+    /// queries and replays a reseed needs are not available).
+    fn on_session_window_changed(&mut self, session_id: &str, window_id: &str) {
+        if self.status.session_id.as_deref() == Some(session_id) && window_id != self.window {
+            self.pending.follow_window = Some(window_id.to_string());
+        }
+        self.status_dirty = true;
+    }
+
     /// One daemon push. `End` on `%exit` (or the window's pane roster
     /// emptying, which leaves nothing to render).
     fn handle_event(&mut self, event: TmuxNotification) -> EventOutcome {
@@ -1955,30 +1988,14 @@ impl WindowSession {
             // into one refresh — one `client-snapshot` round trip against
             // a daemon that advertises it).
             TmuxNotification::WindowPaneChanged { window_id, pane_id } => {
-                // An external focus move on the shown window re-points the
-                // local highlight; on any other window it is chrome-only.
-                if *window_id == self.window {
-                    if let Some(pane) = pane_id.strip_prefix('%').and_then(|p| p.parse().ok()) {
-                        self.renderer.focus(pane);
-                    }
-                }
-                self.status_dirty = true;
+                self.on_window_pane_changed(&window_id, &pane_id);
                 EventOutcome::Continue
             }
             TmuxNotification::SessionWindowChanged {
                 session_id,
                 window_id,
             } => {
-                // The shared selection moved this session to another
-                // window: park the follow — the pump performs the reseed
-                // (the handler runs in the nonblocking drain, where the
-                // queries and replays a reseed needs are not available).
-                if self.status.session_id.as_deref() == Some(session_id.as_str())
-                    && window_id != self.window
-                {
-                    self.pending.follow_window = Some(window_id.clone());
-                }
-                self.status_dirty = true;
+                self.on_session_window_changed(&session_id, &window_id);
                 EventOutcome::Continue
             }
             TmuxNotification::ClientSessionChanged { session_id, .. } => {

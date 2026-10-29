@@ -2,7 +2,7 @@
 
 Comprehensive internal architecture documentation for par-term-emu-core-rust, a high-performance terminal emulator library written in Rust with Python bindings.
 
-> **Last verified against v0.63.0 (commit `6358f60f`).** Struct layouts, module lists, and file counts drift quickly; where a section could go stale, prefer the runnable commands given over hard-coded numbers.
+> **Last verified against v0.71.1 (2026-10-29).** That pass covered the crate layout, the module lists, the dependency lists, and the CI summary. Struct layouts, module lists, and file counts drift quickly; where a section could go stale, prefer the runnable commands given over hard-coded numbers.
 
 ## Table of Contents
 
@@ -297,18 +297,18 @@ The main terminal emulator that ties everything together, organized into submodu
 - A tmux-control-mode multiplexer: owns PTY-backed panes in a workspace/session/window/pane tree (workspaces are the first-class level above sessions; a workspace dies with its last session) and serves the control protocol over a local socket, with an agent layer (state hook reports, scrape tier, session resume) on top
 - Control plane:
   - `server/` - the socket server: `mod.rs` (accept loop, one writer thread per client), `protocol.rs` (bounded line reads, eviction-aware writes, reply classification), `client.rs` (per-client registration and the read-dispatch-reply loop), `broadcast.rs` (client fan-out, pane output wiring, layout/exit replays), `reap.rs` (dead-pane reaping), `endpoint.rs` (hook-only per-pane endpoints, ENH-039)
-  - `command/` - control-command parsing (`parse_command` → `MuxCommand`), one file per verb group: `sessions.rs`, `windows.rs`, `panes.rs`, `keys.rs`, `buffers.rs`, `agents.rs`, `streams.rs`, `worktrees.rs`; the `mutates()` persistence rule lives in `mod.rs`
-  - `dispatch/` - private per-command handlers, one file per group (`sessions.rs`, `windows.rs`, `panes.rs`, `buffers.rs`, `agents.rs`, `worktrees.rs`, `client.rs`) plus the shared post-dispatch tail in `mod.rs`; reached only through `server`
+  - `command/` - control-command parsing (`parse_command` → `MuxCommand`), one file per verb group: `sessions.rs`, `windows.rs`, `panes.rs`, `keys.rs`, `buffers.rs`, `agents.rs`, `streams.rs`, `worktrees.rs`, `layouts.rs` (named layouts), `uploads.rs` (client file uploads); the `mutates()` persistence rule lives in `mod.rs`
+  - `dispatch/` - private per-command handlers, one file per group (`sessions.rs`, `windows.rs`, `panes.rs`, `buffers.rs`, `agents.rs`, `worktrees.rs`, `layouts.rs`, `uploads.rs`, `client.rs`) plus the shared post-dispatch tail in `mod.rs`; reached only through `server`
   - `emit.rs` (wire lines and `%`-notifications), `ids.rs` (`$N`/`@N`/`%N` ids and allocation), `ipc.rs` (Unix socket / Windows named pipe transport) plus `ipc/rows.rs` (typed reply rows for the fixed-shape listings, shared by the daemon's emitters and the clients that parse them, ARC-130), `client.rs` (`MuxClient`), `discovery.rs` (registry of running daemons plus a stale-entry probe), `config.rs` (`<config dir>/par-mux/config.toml`)
 - State:
   - `tree/` - the session/window/pane tree, the server's single source of truth: `mod.rs` (types and lookups), `lifecycle.rs` (creation, respawn, renames, session environment, kill cascades), `layout_ops.rs` (splits, selection, zoom, moves, resizes, and the `mutate_layout` choke point, ARC-090), `worktrees.rs` (git-worktree workspace grouping, derived from each link's repo key)
-  - `layout.rs` (a window's binary split tree and its geometry), `pane.rs` (PTY panes + env contract), `persist.rs` (save format, quarantine, restore)
+  - `layout.rs` (a window's binary split tree and its geometry), `pane.rs` (PTY panes + env contract), `persist.rs` (save format, quarantine, restore, and the named-layout store), `uploads.rs` (bounded staging for client file uploads: `upload-commit` materializes the bytes under one staging directory and bracket-pastes the file's path into the target pane)
 - Agent layer: `hooks/` (hook-report grammar: `mod.rs` dispatch, `report.rs`, `telemetry.rs`, `seen.rs` (derived `done` state), `release.rs`), `scrape.rs` (fallback state tier, patterns in `patterns/*.toml`), `agent_resume.rs`, `foreground.rs` (process-table snapshot for `pane-info cmd=` and hook-claim liveness), `host_probe.rs` (30 s disk and git host-telemetry sweep, hardened git), `win_resume.rs` (Windows resume transport), `integrations/` (the agent-state integrations: claude/codex/grok session hooks merged into config-entry agents' settings files without disturbing user bytes, plus the pi/omp extension files — installed by the `--install-agent-*`/`--heal-agent-hooks` one-shot flags; compiled only with `mux-bin`), `skill_installer.rs` (`--install-skill` writes the SKILL.md embedded from `crates/par-mux/skills/par-mux/`; compiled only with `mux-bin`)
 - `attach/` - the `par-mux attach` client (feature `attach`). Shared by both phases: `mod.rs`, `conn.rs` (`AttachConn`, the connection layer), `panels.rs` (overlay and sidebar composition, help rows, prompts, pickers), `prefs.rs` (the persisted side-panel state, `client-state.json`), `targets.rs` (prefix/chord parsing and `-t` target resolution). Phase A (passthrough) keeps the host terminal as the emulator: `pump.rs`, `actions.rs`, `navigate.rs`, `status_row.rs`. Phase B (render mode) runs a core `Terminal` per pane and paints a ratatui buffer: `input.rs` (stdin parse and re-encode), `layout.rs` (client-side layout parser), `status.rs`, `tabs.rs`, and `render/`:
   - `render/mod.rs` - the pane renderer type and its frame-cadence damage diffing
   - `render/geometry.rs` - the frame chrome layout: the one owner of how the host grid divides into tab strip, status bar, side panel, and pane content area (host/frame/content coordinate spaces)
   - `render/renderer.rs` - painting: per-pane grids, dividers, pane boxes, the modal overlay, the stdout flush sink
-  - `render/modal.rs` - modal state machines: help, session/workspace pickers, prompts, context menus, resize mode, scroll viewport
+  - `render/modal.rs` - modal state machines: help, session/workspace pickers, prompts, context menus, resize mode, scroll viewport; the per-dialog owners sit in sibling `modal_*.rs` files (for example `modal_layouts.rs`, the save/load named-layout dialog)
   - `render/input_route.rs` - routes key runs through the prefix scanner and modal owners (`route_key`) and mouse reports through the overlay hit-testers
   - `render/navigate.rs` - management chords and window/session/workspace switches through the select-then-resync contract
   - `render/session.rs` - seeding a window, feeding pane bytes, host resize, status row and tab strip
@@ -345,6 +345,8 @@ The main terminal emulator that ties everything together, organized into submodu
   - `py_convert.rs` - Python dict conversion helpers shared by the streaming bindings
   - `broadcaster.rs` - Multi-client broadcast support
   - `auth_hash.rs` - htpasswd-format hash verification (bcrypt, apr1/MD5-crypt, `{SHA}`) for HTTP Basic Auth (SEC-003)
+  - `inline_image.rs` - Bridges a terminal's `GraphicsAdded` events to size-bounded `InlineImage` frames (the announce carries an id, the pixels are fetched once), and `apply_inline_image` ingests a received frame into a mirroring `Terminal`'s graphics store
+  - `metrics.rs` + `metrics/` - Server metrics behind two gates: the `otel` cargo feature (without it, `metrics/stub.rs` compiles an identical-API no-op) and the runtime switch `--otel-enabled` / `PAR_TERM_STREAMER_OTEL_ENABLED`; `metrics/otel.rs` binds the instruments to the global OTLP meter provider
   - `error.rs` - Streaming-specific errors
 - **App-to-wire conversions (ARC-006)**: the message-level conversions between `protocol.rs` types and the generated protobuf types are derived with `#[derive(par_term_emu_derive::ProtoConvert)]` (macro in `derive/src/proto_convert.rs`). Every field value passes through `ToWire`/`FromWire` in `proto.rs`, keyed on the app and wire field types. Each type pair is listed explicitly, so a missing pair fails to compile instead of silently narrowing; fields with a specific rule (a clamp, a presence check) use `#[proto(with = ..)]`. The golden test fails on any byte-level change. Regenerate it only for an intended wire change: `PROTO_GOLDEN_UPDATE=1 cargo test --lib --no-default-features --features pyo3/auto-initialize,streaming proto_golden`
 - **Features**: Real-time terminal sharing, multiplexing, binary protocol with compression, mouse/focus/paste forwarding, selection/clipboard sync, shell integration events (with cursor_line positioning), per-client event subscription filtering, badge change streaming, per-session client limits, input rate limiting, session metrics, terminal size validation, dead session reaping
@@ -389,6 +391,7 @@ The main terminal emulator that ties everything together, organized into submodu
   - Color preservation (foreground, background, attributes)
   - Monospace font stack: Monaco, Menlo, Ubuntu Mono, Consolas, monospace
 - `debug.rs` - Debug utilities and logging helpers with formatted output macros
+- `self_update.rs` - Checksum-required GitHub release updater shared by the standalone binaries (`par-term-streamer`, `par-mux`); feature `self-update`, enabled by the root's `streaming-bin` and the member's `mux-bin`
 - `conformance_level.rs` - VT terminal conformance level support
   - VT100/VT220/VT320/VT420/VT520 level definitions
   - Feature compatibility management
@@ -609,7 +612,7 @@ The Python bindings live in the root crate under `src/python_bindings/`. `src/py
 
 The split is a relocation out of a single monolithic `#[pymethods]` block; all methods resolve on the same `Terminal` Python class because Rust allows multiple `impl` blocks for one type (pyo3's `multiple-pymethods` feature).
 
-**Surface freeze (ARC-001).** `Terminal` (389 methods) and `PtyTerminal` (206) do not grow. New API areas ship as separate pyclasses with their own cohesive surface, following `ScreenshotConfig`, `StreamingConfig`, `WidthConfig`, `Macro`, and the `types/` data classes, and are reached from `Terminal` through at most one accessor. `make api-surface-check` (`scripts/check_api_surface.py`, part of `checkall`) counts the unique non-dunder methods of both classes in `_native.pyi` and fails when a count exceeds its baseline, or drops without the baseline being lowered to match. Splitting the existing flat surface into per-area classes is a long-term roadmap item, not done yet.
+**Surface freeze (ARC-001).** `Terminal` (389 methods) and `PtyTerminal` (206) do not grow. New API areas ship as separate pyclasses with their own cohesive surface, following `ScreenshotConfig`, `StreamingConfig`, `WidthConfig`, `Macro`, and the `types/` data classes, and are reached from `Terminal` through at most one accessor. `make api-surface-check` (`scripts/check_api_surface.py`, part of `checkall`) counts the unique non-dunder methods of both classes in `_native.pyi` and fails when a count exceeds its baseline, or drops without the baseline being lowered to match. The Rust `Terminal` struct carries the same ratchet on its field count: `make terminal-fields-check` (`scripts/check_terminal_fields.py`) fails when a new top-level field lands instead of a `terminal/state.rs` sub-struct. Splitting the existing flat surface into per-area classes is a long-term roadmap item, not done yet.
 
 Other submodules:
 - `pty.rs` - `PyPtyTerminal` (`inner: PtySession`), the PTY-backed class. It reaches the `Terminal` through `PtySession`'s `Arc<RwLock<Terminal>>` rather than owning it directly.
@@ -1044,6 +1047,10 @@ The lists below cover the workspace as a whole. The terminal-side crates (`vte`,
 - `sysinfo` - System resource statistics for `SystemStats` events
 - `subtle` + `zeroize` - Constant-time credential comparison and secret wiping
 - `sha2` - Release-asset checksum verification (binary-only, via `streaming-bin`)
+- `opentelemetry` + `opentelemetry_sdk` + `opentelemetry-otlp` - OTLP metrics export (feature `otel`, default off; the three release in lockstep)
+
+**Self-update dependencies (`par-term-emu-core` member, feature `self-update`):**
+- `sha2` + `semver` + `tempfile` - Checksum-required release download, version comparison, and atomic binary replacement for `self_update.rs`
 
 **Multiplexer dependencies (`par-mux` member, optional, feature-gated):**
 - `interprocess` - Unix socket / Windows named pipe transport (`mux`)
@@ -1156,7 +1163,7 @@ The project uses GitHub Actions. `.github/workflows/ci.yml` is authoritative; th
 
 #### Version Check Job
 - **Platform:** Ubuntu only
-- **Purpose:** Verifies the version string is consistent across `Cargo.toml`, `pyproject.toml`, and `python/par_term_emu_core_rust/__init__.py`, that the root's derive dependency spec matches `derive/Cargo.toml` (ARC-008), and that the `par-term-emu-core` member stays in lockstep with the root version (ARC-007).
+- **Purpose:** Verifies the version string is consistent across `Cargo.toml`, `pyproject.toml`, and `python/par_term_emu_core_rust/__init__.py`, that the root's derive dependency spec matches `derive/Cargo.toml` (ARC-008), and that the `par-term-emu-core` and `par-mux` members stay in lockstep with the root version, with exact `=X.Y.Z` pins on every in-workspace dependency edge (ARC-007, `scripts/check_core_version.py`).
 
 #### Test Job
 - **Steps:**

@@ -21,6 +21,7 @@ mod event_broker;
 #[cfg(any(feature = "python", feature = "ffi"))]
 #[doc(hidden)]
 pub mod event_fields;
+mod export_snapshot;
 pub mod file_transfer;
 mod graphics;
 pub mod image;
@@ -70,6 +71,7 @@ pub(crate) use event_broker::EventBroker;
 pub use event_broker::ObserverDispatchBatch;
 #[cfg(test)]
 pub(crate) use event_broker::{MAX_BELL_EVENTS, MAX_TERMINAL_EVENTS};
+pub use export_snapshot::TextExportSnapshot;
 
 /// Maximum undrained device-query response bytes retained (SEC-207). A
 /// parse pass that would grow the queue past this drops the replies it
@@ -113,15 +115,15 @@ pub use semantic_snapshot::{
 pub use shell_integration::{CommandExecution, CommandOutput, ShellIntegrationStats};
 // State sub-structs live in `state` (ARC-003); re-exported so every
 // `crate::terminal::*` path keeps resolving.
-pub use state::{AttributeChangeExtent, Charset, GraphicsState, DEFAULT_MAX_OSC_DATA_LENGTH};
 pub(crate) use state::{
-    BadgeState, BookmarksState, CharsetState, ClipboardState, ClipboardSyncState,
-    ColorPaletteSnapshot, ColorThemeState, CommandHistoryState, DcsState, HostConfig,
-    HyperlinkState, InlineImageState, KeyboardState, MarginState, MouseHistoryState,
+    ApcPrefilterState, BadgeState, BellVolumeState, BookmarksState, CharsetState, ClipboardState,
+    ClipboardSyncState, ColorPaletteSnapshot, ColorThemeState, CommandHistoryState, DcsState,
+    HostConfig, HyperlinkState, InlineImageState, KeyboardState, MarginState, MouseHistoryState,
     NotificationState, PointerShapeState, ProfilingState, ProgressBellState, RecordingState,
     RenderingState, SavedCursorState, SearchState, SecurityFlagsState, ShellState, SyncState,
     TerminalModes, TextAttributes, TitleState, TmuxState, UnicodeConfigState,
 };
+pub use state::{AttributeChangeExtent, Charset, GraphicsState, DEFAULT_MAX_OSC_DATA_LENGTH};
 // Generic helpers relocated to `crate::text_utils` (ARC-009); re-exported so
 // the public `crate::terminal::*` paths keep resolving.
 pub use crate::text_utils::{cells_to_text, html_escape, unix_millis};
@@ -248,16 +250,9 @@ pub struct Terminal {
     pub(crate) progress_state: ProgressBellState,
     /// VTE parser instance (maintains state across process() calls)
     pub(crate) parser: vte::Parser,
-    /// Streaming state for the Kitty TGP APC pre-filter (vte 0.15 doesn't
-    /// expose APC payloads to `Perform`, so we strip them out before they
-    /// reach the parser).
-    pub(crate) apc_filter_state: ApcFilterState,
-    /// Accumulator for the in-flight Kitty APC payload bytes.
-    pub(crate) apc_buffer: Vec<u8>,
-    /// Reusable scratch buffer for non-APC bytes during APC pre-filtering
-    /// (ARC-008). Capacity is reused across `process()` calls instead of
-    /// reallocating a fresh `Vec` on every call.
-    pub(crate) apc_passthrough: Vec<u8>,
+    /// Kitty TGP APC pre-filter: filter state, payload accumulator, and
+    /// reusable passthrough buffer (ARC-001 sub-struct)
+    pub(crate) apc: ApcPrefilterState,
     /// SEC-003: scratch buffer reused by the incremental OSC guard in
     /// [`Terminal::advance_parser`] so guarded chunks (those containing ESC or
     /// mid-OSC state) do not allocate per call.
@@ -278,10 +273,8 @@ pub struct Terminal {
     pub(crate) security_state: SecurityFlagsState,
     /// Terminal conformance level (VT100/VT220/VT320/VT420/VT520)
     pub(crate) conformance_level: crate::conformance_level::ConformanceLevel,
-    /// Warning bell volume (0=off, 1-8=volume levels) - VT520 DECSWBV
-    pub(crate) warning_bell_volume: u8,
-    /// Margin bell volume (0=off, 1-8=volume levels) - VT520 DECSMBV
-    pub(crate) margin_bell_volume: u8,
+    /// VT520 DECSWBV/DECSMBV warning + margin bell volumes (ARC-001 sub-struct)
+    pub(crate) bell_volumes: BellVolumeState,
     /// tmux control-protocol state (ARC-001 sub-struct)
     pub(crate) tmux: TmuxState,
     /// Event queue, observer registry, and dispatch bookkeeping (ARC-002 broker)
@@ -392,9 +385,7 @@ impl Terminal {
             theme: ColorThemeState::default(),
             progress_state: ProgressBellState::default(),
             parser: vte::Parser::new(),
-            apc_filter_state: ApcFilterState::default(),
-            apc_buffer: Vec::new(),
-            apc_passthrough: Vec::new(),
+            apc: ApcPrefilterState::default(),
             osc_scratch: Vec::new(),
             kitty_parser: KittyParser::new(),
             pending_wrap: false,
@@ -407,8 +398,7 @@ impl Terminal {
             // VT520 conformance level - default to VT520 for maximum compatibility
             conformance_level: crate::conformance_level::ConformanceLevel::default(),
             // VT520 bell volume controls - default to moderate volume (4)
-            warning_bell_volume: 4,
-            margin_bell_volume: 4,
+            bell_volumes: BellVolumeState::default(),
             tmux: TmuxState::default(),
             events: EventBroker::default(),
             selection: None,
@@ -476,14 +466,7 @@ impl Terminal {
 
     /// Get the scrollback buffer content as text
     pub fn scrollback(&self) -> Vec<String> {
-        let scrollback_len = self.grid.scrollback_len();
-        let mut lines = Vec::with_capacity(scrollback_len);
-        for i in 0..scrollback_len {
-            if let Some(line) = self.grid.scrollback_line(i) {
-                lines.push(crate::text_utils::cells_to_text(line));
-            }
-        }
-        lines
+        export_snapshot::scrollback_lines(&self.grid)
     }
 
     /// Get the cursor
@@ -702,7 +685,7 @@ impl Terminal {
         // Fast path (ARC-008): if the APC filter is idle and this chunk has no
         // ESC byte, no APC sequence can begin here — feed the bytes straight to
         // vte, skipping the passthrough copy and the filter pass entirely.
-        if self.apc_filter_state == ApcFilterState::Outside && !data.contains(&0x1b) {
+        if self.apc.filter == ApcFilterState::Outside && !data.contains(&0x1b) {
             self.advance_parser(data);
             return;
         }
@@ -711,7 +694,7 @@ impl Terminal {
         // (ARC-008) instead of reallocating `Vec::with_capacity(data.len())`
         // on every `process()`. Take it out of `self` so feeding it to vte
         // below doesn't alias a `&mut self` borrow.
-        let mut passthrough = std::mem::take(&mut self.apc_passthrough);
+        let mut passthrough = std::mem::take(&mut self.apc.passthrough);
         passthrough.clear();
         // Record (passthrough_offset, payload) pairs so each APC is processed
         // with the cursor state produced by the passthrough bytes that
@@ -719,8 +702,8 @@ impl Terminal {
         let mut completed_with_offsets: Vec<(usize, Vec<u8>)> = Vec::new();
 
         apc_filter::feed(
-            &mut self.apc_filter_state,
-            &mut self.apc_buffer,
+            &mut self.apc.filter,
+            &mut self.apc.buffer,
             data,
             &mut passthrough,
             |apc, offset| {
@@ -825,7 +808,7 @@ impl Terminal {
         if prev_offset < passthrough.len() {
             self.advance_parser(&passthrough[prev_offset..]);
         }
-        self.apc_passthrough = passthrough;
+        self.apc.passthrough = passthrough;
     }
 
     /// Feed bytes to the vte parser. `vte::Parser::advance` needs `&mut self`
@@ -1193,8 +1176,8 @@ impl Terminal {
             .file_transfer_manager
             .set_max_transfer_size(self.host.max_transfer_size);
         self.conformance_level = self.host.configured_conformance_level;
-        self.warning_bell_volume = self.host.configured_warning_bell_volume;
-        self.margin_bell_volume = self.host.configured_margin_bell_volume;
+        self.bell_volumes.warning = self.host.configured_warning_bell_volume;
+        self.bell_volumes.margin = self.host.configured_margin_bell_volume;
     }
 
     /// Soft terminal reset (DECSTR, `CSI ! p`) per VT510.

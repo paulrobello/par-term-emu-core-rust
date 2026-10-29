@@ -256,7 +256,7 @@ par-term-streamer --macro-file demo.yaml --macro-loop --macro-speed 1.5
 
 # With HTTP Basic Authentication (password protection)
 par-term-streamer --enable-http --http-user admin --http-password secret
-par-term-streamer --enable-http --http-user admin --http-password-hash '$apr1$...'
+par-term-streamer --enable-http --http-user admin --http-password-hash '$2y$...'
 par-term-streamer --enable-http --http-user admin --http-password-file /path/to/password
 
 # With API key authentication (protects API routes: /ws, /sessions, /stats)
@@ -310,6 +310,7 @@ par-term-streamer --enable-http
 | `PAR_TERM_HTTP_PASSWORD_HASH` | `--http-password-hash` | HTTP Basic Auth password (htpasswd hash) |
 | `PAR_TERM_HTTP_PASSWORD_FILE` | `--http-password-file` | Password file path |
 | `PAR_TERM_REQUIRE_BCRYPT` | `--require-bcrypt` | Refuse cleartext and legacy htpasswd hashes at startup |
+| `PAR_TERM_ALLOW_LEGACY_HASH` | `--allow-legacy-hash` | Accept a legacy `{SHA}` / `$1$` / `$apr1$` htpasswd hash (refused by default) |
 | `PAR_TERM_TLS_CERT` | `--tls-cert` | TLS certificate file |
 | `PAR_TERM_TLS_KEY` | `--tls-key` | TLS private key file |
 | `PAR_TERM_TLS_PEM` | `--tls-pem` | Combined TLS PEM file |
@@ -1953,8 +1954,9 @@ par-term-streamer --enable-http --api-key secret-token-here
 # Server with HTTP Basic Auth (protects /ws, /sessions, /stats)
 par-term-streamer --enable-http --http-user admin --http-password secret
 
-# Server with htpasswd hash (bcrypt, apr1, sha1, md5crypt)
-par-term-streamer --enable-http --http-user admin --http-password-hash '$apr1$xyz$hash...'
+# Server with a bcrypt htpasswd hash (`htpasswd -nB admin`); legacy apr1/sha1/md5crypt
+# hashes are refused at startup unless --allow-legacy-hash is passed
+par-term-streamer --enable-http --http-user admin --http-password-hash '$2y$05$hash...'
 
 # Server with password from file (reads first line, auto-detects hash vs clear text)
 par-term-streamer --enable-http --http-user admin --http-password-file /etc/par-term/password

@@ -1891,3 +1891,22 @@ fn outer_agent_identity_env_does_not_leak_into_spawned_ptys() {
         std::thread::sleep(std::time::Duration::from_millis(25));
     }
 }
+
+/// ARC-004: the session's export methods build from a copy taken under the
+/// read lock, and must stay byte-identical to the terminal's own exports.
+#[test]
+fn session_exports_match_terminal_exports() {
+    let session = new_test_session(12, 4, 100);
+    session.with_terminal_mut(|term| {
+        for i in 0..10 {
+            term.process(format!("row {i}\r\n").as_bytes());
+        }
+        term.process(b"a soft wrapped tail line");
+    });
+    let (text, styled, scrollback) =
+        session.with_terminal(|term| (term.export_text(), term.export_styled(), term.scrollback()));
+    assert!(!scrollback.is_empty());
+    assert_eq!(session.export_text(), text);
+    assert_eq!(session.export_styled(), styled);
+    assert_eq!(session.scrollback(), scrollback);
+}

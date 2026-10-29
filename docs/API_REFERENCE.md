@@ -281,6 +281,8 @@ term.encode_key(1, 2, ord("f"), left_option=0)  # b'f' (normal passthrough)
 - `clear_all_clipboard_history()`: Clear all clipboard history
 - `search_clipboard_history(query: str, slot: str | None = None) -> list[ClipboardEntry]`: Search clipboard history for entries containing `query` (case-sensitive substring match; searches all slots if `slot` is None)
 
+The same family is available as a feature-scoped facade, `TerminalClipboard(term)` (ARC-002), which delegates to the terminal it wraps: `add(slot, content, label=None)`, `history(slot)`, `latest(slot)`, `clear(slot=None)` (all slots when `slot` is None), `set(content, slot=None)`, `get(slot=None)`, `search(query, slot=None)`, and the `terminal` property. New code should prefer the facade; the flat methods stay for compatibility.
+
 #### Scrollback Buffer
 - `scrollback() -> list[str]`: Get scrollback buffer as list of strings
 - `scrollback_len() -> int`: Get number of scrollback lines
@@ -713,7 +715,7 @@ Additional graphics management beyond basic display:
 - `get_sixel_graphics_limit() -> int`: Get maximum Sixel graphics count
 - `set_sixel_graphics_limit(max_graphics: int)`: Set maximum Sixel graphics count
 - `get_sixel_stats() -> dict[str, int]`: Get Sixel statistics
-- `get_dropped_sixel_graphics() -> int`: Get count of dropped Sixel graphics
+- `get_dropped_sixel_graphics() -> int`: Get count of graphics dropped due to limits (Sixel and Kitty share the store and this counter)
 
 ### File Transfer
 

@@ -87,7 +87,9 @@ pub fn pyo3_get_all(_attr: TokenStream, item: TokenStream) -> TokenStream {
 /// - `#[pydict(nested)]` — the field is an `Option<T>` or `Vec<T>` of a
 ///   struct that itself derives `PyDictConvert`: the value becomes `T`'s
 ///   dict (or a list of them), and the key is **omitted** when the `Option`
-///   is `None` or the `Vec` is empty. Nested values are never read back from
+///   is `None` or the `Vec` is empty. A field of any other type is a nested
+///   struct whose dict is always emitted. `#[pydict(nested(keep_empty))]`
+///   keeps an empty `Vec` as `[]`. Nested values are never read back from
 ///   kwargs; encode constructs them with `Default::default()`.
 ///
 /// Missing/wrong-typed kwargs silently fall back to defaults, matching the
@@ -97,12 +99,26 @@ pub fn pyo3_get_all(_attr: TokenStream, item: TokenStream) -> TokenStream {
 ///
 /// A struct with named fields gets only `to_py_dict(&self, py)`: one key per
 /// field (field name == key name), no `"type"` key, and `#[pydict(nested)]`
-/// honored as above. It exists so `#[pydict(nested)]` enum fields (the
-/// `SystemStats` cpu/memory/disk/network/load-average payloads) derive their
-/// dict shape from the struct definition instead of a hand-written copy.
+/// honored as above, and `#[pydict(skip)]` leaves a field out of the dict.
+/// It exists so `#[pydict(nested)]` enum fields (the `SystemStats`
+/// cpu/memory/disk/network/load-average payloads, the agent-roster entries)
+/// derive their dict shape from the struct definition instead of a
+/// hand-written copy.
 #[proc_macro_derive(PyDictConvert, attributes(pydict))]
 pub fn derive_py_dict_convert(input: TokenStream) -> TokenStream {
     expand_py_dict_convert(input.into()).into()
+}
+
+/// How a field's value reaches the dict.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Nested {
+    /// Plain value (or `to_with`).
+    No,
+    /// `#[pydict(nested)]`: `Option<T>`/`Vec<T>` omitted when `None`/empty;
+    /// any other type is a struct whose dict is always emitted.
+    Yes,
+    /// `#[pydict(nested(keep_empty))]`: a `Vec<T>` emitted as `[]` when empty.
+    KeepEmpty,
 }
 
 /// The `__d.set_item(..)` statement(s) for one field whose value is the
@@ -112,25 +128,34 @@ fn set_field_tokens(
     value: proc_macro2::TokenStream,
     ty: &syn::Type,
     to_with: Option<&Path>,
-    nested: bool,
+    nested: Nested,
 ) -> proc_macro2::TokenStream {
-    if nested {
+    if nested != Nested::No {
         if is_option_type(ty) {
             quote! {
                 if let Some(__v) = #value {
                     __d.set_item(#key, __v.to_py_dict(py)?)?;
                 }
             }
-        } else {
-            quote! {
-                if !(#value).is_empty() {
-                    let __l = pyo3::types::PyList::empty(py);
-                    for __v in #value {
-                        pyo3::types::PyListMethods::append(&__l, __v.to_py_dict(py)?)?;
+        } else if is_vec_type(ty) {
+            let build = quote! {
+                let __l = pyo3::types::PyList::empty(py);
+                for __v in #value {
+                    pyo3::types::PyListMethods::append(&__l, __v.to_py_dict(py)?)?;
+                }
+                __d.set_item(#key, __l)?;
+            };
+            if nested == Nested::KeepEmpty {
+                quote! { { #build } }
+            } else {
+                quote! {
+                    if !(#value).is_empty() {
+                        #build
                     }
-                    __d.set_item(#key, __l)?;
                 }
             }
+        } else {
+            quote! { __d.set_item(#key, (#value).to_py_dict(py)?)?; }
         }
     } else {
         match to_with {
@@ -140,27 +165,55 @@ fn set_field_tokens(
     }
 }
 
+/// Parse `nested` or `nested(keep_empty)`.
+fn parse_nested(meta: &syn::meta::ParseNestedMeta) -> syn::Result<Nested> {
+    let mut mode = Nested::Yes;
+    if meta.input.peek(syn::token::Paren) {
+        meta.parse_nested_meta(|inner| {
+            if inner.path.is_ident("keep_empty") {
+                mode = Nested::KeepEmpty;
+                Ok(())
+            } else {
+                Err(inner.error("unknown nested option (expected keep_empty)"))
+            }
+        })?;
+    }
+    Ok(mode)
+}
+
+/// Parsed `#[pydict(..)]` attributes of a struct-form field.
+struct StructFieldAttrs {
+    to_with: Option<Path>,
+    nested: Nested,
+    skip: bool,
+}
+
 /// Parse the `#[pydict(..)]` attributes of a struct field for the struct
-/// form, which accepts only `nested` and `to_with`/`with`.
-fn struct_field_attrs(field: &syn::Field) -> syn::Result<(Option<Path>, bool)> {
-    let mut to_with = None;
-    let mut nested = false;
+/// form, which accepts only `nested`, `to_with`/`with`, and `skip`.
+fn struct_field_attrs(field: &syn::Field) -> syn::Result<StructFieldAttrs> {
+    let mut parsed = StructFieldAttrs {
+        to_with: None,
+        nested: Nested::No,
+        skip: false,
+    };
     for attr in &field.attrs {
         if !attr.path().is_ident("pydict") {
             continue;
         }
         attr.parse_nested_meta(|meta| {
             if meta.path.is_ident("with") || meta.path.is_ident("to_with") {
-                to_with = Some(parse_path_value(&meta)?);
+                parsed.to_with = Some(parse_path_value(&meta)?);
             } else if meta.path.is_ident("nested") {
-                nested = true;
+                parsed.nested = parse_nested(&meta)?;
+            } else if meta.path.is_ident("skip") {
+                parsed.skip = true;
             } else {
                 return Err(meta.error("unknown pydict struct-field attribute"));
             }
             Ok(())
         })?;
     }
-    Ok((to_with, nested))
+    Ok(parsed)
 }
 
 fn expand_py_dict_struct(input: &DeriveInput, data: &syn::DataStruct) -> proc_macro2::TokenStream {
@@ -171,17 +224,20 @@ fn expand_py_dict_struct(input: &DeriveInput, data: &syn::DataStruct) -> proc_ma
     };
     let mut sets = Vec::new();
     for field in &named.named {
-        let (to_with, nested) = match struct_field_attrs(field) {
+        let attrs = match struct_field_attrs(field) {
             Ok(parsed) => parsed,
             Err(err) => return err.to_compile_error(),
         };
+        if attrs.skip {
+            continue;
+        }
         let ident = field.ident.as_ref().expect("named field has ident");
         sets.push(set_field_tokens(
             &ident.to_string(),
             quote! { &self.#ident },
             &field.ty,
-            to_with.as_ref(),
-            nested,
+            attrs.to_with.as_ref(),
+            attrs.nested,
         ));
     }
     quote! {
@@ -206,6 +262,211 @@ fn expand_py_dict_struct(input: &DeriveInput, data: &syn::DataStruct) -> proc_ma
     }
 }
 
+/// One named field of an enum variant, with its parsed `#[pydict(..)]`
+/// attributes.
+struct FieldInfo {
+    ident: syn::Ident,
+    ty: syn::Type,
+    to_with: Option<Path>,
+    from_with: Option<Path>,
+    default: Option<Expr>,
+    encode_skip: bool,
+    nested: Nested,
+}
+
+/// One enum variant: its dict `"type"` tag, its escape-hatch paths, and
+/// its fields.
+struct VariantInfo {
+    ident: syn::Ident,
+    tag: String,
+    to_path: Option<Path>,
+    from_path: Option<Path>,
+    fields: Vec<FieldInfo>,
+}
+
+/// Parse one variant's `#[pydict(..)]` attributes and its fields',
+/// pushing every attribute error onto `errors` (variant first, then its
+/// fields in order) so they all surface in one compile.
+fn variant_info(variant: &syn::Variant, errors: &mut Vec<syn::Error>) -> VariantInfo {
+    let mut tag = snake_case(&variant.ident.to_string());
+    let mut to_path = None;
+    let mut from_path = None;
+    for attr in &variant.attrs {
+        if !attr.path().is_ident("pydict") {
+            continue;
+        }
+        if let Err(err) = attr.parse_nested_meta(|meta| {
+            if meta.path.is_ident("type") {
+                let value = meta.value()?;
+                let lit: LitStr = value.parse()?;
+                tag = lit.value();
+            } else if meta.path.is_ident("to") {
+                to_path = Some(parse_path_value(&meta)?);
+            } else if meta.path.is_ident("from") {
+                from_path = Some(parse_path_value(&meta)?);
+            } else {
+                return Err(meta.error("unknown pydict variant attribute"));
+            }
+            Ok(())
+        }) {
+            errors.push(err);
+        }
+    }
+    let fields = match &variant.fields {
+        Fields::Named(named) => named
+            .named
+            .iter()
+            .map(|field| field_info(field, errors))
+            .collect(),
+        _ => Vec::new(),
+    };
+    VariantInfo {
+        ident: variant.ident.clone(),
+        tag,
+        to_path,
+        from_path,
+        fields,
+    }
+}
+
+/// Parse one enum-variant field's `#[pydict(..)]` attributes, pushing
+/// attribute errors onto `errors`.
+fn field_info(field: &syn::Field, errors: &mut Vec<syn::Error>) -> FieldInfo {
+    let mut to_with = None;
+    let mut from_with = None;
+    let mut default = None;
+    let mut encode_skip = false;
+    let mut nested = Nested::No;
+    for attr in &field.attrs {
+        if !attr.path().is_ident("pydict") {
+            continue;
+        }
+        if let Err(err) = attr.parse_nested_meta(|meta| {
+            if meta.path.is_ident("with") || meta.path.is_ident("to_with") {
+                to_with = Some(parse_path_value(&meta)?);
+            } else if meta.path.is_ident("from_with") {
+                from_with = Some(parse_path_value(&meta)?);
+            } else if meta.path.is_ident("default") {
+                let value = meta.value()?;
+                default = Some(value.parse::<Expr>()?);
+            } else if meta.path.is_ident("encode_skip") {
+                if meta.value().is_ok() {
+                    return Err(meta.error("encode_skip takes no value"));
+                }
+                encode_skip = true;
+            } else if meta.path.is_ident("nested") {
+                nested = parse_nested(&meta)?;
+            } else {
+                return Err(meta.error("unknown pydict field attribute"));
+            }
+            Ok(())
+        }) {
+            errors.push(err);
+        }
+    }
+    FieldInfo {
+        ident: field.ident.clone().expect("named field has ident"),
+        ty: field.ty.clone(),
+        to_with,
+        from_with,
+        default,
+        encode_skip,
+        nested,
+    }
+}
+
+/// The variant's match pattern: `Self::V` for a unit variant, otherwise
+/// `Self::V { <rest> }` with `rest` the field bindings (or `..`).
+fn variant_pattern(info: &VariantInfo, rest: proc_macro2::TokenStream) -> proc_macro2::TokenStream {
+    let ident = &info.ident;
+    if info.fields.is_empty() {
+        quote! { Self::#ident }
+    } else {
+        quote! { Self::#ident { #rest } }
+    }
+}
+
+/// A `py_type_tag` arm.
+fn tag_arm(info: &VariantInfo) -> proc_macro2::TokenStream {
+    let tag = &info.tag;
+    let pattern = variant_pattern(info, quote! { .. });
+    quote! { #pattern => #tag }
+}
+
+/// A `to_py_dict` arm: the variant's `to` escape hatch, or a dict with
+/// the `"type"` tag first and then one key per field.
+fn to_arm(info: &VariantInfo) -> proc_macro2::TokenStream {
+    let tag = &info.tag;
+    let field_idents = info.fields.iter().map(|f| &f.ident).collect::<Vec<_>>();
+    let pattern = variant_pattern(info, quote! { #( #field_idents ),* });
+    if let Some(path) = &info.to_path {
+        let args = if info.fields.is_empty() {
+            quote! { py }
+        } else {
+            quote! { py, #( #field_idents ),* }
+        };
+        return quote! { #pattern => #path(#args)? };
+    }
+    let set_fields = info.fields.iter().map(|f| {
+        let ident = &f.ident;
+        set_field_tokens(
+            &ident.to_string(),
+            quote! { #ident },
+            &f.ty,
+            f.to_with.as_ref(),
+            f.nested,
+        )
+    });
+    quote! {
+        #pattern => {
+            let __d = pyo3::types::PyDict::new(py);
+            __d.set_item("type", #tag)?;
+            #( #set_fields )*
+            __d
+        }
+    }
+}
+
+/// A `from_py_kwargs` arm: the variant's `from` escape hatch, or the
+/// variant built field by field from the kwargs.
+fn from_arm(info: &VariantInfo) -> proc_macro2::TokenStream {
+    let ident = &info.ident;
+    let tag = &info.tag;
+    if let Some(path) = &info.from_path {
+        return quote! { #tag => #path(__kwargs)? };
+    }
+    if info.fields.is_empty() {
+        return quote! { #tag => Self::#ident };
+    }
+    let inits = info.fields.iter().map(field_init);
+    quote! {
+        #tag => Self::#ident { #( #inits ),* }
+    }
+}
+
+/// One field's initializer in a `from_py_kwargs` arm: skipped and nested
+/// fields default, `from_with` converts, an `Option` flattens, and any
+/// other field extracts with its `default` (or `Default`) as fallback.
+fn field_init(f: &FieldInfo) -> proc_macro2::TokenStream {
+    let ident = &f.ident;
+    let key = ident.to_string();
+    let ty = &f.ty;
+    if f.encode_skip || f.nested != Nested::No {
+        return quote! { #ident: ::core::default::Default::default() };
+    }
+    if let Some(path) = &f.from_with {
+        return quote! { #ident: #path(__kv(#key).as_ref()) };
+    }
+    let extracted = quote! { __kv(#key).and_then(|__v| __v.extract::<#ty>().ok()) };
+    if is_option_type(&f.ty) {
+        quote! { #ident: #extracted.flatten() }
+    } else if let Some(default) = &f.default {
+        quote! { #ident: #extracted.unwrap_or(#default) }
+    } else {
+        quote! { #ident: #extracted.unwrap_or_default() }
+    }
+}
+
 fn expand_py_dict_convert(input: proc_macro2::TokenStream) -> proc_macro2::TokenStream {
     let input = match syn::parse2::<DeriveInput>(input) {
         Ok(input) => input,
@@ -225,228 +486,23 @@ fn expand_py_dict_convert(input: proc_macro2::TokenStream) -> proc_macro2::Token
         }
     };
 
-    struct FieldInfo {
-        ident: syn::Ident,
-        ty: syn::Type,
-        to_with: Option<Path>,
-        from_with: Option<Path>,
-        default: Option<Expr>,
-        encode_skip: bool,
-        nested: bool,
-    }
-
-    struct VariantInfo {
-        ident: syn::Ident,
-        tag: String,
-        to_path: Option<Path>,
-        from_path: Option<Path>,
-        fields: Vec<FieldInfo>,
-    }
-
-    let mut infos = Vec::new();
     let mut errors: Vec<syn::Error> = Vec::new();
-
-    for variant in variants {
-        let mut tag = Some(snake_case(&variant.ident.to_string()));
-        let mut to_path = None;
-        let mut from_path = None;
-
-        for attr in &variant.attrs {
-            if !attr.path().is_ident("pydict") {
-                continue;
-            }
-            if let Err(err) = attr.parse_nested_meta(|meta| {
-                if meta.path.is_ident("type") {
-                    let value = meta.value()?;
-                    let lit: LitStr = value.parse()?;
-                    tag = Some(lit.value());
-                } else if meta.path.is_ident("to") {
-                    to_path = Some(parse_path_value(&meta)?);
-                } else if meta.path.is_ident("from") {
-                    from_path = Some(parse_path_value(&meta)?);
-                } else {
-                    return Err(meta.error("unknown pydict variant attribute"));
-                }
-                Ok(())
-            }) {
-                errors.push(err);
-            }
-        }
-
-        let mut fields = Vec::new();
-        if let Fields::Named(named) = &variant.fields {
-            for field in &named.named {
-                let mut to_with = None;
-                let mut from_with = None;
-                let mut default = None;
-                let mut encode_skip = false;
-                let mut nested = false;
-                for attr in &field.attrs {
-                    if !attr.path().is_ident("pydict") {
-                        continue;
-                    }
-                    if let Err(err) = attr.parse_nested_meta(|meta| {
-                        if meta.path.is_ident("with") || meta.path.is_ident("to_with") {
-                            to_with = Some(parse_path_value(&meta)?);
-                        } else if meta.path.is_ident("from_with") {
-                            from_with = Some(parse_path_value(&meta)?);
-                        } else if meta.path.is_ident("default") {
-                            let value = meta.value()?;
-                            default = Some(value.parse::<Expr>()?);
-                        } else if meta.path.is_ident("encode_skip") {
-                            if meta.value().is_ok() {
-                                return Err(meta.error("encode_skip takes no value"));
-                            }
-                            encode_skip = true;
-                        } else if meta.path.is_ident("nested") {
-                            nested = true;
-                        } else {
-                            return Err(meta.error("unknown pydict field attribute"));
-                        }
-                        Ok(())
-                    }) {
-                        errors.push(err);
-                    }
-                }
-                fields.push(FieldInfo {
-                    ident: field.ident.clone().expect("named field has ident"),
-                    ty: field.ty.clone(),
-                    to_with,
-                    from_with,
-                    default,
-                    encode_skip,
-                    nested,
-                });
-            }
-        }
-
-        infos.push(VariantInfo {
-            ident: variant.ident.clone(),
-            tag: tag.expect("tag always initialized"),
-            to_path,
-            from_path,
-            fields,
-        });
-    }
-
-    if !errors.is_empty() {
-        let combined = errors
-            .into_iter()
-            .fold(None::<syn::Error>, |acc, err| match acc {
-                Some(mut acc) => {
-                    acc.combine(err);
-                    Some(acc)
-                }
-                None => Some(err),
-            })
-            .expect("errors is non-empty");
+    let infos: Vec<VariantInfo> = variants
+        .iter()
+        .map(|variant| variant_info(variant, &mut errors))
+        .collect();
+    if let Some(combined) = errors.into_iter().reduce(|mut acc, err| {
+        acc.combine(err);
+        acc
+    }) {
         return combined.to_compile_error();
     }
 
     let all_unit = infos.iter().all(|info| info.fields.is_empty());
-
-    // py_type_tag arms.
-    let tag_arms = infos.iter().map(|info| {
-        let ident = &info.ident;
-        let tag = &info.tag;
-        if info.fields.is_empty() {
-            quote! { Self::#ident => #tag }
-        } else {
-            quote! { Self::#ident { .. } => #tag }
-        }
-    });
-
-    // py_type_tags list.
+    let tag_arms = infos.iter().map(tag_arm);
     let tags = infos.iter().map(|info| info.tag.as_str());
-
-    // to_py_dict arms.
-    let to_arms = infos.iter().map(|info| {
-        let ident = &info.ident;
-        let tag = &info.tag;
-        let to_path = &info.to_path;
-        let field_idents = info.fields.iter().map(|f| &f.ident).collect::<Vec<_>>();
-        if let Some(path) = to_path {
-            if info.fields.is_empty() {
-                quote! { Self::#ident => #path(py)? }
-            } else {
-                quote! { Self::#ident { #(#field_idents),* } => #path(py, #( #field_idents ),*)? }
-            }
-        } else {
-            let set_type = quote! { __d.set_item("type", #tag)?; };
-            let set_fields = info.fields.iter().map(|f| {
-                let ident = &f.ident;
-                set_field_tokens(
-                    &ident.to_string(),
-                    quote! { #ident },
-                    &f.ty,
-                    f.to_with.as_ref(),
-                    f.nested,
-                )
-            });
-            if info.fields.is_empty() {
-                quote! {
-                    Self::#ident => {
-                        let __d = pyo3::types::PyDict::new(py);
-                        #set_type
-                        __d
-                    }
-                }
-            } else {
-                quote! {
-                    Self::#ident { #( #field_idents ),* } => {
-                        let __d = pyo3::types::PyDict::new(py);
-                        #set_type
-                        #( #set_fields )*
-                        __d
-                    }
-                }
-            }
-        }
-    });
-
-    // from_py_kwargs arms.
-    let from_arms = infos.iter().map(|info| {
-        let ident = &info.ident;
-        let tag = &info.tag;
-        let from_path = &info.from_path;
-        if let Some(path) = from_path {
-            return quote! { #tag => #path(__kwargs)? };
-        }
-        if info.fields.is_empty() {
-            return quote! { #tag => Self::#ident };
-        }
-        let inits = info.fields.iter().map(|f| {
-            let ident = &f.ident;
-            let key = ident.to_string();
-            let ty = &f.ty;
-            if f.encode_skip || f.nested {
-                quote! { #ident: ::core::default::Default::default() }
-            } else if let Some(path) = &f.from_with {
-                quote! { #ident: #path(__kv(#key).as_ref()) }
-            } else if is_option_type(&f.ty) {
-                quote! {
-                    #ident: __kv(#key)
-                        .and_then(|__v| __v.extract::<#ty>().ok())
-                        .flatten()
-                }
-            } else if let Some(default) = &f.default {
-                quote! {
-                    #ident: __kv(#key)
-                        .and_then(|__v| __v.extract::<#ty>().ok())
-                        .unwrap_or(#default)
-                }
-            } else {
-                quote! {
-                    #ident: __kv(#key)
-                        .and_then(|__v| __v.extract::<#ty>().ok())
-                        .unwrap_or_default()
-                }
-            }
-        });
-        quote! {
-            #tag => Self::#ident { #( #inits ),* }
-        }
-    });
+    let to_arms = infos.iter().map(to_arm);
+    let from_arms = infos.iter().map(from_arm);
 
     // Fieldless enums (EventType) get only the tag surface.
     let to_py_dict_method = if all_unit {
@@ -570,6 +626,15 @@ fn snake_case(ident: &str) -> String {
     out
 }
 
+fn is_vec_type(ty: &syn::Type) -> bool {
+    if let syn::Type::Path(type_path) = ty {
+        if let Some(last) = type_path.path.segments.last() {
+            return last.ident == "Vec";
+        }
+    }
+    false
+}
+
 fn is_option_type(ty: &syn::Type) -> bool {
     if let syn::Type::Path(type_path) = ty {
         if let Some(last) = type_path.path.segments.last() {
@@ -639,6 +704,48 @@ mod tests {
             }
         "#,
         );
+    }
+
+    #[test]
+    fn expansion_handles_struct_and_keep_empty_nesting() {
+        let ts: proc_macro2::TokenStream = r#"
+            enum Test {
+                A {
+                    #[pydict(nested(keep_empty))]
+                    xs: Vec<Inner>,
+                    #[pydict(nested)]
+                    one: Inner,
+                },
+            }
+        "#
+        .parse()
+        .unwrap();
+        let out = expand_py_dict_convert(ts);
+        syn::parse2::<syn::Item>(out.clone()).expect("expansion must be syntactically valid");
+        let out = out.to_string();
+        assert!(
+            !out.contains("is_empty"),
+            "keep_empty emits the list unconditionally"
+        );
+        let bad = expand_py_dict_convert(
+            "enum T { A { #[pydict(nested(bogus))] xs: Vec<I> } }"
+                .parse()
+                .unwrap(),
+        )
+        .to_string();
+        assert!(bad.contains("compile_error"));
+    }
+
+    #[test]
+    fn struct_expansion_skips_skipped_fields() {
+        let out = expand_py_dict_convert(
+            "struct S { a: u32, #[pydict(skip)] hidden: String }"
+                .parse()
+                .unwrap(),
+        )
+        .to_string();
+        assert!(out.contains("\"a\""));
+        assert!(!out.contains("\"hidden\""));
     }
 
     #[test]

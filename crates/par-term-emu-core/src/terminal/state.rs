@@ -5,6 +5,7 @@
 //! re-exported from `terminal/mod.rs` at its historical `crate::terminal::*`
 //! path.
 
+use super::apc_filter::ApcFilterState;
 use super::notification;
 use super::{Bookmark, DamageRegion};
 use super::{
@@ -848,6 +849,38 @@ impl ProgressBellState {
             });
         }
     }
+}
+
+/// VT520 bell volumes set by DECSWBV/DECSMBV (ARC-001 sub-struct). RIS
+/// restores both from the host-configured baseline in [`HostConfig`].
+pub(crate) struct BellVolumeState {
+    /// Warning bell volume (0=off, 1-8=volume levels) - VT520 DECSWBV
+    pub(crate) warning: u8,
+    /// Margin bell volume (0=off, 1-8=volume levels) - VT520 DECSMBV
+    pub(crate) margin: u8,
+}
+
+impl Default for BellVolumeState {
+    fn default() -> Self {
+        Self {
+            warning: 4,
+            margin: 4,
+        }
+    }
+}
+
+/// Kitty TGP APC pre-filter state (ARC-001 sub-struct). vte 0.15 does not
+/// expose APC payloads to `Perform`, so `Terminal::process` strips them out
+/// before the bytes reach the parser.
+#[derive(Default)]
+pub(crate) struct ApcPrefilterState {
+    /// Streaming filter state carried across `process()` calls.
+    pub(crate) filter: ApcFilterState,
+    /// Accumulator for the in-flight Kitty APC payload bytes.
+    pub(crate) buffer: Vec<u8>,
+    /// Reusable scratch buffer for the non-APC bytes of a filtered chunk
+    /// (ARC-008): its capacity is reused instead of reallocated per call.
+    pub(crate) passthrough: Vec<u8>,
 }
 
 /// Unicode width configuration + normalization form (ARC-001 sub-struct)

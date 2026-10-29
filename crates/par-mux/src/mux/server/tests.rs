@@ -226,6 +226,71 @@ fn summarize_line_redacts_payload_commands() {
     assert_eq!(summarize_line("list-panes"), "list-panes");
 }
 
+/// SEC-006: environment values never reach the log; variable names do.
+#[test]
+fn summarize_line_redacts_environment_values() {
+    let set = summarize_line("set-environment -t $0 API_TOKEN 'sk live 123'");
+    assert!(
+        !set.contains("sk") && !set.contains("123"),
+        "value leaked: {set}"
+    );
+    assert!(
+        set.starts_with("set-environment -t $0 API_TOKEN [redacted]"),
+        "name and target survive: {set}"
+    );
+
+    // A value that looks like a flag is still the value (flags lead).
+    let flaglike = summarize_line("set-environment -t $0 K -hunter2");
+    assert!(!flaglike.contains("hunter2"), "value leaked: {flaglike}");
+
+    // After `--` the next word is the name even when it starts with `-`.
+    let dashed = summarize_line("set-environment -t $0 -- -X secret");
+    assert!(!dashed.contains("secret"), "value leaked: {dashed}");
+    assert!(dashed.contains("-- -X [redacted]"), "{dashed}");
+
+    // A redacted line is still cut to the head like any other line.
+    let long = format!("new-session -e K=v {}", "x".repeat(500));
+    let cut = summarize_line(&long);
+    assert!(
+        cut.len() < 200,
+        "redacted line not truncated: {} bytes",
+        cut.len()
+    );
+    assert!(
+        cut.contains(&format!("{} bytes total", long.len())),
+        "{cut}"
+    );
+
+    // Unset carries no value; the name stays visible.
+    assert!(summarize_line("set-environment -u -t $0 DISPLAY").contains("DISPLAY"));
+
+    // A rejected extra word is redacted too.
+    let extra = summarize_line("set-environment -t $0 K v1 v2");
+    assert!(
+        !extra.contains("v1") && !extra.contains("v2"),
+        "value leaked: {extra}"
+    );
+
+    let new = summarize_line("new-session -s work -e TOKEN=hunter2 -e 'PASS=a b c' -e bare");
+    assert!(
+        !new.contains("hunter2") && !new.contains("a b c") && !new.contains("bare"),
+        "value leaked: {new}"
+    );
+    assert!(
+        new.contains("-s work")
+            && new.contains("-e TOKEN=[redacted]")
+            && new.contains("-e PASS=[redacted]"),
+        "names survive: {new}"
+    );
+}
+
+/// SEC-006: the `-e` parse error does not echo the rejected word.
+#[test]
+fn new_session_bad_env_error_does_not_echo_the_word() {
+    let err = crate::mux::command::parse_command("new-session -e hunter2").unwrap_err();
+    assert!(!err.contains("hunter2"), "error leaked the word: {err}");
+}
+
 /// A reader that serves a fixed script of chunks and errors, one per
 /// `fill_buf`, so the bounded fill can be driven through poll wakes.
 struct ScriptedReader {

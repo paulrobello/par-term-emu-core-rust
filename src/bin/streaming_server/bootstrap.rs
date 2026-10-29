@@ -798,9 +798,23 @@ fn is_bcrypt(s: &str) -> bool {
 }
 
 /// True if `host` binds only to the loopback interface (not reachable from the network).
+///
+/// Only the exact name `localhost` or an IP literal that parses as loopback
+/// (`127.0.0.0/8`, `::1`, optionally bracketed) qualifies — a hostname such
+/// as `127.example.com` resolves anywhere, so it never suppresses the
+/// unauthenticated-bind warning (SEC-005).
 pub fn is_loopback_host(host: &str) -> bool {
     let h = host.trim().to_ascii_lowercase();
-    h == "127.0.0.1" || h == "::1" || h == "localhost" || h.starts_with("127.")
+    if h == "localhost" {
+        return true;
+    }
+    let literal = h
+        .strip_prefix('[')
+        .and_then(|s| s.strip_suffix(']'))
+        .unwrap_or(&h);
+    literal
+        .parse::<std::net::IpAddr>()
+        .is_ok_and(|ip| ip.is_loopback())
 }
 
 /// Resolve HTTP Basic Auth configuration from CLI arguments
@@ -905,6 +919,20 @@ pub fn resolve_http_basic_auth(args: &Args) -> Result<Option<HttpBasicAuthConfig
                 }
             }
         }
+    } else if !args.allow_legacy_hash {
+        // SEC-003: legacy formats are refused by default; --allow-legacy-hash
+        // is the explicit opt-out for deployments that cannot regenerate yet.
+        if let PasswordConfig::Hash(h) = &auth.password {
+            if let Some(format) = legacy_hash_format(h) {
+                anyhow::bail!(
+                    "HTTP Basic Auth for user '{}' uses legacy hash format {format}, which is \
+                     refused by default; regenerate it with `htpasswd -nB {}` or pass \
+                     --allow-legacy-hash (PAR_TERM_ALLOW_LEGACY_HASH) to accept it",
+                    auth.username,
+                    auth.username
+                );
+            }
+        }
     }
 
     Ok(Some(auth))
@@ -958,6 +986,41 @@ mod tests {
                     panic!("forwarder still running after keep_running went false")
                 }
             }
+        }
+    }
+}
+
+#[cfg(test)]
+mod loopback_host_tests {
+    use super::is_loopback_host;
+
+    #[test]
+    fn loopback_literals_are_loopback() {
+        for host in [
+            "127.0.0.1",
+            "127.1.2.3",
+            "::1",
+            "[::1]",
+            "localhost",
+            " LOCALHOST ",
+        ] {
+            assert!(is_loopback_host(host), "{host}");
+        }
+    }
+
+    /// SEC-005: a hostname that merely starts with `127.` is not loopback.
+    #[test]
+    fn prefixed_hostnames_and_routable_addresses_are_not_loopback() {
+        for host in [
+            "127.example.com",
+            "127.0.0.1.nip.io",
+            "0.0.0.0",
+            "::",
+            "192.168.1.5",
+            "localhost.example.com",
+            "",
+        ] {
+            assert!(!is_loopback_host(host), "{host}");
         }
     }
 }
@@ -1024,13 +1087,42 @@ mod require_bcrypt_tests {
         assert!(auth.is_some());
     }
 
+    /// SEC-003: legacy hashes are refused by default, without echoing them.
     #[test]
-    fn require_bcrypt_off_keeps_legacy_hashes_accepted() {
+    fn legacy_hashes_are_refused_by_default() {
         for hash in LEGACY {
-            let auth = resolve_http_basic_auth(&args(&["--http-password-hash", hash]))
-                .expect("legacy hash accepted by default");
+            let err = resolve_http_basic_auth(&args(&["--http-password-hash", hash]))
+                .expect_err("legacy hash refused by default");
+            let msg = format!("{err:#}");
+            assert!(msg.contains("--allow-legacy-hash"), "{msg}");
+            assert!(!msg.contains(hash), "error leaked the hash: {msg}");
+        }
+    }
+
+    #[test]
+    fn allow_legacy_hash_keeps_legacy_hashes_accepted() {
+        for hash in LEGACY {
+            let auth = resolve_http_basic_auth(&args(&[
+                "--http-password-hash",
+                hash,
+                "--allow-legacy-hash",
+            ]))
+            .expect("legacy hash accepted with the opt-out");
             assert!(auth.is_some());
         }
+    }
+
+    #[test]
+    fn default_still_accepts_cleartext_and_bcrypt() {
+        assert!(resolve_http_basic_auth(&args(&["--http-password", "pw"]))
+            .expect("cleartext accepted by default")
+            .is_some());
+        let hash = bcrypt::hash("pw", 4).expect("bcrypt hash");
+        assert!(
+            resolve_http_basic_auth(&args(&["--http-password-hash", &hash]))
+                .expect("bcrypt accepted by default")
+                .is_some()
+        );
     }
 
     #[test]

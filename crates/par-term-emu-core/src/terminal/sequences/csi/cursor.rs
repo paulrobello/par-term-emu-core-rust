@@ -172,7 +172,7 @@ impl Terminal {
                     };
 
                     // Handle DECSWBV (VT520)
-                    self.warning_bell_volume = n.min(8) as u8;
+                    self.bell_volumes.warning = n.min(8) as u8;
                 }
             's' => {
                 // SCOSC - Save Cursor
@@ -186,10 +186,10 @@ impl Terminal {
                 if let Some(val) = ps {
                     if val == 0 {
                         self.restore_cursor();
-                        self.margin_bell_volume = 0;
+                        self.bell_volumes.margin = 0;
                     } else {
                         // DECSMBV - Set Margin Bell Volume: CSI Ps u
-                        self.margin_bell_volume = val.min(8) as u8;
+                        self.bell_volumes.margin = val.min(8) as u8;
                     }
                 } else {
                     // SCORC - Restore Cursor

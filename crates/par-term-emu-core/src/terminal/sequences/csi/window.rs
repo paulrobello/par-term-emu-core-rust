@@ -40,7 +40,7 @@ impl Terminal {
                     response: &mut self.response_buffer,
                     host: &self.host,
                     title_state: &mut self.title_state,
-                    warning_bell_volume: &mut self.warning_bell_volume,
+                    warning_bell_volume: &mut self.bell_volumes.warning,
                     pixel_size: (self.pixel_width, self.pixel_height),
                     size: (cols, rows),
                 },

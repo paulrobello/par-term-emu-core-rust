@@ -1,7 +1,7 @@
 .PHONY: help build build-release build-streaming dev-streaming app test test-rust test-rust-streaming test-python test-pty coverage coverage-html coverage-python clean install install-force python-install python-uninstall par-mux-install par-mux-uninstall streamer-uninstall uninstall dev fmt lint check \
         examples examples-basic examples-pty examples-streaming examples-all setup-venv watch \
         typecheck clippy fmt-python lint-python lint-check checkall checkall-ci test-mux-ci test-python-streaming-ci cross-target-check check-features bench pre-commit-install pre-commit-uninstall \
-        caps-table caps-table-check gen-extensions extensions-check ffi-header ffi-header-check ffi-surface-check core-version-check doc-hidden-check api-surface-check mux-docs-check mux-schema mux-schema-check completions completions-check _completions-into env-docs-check pinned-tests-check stub-docs-check doc-links-check release-check derive-version-check audit-deps \
+        caps-table caps-table-check gen-extensions extensions-check ffi-header ffi-header-check ffi-surface-check core-version-check doc-hidden-check api-surface-check terminal-fields-check mux-docs-check mux-schema mux-schema-check completions completions-check _completions-into env-docs-check pinned-tests-check stub-docs-check doc-links-check release-check derive-version-check set-version version-train-check audit-deps \
         mux-manual-seed mux-package-check rustdoc-check \
         pre-commit-run pre-commit-update deploy \
         proto-generate proto-rust proto-typescript proto-clean \
@@ -77,8 +77,11 @@ help:
 	@echo "  mux-manual-seed - Build the attach daemon and seed the docs/MANUAL-PASS.md demo (daemon + session + split on /tmp/manual-mux)"
 	@echo "  derive-version-check - Fail when Cargo.toml's par-term-emu-derive dependency spec differs from derive/Cargo.toml's version (ARC-008)"
 	@echo "  core-version-check - Fail when crates/par-term-emu-core's version or the root's exact pin on it drifts from the root version (ARC-007)"
+	@echo "  set-version VERSION=X.Y.Z - Rewrite the whole version train (5 versions, 3 exact pins, Cargo.lock) in one step; derive excluded (ARC-009)"
+	@echo "  version-train-check - Self-test the set-version writer against a temp copy of the train (ARC-009)"
 	@echo "  doc-hidden-check - Fail when par-term-emu-core's #[doc(hidden)] pub set differs from the DESIGN.md baseline (ARC-005)"
 	@echo "  api-surface-check - Fail when Terminal/PtyTerminal method counts in _native.pyi leave the frozen baseline (ARC-001)"
+	@echo "  terminal-fields-check - Fail when the core Terminal struct's field count leaves its frozen baseline (ARC-001)"
 	@echo "  stub-docs-check - Fail when a _native.pyi def lacks a docstring outside the accessor/__init__ allow-list (DOC-004)"
 	@echo "  doc-links-check - Fail on broken intra-repo links or heading anchors in docs/ and the top-level guides (lychee; needs: brew install lychee)"
 	@echo "  release-check   - Fail when the top CHANGELOG section misses a feat/fix commit since the previous release tag; also lints that section's structure (duplicate subsections, detached bullets, <this>, stale paths, [Unreleased] link base); then runs the script's --self-test (release-time only, not part of checkall)"
@@ -605,6 +608,15 @@ core-version-check:
 	python3 scripts/check_core_version.py
 	python3 scripts/check_core_version.py --self-test
 
+# ARC-009: the writer for the lockstep train the two checks above verify.
+# Refuses (writes nothing) unless every site matches the current version once.
+set-version:
+	@if [ -z "$(VERSION)" ]; then echo "usage: make set-version VERSION=X.Y.Z"; exit 1; fi
+	python3 scripts/set_version_train.py $(VERSION)
+
+version-train-check:
+	python3 scripts/set_version_train.py --self-test
+
 # ARC-005: the member's #[doc(hidden)] pub promotions are public API to any
 # embedder of the published crate; the set is frozen by the DESIGN.md
 # baseline (promote methods, never fields).
@@ -617,6 +629,12 @@ doc-hidden-check:
 api-surface-check:
 	python3 scripts/check_api_surface.py
 	python3 scripts/check_api_surface.py --self-test
+
+# ARC-001: field-count ratchet on the core Terminal struct. New state goes
+# into a terminal/state.rs sub-struct, never a new top-level field.
+terminal-fields-check:
+	python3 scripts/check_terminal_fields.py
+	python3 scripts/check_terminal_fields.py --self-test
 
 # DOC-004: docstring coverage of the generated Python stub. Pure python3
 # over the committed _native.pyi, so no build or venv is needed.
@@ -705,7 +723,7 @@ audit-deps:
 	uvx --python-preference only-system pip-audit --strict -r $$reqs; \
 	status=$$?; rm -f $$reqs; exit $$status
 
-checkall: extensions-check ffi-header-check ffi-surface-check derive-version-check core-version-check doc-hidden-check api-surface-check mux-docs-check mux-schema-check completions-check env-docs-check otel-check pinned-tests-check stub-docs-check mux-package-check rustdoc-check doc-links-check test-rust test-rust-streaming lint-check stub-check test-python test-web caps-table-check
+checkall: extensions-check ffi-header-check ffi-surface-check derive-version-check core-version-check version-train-check doc-hidden-check api-surface-check terminal-fields-check mux-docs-check mux-schema-check completions-check env-docs-check otel-check pinned-tests-check stub-docs-check mux-package-check rustdoc-check doc-links-check test-rust test-rust-streaming lint-check stub-check test-python test-web caps-table-check
 	@echo ""
 	@echo "======================================================================"
 	@echo "  All code quality checks passed!"

@@ -15,7 +15,7 @@ use flate2::read::ZlibDecoder;
 use crate::graphics::{
     next_graphic_id, AnimationControl, AnimationFrame, CompositionMode, GraphicProtocol,
     GraphicsError, GraphicsStore, ImageDimension, ImagePlacement, TerminalGraphic,
-    MAX_IMAGE_DIMENSION, MAX_IMAGE_PIXELS,
+    MAX_IMAGE_PIXELS,
 };
 
 /// cap: Decoded bytes one kitty transmission may accumulate across chunks

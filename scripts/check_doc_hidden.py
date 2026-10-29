@@ -28,9 +28,9 @@ import argparse
 import re
 import tempfile
 from pathlib import Path
-from typing import NoReturn
 
-ROOT = Path(__file__).resolve().parent.parent
+from _gate_common import ROOT, expect_failure, fail
+
 SRC_REL = "crates/par-term-emu-core/src"
 DESIGN_REL = "crates/par-term-emu-core/DESIGN.md"
 BEGIN = "<!-- doc-hidden-baseline:begin -->"
@@ -54,11 +54,6 @@ OWNER_RE = re.compile(
     r"(?:impl(?:<[^>]*>)?\s+(?:[\w:<>, ]+\s+for\s+)?(?P<impl>\w+)"
     r"|struct\s+(?P<struct>\w+)|enum\s+(?P<enum>\w+)|trait\s+(?P<trait>\w+))"
 )
-
-
-def fail(msg: str) -> NoReturn:
-    print(msg)
-    raise SystemExit(1)
 
 
 def top_module(rel: Path) -> str:
@@ -205,21 +200,6 @@ def build_synthetic_tree(root: Path) -> None:
     )
 
 
-def _expect_failure(root: Path, needle: str) -> None:
-    import contextlib
-    import io
-
-    buf = io.StringIO()
-    try:
-        with contextlib.redirect_stdout(buf):
-            check(root)
-    except SystemExit:
-        if needle not in buf.getvalue():
-            fail(f"self-test: failure output lacks {needle!r}: {buf.getvalue()}")
-        return
-    fail(f"self-test: expected a failure mentioning {needle!r}, got a pass")
-
-
 def self_test() -> None:
     with tempfile.TemporaryDirectory(prefix="arc005-selftest-") as tmp:
         root = Path(tmp)
@@ -244,7 +224,7 @@ def self_test() -> None:
             ),
             encoding="utf-8",
         )
-        _expect_failure(root, "promote methods, never fields")
+        expect_failure(lambda: check(root), "promote methods, never fields")
 
         # A promotion reverted to pub(crate) leaves a stale baseline entry.
         build_synthetic_tree(root)
@@ -255,30 +235,30 @@ def self_test() -> None:
             ),
             encoding="utf-8",
         )
-        _expect_failure(root, "no longer #[doc(hidden)] pub")
+        expect_failure(lambda: check(root), "no longer #[doc(hidden)] pub")
 
         # The inline form `#[doc(hidden)] pub fn x()` is extracted, not skipped.
         build_synthetic_tree(root)
         with mod_rs.open("a", encoding="utf-8") as fh:
             fh.write("#[doc(hidden)] pub fn inline_leak() {}\n")
-        _expect_failure(root, "terminal::inline_leak (fn)")
+        expect_failure(lambda: check(root), "terminal::inline_leak (fn)")
 
         # An unparseable pub item after #[doc(hidden)] fails closed.
         build_synthetic_tree(root)
         with mod_rs.open("a", encoding="utf-8") as fh:
             fh.write("#[doc(hidden)]\npub macro_rules_like! odd\n")
-        _expect_failure(root, "cannot classify")
+        expect_failure(lambda: check(root), "cannot classify")
 
         # Missing markers fail closed.
         build_synthetic_tree(root)
         (root / DESIGN_REL).write_text("# x\n", encoding="utf-8")
-        _expect_failure(root, "missing")
+        expect_failure(lambda: check(root), "missing")
 
     # Fail closed on an empty source tree.
     with tempfile.TemporaryDirectory(prefix="arc005-selftest2-") as tmp:
         root = Path(tmp)
         (root / SRC_REL).mkdir(parents=True)
-        _expect_failure(root, "parsed nothing")
+        expect_failure(lambda: check(root), "parsed nothing")
 
     # The real tree must pass and must not regress to a trivially small scan.
     real = extract(ROOT)

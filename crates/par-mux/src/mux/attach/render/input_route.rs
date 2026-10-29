@@ -642,22 +642,9 @@ impl WindowSession {
             Hit::LayoutsRow(row) => self.layouts_click(conn, row),
             Hit::LayoutsClose => self.leave_layouts(),
             Hit::MenuClose => self.leave_menu(),
-            Hit::ToastPress { pane } => {
-                self.notify.toast_until = None;
-                self.renderer.set_toast(None);
-                if let Some(pane) = pane {
-                    self.focus_pane(conn, pane);
-                }
-            }
+            Hit::ToastPress { pane } => self.toast_press(conn, pane),
             Hit::SidebarNewWorkspace => self.enter_prompt(PromptTarget::NewWorkspace),
-            Hit::SidebarMenu => {
-                let anchor = self
-                    .renderer
-                    .sidebar_menu_chip_anchor()
-                    .map(|(x, y)| super::OverlayAnchor::Above(x, y));
-                self.open_menu(MenuTarget::Commands);
-                self.renderer.set_overlay_anchor(anchor);
-            }
+            Hit::SidebarMenu => self.open_sidebar_menu(),
             Hit::SidebarCollapse => self.toggle_sidebar_collapse(conn),
             Hit::SidebarAgentsSort => self.toggle_agents_sort(conn),
             Hit::SidebarWorkspace { id, menu: true } => {
@@ -670,28 +657,10 @@ impl WindowSession {
             Hit::SidebarDrag { x, y, release } => self.sidebar_drag_event(x, y, release),
             Hit::Drag { x, y, release } => self.drag_event(conn, x, y, release),
             Hit::PickerMove(delta) => self.picker_move(delta),
-            Hit::PickerFilter => {
-                if let Modal::Picker(picker) = &mut self.modal {
-                    picker.filtering = true;
-                }
-                self.refresh_picker();
-            }
-            Hit::PickerRow(content) => {
-                // Move the cursor to the clicked row and activate it
-                // (start maps the windowed index onto the filtered
-                // list).
-                if let Modal::Picker(picker) = &mut self.modal {
-                    picker.selected = picker.start + content;
-                }
-                self.refresh_picker();
-                self.picker_activate(conn);
-            }
+            Hit::PickerFilter => self.picker_open_filter(),
+            Hit::PickerRow(content) => self.picker_click_row(conn, content),
             Hit::HelpScroll(delta) => self.help_scroll_by(delta),
-            Hit::TabMenu { id, anchor } => {
-                self.open_menu(MenuTarget::Tab(id));
-                self.renderer
-                    .set_overlay_anchor(Some(super::OverlayAnchor::Below(anchor.0, anchor.1)));
-            }
+            Hit::TabMenu { id, anchor } => self.open_tab_menu(id, anchor),
             Hit::TabPress(rx) => self.tab_click(conn, rx),
             Hit::TabWheel(delta) => {
                 self.chrome.tab_strip.wheel(delta);
@@ -699,12 +668,8 @@ impl WindowSession {
             }
             Hit::TabDrop(rx) => self.tab_drop(conn, rx),
             Hit::Wheel { rect, x, cy, delta } => {
-                let forwards = self.pane_accepts_mouse(rect.pane, &mouse);
-                if !forwards && self.renderer.wheel_scroll(x, cy, delta) {
+                if self.pane_wheel(conn, &mouse, &rect, x, cy, delta) {
                     return; // consumed client-side
-                }
-                if forwards {
-                    self.forward_mouse(conn, &rect, &mouse);
                 }
             }
             Hit::PaneForward(rect) => self.forward_mouse(conn, &rect, &mouse),
@@ -713,43 +678,8 @@ impl WindowSession {
             }
             Hit::TextDrag { x, y, release } => self.text_drag_event(x, y, release),
             Hit::PanePress(rect) => {
-                // A re-click on the focused pane must not re-select it:
-                // `select-pane` always broadcasts `%layout-change`, and
-                // the re-seed repaints the whole window — htop read it
-                // as the menu opening twice. Focus follows press on
-                // change alone.
-                let changed = self.renderer.focused() != Some(rect.pane);
-                super::trace_input(format_args!(
-                    "PanePress pane=%{} changed={}",
-                    rect.pane, changed
-                ));
-                self.renderer.focus(rect.pane);
-                if changed {
-                    let _ = conn.send_forget(&format!("select-pane -t %{}", rect.pane));
-                }
-                // The mouse-owning pane keeps its report; anything else
-                // (or shift, the bypass modifier) arms a text selection
-                // instead — the drag sweeps the pane's cells and release
-                // copies, tmux's own mouse-copy gating.
-                if mouse.is_left_press()
-                    && (mouse.shift() || !self.pane_accepts_mouse(rect.pane, &mouse))
-                {
-                    let (x, cy) = self.geometry.host_to_content_clamped(
-                        mouse.col.saturating_sub(1),
-                        mouse.row.saturating_sub(1),
-                    );
-                    if let Some(anchor) = self.renderer.pane_view_cell(&rect, x, cy) {
-                        self.text_drag = Some(TextDrag::Pending {
-                            pane: rect.pane,
-                            anchor,
-                        });
-                        // A fresh press clears whatever was selected.
-                        self.renderer.set_selection(None);
-                        return;
-                    }
-                }
-                if self.pane_accepts_mouse(rect.pane, &mouse) {
-                    self.forward_mouse(conn, &rect, &mouse);
+                if self.pane_press(conn, &mouse, &rect) {
+                    return;
                 }
             }
         }
@@ -757,6 +687,125 @@ impl WindowSession {
         // must already see `drag` cleared, or the pointer would keep
         // the resize shape until an unrelated motion report arrives.
         self.update_pointer(&mouse);
+    }
+
+    /// A press on the in-app toast: dismiss it and focus its agent's pane.
+    fn toast_press(&mut self, conn: &mut crate::mux::attach::conn::AttachConn, pane: Option<u32>) {
+        self.notify.toast_until = None;
+        self.renderer.set_toast(None);
+        if let Some(pane) = pane {
+            self.focus_pane(conn, pane);
+        }
+    }
+
+    /// The side panel's ` menu ` chip: the command menu, anchored above
+    /// the chip.
+    fn open_sidebar_menu(&mut self) {
+        let anchor = self
+            .renderer
+            .sidebar_menu_chip_anchor()
+            .map(|(x, y)| super::OverlayAnchor::Above(x, y));
+        self.open_menu(MenuTarget::Commands);
+        self.renderer.set_overlay_anchor(anchor);
+    }
+
+    /// A right press on a tab: that window's context menu, anchored under
+    /// the tab's block.
+    fn open_tab_menu(&mut self, id: String, anchor: (u16, u16)) {
+        self.open_menu(MenuTarget::Tab(id));
+        self.renderer
+            .set_overlay_anchor(Some(super::OverlayAnchor::Below(anchor.0, anchor.1)));
+    }
+
+    /// A press on the picker's filter line: open the filter box.
+    fn picker_open_filter(&mut self) {
+        if let Modal::Picker(picker) = &mut self.modal {
+            picker.filtering = true;
+        }
+        self.refresh_picker();
+    }
+
+    /// Move the cursor to the clicked row and activate it (start maps the
+    /// windowed index onto the filtered list).
+    fn picker_click_row(
+        &mut self,
+        conn: &mut crate::mux::attach::conn::AttachConn,
+        content: usize,
+    ) {
+        if let Modal::Picker(picker) = &mut self.modal {
+            picker.selected = picker.start + content;
+        }
+        self.refresh_picker();
+        self.picker_activate(conn);
+    }
+
+    /// A wheel over a pane: forward when the pane owns the mouse, else
+    /// scroll the client's scrollback. Returns true when the scrollback
+    /// consumed it (the pointer update is skipped then).
+    fn pane_wheel(
+        &mut self,
+        conn: &mut crate::mux::attach::conn::AttachConn,
+        mouse: &SgrMouse,
+        rect: &PaneRect,
+        x: u16,
+        cy: u16,
+        delta: isize,
+    ) -> bool {
+        let forwards = self.pane_accepts_mouse(rect.pane, mouse);
+        if !forwards && self.renderer.wheel_scroll(x, cy, delta) {
+            return true;
+        }
+        if forwards {
+            self.forward_mouse(conn, rect, mouse);
+        }
+        false
+    }
+
+    /// A press in a pane: focus it, then either arm a text selection or
+    /// forward the report to a mouse-owning pane. Returns true when a
+    /// text selection was armed (the pointer update is skipped then).
+    fn pane_press(
+        &mut self,
+        conn: &mut crate::mux::attach::conn::AttachConn,
+        mouse: &SgrMouse,
+        rect: &PaneRect,
+    ) -> bool {
+        // A re-click on the focused pane must not re-select it:
+        // `select-pane` always broadcasts `%layout-change`, and
+        // the re-seed repaints the whole window — htop read it
+        // as the menu opening twice. Focus follows press on
+        // change alone.
+        let changed = self.renderer.focused() != Some(rect.pane);
+        super::trace_input(format_args!(
+            "PanePress pane=%{} changed={}",
+            rect.pane, changed
+        ));
+        self.renderer.focus(rect.pane);
+        if changed {
+            let _ = conn.send_forget(&format!("select-pane -t %{}", rect.pane));
+        }
+        // The mouse-owning pane keeps its report; anything else
+        // (or shift, the bypass modifier) arms a text selection
+        // instead — the drag sweeps the pane's cells and release
+        // copies, tmux's own mouse-copy gating.
+        if mouse.is_left_press() && (mouse.shift() || !self.pane_accepts_mouse(rect.pane, mouse)) {
+            let (x, cy) = self
+                .geometry
+                .host_to_content_clamped(mouse.col.saturating_sub(1), mouse.row.saturating_sub(1));
+            if let Some(anchor) = self.renderer.pane_view_cell(rect, x, cy) {
+                self.text_drag = Some(TextDrag::Pending {
+                    pane: rect.pane,
+                    anchor,
+                });
+                // A fresh press clears whatever was selected.
+                self.renderer.set_selection(None);
+                return true;
+            }
+        }
+        if self.pane_accepts_mouse(rect.pane, mouse) {
+            self.forward_mouse(conn, rect, mouse);
+        }
+        false
     }
 
     /// The pointer-shape routing (config `change-cursor-shape`): a live
@@ -876,60 +925,14 @@ impl WindowSession {
         if matches!(self.modal, Modal::Menu(_)) {
             return self.menu_hit(mouse, x, y);
         }
-        // The settings dialog is modal for the pointer, like the menu:
-        // wheels move the selection (the arrows' move), a press on a tab
-        // or a choice acts, everything else is consumed.
         if matches!(self.modal, Modal::Settings(_)) {
-            if mouse.is_wheel_up() {
-                return Hit::SettingsMove(-1);
-            }
-            if mouse.is_wheel_down() {
-                return Hit::SettingsMove(1);
-            }
-            let is_press = !mouse.release
-                && !mouse.is_motion()
-                && !mouse.is_wheel_up()
-                && !mouse.is_wheel_down();
-            return match (
-                is_press,
-                self.renderer.overlay_row_at(x, y),
-                self.renderer.overlay_col_at(x),
-            ) {
-                (true, Some(row), Some(col)) => Hit::SettingsAt { row, col },
-                // A press outside the box closes the dialog (herdr's
-                // click-away dismissal).
-                (true, _, _) if !self.renderer.overlay_contains(x, y) => Hit::SettingsClose,
-                _ => Hit::Consumed,
-            };
+            return self.settings_hit(mouse, x, y);
         }
-        // The layouts dialog is modal for the pointer the same way: a
-        // press on a row acts, a press outside closes, the rest is consumed.
         if matches!(self.modal, Modal::Layouts(_)) {
-            let is_press = !mouse.release
-                && !mouse.is_motion()
-                && !mouse.is_wheel_up()
-                && !mouse.is_wheel_down();
-            return match (is_press, self.renderer.overlay_row_at(x, y)) {
-                (true, Some(row)) => Hit::LayoutsRow(row),
-                (true, None) if !self.renderer.overlay_contains(x, y) => Hit::LayoutsClose,
-                _ => Hit::Consumed,
-            };
+            return self.layouts_hit(mouse, x, y);
         }
-        // The in-app toast sits over the panes: a press on it focuses the
-        // agent's pane and dismisses the card.
-        if matches!(self.modal, Modal::None | Modal::Scroll)
-            && !mouse.release
-            && !mouse.is_motion()
-            && !mouse.is_wheel_up()
-            && !mouse.is_wheel_down()
-        {
-            if let Some(pane) = self
-                .geometry
-                .host_to_frame(x, y)
-                .and_then(|(fx, fy)| self.renderer.toast_pane_at(fx, fy))
-            {
-                return Hit::ToastPress { pane };
-            }
+        if let Some(hit) = self.toast_hit(mouse, x, y) {
+            return hit;
         }
         // The TOP row stays the tab strip's (the panel begins under it),
         // so a click there falls through to the tab strip even inside
@@ -992,6 +995,52 @@ impl WindowSession {
         // Below the strip, content coordinates are host rows minus the
         // strip row.
         self.pane_area_hit(mouse, x, content_y)
+    }
+
+    /// The settings dialog is modal for the pointer, like the menu:
+    /// wheels move the selection (the arrows' move), a press on a tab or
+    /// a choice acts, everything else is consumed.
+    fn settings_hit(&self, mouse: &SgrMouse, x: u16, y: u16) -> Hit {
+        if mouse.is_wheel_up() {
+            return Hit::SettingsMove(-1);
+        }
+        if mouse.is_wheel_down() {
+            return Hit::SettingsMove(1);
+        }
+        match (
+            mouse.is_press(),
+            self.renderer.overlay_row_at(x, y),
+            self.renderer.overlay_col_at(x),
+        ) {
+            (true, Some(row), Some(col)) => Hit::SettingsAt { row, col },
+            // A press outside the box closes the dialog (herdr's
+            // click-away dismissal).
+            (true, _, _) if !self.renderer.overlay_contains(x, y) => Hit::SettingsClose,
+            _ => Hit::Consumed,
+        }
+    }
+
+    /// The layouts dialog is modal for the pointer the same way: a press
+    /// on a row acts, a press outside closes, the rest is consumed.
+    fn layouts_hit(&self, mouse: &SgrMouse, x: u16, y: u16) -> Hit {
+        match (mouse.is_press(), self.renderer.overlay_row_at(x, y)) {
+            (true, Some(row)) => Hit::LayoutsRow(row),
+            (true, None) if !self.renderer.overlay_contains(x, y) => Hit::LayoutsClose,
+            _ => Hit::Consumed,
+        }
+    }
+
+    /// The in-app toast sits over the panes: a press on it focuses the
+    /// agent's pane and dismisses the card. `None` when the report is not
+    /// a press on the toast (or a modal other than scroll is up).
+    fn toast_hit(&self, mouse: &SgrMouse, x: u16, y: u16) -> Option<Hit> {
+        if !matches!(self.modal, Modal::None | Modal::Scroll) || !mouse.is_press() {
+            return None;
+        }
+        self.geometry
+            .host_to_frame(x, y)
+            .and_then(|(fx, fy)| self.renderer.toast_pane_at(fx, fy))
+            .map(|pane| Hit::ToastPress { pane })
     }
 
     /// The context menu is modal for the pointer: wheels move the

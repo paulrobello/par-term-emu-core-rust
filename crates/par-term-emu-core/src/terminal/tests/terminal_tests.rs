@@ -2465,23 +2465,23 @@ fn test_vt520_decswbv_set_warning_bell_volume() {
     let mut term = Terminal::new(80, 24);
 
     // Default should be 4 (moderate)
-    assert_eq!(term.warning_bell_volume, 4);
+    assert_eq!(term.bell_volumes.warning, 4);
 
     // Set to off (0)
     term.process(b"\x1b[0 t");
-    assert_eq!(term.warning_bell_volume, 0);
+    assert_eq!(term.bell_volumes.warning, 0);
 
     // Set to low (1)
     term.process(b"\x1b[1 t");
-    assert_eq!(term.warning_bell_volume, 1);
+    assert_eq!(term.bell_volumes.warning, 1);
 
     // Set to medium (4)
     term.process(b"\x1b[4 t");
-    assert_eq!(term.warning_bell_volume, 4);
+    assert_eq!(term.bell_volumes.warning, 4);
 
     // Set to high (8)
     term.process(b"\x1b[8 t");
-    assert_eq!(term.warning_bell_volume, 8);
+    assert_eq!(term.bell_volumes.warning, 8);
 }
 
 #[test]
@@ -2490,10 +2490,10 @@ fn test_vt520_decswbv_clamps_to_valid_range() {
 
     // Values above 8 should be clamped to 8
     term.process(b"\x1b[99 t");
-    assert_eq!(term.warning_bell_volume, 8);
+    assert_eq!(term.bell_volumes.warning, 8);
 
     term.process(b"\x1b[255 t");
-    assert_eq!(term.warning_bell_volume, 8);
+    assert_eq!(term.bell_volumes.warning, 8);
 }
 
 #[test]
@@ -2501,23 +2501,23 @@ fn test_vt520_decsmbv_set_margin_bell_volume() {
     let mut term = Terminal::new(80, 24);
 
     // Default should be 4 (moderate)
-    assert_eq!(term.margin_bell_volume, 4);
+    assert_eq!(term.bell_volumes.margin, 4);
 
     // Set to off (0)
     term.process(b"\x1b[0 u");
-    assert_eq!(term.margin_bell_volume, 0);
+    assert_eq!(term.bell_volumes.margin, 0);
 
     // Set to low (1)
     term.process(b"\x1b[1 u");
-    assert_eq!(term.margin_bell_volume, 1);
+    assert_eq!(term.bell_volumes.margin, 1);
 
     // Set to medium (4)
     term.process(b"\x1b[4 u");
-    assert_eq!(term.margin_bell_volume, 4);
+    assert_eq!(term.bell_volumes.margin, 4);
 
     // Set to high (8)
     term.process(b"\x1b[8 u");
-    assert_eq!(term.margin_bell_volume, 8);
+    assert_eq!(term.bell_volumes.margin, 8);
 }
 
 #[test]
@@ -2526,10 +2526,10 @@ fn test_vt520_decsmbv_clamps_to_valid_range() {
 
     // Values above 8 should be clamped to 8
     term.process(b"\x1b[99 u");
-    assert_eq!(term.margin_bell_volume, 8);
+    assert_eq!(term.bell_volumes.margin, 8);
 
     term.process(b"\x1b[200 u");
-    assert_eq!(term.margin_bell_volume, 8);
+    assert_eq!(term.bell_volumes.margin, 8);
 }
 
 #[test]
@@ -2540,13 +2540,13 @@ fn test_vt520_bell_volumes_independent() {
     term.process(b"\x1b[2 t"); // Warning bell = 2
     term.process(b"\x1b[6 u"); // Margin bell = 6
 
-    assert_eq!(term.warning_bell_volume, 2);
-    assert_eq!(term.margin_bell_volume, 6);
+    assert_eq!(term.bell_volumes.warning, 2);
+    assert_eq!(term.bell_volumes.margin, 6);
 
     // Change warning bell without affecting margin bell
     term.process(b"\x1b[7 t");
-    assert_eq!(term.warning_bell_volume, 7);
-    assert_eq!(term.margin_bell_volume, 6); // Should remain unchanged
+    assert_eq!(term.bell_volumes.warning, 7);
+    assert_eq!(term.bell_volumes.margin, 6); // Should remain unchanged
 }
 
 #[test]

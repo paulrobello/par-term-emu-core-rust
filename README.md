@@ -740,6 +740,16 @@ All contributions must pass:
 
 **TIP:** Use `make pre-commit-install` to automate all checks on every commit!
 
+### Load-Sensitive Tests
+
+Timing-dependent Rust tests (the PTY and attach integration suites, and render tests pinned to timing) are labeled `#[ignore = "load-sensitive ..."]`. A plain `cargo test` and `make checkall` skip them, and `make test-rust` prints how many it deferred. Run them as follows:
+
+- `make test-rust-sensitive` runs exactly the labeled set.
+- `make checkall-ci` includes them (its nextest legs run ignored tests too), so it is the gate to pass before pushing a change that touches a labeled test.
+- To run one suite by hand, pass `--include-ignored`, for example `cargo test -p par-mux --features mux-bin,attach --test mux_attach -- --include-ignored --test-threads=1`.
+
+These tests measure wall-clock behavior, so run them on a quiet machine. Under heavy host load a failure is usually a timing flake rather than a regression, so re-run on an idle host before debugging.
+
 See [CONTRIBUTING.md](CONTRIBUTING.md) for the contribution workflow, and [CLAUDE.md](CLAUDE.md) for detailed development instructions.
 
 ## License
