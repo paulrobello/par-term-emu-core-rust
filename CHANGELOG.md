@@ -10,6 +10,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Fixed
 - **mux attach: a roster agent-row click on a pane in a multi-pane tab lands focused on the clicked pane even when the tab's `%layout-change` lags the landing** (`crates/par-mux/src/mux/attach/render/{mod.rs,navigate.rs}`): the v0.71 landing (`5c4bde0e`) carries the clicked pane only through the reseed's synchronous drain — when the switched-to window's layout event has not arrived by drain time, the landing completes on the old layout, the re-focus is ignored, and the event's later install through the pump's `PendingWork` resets the focus to the window's FIRST pane (the reported multi-pane-tab wrong-pane). The landing now parks the clicked pane as `PendingWork::layout_focus`; the async install re-focuses it after applying the layout, a reseed's `clear_view_work` drops a stale park, and a fresh click supersedes one. Pinned by `focus_pane_landing_focus_survives_a_lagging_layout_event`, red-proven against the v0.71 landing. The split chord parks the fresh pane the same way when its layout event lags (`split_focus_survives_a_lagging_layout_event`).
 
+## [0.71.1] - 2026-10-28
+
+### Fixed
+- **streaming: a client text frame no longer kills the mirror streamer session** (`3c3d5a13`; `src/streaming/client.rs`): `Client::recv()` — the tungstenite transport serving `par-term-streamer --mux-socket` — returned `StreamingError::InvalidMessage` on any TEXT frame, and the ws_session loop treats a recv error as fatal, so one control text frame from a probing client (pardeck sends one on every connect) tore down an otherwise healthy mirror session. The path now logs and skips text frames exactly like the axum `AxumTransport` already did, making text handling consistent across both server paths (kanban 01a16f84d1ac777c833425ba6dd522a9, filed from pardeck against 0.66.0, still present at 0.71.0). Pinned by `recv_skips_text_frames_instead_of_closing_session` (in-process duplex WebSocketStream), red-proven against the old recv.
+
 ## [0.71.0] - 2026-10-28
 
 ### Changed
@@ -2363,7 +2368,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Unicode Support**: Full Unicode including emoji and wide characters
 - **Python Integration**: PyO3 bindings for Python 3.12+
 
-[Unreleased]: https://github.com/paulrobello/par-term-emu-core-rust/compare/v0.71.0...HEAD
+[Unreleased]: https://github.com/paulrobello/par-term-emu-core-rust/compare/v0.71.1...HEAD
+[0.71.1]: https://github.com/paulrobello/par-term-emu-core-rust/compare/v0.71.0...v0.71.1
 [0.71.0]: https://github.com/paulrobello/par-term-emu-core-rust/compare/v0.70.0...v0.71.0
 [0.70.0]: https://github.com/paulrobello/par-term-emu-core-rust/compare/v0.69.0...v0.70.0
 [0.69.0]: https://github.com/paulrobello/par-term-emu-core-rust/compare/v0.68.0...v0.69.0
