@@ -85,10 +85,13 @@ where
                     // Ignore pong messages and continue loop
                 }
                 Some(Ok(Message::Text(_))) => {
-                    // Text messages are not supported in the binary protocol
-                    return Err(StreamingError::InvalidMessage(
-                        "Text messages are not supported, use binary protocol".to_string(),
-                    ));
+                    // Text messages are not supported in the binary protocol;
+                    // log and skip so a client's control text frame does not
+                    // tear down the session (same behavior as AxumTransport).
+                    crate::debug_error!(
+                        "STREAMING",
+                        "Text messages not supported, use binary protocol"
+                    );
                 }
                 Some(Ok(Message::Frame(_))) => {
                     // Raw frames shouldn't happen in high-level API, continue loop
@@ -146,6 +149,29 @@ impl<S> std::fmt::Debug for Client<S> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Regression (pardeck, 2026-10-24): a ws client that sends one control
+    /// TEXT frame on connect must not have its session torn down. The axum
+    /// path (`AxumTransport::recv`) logs and skips text frames; this
+    /// tungstenite path used to return `InvalidMessage`, which the
+    /// ws_session loop treats as fatal.
+    #[tokio::test]
+    async fn recv_skips_text_frames_instead_of_closing_session() {
+        use tokio_tungstenite::tungstenite::protocol::Role;
+
+        let (peer_io, server_io) = tokio::io::duplex(4096);
+        let mut peer = WebSocketStream::from_raw_socket(peer_io, Role::Client, None).await;
+        let mut client = Client::new(
+            WebSocketStream::from_raw_socket(server_io, Role::Server, None).await,
+            false,
+        );
+
+        peer.send(Message::Text("probe".into())).await.unwrap();
+        peer.send(Message::Close(None)).await.unwrap();
+
+        // Text is skipped, then the graceful close is reported as Ok(None).
+        assert!(matches!(client.recv().await, Ok(None)));
+    }
 
     #[test]
     fn test_client_id_uniqueness() {
