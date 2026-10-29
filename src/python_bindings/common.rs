@@ -25,6 +25,20 @@ pub(crate) trait TerminalAccess {
     fn term_ref(&self) -> impl std::ops::Deref<Target = Terminal>;
     /// Exclusive (mutable) access to the terminal.
     fn term_mut(&mut self) -> impl std::ops::DerefMut<Target = Terminal>;
+
+    /// Full-buffer plain-text export. A lock-shared wrapper overrides this to
+    /// build the text from a copy taken under the lock (ARC-004).
+    fn export_text_full(&self) -> String {
+        self.term_ref().export_text()
+    }
+    /// Full-buffer styled export; see [`Self::export_text_full`].
+    fn export_styled_full(&self) -> String {
+        self.term_ref().export_styled()
+    }
+    /// Scrollback as text; see [`Self::export_text_full`].
+    fn scrollback_full(&self) -> Vec<String> {
+        self.term_ref().scrollback()
+    }
 }
 
 /// Word-selection bounds: ((start_col, start_row), (end_col, end_row)).
@@ -196,8 +210,7 @@ macro_rules! impl_terminal_query_getters {
             /// Returns:
             ///     List of scrollback lines
             fn scrollback(&self) -> pyo3::PyResult<Vec<String>> {
-                let t = $crate::python_bindings::common::TerminalAccess::term_ref(self);
-                Ok(t.scrollback())
+                Ok($crate::python_bindings::common::TerminalAccess::scrollback_full(self))
             }
 
             /// Check if alternate screen is active
@@ -2106,8 +2119,7 @@ macro_rules! impl_terminal_exports {
             /// Returns:
             ///     String containing all text content
             fn export_text(&self) -> pyo3::PyResult<String> {
-                let t = $crate::python_bindings::common::TerminalAccess::term_ref(self);
-                Ok(t.export_text())
+                Ok($crate::python_bindings::common::TerminalAccess::export_text_full(self))
             }
 
             /// Export entire buffer (scrollback + current screen) with ANSI styling
@@ -2115,8 +2127,7 @@ macro_rules! impl_terminal_exports {
             /// Returns:
             ///     String containing text content with ANSI escape codes
             fn export_styled(&self) -> pyo3::PyResult<String> {
-                let t = $crate::python_bindings::common::TerminalAccess::term_ref(self);
-                Ok(t.export_styled())
+                Ok($crate::python_bindings::common::TerminalAccess::export_styled_full(self))
             }
 
             /// Export terminal content as HTML

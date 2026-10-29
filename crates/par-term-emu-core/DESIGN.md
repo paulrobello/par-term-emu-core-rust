@@ -155,9 +155,15 @@ output delays PTY ingestion, and vice versa. Accepted, not an impairment:
 - The snapshot machinery (`GridSnapshot`, `grid/snapshot.rs`) already
   exists for replay.
 
-Remedy when it bites: export from a snapshot copy — take the read lock
-only to clone the snapshot, then build the export from the copy — rather
-than walking the live grid under the read lock.
+Full-buffer text exports take this route (ARC-004):
+`PtySession::{export_text, export_styled, scrollback}` (and the Python
+`PtyTerminal` methods of the same names) hold the read lock only to take a
+`TextExportSnapshot` (`terminal/export_snapshot.rs`, a clone of the primary
+grid plus the alternate grid when it is active) and build the text after
+the lock drops. `Terminal`'s own exports run the same grid functions, so
+the two paths cannot drift. Screenshots and the other bounded queries still
+read the live grid under the lock. Extend the snapshot to them when one of
+them shows up as a measured stall.
 
 ## Cross-boundary edits (Phase 1)
 

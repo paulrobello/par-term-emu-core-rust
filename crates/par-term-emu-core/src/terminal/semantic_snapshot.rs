@@ -975,14 +975,12 @@ impl Terminal {
         self.active_grid().export_visible_screen_styled_lines()
     }
 
-    /// Export entire buffer (scrollback + current screen) as plain text
+    /// Export entire buffer (scrollback + current screen) as plain text.
+    ///
+    /// For a lock-held terminal, [`Terminal::text_export_snapshot`] builds
+    /// the same text from a copy taken under the lock (ARC-004).
     pub fn export_text(&self) -> String {
-        let mut output = self.export_scrollback(ExportFormat::Plain, None);
-        if !output.is_empty() && !output.ends_with('\n') {
-            output.push('\n');
-        }
-        output.push_str(&self.content());
-        output
+        super::export_snapshot::export_text(&self.grid, self.active_grid())
     }
 
     /// Export entire buffer (scrollback + current screen) with ANSI styling

@@ -50,6 +50,15 @@ impl crate::python_bindings::common::TerminalAccess for PyPtyTerminal {
         // macro-generated mutator keeps size()/cursor_position() current.
         self.inner.terminal_write()
     }
+    fn export_text_full(&self) -> String {
+        self.inner.export_text()
+    }
+    fn export_styled_full(&self) -> String {
+        self.inner.export_styled()
+    }
+    fn scrollback_full(&self) -> Vec<String> {
+        self.inner.scrollback()
+    }
 }
 
 // ARC-003/QA-001 validation: shared getters generated from one definition.

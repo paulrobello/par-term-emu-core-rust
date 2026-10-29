@@ -21,6 +21,7 @@ mod event_broker;
 #[cfg(any(feature = "python", feature = "ffi"))]
 #[doc(hidden)]
 pub mod event_fields;
+mod export_snapshot;
 pub mod file_transfer;
 mod graphics;
 pub mod image;
@@ -70,6 +71,7 @@ pub(crate) use event_broker::EventBroker;
 pub use event_broker::ObserverDispatchBatch;
 #[cfg(test)]
 pub(crate) use event_broker::{MAX_BELL_EVENTS, MAX_TERMINAL_EVENTS};
+pub use export_snapshot::TextExportSnapshot;
 
 /// Maximum undrained device-query response bytes retained (SEC-207). A
 /// parse pass that would grow the queue past this drops the replies it
@@ -464,14 +466,7 @@ impl Terminal {
 
     /// Get the scrollback buffer content as text
     pub fn scrollback(&self) -> Vec<String> {
-        let scrollback_len = self.grid.scrollback_len();
-        let mut lines = Vec::with_capacity(scrollback_len);
-        for i in 0..scrollback_len {
-            if let Some(line) = self.grid.scrollback_line(i) {
-                lines.push(crate::text_utils::cells_to_text(line));
-            }
-        }
-        lines
+        export_snapshot::scrollback_lines(&self.grid)
     }
 
     /// Get the cursor
