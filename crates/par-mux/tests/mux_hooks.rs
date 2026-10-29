@@ -287,6 +287,8 @@ struct RosterRow {
     telemetry: Option<Vec<u8>>,
     host_telemetry: Option<Vec<u8>>,
     ws: Option<String>,
+    last_activity_at: Option<String>,
+    last_report_at: Option<String>,
 }
 
 fn parse_roster_row(row: &str) -> RosterRow {
@@ -304,6 +306,8 @@ fn parse_roster_row(row: &str) -> RosterRow {
         telemetry: None,
         host_telemetry: None,
         ws: None,
+        last_activity_at: None,
+        last_report_at: None,
     };
     for token in tokens {
         let (key, value) = token.split_once('=').unwrap_or_else(|| {
@@ -315,6 +319,18 @@ fn parse_roster_row(row: &str) -> RosterRow {
                 "ws token is a +<id> workspace reference, got {value:?} in {row:?}"
             );
             fields.ws = Some(value.to_string());
+            continue;
+        }
+        if key == "last_activity_at" || key == "last_report_at" {
+            assert!(
+                !value.is_empty() && value.bytes().all(|b| b.is_ascii_digit()),
+                "{key} token is epoch-ms digits, got {value:?} in {row:?}"
+            );
+            if key == "last_activity_at" {
+                fields.last_activity_at = Some(value.to_string());
+            } else {
+                fields.last_report_at = Some(value.to_string());
+            }
             continue;
         }
         let decoded = base64::engine::general_purpose::STANDARD
