@@ -885,10 +885,12 @@ macro_rules! impl_terminal_sixel_graphics {
                 Ok(())
             }
 
-            /// Get count of Sixel graphics dropped due to limits
+            /// Get count of graphics dropped due to limits
             ///
             /// Returns:
-            ///     Number of Sixel graphics that have been dropped because of size or count limits
+            ///     Number of graphics that have been dropped because of size or count
+            ///     limits. Sixel and Kitty graphics share one store and this counter,
+            ///     so it includes Kitty graphics evicted by the memory budget.
             fn get_dropped_sixel_graphics(&self) -> pyo3::PyResult<usize> {
                 let t = $crate::python_bindings::common::TerminalAccess::term_ref(self);
                 Ok(t.dropped_sixel_graphics())

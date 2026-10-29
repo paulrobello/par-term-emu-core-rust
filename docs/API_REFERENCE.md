@@ -715,7 +715,7 @@ Additional graphics management beyond basic display:
 - `get_sixel_graphics_limit() -> int`: Get maximum Sixel graphics count
 - `set_sixel_graphics_limit(max_graphics: int)`: Set maximum Sixel graphics count
 - `get_sixel_stats() -> dict[str, int]`: Get Sixel statistics
-- `get_dropped_sixel_graphics() -> int`: Get count of dropped Sixel graphics
+- `get_dropped_sixel_graphics() -> int`: Get count of graphics dropped due to limits (Sixel and Kitty share the store and this counter)
 
 ### File Transfer
 
