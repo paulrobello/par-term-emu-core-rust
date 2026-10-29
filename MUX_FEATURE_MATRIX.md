@@ -171,7 +171,7 @@ Row claims cite source keys expanded in [Sources](#sources) — documentation by
 | Surface size | ~40 `[client]` keys + `[daemon]` socket/state/endpoint keys | Theme, terminal, ~50 key actions + custom commands, server, worktrees, ui (+toast/sound), session, remote, experimental, advanced | PM-MUX / H-CFG |
 | Live reload | `reload-config` command, `C-b C-r` chord, `%config-changed` broadcast to clients | `server reload-config`, `prefix+shift+r` | PM-MUX / H-CLI |
 | Config generator | `--gen-config [--force]` writes effective values | `--default-config` prints the full annotated default | PM-MUX / H-CLI |
-| Docs-sync gate | `mux-docs-check` in `make checkall` fails on drift | `scripts/config_reference_check.py` keeps docs in sync | PM-MUX / H-AGENTS.md |
+| Docs-sync gate | `mux-docs-check` in `make checkall` fails on drift | herdr's `scripts/config_reference_check.py` keeps docs in sync <!-- doc-path: example --> | PM-MUX / H-AGENTS.md |
 | Per-client state | `client-state.json` (sidebar width/split/collapse) | Sidebar and UI state in config | PM-MUX / H-CFG |
 
 ## 10. Platform support
@@ -253,26 +253,26 @@ Row claims cite source keys expanded in [Sources](#sources) — documentation by
 
 ## Sources
 
-Verified against these trees on 2026-10-19 (read-only exploration; citations are section/file level):
+Verified against these trees on 2026-10-19 (read-only exploration; citations are section/file level). `PM-*` paths are relative to this repository. `H-*` paths are relative to the herdr repository root (`~/Repos/herdr` in the recording environment), not this one.
 
 | Key | Source |
 | --- | --- |
 | PM-MUX | `docs/MUX.md` (par-mux operational reference, sections cited per row) |
 | PM-CLI | `crates/par-mux/src/bin/par_mux/main.rs` (clap surface) |
 | PM-SRC | `crates/par-mux/src/mux/` — `layout.rs`, `persist.rs`, `hooks/`, `server/`, `command/`, `attach/` |
-| H-README | herdr `README.md` |
-| H-CONCEPTS | herdr `docs/next/website/src/content/docs/concepts.mdx` |
-| H-CLI | herdr `docs/next/website/src/content/docs/cli-reference.mdx` |
-| H-KEYS | herdr `docs/next/website/src/content/docs/keyboard.mdx` |
-| H-AGENTS | herdr `docs/next/website/src/content/docs/agents.mdx` |
-| H-STATE | herdr `docs/next/website/src/content/docs/session-state.mdx` |
-| H-API | herdr `docs/next/website/src/content/docs/socket-api.mdx` |
-| H-PLUG | herdr `docs/next/website/src/content/docs/plugins.mdx` |
-| H-ADD | herdr `docs/next/website/src/content/docs/add-herdr-support.mdx` |
-| H-WIN | herdr `docs/next/website/src/content/docs/windows-beta.mdx` |
-| H-CFG | herdr `src/main.rs` (`DEFAULT_CONFIG`) |
-| H-SKILL | herdr `skills/herdr/SKILL.md` |
-| H-AGENTS.md | herdr `AGENTS.md`, `distribution/agent-guide.md` |
-| H-CHANGELOG | herdr `docs/next/CHANGELOG.md` |
+| H-README | herdr `README.md` <!-- doc-path: example --> |
+| H-CONCEPTS | herdr `docs/next/website/src/content/docs/concepts.mdx` <!-- doc-path: example --> |
+| H-CLI | herdr `docs/next/website/src/content/docs/cli-reference.mdx` <!-- doc-path: example --> |
+| H-KEYS | herdr `docs/next/website/src/content/docs/keyboard.mdx` <!-- doc-path: example --> |
+| H-AGENTS | herdr `docs/next/website/src/content/docs/agents.mdx` <!-- doc-path: example --> |
+| H-STATE | herdr `docs/next/website/src/content/docs/session-state.mdx` <!-- doc-path: example --> |
+| H-API | herdr `docs/next/website/src/content/docs/socket-api.mdx` <!-- doc-path: example --> |
+| H-PLUG | herdr `docs/next/website/src/content/docs/plugins.mdx` <!-- doc-path: example --> |
+| H-ADD | herdr `docs/next/website/src/content/docs/add-herdr-support.mdx` <!-- doc-path: example --> |
+| H-WIN | herdr `docs/next/website/src/content/docs/windows-beta.mdx` <!-- doc-path: example --> |
+| H-CFG | herdr `src/main.rs` (`DEFAULT_CONFIG`) <!-- doc-path: example --> |
+| H-SKILL | herdr `skills/herdr/SKILL.md` <!-- doc-path: example --> |
+| H-AGENTS.md | herdr `AGENTS.md`, `distribution/agent-guide.md` <!-- doc-path: example --> |
+| H-CHANGELOG | herdr `docs/next/CHANGELOG.md` <!-- doc-path: example --> |
 
-herdr's released documentation snapshots live under `docs/versions/0.9.5/`; the `docs/next/` tree is the current source of truth.
+herdr's released documentation snapshots live under its `docs/versions/0.9.5/`; its `docs/next/` tree is the current source of truth. <!-- doc-path: example -->
