@@ -2596,8 +2596,6 @@ macro_rules! impl_terminal_screenshot_methods {
             ) -> pyo3::PyResult<Vec<u8>> {
                 use $crate::screenshot::{ImageFormat, ScreenshotConfig};
 
-                let t = $crate::python_bindings::common::TerminalAccess::term_ref(self);
-
                 let img_format = match format.to_lowercase().as_str() {
                     "png" => ImageFormat::Png,
                     "jpeg" | "jpg" => ImageFormat::Jpeg,
@@ -2612,9 +2610,17 @@ macro_rules! impl_terminal_screenshot_methods {
                 };
 
                 // Theme settings from the terminal are the defaults when the
-                // corresponding args are not explicitly provided.
-                let term_bold_brightening = t.bold_brightening();
-                let term_bg_color = t.default_bg().to_rgb();
+                // corresponding args are not explicitly provided. The read
+                // guard lives only inside this block, so the render below runs
+                // without holding the terminal lock (ARC-004).
+                let (term_bold_brightening, term_bg_color, snap) = {
+                    let t = $crate::python_bindings::common::TerminalAccess::term_ref(self);
+                    (
+                        t.bold_brightening(),
+                        t.default_bg().to_rgb(),
+                        t.render_snapshot(scrollback_offset),
+                    )
+                };
 
                 let config = ScreenshotConfig {
                     format: img_format,
@@ -2638,7 +2644,7 @@ macro_rules! impl_terminal_screenshot_methods {
                     ..Default::default()
                 };
 
-                $crate::screenshot::render_terminal(&t, config, scrollback_offset).map_err(|e| {
+                $crate::screenshot::render_terminal_from_snapshot(&snap, config).map_err(|e| {
                     pyo3::exceptions::PyRuntimeError::new_err(format!("Screenshot error: {}", e))
                 })
             }
@@ -2769,8 +2775,11 @@ macro_rules! impl_terminal_screenshot_methods {
                 scrollback_offset: usize,
             ) -> pyo3::PyResult<Vec<u8>> {
                 let cfg = config.to_screenshot_config()?;
-                let t = $crate::python_bindings::common::TerminalAccess::term_ref(self);
-                $crate::screenshot::render_terminal(&t, cfg, scrollback_offset).map_err(|e| {
+                let snap = {
+                    let t = $crate::python_bindings::common::TerminalAccess::term_ref(self);
+                    t.render_snapshot(scrollback_offset)
+                };
+                $crate::screenshot::render_terminal_from_snapshot(&snap, cfg).map_err(|e| {
                     pyo3::exceptions::PyRuntimeError::new_err(format!("Screenshot error: {}", e))
                 })
             }
