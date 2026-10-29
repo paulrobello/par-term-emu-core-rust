@@ -92,7 +92,7 @@ help:
 	@echo "  extensions-check - Fail when a committed extension asset differs from the template, or the renderer self-test fails"
 	@echo "  checkall        - All quality checks (non-mutating; run 'make lint lint-python' to auto-fix)"
 	@echo "  checkall-ci     - CI-parity gate: checkall + Windows MSVC cross-checks + CI mux-test suites + the python-test,streaming combo (heavy; run before pushing)"
-	@echo "  cross-target-check - cargo check par-mux (mux-bin,attach) + par-term-emu-core for aarch64/x86_64-pc-windows-msvc, -D warnings (part of checkall-ci)"
+	@echo "  cross-target-check - cargo check par-mux (mux-bin,attach) + par-term-emu-core + root crate (python-test,mux,ffi) for aarch64/x86_64-pc-windows-msvc, -D warnings (part of checkall-ci)"
 	@echo "  bench           - Run VTE throughput benchmarks (criterion, not part of checkall)"
 	@echo "  check-features  - Feature matrix + dependency-tree assertions (not part of checkall; needs cargo-hack)"
 	@echo ""
@@ -654,10 +654,14 @@ mux-package-check:
 # accumulated in the two other crates.io-published crates; all three are
 # gated now. The root runs python-test (not the extension-module default)
 # so it links. ~1s each warm; the full graph docs only on change.
+# The streaming,mux root leg compiles src/streaming/mux_factory (gated on
+# BOTH features) — the plain `--features mux` form never reaches it, and a
+# private intra-doc link from MuxUploadPipe hid there until 2026-10-29.
 rustdoc-check:
 	RUSTDOCFLAGS="-D warnings" cargo doc -p par-mux --features mux-bin --no-deps
 	RUSTDOCFLAGS="-D warnings" cargo doc -p par-term-emu-core --no-deps
 	RUSTDOCFLAGS="-D warnings" cargo doc --no-default-features --features python-test --no-deps
+	RUSTDOCFLAGS="-D warnings" cargo doc --no-deps --features streaming,mux -p par-term-emu-core-rust
 
 # Seed the docs/MANUAL-PASS.md daemon: fresh daemon on /tmp/manual-mux with a
 # split demo session, ready to attach from the terminal under test. Re-runs
@@ -789,6 +793,13 @@ cross-target-check:
 	RUSTFLAGS="-D warnings" cargo check --locked --target aarch64-pc-windows-msvc -p par-term-emu-core --lib --tests
 	RUSTFLAGS="-D warnings" cargo check --locked --target x86_64-pc-windows-msvc -p par-mux --lib --tests --features mux-bin,attach
 	RUSTFLAGS="-D warnings" cargo check --locked --target x86_64-pc-windows-msvc -p par-term-emu-core --lib --tests
+	# Root crate: pyo3 needs PYO3_CROSS_PYTHON_VERSION when cross-compiling
+	# without an abi3 feature; check stops before linking so no libpython is
+	# needed. `streaming` is excluded: its rustls -> aws-lc-sys C build needs
+	# Windows SDK headers that do not exist for a macOS->MSVC cross build —
+	# CI covers the root crate's streaming surface natively on windows-latest.
+	PYO3_CROSS_PYTHON_VERSION=3.12 RUSTFLAGS="-D warnings" cargo check --locked --target aarch64-pc-windows-msvc -p par-term-emu-core-rust --lib --tests --no-default-features --features python-test,mux,ffi
+	PYO3_CROSS_PYTHON_VERSION=3.12 RUSTFLAGS="-D warnings" cargo check --locked --target x86_64-pc-windows-msvc -p par-term-emu-core-rust --lib --tests --no-default-features --features python-test,mux,ffi
 
 # The pinned ARC-006 stats-dict test needs python-test + streaming together;
 # CI runs each feature alone and never the combo, so this leg is local-only

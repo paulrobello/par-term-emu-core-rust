@@ -17,7 +17,7 @@ use std::time::Duration;
 /// verbs run on their OWN short-lived daemon control connection — the
 /// mirror link's connection is read solely by its drain thread, so a
 /// request/reply verb cannot share it (the same shape
-/// [`follow_active_workspace`](super::mirror::follow_active_workspace) resolves over).
+/// `follow_active_workspace` resolves over).
 ///
 /// Ordering is the point: a client may send `upload_chunk` and
 /// `upload_commit` back-to-back, so the verbs are serialized through ONE
