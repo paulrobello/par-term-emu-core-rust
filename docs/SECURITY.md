@@ -933,7 +933,17 @@ connected client can execute arbitrary commands as the user running the server.
   include the key via the `Authorization: Bearer <key>` or `X-API-Key`
   header, or the `?api_key=` URL param (the latter is disabled by default —
   `--allow-api-key-in-query` logs the key in proxy/browser history, and the
-  server warns at startup when it is enabled). The key and password
+  server warns at startup when it is enabled). **Bundled web frontend
+  residual (SEC-004):** the browser WebSocket API cannot set request
+  headers, so the bundled frontend (`web-terminal-frontend/app/page.tsx`)
+  authenticates only by copying `?api_key=` from its page URL into the
+  WebSocket URL. Using it against an `--api-key` server therefore requires
+  `--allow-api-key-in-query`, and the key then sits in the browser history
+  (page URL) and in any proxy or access log that records request URLs.
+  Prefer HTTP Basic Auth (`--http-user`, which the browser sends as a
+  header) for browser access, use the API key for programmatic clients that
+  can send `Authorization`/`X-API-Key`, keep TLS on, and rotate a key that
+  has been used in a URL. The key and password
   arguments declare `hide_env_values`, so values supplied through
   `PAR_TERM_API_KEY`, `PAR_TERM_HTTP_PASSWORD`, and
   `PAR_TERM_HTTP_PASSWORD_HASH` are never echoed by `--help`.
