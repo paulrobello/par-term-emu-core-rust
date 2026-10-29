@@ -60,7 +60,7 @@ tree (state, scrollback, paste buffer) across restarts — panes respawn with
 fresh processes in their saved cwd. Panes it spawns are marked with
 `PAR_MUX_ENV=1` and starting a daemon from inside a pane is refused
 (nested-daemon guard) unless `PAR_MUX_ALLOW_NESTED=1`. A config file
-(`~/.config/par-mux/config.toml`, `[daemon]` and `[client]` sections,
+(`~/Library/Application Support/par-mux/config.toml`, `[daemon]` and `[client]` sections,
 `par-mux --gen-config` to seed it) carries socket/state-dir defaults and is
 hot-reloaded by `reload-config`.
 
