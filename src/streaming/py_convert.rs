@@ -166,51 +166,10 @@ pub fn cwd_changed_from(kwargs: Option<&Bound<'_, PyDict>>) -> PyResult<ServerMe
     })
 }
 
-fn agent_entry_to_py_dict<'py>(
-    py: Python<'py>,
-    entry: &super::protocol::AgentEntry,
-) -> PyResult<Bound<'py, PyDict>> {
-    let dict = PyDict::new(py);
-    dict.set_item("pane_id", entry.pane_id)?;
-    dict.set_item("agent", &entry.agent)?;
-    dict.set_item("state", &entry.state)?;
-    dict.set_item("source", &entry.source)?;
-    dict.set_item("reason", &entry.reason)?;
-    Ok(dict)
-}
-
-/// Whole-variant decode for `ServerMessage::AgentRoster` (`#[pydict(to)]`).
-pub fn agent_roster_to_py_dict<'py>(
-    py: Python<'py>,
-    agents: &Vec<super::protocol::AgentEntry>,
-) -> PyResult<Bound<'py, PyDict>> {
-    let dict = PyDict::new(py);
-    dict.set_item("type", "agent_roster")?;
-    let list = PyList::empty(py);
-    for entry in agents {
-        list.append(agent_entry_to_py_dict(py, entry)?)?;
-    }
-    dict.set_item("agents", list)?;
-    Ok(dict)
-}
-
 /// Whole-variant encode for `ServerMessage::AgentRoster`: roster messages are
 /// server-generated, so the Python encode API emits the empty variant.
 pub fn agent_roster_from(_kwargs: Option<&Bound<'_, PyDict>>) -> PyResult<ServerMessage> {
     Ok(ServerMessage::AgentRoster { agents: vec![] })
-}
-
-/// Whole-variant decode for `ServerMessage::AgentStateChanged`.
-pub fn agent_state_changed_to_py_dict<'py>(
-    py: Python<'py>,
-    agent: &super::protocol::AgentEntry,
-    released: &bool,
-) -> PyResult<Bound<'py, PyDict>> {
-    let dict = PyDict::new(py);
-    dict.set_item("type", "agent_state_changed")?;
-    dict.set_item("agent", agent_entry_to_py_dict(py, agent)?)?;
-    dict.set_item("released", *released)?;
-    Ok(dict)
 }
 
 /// Whole-variant encode for `ServerMessage::AgentStateChanged`: server-generated,
@@ -311,6 +270,58 @@ mod system_stats_dict {
         ];
         Python::attach(|py| {
             for (msg, want) in [populated(), partial()].into_iter().zip(expected) {
+                let got = msg.to_py_dict(py).unwrap().repr().unwrap().to_string();
+                assert_eq!(got, want);
+            }
+        });
+    }
+}
+
+#[cfg(test)]
+mod agent_roster_dict {
+    use super::super::protocol::*;
+    use pyo3::prelude::*;
+
+    fn entry(pane_id: u32) -> AgentEntry {
+        AgentEntry {
+            pane_id,
+            agent: "claude".into(),
+            state: "working".into(),
+            source: "hook".into(),
+            reason: String::new(),
+            workspace: "+1".into(),
+            project: "proj".into(),
+            pane_label: "label".into(),
+        }
+    }
+
+    /// The roster dict shape, pinned byte-for-byte (ARC-008): `agents`
+    /// always present (an empty list when the roster is empty), each entry
+    /// exactly `pane_id`/`agent`/`state`/`source`/`reason` — `workspace`,
+    /// `project` and `pane_label` are not part of the Python dict.
+    #[test]
+    fn roster_dicts_match_pinned_shape() {
+        let cases = [
+            (
+                ServerMessage::AgentRoster { agents: vec![] },
+                "{'type': 'agent_roster', 'agents': []}",
+            ),
+            (
+                ServerMessage::AgentRoster {
+                    agents: vec![entry(3)],
+                },
+                "{'type': 'agent_roster', 'agents': [{'pane_id': 3, 'agent': 'claude', 'state': 'working', 'source': 'hook', 'reason': ''}]}",
+            ),
+            (
+                ServerMessage::AgentStateChanged {
+                    agent: entry(7),
+                    released: true,
+                },
+                "{'type': 'agent_state_changed', 'agent': {'pane_id': 7, 'agent': 'claude', 'state': 'working', 'source': 'hook', 'reason': ''}, 'released': True}",
+            ),
+        ];
+        Python::attach(|py| {
+            for (msg, want) in cases {
                 let got = msg.to_py_dict(py).unwrap().repr().unwrap().to_string();
                 assert_eq!(got, want);
             }
