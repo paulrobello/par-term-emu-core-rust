@@ -34,9 +34,9 @@ import argparse
 import ast
 import tempfile
 from pathlib import Path
-from typing import NoReturn
 
-ROOT = Path(__file__).resolve().parent.parent
+from _gate_common import ROOT, expect_failure, fail
+
 STUB_REL = "python/par_term_emu_core_rust/_native.pyi"
 
 # The recorded ceilings. Lower these when methods are removed.
@@ -44,11 +44,6 @@ BASELINE: dict[str, int] = {
     "Terminal": 389,
     "PtyTerminal": 206,
 }
-
-
-def fail(msg: str) -> NoReturn:
-    print(msg)
-    raise SystemExit(1)
 
 
 def count_methods(stub: Path, classes: list[str]) -> dict[str, int]:
@@ -98,21 +93,6 @@ def check(stub: Path, baseline: dict[str, int]) -> None:
     print(f"api surface ok: {summary} (at baseline)")
 
 
-def _expect_failure(stub: Path, baseline: dict[str, int], needle: str) -> None:
-    import contextlib
-    import io
-
-    buf = io.StringIO()
-    try:
-        with contextlib.redirect_stdout(buf):
-            check(stub, baseline)
-    except SystemExit:
-        if needle not in buf.getvalue():
-            fail(f"self-test: failure output lacks {needle!r}: {buf.getvalue()}")
-        return
-    fail(f"self-test: expected a failure mentioning {needle!r}, got a pass")
-
-
 def self_test() -> None:
     synthetic = (
         "class Terminal:\n"
@@ -131,17 +111,17 @@ def self_test() -> None:
         check(stub, base)  # Dunders ignored; a repeated name counts once.
 
         stub.write_text(synthetic + "    def c(self) -> None: ...\n", encoding="utf-8")
-        _expect_failure(stub, base, "above the frozen baseline")
+        expect_failure(lambda: check(stub, base), "above the frozen baseline")
 
         stub.write_text(
             synthetic.replace("    def a(self) -> None: ...\n", "", 1), encoding="utf-8"
         )
-        _expect_failure(stub, base, "lower BASELINE")
+        expect_failure(lambda: check(stub, base), "lower BASELINE")
 
         stub.write_text(
             "class Terminal:\n    def a(self) -> None: ...\n", encoding="utf-8"
         )
-        _expect_failure(stub, base, "parsed nothing")
+        expect_failure(lambda: check(stub, base), "parsed nothing")
 
     check(ROOT / STUB_REL, BASELINE)
     print("self-test ok: growth, unratcheted shrink, and a missing class reported")

@@ -608,7 +608,7 @@ Not ported from herdr, with the reason:
 #### Limitations
 
 Forward-only mouse re-encoding (the pane's negotiated dialect — SGR, or classic/urxvt when 1006 was never enabled) and wheel scrollback is view-only (no pane resize probe).
-A host resize re-fits the render client end to end (the new grid is reported with the content height, the daemon re-divides, panes re-seed, the status row repaints at the new bottom row — pinned by `render_mode_host_resize_refits_window_layout_and_status_row`), and a daemon-side zoom (`resize-pane -Z`) re-renders the visible layout — the zoomed pane alone — with `-Z` again restoring the split (`render_mode_daemon_zoom_shows_single_pane_and_unzoom_restores_split`); both in `crates/par-mux/tests/mux_attach.rs`. [MANUAL-PASS.md](MANUAL-PASS.md) carries the human checklist for Ghostty / iTerm2 / Terminal.app / SSH.
+A host resize re-fits the render client end to end (the new grid is reported with the content height, the daemon re-divides, panes re-seed, the status row repaints at the new bottom row — pinned by `render_mode_host_resize_refits_window_layout_and_status_row`), and a daemon-side zoom (`resize-pane -Z`) re-renders the visible layout — the zoomed pane alone — with `-Z` again restoring the split (`render_mode_daemon_zoom_shows_single_pane_and_unzoom_restores_split`); both in `crates/par-mux/tests/mux_attach/render_layout.rs`. [MANUAL-PASS.md](MANUAL-PASS.md) carries the human checklist for Ghostty / iTerm2 / Terminal.app / SSH.
 
 ## Socket and State Paths
 

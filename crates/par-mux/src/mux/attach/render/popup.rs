@@ -648,11 +648,11 @@ impl WindowSession {
             ),
             None => (String::new(), usize::MAX, ADD_POPUP_LABEL),
         };
-        let spec = super::modal_settings::SettingSpec {
-            key: "popup",
+        let spec = super::modal_settings::SettingSpec::prompt_only(
+            "popup",
             label,
-            kind: super::modal_settings::SettingKind::Popup(slot),
-        };
+            super::modal_settings::SettingKind::Popup(slot),
+        );
         self.enter_setting_prompt(&spec, spec.kind, seed, back);
     }
 

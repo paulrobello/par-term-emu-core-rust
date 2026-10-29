@@ -13,9 +13,8 @@ from __future__ import annotations
 import argparse
 import re
 from pathlib import Path
-from typing import NoReturn
 
-ROOT = Path(__file__).resolve().parent.parent
+from _gate_common import ROOT, fail
 
 # A pinned clause: the word "pinned" to the end of its sentence (". ", ";"
 # or end of line). Qualifiers may sit between "pinned" and "by".
@@ -36,11 +35,6 @@ TEST_FN_RE = re.compile(
 MOD_RE = re.compile(r"\bmod\s+([a-z_][a-z0-9_]*)\s*[{;]")
 PY_TEST_RE = re.compile(r"^def (test_[a-z0-9_]+)\(", re.MULTILINE)
 SKIP_DIRS = {"target", "node_modules"}
-
-
-def fail(msg: str) -> NoReturn:
-    print(msg)
-    raise SystemExit(1)
 
 
 def test_names(root: Path) -> set[str]:

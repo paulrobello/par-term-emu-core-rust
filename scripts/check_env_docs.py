@@ -20,12 +20,10 @@ import re
 import shutil
 import sys
 from pathlib import Path
-from typing import NoReturn
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
+from _gate_common import ROOT, fail
 from check_mux_docs import strip_test_modules
-
-ROOT = Path(__file__).resolve().parent.parent
 
 RUST_ROOTS = ("src", "crates/par-term-emu-core/src", "crates/par-mux/src", "derive/src")
 TS_GLOB = "crates/par-mux/integrations/extensions/*.ts"
@@ -87,11 +85,6 @@ HELPER_PARAMS = {
     ("crates/par-mux/src/mux/integrations/extensions.rs", "name"),
     ("crates/par-mux/src/mux/integrations/extensions.rs", "env_var"),
 }
-
-
-def fail(msg: str) -> NoReturn:
-    print(msg)
-    raise SystemExit(1)
 
 
 def rust_files(root: Path) -> list[Path]:
