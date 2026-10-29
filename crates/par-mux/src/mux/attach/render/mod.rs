@@ -1246,7 +1246,7 @@ struct PickerState {
     /// `(id, name, active)` roster its rows compose from.
     workspaces: Option<Vec<(String, String, bool)>>,
     /// When set, this is the COMMAND palette: `(action index, label)`
-    /// rows over [`super::super::panels::PALETTE_ACTIONS`], filterable
+    /// rows over [`crate::mux::attach::panels::PALETTE_ACTIONS`], filterable
     /// like any picker list.
     commands: Option<Vec<(usize, String)>>,
 }
@@ -1937,6 +1937,29 @@ impl WindowSession {
         }
     }
 
+    /// A `%window-pane-changed`: an external focus move on the shown
+    /// window re-points the local highlight; on any other window it is
+    /// chrome-only.
+    fn on_window_pane_changed(&mut self, window_id: &str, pane_id: &str) {
+        if window_id == self.window {
+            if let Some(pane) = pane_id.strip_prefix('%').and_then(|p| p.parse().ok()) {
+                self.renderer.focus(pane);
+            }
+        }
+        self.status_dirty = true;
+    }
+
+    /// A `%session-window-changed`: the shared selection moved this
+    /// session to another window — park the follow; the pump performs
+    /// the reseed (the handler runs in the nonblocking drain, where the
+    /// queries and replays a reseed needs are not available).
+    fn on_session_window_changed(&mut self, session_id: &str, window_id: &str) {
+        if self.status.session_id.as_deref() == Some(session_id) && window_id != self.window {
+            self.pending.follow_window = Some(window_id.to_string());
+        }
+        self.status_dirty = true;
+    }
+
     /// One daemon push. `End` on `%exit` (or the window's pane roster
     /// emptying, which leaves nothing to render).
     fn handle_event(&mut self, event: TmuxNotification) -> EventOutcome {
@@ -1965,30 +1988,14 @@ impl WindowSession {
             // into one refresh — one `client-snapshot` round trip against
             // a daemon that advertises it).
             TmuxNotification::WindowPaneChanged { window_id, pane_id } => {
-                // An external focus move on the shown window re-points the
-                // local highlight; on any other window it is chrome-only.
-                if *window_id == self.window {
-                    if let Some(pane) = pane_id.strip_prefix('%').and_then(|p| p.parse().ok()) {
-                        self.renderer.focus(pane);
-                    }
-                }
-                self.status_dirty = true;
+                self.on_window_pane_changed(&window_id, &pane_id);
                 EventOutcome::Continue
             }
             TmuxNotification::SessionWindowChanged {
                 session_id,
                 window_id,
             } => {
-                // The shared selection moved this session to another
-                // window: park the follow — the pump performs the reseed
-                // (the handler runs in the nonblocking drain, where the
-                // queries and replays a reseed needs are not available).
-                if self.status.session_id.as_deref() == Some(session_id.as_str())
-                    && window_id != self.window
-                {
-                    self.pending.follow_window = Some(window_id.clone());
-                }
-                self.status_dirty = true;
+                self.on_session_window_changed(&session_id, &window_id);
                 EventOutcome::Continue
             }
             TmuxNotification::ClientSessionChanged { session_id, .. } => {
