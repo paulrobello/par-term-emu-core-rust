@@ -1419,9 +1419,11 @@ sections; the numbers live here.
 | `MAX_REPLY_LINE_BYTES` | 4 MiB | `crates/par-mux/src/mux/client.rs:33` | Bytes accumulated from one daemon reply or notification line before the client closes the connection. |
 | `NOTIFICATION_TITLE_MAX` | 80 | `crates/par-mux/src/mux/command/buffers.rs:181` | Characters of a `show-notification` title (herdr's 80); longer is truncated. |
 | `NOTIFICATION_BODY_MAX` | 240 | `crates/par-mux/src/mux/command/buffers.rs:184` | Characters of a `show-notification` body (herdr's 240); longer is truncated. |
-| `MAX_CLIENT_COLS` | 1,000 | `crates/par-mux/src/mux/command/mod.rs:935` | Columns a par-mux client may report for a window grid (`refresh-client -C`). |
-| `MAX_CLIENT_ROWS` | 500 | `crates/par-mux/src/mux/command/mod.rs:937` | Rows a par-mux client may report for a window grid (`refresh-client -C`). |
-| `MAX_CELL_PIXELS` | 512 | `crates/par-mux/src/mux/command/mod.rs:939` | Pixels per cell axis a par-mux client may report (`refresh-client -p`). |
+| `MAX_CLIENT_COLS` | 1,000 | `crates/par-mux/src/mux/command/mod.rs:945` | Columns a par-mux client may report for a window grid (`refresh-client -C`). |
+| `MAX_CLIENT_ROWS` | 500 | `crates/par-mux/src/mux/command/mod.rs:947` | Rows a par-mux client may report for a window grid (`refresh-client -C`). |
+| `MAX_CELL_PIXELS` | 512 | `crates/par-mux/src/mux/command/mod.rs:949` | Pixels per cell axis a par-mux client may report (`refresh-client -p`). |
+| `STALLED_AFTER_MS` | 300,000 | `crates/par-mux/src/mux/dispatch/client.rs:312` | Milliseconds of no output and no report before a working agent reads stalled. |
+| `EVENT_RING_CAPACITY` | 1,024 | `crates/par-mux/src/mux/events.rs:27` | Lifecycle events retained by the daemon's replay ring. |
 | `MAX_FOREGROUND_NAME_LEN` | 128 | `crates/par-mux/src/mux/foreground.rs:42` | Bytes of a pane's foreground command name served by pane-info. |
 | `MAX_REPORT_VALUE_LEN` | 4,096 | `crates/par-mux/src/mux/hooks/mod.rs:110` | Bytes accepted for one hook or agent report value sent from a pane. |
 | `MAX_GIT_BRANCH_LEN` | 128 | `crates/par-mux/src/mux/host_probe.rs:174` | Bytes of git branch name the host probe serves for one pane cwd. |
@@ -1445,11 +1447,11 @@ sections; the numbers live here.
 | `MAX_FILE_SIZE` | 100 MiB | `crates/par-term-emu-core/src/graphics/kitty/decode.rs:155` | Bytes read from one kitty file medium named by an escape payload. |
 | `MAX_KITTY_PAYLOAD_BYTES` | 64 MiB | `crates/par-term-emu-core/src/graphics/kitty/mod.rs:21` | Decoded bytes one kitty transmission may accumulate across chunks |
 | `MAX_KITTY_DECOMPRESSED_BYTES` | `MAX_IMAGE_PIXELS * 4` | `crates/par-term-emu-core/src/graphics/kitty/mod.rs:26` | Upper bound on one kitty zlib stream's decompressed output |
-| `MAX_IMAGE_DIMENSION` | 16 KiB | `crates/par-term-emu-core/src/graphics/mod.rs:40` | Width or height accepted for a graphic decoded from a protocol payload. |
-| `MAX_IMAGE_PIXELS` | 67,108,864 | `crates/par-term-emu-core/src/graphics/mod.rs:47` | Total pixels accepted for a graphic decoded from a protocol payload. |
-| `DEFAULT_MAX_GRAPHICS_MEMORY_BYTES` | 256 MiB | `crates/par-term-emu-core/src/graphics/mod.rs:55` | Bytes of decoded kitty image and animation-frame pixels retained store-wide. |
-| `MAX_KITTY_IMAGES` | 4,096 | `crates/par-term-emu-core/src/graphics/mod.rs:60` | Kitty image IDs (stored images plus animations) retained store-wide. |
-| `MAX_VIRTUAL_PLACEMENTS` | 4,096 | `crates/par-term-emu-core/src/graphics/mod.rs:65` | Distinct kitty virtual placements retained from escape payloads. |
+| `MAX_IMAGE_DIMENSION` | 16 KiB | `crates/par-term-emu-core/src/graphics/mod.rs:42` | Width or height accepted for a graphic decoded from a protocol payload. |
+| `MAX_IMAGE_PIXELS` | 67,108,864 | `crates/par-term-emu-core/src/graphics/mod.rs:49` | Total pixels accepted for a graphic decoded from a protocol payload. |
+| `DEFAULT_MAX_GRAPHICS_MEMORY_BYTES` | 256 MiB | `crates/par-term-emu-core/src/graphics/mod.rs:57` | Bytes of decoded kitty image and animation-frame pixels retained store-wide. |
+| `MAX_KITTY_IMAGES` | 4,096 | `crates/par-term-emu-core/src/graphics/mod.rs:62` | Kitty image IDs (stored images plus animations) retained store-wide. |
+| `MAX_VIRTUAL_PLACEMENTS` | 4,096 | `crates/par-term-emu-core/src/graphics/mod.rs:67` | Distinct kitty virtual placements retained from escape payloads. |
 | `MAX_EVICTED_ZONES` | 10,000 | `crates/par-term-emu-core/src/grid/zone.rs:11` | Evicted zones buffered per grid before they become events. |
 | `SIXEL_HARD_MAX_WIDTH` | 4 KiB | `crates/par-term-emu-core/src/sixel.rs:25` | Hard ceiling on sixel raster width from payload geometry or user config. |
 | `SIXEL_HARD_MAX_HEIGHT` | 4 KiB | `crates/par-term-emu-core/src/sixel.rs:28` | Hard ceiling on sixel raster height from payload geometry or user config. |
