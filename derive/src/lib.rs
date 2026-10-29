@@ -87,7 +87,9 @@ pub fn pyo3_get_all(_attr: TokenStream, item: TokenStream) -> TokenStream {
 /// - `#[pydict(nested)]` — the field is an `Option<T>` or `Vec<T>` of a
 ///   struct that itself derives `PyDictConvert`: the value becomes `T`'s
 ///   dict (or a list of them), and the key is **omitted** when the `Option`
-///   is `None` or the `Vec` is empty. Nested values are never read back from
+///   is `None` or the `Vec` is empty. A field of any other type is a nested
+///   struct whose dict is always emitted. `#[pydict(nested(keep_empty))]`
+///   keeps an empty `Vec` as `[]`. Nested values are never read back from
 ///   kwargs; encode constructs them with `Default::default()`.
 ///
 /// Missing/wrong-typed kwargs silently fall back to defaults, matching the
@@ -97,12 +99,26 @@ pub fn pyo3_get_all(_attr: TokenStream, item: TokenStream) -> TokenStream {
 ///
 /// A struct with named fields gets only `to_py_dict(&self, py)`: one key per
 /// field (field name == key name), no `"type"` key, and `#[pydict(nested)]`
-/// honored as above. It exists so `#[pydict(nested)]` enum fields (the
-/// `SystemStats` cpu/memory/disk/network/load-average payloads) derive their
-/// dict shape from the struct definition instead of a hand-written copy.
+/// honored as above, and `#[pydict(skip)]` leaves a field out of the dict.
+/// It exists so `#[pydict(nested)]` enum fields (the `SystemStats`
+/// cpu/memory/disk/network/load-average payloads, the agent-roster entries)
+/// derive their dict shape from the struct definition instead of a
+/// hand-written copy.
 #[proc_macro_derive(PyDictConvert, attributes(pydict))]
 pub fn derive_py_dict_convert(input: TokenStream) -> TokenStream {
     expand_py_dict_convert(input.into()).into()
+}
+
+/// How a field's value reaches the dict.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Nested {
+    /// Plain value (or `to_with`).
+    No,
+    /// `#[pydict(nested)]`: `Option<T>`/`Vec<T>` omitted when `None`/empty;
+    /// any other type is a struct whose dict is always emitted.
+    Yes,
+    /// `#[pydict(nested(keep_empty))]`: a `Vec<T>` emitted as `[]` when empty.
+    KeepEmpty,
 }
 
 /// The `__d.set_item(..)` statement(s) for one field whose value is the
@@ -112,25 +128,34 @@ fn set_field_tokens(
     value: proc_macro2::TokenStream,
     ty: &syn::Type,
     to_with: Option<&Path>,
-    nested: bool,
+    nested: Nested,
 ) -> proc_macro2::TokenStream {
-    if nested {
+    if nested != Nested::No {
         if is_option_type(ty) {
             quote! {
                 if let Some(__v) = #value {
                     __d.set_item(#key, __v.to_py_dict(py)?)?;
                 }
             }
-        } else {
-            quote! {
-                if !(#value).is_empty() {
-                    let __l = pyo3::types::PyList::empty(py);
-                    for __v in #value {
-                        pyo3::types::PyListMethods::append(&__l, __v.to_py_dict(py)?)?;
+        } else if is_vec_type(ty) {
+            let build = quote! {
+                let __l = pyo3::types::PyList::empty(py);
+                for __v in #value {
+                    pyo3::types::PyListMethods::append(&__l, __v.to_py_dict(py)?)?;
+                }
+                __d.set_item(#key, __l)?;
+            };
+            if nested == Nested::KeepEmpty {
+                quote! { { #build } }
+            } else {
+                quote! {
+                    if !(#value).is_empty() {
+                        #build
                     }
-                    __d.set_item(#key, __l)?;
                 }
             }
+        } else {
+            quote! { __d.set_item(#key, (#value).to_py_dict(py)?)?; }
         }
     } else {
         match to_with {
@@ -140,27 +165,55 @@ fn set_field_tokens(
     }
 }
 
+/// Parse `nested` or `nested(keep_empty)`.
+fn parse_nested(meta: &syn::meta::ParseNestedMeta) -> syn::Result<Nested> {
+    let mut mode = Nested::Yes;
+    if meta.input.peek(syn::token::Paren) {
+        meta.parse_nested_meta(|inner| {
+            if inner.path.is_ident("keep_empty") {
+                mode = Nested::KeepEmpty;
+                Ok(())
+            } else {
+                Err(inner.error("unknown nested option (expected keep_empty)"))
+            }
+        })?;
+    }
+    Ok(mode)
+}
+
+/// Parsed `#[pydict(..)]` attributes of a struct-form field.
+struct StructFieldAttrs {
+    to_with: Option<Path>,
+    nested: Nested,
+    skip: bool,
+}
+
 /// Parse the `#[pydict(..)]` attributes of a struct field for the struct
-/// form, which accepts only `nested` and `to_with`/`with`.
-fn struct_field_attrs(field: &syn::Field) -> syn::Result<(Option<Path>, bool)> {
-    let mut to_with = None;
-    let mut nested = false;
+/// form, which accepts only `nested`, `to_with`/`with`, and `skip`.
+fn struct_field_attrs(field: &syn::Field) -> syn::Result<StructFieldAttrs> {
+    let mut parsed = StructFieldAttrs {
+        to_with: None,
+        nested: Nested::No,
+        skip: false,
+    };
     for attr in &field.attrs {
         if !attr.path().is_ident("pydict") {
             continue;
         }
         attr.parse_nested_meta(|meta| {
             if meta.path.is_ident("with") || meta.path.is_ident("to_with") {
-                to_with = Some(parse_path_value(&meta)?);
+                parsed.to_with = Some(parse_path_value(&meta)?);
             } else if meta.path.is_ident("nested") {
-                nested = true;
+                parsed.nested = parse_nested(&meta)?;
+            } else if meta.path.is_ident("skip") {
+                parsed.skip = true;
             } else {
                 return Err(meta.error("unknown pydict struct-field attribute"));
             }
             Ok(())
         })?;
     }
-    Ok((to_with, nested))
+    Ok(parsed)
 }
 
 fn expand_py_dict_struct(input: &DeriveInput, data: &syn::DataStruct) -> proc_macro2::TokenStream {
@@ -171,17 +224,20 @@ fn expand_py_dict_struct(input: &DeriveInput, data: &syn::DataStruct) -> proc_ma
     };
     let mut sets = Vec::new();
     for field in &named.named {
-        let (to_with, nested) = match struct_field_attrs(field) {
+        let attrs = match struct_field_attrs(field) {
             Ok(parsed) => parsed,
             Err(err) => return err.to_compile_error(),
         };
+        if attrs.skip {
+            continue;
+        }
         let ident = field.ident.as_ref().expect("named field has ident");
         sets.push(set_field_tokens(
             &ident.to_string(),
             quote! { &self.#ident },
             &field.ty,
-            to_with.as_ref(),
-            nested,
+            attrs.to_with.as_ref(),
+            attrs.nested,
         ));
     }
     quote! {
@@ -232,7 +288,7 @@ fn expand_py_dict_convert(input: proc_macro2::TokenStream) -> proc_macro2::Token
         from_with: Option<Path>,
         default: Option<Expr>,
         encode_skip: bool,
-        nested: bool,
+        nested: Nested,
     }
 
     struct VariantInfo {
@@ -280,7 +336,7 @@ fn expand_py_dict_convert(input: proc_macro2::TokenStream) -> proc_macro2::Token
                 let mut from_with = None;
                 let mut default = None;
                 let mut encode_skip = false;
-                let mut nested = false;
+                let mut nested = Nested::No;
                 for attr in &field.attrs {
                     if !attr.path().is_ident("pydict") {
                         continue;
@@ -299,7 +355,7 @@ fn expand_py_dict_convert(input: proc_macro2::TokenStream) -> proc_macro2::Token
                             }
                             encode_skip = true;
                         } else if meta.path.is_ident("nested") {
-                            nested = true;
+                            nested = parse_nested(&meta)?;
                         } else {
                             return Err(meta.error("unknown pydict field attribute"));
                         }
@@ -419,7 +475,7 @@ fn expand_py_dict_convert(input: proc_macro2::TokenStream) -> proc_macro2::Token
             let ident = &f.ident;
             let key = ident.to_string();
             let ty = &f.ty;
-            if f.encode_skip || f.nested {
+            if f.encode_skip || f.nested != Nested::No {
                 quote! { #ident: ::core::default::Default::default() }
             } else if let Some(path) = &f.from_with {
                 quote! { #ident: #path(__kv(#key).as_ref()) }
@@ -570,6 +626,15 @@ fn snake_case(ident: &str) -> String {
     out
 }
 
+fn is_vec_type(ty: &syn::Type) -> bool {
+    if let syn::Type::Path(type_path) = ty {
+        if let Some(last) = type_path.path.segments.last() {
+            return last.ident == "Vec";
+        }
+    }
+    false
+}
+
 fn is_option_type(ty: &syn::Type) -> bool {
     if let syn::Type::Path(type_path) = ty {
         if let Some(last) = type_path.path.segments.last() {
@@ -639,6 +704,48 @@ mod tests {
             }
         "#,
         );
+    }
+
+    #[test]
+    fn expansion_handles_struct_and_keep_empty_nesting() {
+        let ts: proc_macro2::TokenStream = r#"
+            enum Test {
+                A {
+                    #[pydict(nested(keep_empty))]
+                    xs: Vec<Inner>,
+                    #[pydict(nested)]
+                    one: Inner,
+                },
+            }
+        "#
+        .parse()
+        .unwrap();
+        let out = expand_py_dict_convert(ts);
+        syn::parse2::<syn::Item>(out.clone()).expect("expansion must be syntactically valid");
+        let out = out.to_string();
+        assert!(
+            !out.contains("is_empty"),
+            "keep_empty emits the list unconditionally"
+        );
+        let bad = expand_py_dict_convert(
+            "enum T { A { #[pydict(nested(bogus))] xs: Vec<I> } }"
+                .parse()
+                .unwrap(),
+        )
+        .to_string();
+        assert!(bad.contains("compile_error"));
+    }
+
+    #[test]
+    fn struct_expansion_skips_skipped_fields() {
+        let out = expand_py_dict_convert(
+            "struct S { a: u32, #[pydict(skip)] hidden: String }"
+                .parse()
+                .unwrap(),
+        )
+        .to_string();
+        assert!(out.contains("\"a\""));
+        assert!(!out.contains("\"hidden\""));
     }
 
     #[test]

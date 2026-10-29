@@ -77,7 +77,7 @@ NOT_OURS: dict[str, str] = {
 # Documented rows read through a std/dirs API instead of `env::var`; checked
 # only in the doc-to-code direction.
 STD_INDIRECT: dict[str, str] = {
-    "HOME": "dirs::home_dir() (mux/persist.rs, skill_installer.rs)",
+    "HOME": "dirs::home_dir() (mux/persist/restore.rs, skill_installer.rs)",
     "TMPDIR": "std::env::temp_dir() (debug.rs, mux/ipc.rs)",
 }
 

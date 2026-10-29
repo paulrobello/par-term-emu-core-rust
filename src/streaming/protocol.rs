@@ -1037,13 +1037,17 @@ pub enum ServerMessage {
             any(feature = "python", feature = "python-test"),
             feature = "streaming"
         ),
-        pydict(
-            to = "crate::streaming::py_convert::agent_roster_to_py_dict",
-            from = "crate::streaming::py_convert::agent_roster_from"
-        )
+        pydict(from = "crate::streaming::py_convert::agent_roster_from")
     )]
     AgentRoster {
         /// Every roster entry
+        #[cfg_attr(
+            all(
+                any(feature = "python", feature = "python-test"),
+                feature = "streaming"
+            ),
+            pydict(nested(keep_empty))
+        )]
         agents: Vec<AgentEntry>,
     },
 
@@ -1054,13 +1058,17 @@ pub enum ServerMessage {
             any(feature = "python", feature = "python-test"),
             feature = "streaming"
         ),
-        pydict(
-            to = "crate::streaming::py_convert::agent_state_changed_to_py_dict",
-            from = "crate::streaming::py_convert::agent_state_changed_from"
-        )
+        pydict(from = "crate::streaming::py_convert::agent_state_changed_from")
     )]
     AgentStateChanged {
         /// The changed entry (only `pane_id` is meaningful when released)
+        #[cfg_attr(
+            all(
+                any(feature = "python", feature = "python-test"),
+                feature = "streaming"
+            ),
+            pydict(nested)
+        )]
         #[cfg_attr(
             feature = "streaming",
             proto(with = "crate::streaming::proto::wire::required_agent")
@@ -1222,6 +1230,13 @@ impl From<InlineImageFrame> for ServerMessage {
 
 /// One par-mux agent roster entry, verbatim from `list-agents`.
 #[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[cfg_attr(
+    all(
+        any(feature = "python", feature = "python-test"),
+        feature = "streaming"
+    ),
+    derive(par_term_emu_derive::PyDictConvert)
+)]
 #[cfg_attr(feature = "streaming", derive(par_term_emu_derive::ProtoConvert))]
 #[cfg_attr(
     feature = "streaming",
@@ -1240,13 +1255,34 @@ pub struct AgentEntry {
     pub reason: String,
     /// par-mux workspace id (`+N`) from the roster row's `ws=` token,
     /// empty when the daemon pre-dates it or the pane is unassigned
+    #[cfg_attr(
+        all(
+            any(feature = "python", feature = "python-test"),
+            feature = "streaming"
+        ),
+        pydict(skip)
+    )]
     pub workspace: String,
     /// Host-attributed project, empty when unknown — no streamer source
     /// attributes one today; consumers render absent as unknown
+    #[cfg_attr(
+        all(
+            any(feature = "python", feature = "python-test"),
+            feature = "streaming"
+        ),
+        pydict(skip)
+    )]
     pub project: String,
     /// Pane title/label, empty when unknown — the daemon knows titles but
     /// offers no global query a streamer can bind; consumers render
     /// absent as unknown
+    #[cfg_attr(
+        all(
+            any(feature = "python", feature = "python-test"),
+            feature = "streaming"
+        ),
+        pydict(skip)
+    )]
     pub pane_label: String,
 }
 

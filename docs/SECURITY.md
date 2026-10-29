@@ -1407,9 +1407,9 @@ sections; the numbers live here.
 | `MAX_PROJECT_LEN` | 128 | `crates/par-mux/src/mux/host_probe.rs:289` | Bytes of project name the host probe serves for one pane cwd. |
 | `MAX_STREAM_LINE_BYTES` | 64 MiB | `crates/par-mux/src/mux/pane_stream.rs:29` | Bytes accumulated from one daemon line by a pane stream client before it closes the connection. |
 | `CONTROL_CHUNK` | 4,096 | `crates/par-mux/src/mux/pane_stream.rs:34` | Stdin bytes a control-pane client forwards per send-keys line. |
-| `MAX_PERSISTED_SCROLLBACK_CELLS` | 100,000 | `crates/par-mux/src/mux/persist.rs:45` | Scrollback cells restored per pane from an untrusted on-disk state file. |
-| `MAX_RESTORED_COLS` | 1,000 | `crates/par-mux/src/mux/persist.rs:55` | Columns one restored window may claim from an untrusted state file. |
-| `MAX_RESTORED_ROWS` | 500 | `crates/par-mux/src/mux/persist.rs:57` | Rows one restored window may claim from an untrusted state file. |
+| `MAX_PERSISTED_SCROLLBACK_CELLS` | 100,000 | `crates/par-mux/src/mux/persist/format.rs:35` | Scrollback cells restored per pane from an untrusted on-disk state file. |
+| `MAX_RESTORED_COLS` | 1,000 | `crates/par-mux/src/mux/persist/format.rs:45` | Columns one restored window may claim from an untrusted state file. |
+| `MAX_RESTORED_ROWS` | 500 | `crates/par-mux/src/mux/persist/format.rs:47` | Rows one restored window may claim from an untrusted state file. |
 | `CLIENT_QUEUE_DEPTH` | 4,096 | `crates/par-mux/src/mux/server/mod.rs:87` | Broadcast lines queued per control-socket client before the daemon evicts it. |
 | `CLIENT_QUEUE_AGGREGATE_DEPTH` | `CLIENT_QUEUE_DEPTH * 2` | `crates/par-mux/src/mux/server/mod.rs:99` | Broadcast lines queued across all control-socket clients before the daemon evicts the deepest queue. |
 | `MAX_CONTROL_LINE_BYTES` | 1 MiB | `crates/par-mux/src/mux/server/mod.rs:108` | Bytes accumulated from one control-socket client line before the daemon closes it. |
@@ -1440,17 +1440,17 @@ sections; the numbers live here.
 | `MAX_BELL_EVENTS` | 1,024 | `crates/par-term-emu-core/src/terminal/event_broker.rs:27` | Undrained bell events retained from processed output. |
 | `DEFAULT_MAX_TRANSFER_SIZE` | 50 MiB | `crates/par-term-emu-core/src/terminal/file_transfer.rs:88` | Bytes accepted for one file-transfer payload. |
 | `DEFAULT_MAX_COMPLETED` | 32 | `crates/par-term-emu-core/src/terminal/file_transfer.rs:92` | Completed transfers retained from client file-transfer requests. |
-| `MAX_RESPONSE_BYTES` | 64 KiB | `crates/par-term-emu-core/src/terminal/mod.rs:80` | Undrained device-query response bytes retained from processed output. |
-| `MAX_CLIPBOARD_CONTENT_SIZE` | 10 MiB | `crates/par-term-emu-core/src/terminal/mod.rs:144` | Clipboard content bytes accepted from an OSC 52 sequence. |
+| `MAX_RESPONSE_BYTES` | 64 KiB | `crates/par-term-emu-core/src/terminal/mod.rs:82` | Undrained device-query response bytes retained from processed output. |
+| `MAX_CLIPBOARD_CONTENT_SIZE` | 10 MiB | `crates/par-term-emu-core/src/terminal/mod.rs:146` | Clipboard content bytes accepted from an OSC 52 sequence. |
 | `MAX_BOOKMARKS` | 1,000 | `crates/par-term-emu-core/src/terminal/semantic_snapshot.rs:543` | Bookmark entries retained for one terminal session. |
 | `MAX_DCS_BUFFER` | 65,536 | `crates/par-term-emu-core/src/terminal/sequences/dcs/mod.rs:47` | Payload bytes accumulated for one DCS sequence from terminal output. |
 | `MAX_SIXEL_DIMENSION` | 16 KiB | `crates/par-term-emu-core/src/terminal/sequences/dcs/sixel.rs:12` | Width or height accepted for a sixel raster declared in a DCS payload. |
 | `MAX_SIXEL_COLORS` | 4,096 | `crates/par-term-emu-core/src/terminal/sequences/dcs/sixel.rs:16` | Color registers accepted in a sixel palette from a DCS payload. |
 | `DEFAULT_MAX_MEMORY_BYTES` | 4 MiB | `crates/par-term-emu-core/src/terminal/snapshot_manager.rs:14` | Memory held by snapshots retained from processed terminal output. |
-| `DEFAULT_MAX_NOTIFICATIONS` | 128 | `crates/par-term-emu-core/src/terminal/state.rs:79` | Terminal notifications queued from processed escape-sequence output. |
-| `DEFAULT_MAX_CLIPBOARD_SYNC_EVENTS` | 256 | `crates/par-term-emu-core/src/terminal/state.rs:81` | Clipboard sync events queued from processed escape-sequence output. |
-| `DEFAULT_MAX_CLIPBOARD_EVENT_BYTES` | 4 KiB | `crates/par-term-emu-core/src/terminal/state.rs:83` | Bytes retained for one queued clipboard sync event. |
-| `DEFAULT_MAX_OSC_DATA_LENGTH` | 1 MiB | `crates/par-term-emu-core/src/terminal/state.rs:905` | Payload bytes accepted for one OSC sequence from terminal output. |
+| `DEFAULT_MAX_NOTIFICATIONS` | 128 | `crates/par-term-emu-core/src/terminal/state.rs:80` | Terminal notifications queued from processed escape-sequence output. |
+| `DEFAULT_MAX_CLIPBOARD_SYNC_EVENTS` | 256 | `crates/par-term-emu-core/src/terminal/state.rs:82` | Clipboard sync events queued from processed escape-sequence output. |
+| `DEFAULT_MAX_CLIPBOARD_EVENT_BYTES` | 4 KiB | `crates/par-term-emu-core/src/terminal/state.rs:84` | Bytes retained for one queued clipboard sync event. |
+| `DEFAULT_MAX_OSC_DATA_LENGTH` | 1 MiB | `crates/par-term-emu-core/src/terminal/state.rs:938` | Payload bytes accepted for one OSC sequence from terminal output. |
 | `MAX_ARCHIVE_BYTES` | 50 MiB | `src/bin/streaming_server/frontend_download.rs:34` | Bytes accepted from a downloaded web-frontend archive response. |
 | `MAX_SIDECAR_BYTES` | 1 KiB | `src/bin/streaming_server/frontend_download.rs:67` | Bytes accepted from a `.sha256` checksum sidecar response (SEC-203). |
 | `MAX_DECOMPRESSED_SIZE` | 9 MiB | `src/streaming/proto.rs:48` | Decompressed bytes accepted from one zlib-compressed streaming frame. |

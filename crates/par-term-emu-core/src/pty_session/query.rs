@@ -112,9 +112,12 @@ impl PtySession {
     /// - Trailing spaces trimmed from each line
     /// - Wrapped lines properly handled (no newline between wrapped segments)
     /// - Empty lines preserved
+    ///
+    /// The read lock is held only to copy the grids (ARC-004); the text is
+    /// built after it drops, so a long export does not stall PTY ingestion.
     pub fn export_text(&self) -> String {
-        let term = self.terminal.read();
-        term.export_text()
+        let snapshot = self.terminal.read().text_export_snapshot();
+        snapshot.export_text()
     }
 
     /// Export entire buffer (scrollback + current screen) with ANSI styling
@@ -124,9 +127,12 @@ impl PtySession {
     /// - Trailing spaces trimmed from each line
     /// - Wrapped lines properly handled (no newline between wrapped segments)
     /// - Efficient escape sequence generation (only emits changes)
+    ///
+    /// Built from a copy taken under the read lock, like
+    /// [`export_text`](Self::export_text) (ARC-004).
     pub fn export_styled(&self) -> String {
-        let term = self.terminal.read();
-        term.export_styled()
+        let snapshot = self.terminal.read().text_export_snapshot();
+        snapshot.export_styled()
     }
 
     /// Take a screenshot of the current visible buffer
@@ -220,9 +226,12 @@ impl PtySession {
     }
 
     /// Get scrollback content
+    ///
+    /// Built from a copy taken under the read lock, like
+    /// [`export_text`](Self::export_text) (ARC-004).
     pub fn scrollback(&self) -> Vec<String> {
-        let term = self.terminal.read();
-        term.scrollback()
+        let snapshot = self.terminal.read().text_export_snapshot();
+        snapshot.scrollback()
     }
 
     /// Get the number of scrollback lines

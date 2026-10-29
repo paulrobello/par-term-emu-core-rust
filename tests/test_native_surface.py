@@ -38,4 +38,4 @@ def test_registered_classes_match_the_stub() -> None:
 
 
 def test_registered_class_count_is_pinned() -> None:
-    assert len(_registered_classes()) == 66
+    assert len(_registered_classes()) == 67

@@ -102,8 +102,8 @@ with no features compiles neither pyo3 nor swash nor portable-pty
 
 ## Version train
 
-- All members share the root's version (lockstep). `par-term-emu-core` is
-  `0.58.1` today. This is behavior, not tidiness: the XTVERSION/DA reply in
+- All members share the root's version (lockstep). This is behavior, not
+  tidiness: the XTVERSION/DA reply in
   `terminal/sequences/csi/report.rs` embeds `env!("CARGO_PKG_VERSION")`,
   which after the move is the member's version.
 - The root depends on the member with `path` + an exact `version = "=X.Y.Z"`
@@ -112,6 +112,11 @@ with no features compiles neither pyo3 nor swash nor portable-pty
   when `crates/par-term-emu-core/Cargo.toml`, the root version, or the root's
   dependency pin disagree. CLAUDE.md's version-sync list names the member
   manifest.
+- `make set-version VERSION=X.Y.Z` (`scripts/set_version_train.py`, ARC-009)
+  is the writer: it rewrites the five versions, the three exact pins, and
+  the workspace `Cargo.lock` entries in one step, writes nothing when any
+  site has drifted, and re-runs the core-version gate on the result.
+  `make version-train-check` (in `checkall`) self-tests it on a temp copy.
 - `par-term-emu-derive` keeps its independent version (unchanged).
 - **Publish order:** derive (if bumped) → `par-term-emu-core` → `par-mux`
   → root. crates.io strips `path`, so each dependency must exist on the
@@ -155,9 +160,15 @@ output delays PTY ingestion, and vice versa. Accepted, not an impairment:
 - The snapshot machinery (`GridSnapshot`, `grid/snapshot.rs`) already
   exists for replay.
 
-Remedy when it bites: export from a snapshot copy — take the read lock
-only to clone the snapshot, then build the export from the copy — rather
-than walking the live grid under the read lock.
+Full-buffer text exports take this route (ARC-004):
+`PtySession::{export_text, export_styled, scrollback}` (and the Python
+`PtyTerminal` methods of the same names) hold the read lock only to take a
+`TextExportSnapshot` (`terminal/export_snapshot.rs`, a clone of the primary
+grid plus the alternate grid when it is active) and build the text after
+the lock drops. `Terminal`'s own exports run the same grid functions, so
+the two paths cannot drift. Screenshots and the other bounded queries still
+read the live grid under the lock. Extend the snapshot to them when one of
+them shows up as a measured stall.
 
 ## Cross-boundary edits (Phase 1)
 

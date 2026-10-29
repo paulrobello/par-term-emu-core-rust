@@ -47,6 +47,11 @@
 //!   predate the tiering and stay for existing consumers. The PyO3 wrapper
 //!   re-exports are hidden from the docs; their canonical path is
 //!   `python_bindings::…`.
+//! - **Canonical path**: write embedder code against
+//!   `par_term_emu_core_rust::…`. The `par_term_emu_core::…` paths name the
+//!   same types (the core member, re-exported whole); depend on that crate
+//!   directly only for a core-only build. See `docs/RUST_USAGE.md`
+//!   ("Which Crate Path to Import").
 
 // QA-201: every production `unsafe` block states its invariant. Test modules
 // are exempt — their FFI calls restate the fn contract and add only noise.

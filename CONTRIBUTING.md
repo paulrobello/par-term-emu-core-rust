@@ -98,21 +98,13 @@ Seeds live in `fuzz/corpus/<target>/*.seed` and are committed; everything else t
 
 ## Version Sync
 
-The root crate and both workspace members version in lockstep. When bumping the project version, update all five files to the same value in one commit:
+The root crate and both workspace members version in lockstep. To bump the project version, run `make set-version VERSION=X.Y.Z` and commit the result in one commit. The script rewrites the whole train atomically:
 
-1. `Cargo.toml` (`version = "X.Y.Z"`)
-2. `pyproject.toml` (`version = "X.Y.Z"`)
-3. `python/par_term_emu_core_rust/__init__.py` (`__version__ = "X.Y.Z"`)
-4. `crates/par-term-emu-core/Cargo.toml` (`version = "X.Y.Z"`)
-5. `crates/par-mux/Cargo.toml` (`version = "X.Y.Z"`)
+1. The versions in `Cargo.toml`, `pyproject.toml`, `python/par_term_emu_core_rust/__init__.py`, `crates/par-term-emu-core/Cargo.toml` and `crates/par-mux/Cargo.toml`
+2. The three exact `=X.Y.Z` pins on the in-workspace dependency edges, because publishing strips `path` and crates.io resolves the spec: the root's `par-term-emu-core` and `par-mux`, and `crates/par-mux/Cargo.toml`'s `par-term-emu-core`
+3. The matching `Cargo.lock` entries
 
-Then update the three exact pins on the in-workspace dependency edges, because publishing strips `path` and crates.io resolves the spec:
-
-- The root's `par-term-emu-core = { …, version = "=X.Y.Z" }`
-- The root's `par-mux = { …, version = "=X.Y.Z" }`
-- `crates/par-mux/Cargo.toml`'s `par-term-emu-core = { …, version = "=X.Y.Z" }`
-
-The derive crate (`derive/Cargo.toml`) is the exception: it versions independently. Bump it only when the derive code changes, and keep the root's `par-term-emu-derive` dependency spec matching it.
+It writes nothing if any site has drifted, and it never touches `derive/Cargo.toml`, which versions independently: bump it only when the derive code changes, and keep the root's `par-term-emu-derive` dependency spec matching it.
 
 The gates:
 
