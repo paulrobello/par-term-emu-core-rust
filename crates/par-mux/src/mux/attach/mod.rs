@@ -581,149 +581,13 @@ impl Session {
                 to_send.push(byte);
                 continue;
             }
-            // A non-ASCII chord key (IME / CJK input): the same rule as
-            // render mode's scanner — swallow the whole character, fold a
-            // fullwidth form to its ASCII chord byte, flash a hint
-            // otherwise.
-            if let Some(mut utf8) = self.prefix_utf8.take() {
-                match utf8.push(byte) {
-                    text_input::Utf8Step::Pending => {
-                        self.prefix_utf8 = Some(utf8);
-                        continue;
-                    }
-                    text_input::Utf8Step::Char(ch) => match text_input::fold_fullwidth_ascii(ch) {
-                        Some(folded) => byte = folded,
-                        None => {
-                            self.prefix_pending = false;
-                            self.flash = Some(format!(
-                                "prefix {ch}: chords are ASCII keys (switch the input method to ASCII)"
-                            ));
-                            self.draw_status();
-                            continue;
-                        }
-                    },
-                    text_input::Utf8Step::Invalid => {
-                        self.prefix_pending = false;
-                        if byte >= 0x80 {
-                            continue;
-                        }
-                    }
-                }
-            } else if self.prefix_pending && byte >= 0x80 {
-                let mut utf8 = text_input::Utf8Assembler::default();
-                if utf8.push(byte) == text_input::Utf8Step::Pending {
-                    self.prefix_utf8 = Some(utf8);
-                } else {
-                    self.prefix_pending = false;
-                }
-                continue;
+            match self.prefix_chord_byte(byte) {
+                Some(folded) => byte = folded,
+                None => continue,
             }
             if self.prefix_pending {
                 self.prefix_pending = false;
-                if byte == 0x1b && bytes[index..].starts_with(&PASTE_START[1..]) {
-                    // A paste opener cancels the pending prefix (tmux's
-                    // rule); the marker forwards as the pane's framing.
-                    to_send.push(byte);
-                    continue;
-                }
-                if byte == self.prefix {
-                    // prefix prefix: forward the prefix byte itself
-                    // (tmux's rule for typing a literal C-b).
-                    to_send.push(self.prefix);
-                    continue;
-                }
-                if byte == 0x1b {
-                    // An arrow chord: collect the rest of the CSI sequence.
-                    let taken = bytes[index..].iter().take(2).copied().collect::<Vec<u8>>();
-                    index += taken.len();
-                    self.prefix_arrow(&taken);
-                    continue;
-                }
-                // The reload chord matches by byte BEFORE the fixed
-                // command table: it is configurable, so it cannot be a
-                // static table arm, and the default (C-r, 0x12) does not
-                // collide with respawn (`r`, 0x72).
-                if byte == self.reload_key {
-                    self.reload_config();
-                    continue;
-                }
-                // The management chords match by byte BEFORE the fixed
-                // command table: they are configurable, so they cannot be
-                // static arms, and the defaults (`%`, `"`, `x`, `c`) are
-                // consumed unbound by the table today.
-                match self.management_command(byte) {
-                    Some(ManagementKey::SplitRight) => self.split_pane(true),
-                    Some(ManagementKey::SplitDown) => self.split_pane(false),
-                    Some(ManagementKey::KillPane) => self.kill_focused_pane(),
-                    Some(ManagementKey::BreakPane) => self.break_focused_pane(),
-                    // Join needs the window picker's overlay surface:
-                    // passthrough consumes the chord and says so.
-                    Some(ManagementKey::JoinPane) => {
-                        self.flash = Some("join-pane: render mode only".to_string());
-                        self.draw_status();
-                    }
-                    // The palette needs the picker's overlay surface too.
-                    Some(ManagementKey::Palette) => {
-                        self.flash = Some("palette: render mode only".to_string());
-                        self.draw_status();
-                    }
-                    // Moving a tab needs the render session's tab strip.
-                    Some(ManagementKey::MoveWindowLeft | ManagementKey::MoveWindowRight) => {
-                        self.flash = Some("move tab: render mode only".to_string());
-                        self.draw_status();
-                    }
-                    // Scrolling the strip needs the render session's
-                    // strip too.
-                    Some(ManagementKey::TabStripLeft | ManagementKey::TabStripRight) => {
-                        self.flash = Some("tab strip: render mode only".to_string());
-                        self.draw_status();
-                    }
-                    Some(ManagementKey::NewWindow) => self.new_window_in_session(),
-                    Some(ManagementKey::SwapPrev) => self.swap_pane(-1),
-                    Some(ManagementKey::SwapNext) => self.swap_pane(1),
-                    Some(ManagementKey::WorkspaceNext) => self.switch_workspace(1),
-                    Some(ManagementKey::WorkspacePrev) => self.switch_workspace(-1),
-                    Some(ManagementKey::Respawn) => self.respawn_if_dead(),
-                    // Render-mode-only chords: passthrough has no zoom,
-                    // no overlay surface for the rename prompt, no
-                    // divider glyphs to cycle, and no status bar or
-                    // side panel. Consumed, not forwarded.
-                    Some(
-                        ManagementKey::Zoom
-                        | ManagementKey::RenameWindow
-                        | ManagementKey::RenamePane
-                        | ManagementKey::BorderCycle
-                        | ManagementKey::Labels
-                        | ManagementKey::WorkspacePicker
-                        | ManagementKey::Sidebar
-                        | ManagementKey::StatusBar
-                        | ManagementKey::NotifyJump,
-                    ) => {}
-                    None => {
-                        // The resize chord: a sticky mode — arrows adjust
-                        // the focused pane's edges until Enter/Escape/q.
-                        if byte == self.management.resize {
-                            self.enter_resize_mode();
-                            continue;
-                        }
-                        // The help chord: the bindings panel, printed as
-                        // plain text (passthrough has no overlay surface;
-                        // the pane's next output redraws over it).
-                        if byte == self.management.help {
-                            self.show_help();
-                            continue;
-                        }
-                        match prefix_command(byte) {
-                            PrefixKey::Detach => detached = true,
-                            PrefixKey::CyclePane => self.cycle_pane(),
-                            PrefixKey::NextWindow => self.switch_window(1),
-                            PrefixKey::PrevWindow => self.switch_window(-1),
-                            PrefixKey::NextSession => self.switch_session(1),
-                            PrefixKey::PrevSession => self.switch_session(-1),
-                            PrefixKey::None => {}
-                        }
-                    }
-                }
+                detached |= self.prefix_chord(byte, bytes, &mut index, &mut to_send);
             } else if byte == self.prefix {
                 self.prefix_pending = true;
             } else {
@@ -741,6 +605,169 @@ impl Session {
         }
         self.send_chunked(&to_send);
         detached
+    }
+
+    /// A non-ASCII chord key (IME / CJK input): the same rule as render
+    /// mode's scanner — swallow the whole character, fold a fullwidth
+    /// form to its ASCII chord byte, flash a hint otherwise. `None` means
+    /// the byte was consumed; `Some` is the (possibly folded) byte the
+    /// router continues with.
+    fn prefix_chord_byte(&mut self, byte: u8) -> Option<u8> {
+        if let Some(mut utf8) = self.prefix_utf8.take() {
+            match utf8.push(byte) {
+                text_input::Utf8Step::Pending => {
+                    self.prefix_utf8 = Some(utf8);
+                    None
+                }
+                text_input::Utf8Step::Char(ch) => match text_input::fold_fullwidth_ascii(ch) {
+                    Some(folded) => Some(folded),
+                    None => {
+                        self.prefix_pending = false;
+                        self.flash = Some(format!(
+                            "prefix {ch}: chords are ASCII keys (switch the input method to ASCII)"
+                        ));
+                        self.draw_status();
+                        None
+                    }
+                },
+                text_input::Utf8Step::Invalid => {
+                    self.prefix_pending = false;
+                    (byte < 0x80).then_some(byte)
+                }
+            }
+        } else if self.prefix_pending && byte >= 0x80 {
+            let mut utf8 = text_input::Utf8Assembler::default();
+            if utf8.push(byte) == text_input::Utf8Step::Pending {
+                self.prefix_utf8 = Some(utf8);
+            } else {
+                self.prefix_pending = false;
+            }
+            None
+        } else {
+            Some(byte)
+        }
+    }
+
+    /// The key after a pending prefix. `rest` is the burst and `index`
+    /// the position after `byte` (an arrow chord consumes up to two more
+    /// bytes). Bytes that forward go to `to_send`. Returns true when the
+    /// chord detaches.
+    fn prefix_chord(
+        &mut self,
+        byte: u8,
+        rest: &[u8],
+        index: &mut usize,
+        to_send: &mut Vec<u8>,
+    ) -> bool {
+        if byte == 0x1b && rest[*index..].starts_with(&PASTE_START[1..]) {
+            // A paste opener cancels the pending prefix (tmux's
+            // rule); the marker forwards as the pane's framing.
+            to_send.push(byte);
+            return false;
+        }
+        if byte == self.prefix {
+            // prefix prefix: forward the prefix byte itself
+            // (tmux's rule for typing a literal C-b).
+            to_send.push(self.prefix);
+            return false;
+        }
+        if byte == 0x1b {
+            // An arrow chord: collect the rest of the CSI sequence.
+            let taken = rest[*index..].iter().take(2).copied().collect::<Vec<u8>>();
+            *index += taken.len();
+            self.prefix_arrow(&taken);
+            return false;
+        }
+        // The reload chord matches by byte BEFORE the fixed
+        // command table: it is configurable, so it cannot be a
+        // static table arm, and the default (C-r, 0x12) does not
+        // collide with respawn (`r`, 0x72).
+        if byte == self.reload_key {
+            self.reload_config();
+            return false;
+        }
+        // The management chords match by byte BEFORE the fixed
+        // command table: they are configurable, so they cannot be
+        // static arms, and the defaults (`%`, `"`, `x`, `c`) are
+        // consumed unbound by the table today.
+        if let Some(key) = self.management_command(byte) {
+            self.passthrough_management(key);
+            return false;
+        }
+        // The resize chord: a sticky mode — arrows adjust
+        // the focused pane's edges until Enter/Escape/q.
+        if byte == self.management.resize {
+            self.enter_resize_mode();
+            return false;
+        }
+        // The help chord: the bindings panel, printed as
+        // plain text (passthrough has no overlay surface;
+        // the pane's next output redraws over it).
+        if byte == self.management.help {
+            self.show_help();
+            return false;
+        }
+        match prefix_command(byte) {
+            PrefixKey::Detach => return true,
+            PrefixKey::CyclePane => self.cycle_pane(),
+            PrefixKey::NextWindow => self.switch_window(1),
+            PrefixKey::PrevWindow => self.switch_window(-1),
+            PrefixKey::NextSession => self.switch_session(1),
+            PrefixKey::PrevSession => self.switch_session(-1),
+            PrefixKey::None => {}
+        }
+        false
+    }
+
+    /// One management chord in passthrough mode. Exhaustive on purpose:
+    /// a new [`ManagementKey`] variant fails to compile until this side
+    /// decides what it does.
+    fn passthrough_management(&mut self, key: ManagementKey) {
+        match key {
+            ManagementKey::SplitRight => self.split_pane(true),
+            ManagementKey::SplitDown => self.split_pane(false),
+            ManagementKey::KillPane => self.kill_focused_pane(),
+            ManagementKey::BreakPane => self.break_focused_pane(),
+            // Join needs the window picker's overlay surface:
+            // passthrough consumes the chord and says so.
+            ManagementKey::JoinPane => self.render_mode_only("join-pane"),
+            // The palette needs the picker's overlay surface too.
+            ManagementKey::Palette => self.render_mode_only("palette"),
+            // Moving a tab needs the render session's tab strip.
+            ManagementKey::MoveWindowLeft | ManagementKey::MoveWindowRight => {
+                self.render_mode_only("move tab");
+            }
+            // Scrolling the strip needs the render session's
+            // strip too.
+            ManagementKey::TabStripLeft | ManagementKey::TabStripRight => {
+                self.render_mode_only("tab strip");
+            }
+            ManagementKey::NewWindow => self.new_window_in_session(),
+            ManagementKey::SwapPrev => self.swap_pane(-1),
+            ManagementKey::SwapNext => self.swap_pane(1),
+            ManagementKey::WorkspaceNext => self.switch_workspace(1),
+            ManagementKey::WorkspacePrev => self.switch_workspace(-1),
+            ManagementKey::Respawn => self.respawn_if_dead(),
+            // Render-mode-only chords: passthrough has no zoom,
+            // no overlay surface for the rename prompt, no
+            // divider glyphs to cycle, and no status bar or
+            // side panel. Consumed, not forwarded.
+            ManagementKey::Zoom
+            | ManagementKey::RenameWindow
+            | ManagementKey::RenamePane
+            | ManagementKey::BorderCycle
+            | ManagementKey::Labels
+            | ManagementKey::WorkspacePicker
+            | ManagementKey::Sidebar
+            | ManagementKey::StatusBar
+            | ManagementKey::NotifyJump => {}
+        }
+    }
+
+    /// Flash that a chord needs render mode's surfaces.
+    fn render_mode_only(&mut self, what: &str) {
+        self.flash = Some(format!("{what}: render mode only"));
+        self.draw_status();
     }
 }
 
