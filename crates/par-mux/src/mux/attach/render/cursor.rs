@@ -1,6 +1,6 @@
 //! Host-cursor placement bookkeeping for [`super::WindowSession::frame`].
 
-use super::trace_cursor;
+use super::{trace_cursor, PaneRenderer};
 use crate::mux::attach::CURSOR_HEARTBEAT;
 use par_term_emu_core::cursor::CursorStyle;
 use std::time::Instant;
@@ -84,5 +84,70 @@ impl CursorState {
     #[cfg(test)]
     pub(super) fn backdate(&mut self, by: std::time::Duration) {
         self.last_emit = Instant::now() - by;
+    }
+}
+
+impl PaneRenderer {
+    /// The terminal cursor position for the focused pane, mapped through
+    /// its rect origin and the client scroll offset: `Some((x, y, style))`
+    /// where `(x, y)` is the window-relative cell to place the host
+    /// cursor at. `None` — the cursor hides — when nothing is focused,
+    /// the pane's emulator tracks a hidden cursor (DECTCEM), the client
+    /// view is scrolled off live (the wheel/prefix-[ viewport: the live
+    /// cell is not on screen), or the tracked cell is somehow outside
+    /// the pane's rect.
+    ///
+    /// The style is the pane's tracked DECSCUSR shape, for the sink to
+    /// re-emit (`CSI Ps SP q`).
+    pub fn focused_cursor(&self) -> Option<(u16, u16, CursorStyle)> {
+        self.focused_cell(true)
+    }
+
+    /// Where the host cursor PARKS while the focused pane hides its
+    /// cursor (DECTCEM off): the same tracked cell as
+    /// [`Self::focused_cursor`], minus the visibility test. The host
+    /// terminal anchors IME preedit and the candidate window at its
+    /// cursor even when hidden, so a TUI that paints its own cursor
+    /// (agent CLIs) keeps the composition at the input line instead of
+    /// at whatever cell the last diff wrote. `None` for every other
+    /// hide reason (scrolled view, nothing focused, cell outside view).
+    pub fn focused_ime_anchor(&self) -> Option<(u16, u16)> {
+        self.focused_cell(false).map(|(x, y, _)| (x, y))
+    }
+
+    fn focused_cell(&self, require_visible: bool) -> Option<(u16, u16, CursorStyle)> {
+        let Some(focus) = self.focused else {
+            return super::trace_none(format_args!("no focused pane"));
+        };
+        let Some(rect) = self.layout.iter().find(|r| r.pane == focus) else {
+            return super::trace_none(format_args!("focused pane has no layout rect"));
+        };
+        let Some(emulator) = self.emulators.get(&focus) else {
+            return super::trace_none(format_args!("no emulator for focused pane"));
+        };
+        if emulator.scroll_offset() > 0 {
+            return super::trace_none(format_args!(
+                "view scrolled: offset {}",
+                emulator.scroll_offset()
+            ));
+        }
+        let cursor = emulator.terminal().cursor();
+        if require_visible && !cursor.visible {
+            return super::trace_none(format_args!("pane tracked cursor hidden by DECTCEM"));
+        }
+        let (col, row) = (cursor.col, cursor.row);
+        // The placement path shares the paint inset: with the per-pane
+        // border option the cursor maps inside the border ring, hidden
+        // when the tracked cell falls in the cropped perimeter band.
+        let (inset_x, inset_y, view_w, view_h) = self.content_view(rect);
+        if col >= usize::from(view_w) || row >= usize::from(view_h) {
+            return super::trace_none(format_args!(
+                "tracked cell ({col},{row}) outside content view {view_w}x{view_h}"
+            ));
+        }
+        let (x, y) = self
+            .geometry
+            .content_to_frame(rect.x + inset_x + col as u16, rect.y + inset_y + row as u16);
+        Some((x, y, cursor.style))
     }
 }

@@ -1,7 +1,6 @@
 //! Cell painting: a pane's live/scrollback grid into its content view, and the modal overlay.
 
 use super::{PaneRect, PaneRenderer};
-use crate::mux::attach::HelpRow;
 use par_term_emu_core::cell::CellFlags;
 use par_term_emu_core::color::{Color as CoreColor, NamedColor};
 use ratatui::buffer::CellDiffOption;
@@ -205,145 +204,39 @@ impl PaneRenderer {
         }
     }
 
-    /// Paint the help overlay as the themed modal (the round-3 restyle):
-    /// every cell carries the resolved theme bg — the same rule the frame
-    /// fill applies, so no default-style (light) cell ever shows — ringed
-    /// by a rounded box-drawing border in the accent color, title
-    /// `keybinds` left and `esc close` badge top-right embedded in the
-    /// top border, category headers in the accent, and the footer hints
-    /// line inside the box. Clamped to the window; paints last in
-    /// `render_frame`, covering panes and dividers; dismissal lets the
-    /// next frame's pane repaint restore the covered cells.
-    /// Reverse the overlay's highlight spans (the settings dialog's tab
-    /// and selection bands), clipped to its inner box.
-    pub(super) fn paint_overlay_highlights(&mut self) {
-        let Some((x0, y0, inner, height)) = self.overlay_geometry() else {
+    /// Fill the content area past the window's extent with dim `.` cells
+    /// (tmux's padding): the daemon sizes a window to its smallest viewer,
+    /// so a larger client shows the window in its top-left corner and the
+    /// rest marks where the other client's screen ends.
+    pub(super) fn paint_window_padding(&mut self) {
+        let window_w = self.layout.iter().map(|r| r.x + r.width).max().unwrap_or(0);
+        let window_h = self
+            .layout
+            .iter()
+            .map(|r| r.y + r.height)
+            .max()
+            .unwrap_or(0);
+        let content = self.geometry.content_rect();
+        if self.layout.is_empty() || (window_w >= content.width && window_h >= content.height) {
             return;
-        };
-        for &(row, from, to) in &self.overlay_highlights {
-            if row >= height {
-                continue;
-            }
-            for col in from..to.min(inner) {
-                let cell = &mut self.buffer[((x0 + 1 + col) as u16, (y0 + 1 + row) as u16)];
-                let style = cell.style().add_modifier(RtModifier::REVERSED);
-                cell.set_style(style);
-            }
         }
-    }
-
-    pub(super) fn paint_overlay(
-        &mut self,
-        title: &str,
-        rows: &[HelpRow],
-        scroll: Option<(usize, usize, usize)>,
-    ) {
-        let accent_style = RtStyle::default()
-            .fg(self.accent())
-            .add_modifier(RtModifier::BOLD);
-        // The box: the widest row clamped so the ring fits, centered or
-        // anchored — the same geometry every overlay hit-test reads.
-        let Some((x0, y0, inner, height)) = self.overlay_geometry() else {
-            return;
-        };
-        // Fill every cell of the box with the theme background first.
-        for y in y0..y0 + height + 2 {
-            for x in x0..x0 + inner + 2 {
-                let cell = &mut self.buffer[(x as u16, y as u16)];
-                cell.reset();
-                if let Some(bg) = self.bg {
-                    cell.set_bg(bg);
-                }
-            }
+        let mut style = RtStyle::default().add_modifier(ratatui::style::Modifier::DIM);
+        if let Some(bg) = self.bg {
+            style = style.bg(bg);
         }
-        // Border ring in the accent color (ASCII fallback: `+` corners).
-        let mut ring = |x: usize, y: usize, symbol: &str| {
-            let cell = &mut self.buffer[(x as u16, y as u16)];
-            cell.set_symbol(symbol);
-            cell.set_style(accent_style);
-        };
-        for x in x0 + 1..x0 + inner + 1 {
-            ring(x, y0, self.glyphs.horizontal());
-            ring(x, y0 + height + 1, self.glyphs.horizontal());
-        }
-        for y in y0 + 1..y0 + height + 1 {
-            ring(x0, y, self.glyphs.vertical());
-            ring(x0 + inner + 1, y, self.glyphs.vertical());
-        }
-        ring(x0, y0, self.glyphs.corner_top_left());
-        ring(x0 + inner + 1, y0, self.glyphs.corner_top_right());
-        ring(x0, y0 + height + 1, self.glyphs.corner_bottom_left());
-        ring(
-            x0 + inner + 1,
-            y0 + height + 1,
-            self.glyphs.corner_bottom_right(),
-        );
-        // Title and badge embedded in the top border (herdr's label
-        // treatment): `keybinds` after the top-left corner, `esc close`
-        // flush right before the top-right corner. Both accent.
-        let mut embed = |text: &str, start: usize| {
-            for (j, ch) in text.chars().enumerate() {
-                let x = start + j;
-                if x > x0 + inner {
-                    break;
-                }
-                let cell = &mut self.buffer[(x as u16, y0 as u16)];
-                cell.set_symbol(&ch.to_string());
-                cell.set_style(accent_style);
-            }
-        };
-        embed(title, x0 + 1);
-        let badge = " esc close ";
-        let badge_start = x0 + 1 + inner - badge.chars().count().min(inner);
-        embed(badge, badge_start);
-        // Content rows: accent rows (category headers) in the accent
-        // color, footer rows on a dark-grey band across the inner width,
-        // the rest in the default foreground on the theme bg.
-        for (i, row) in rows.iter().take(height).enumerate() {
-            if row.footer {
-                let band = RtStyle::default().bg(RtColor::Rgb(64, 64, 64));
-                for x in x0 + 1..x0 + inner + 1 {
-                    let cell = &mut self.buffer[(x as u16, (y0 + 1 + i) as u16)];
-                    cell.reset();
-                    cell.set_style(band);
-                }
-            }
-            // A wide (CJK) glyph takes two columns; the next glyph starts
-            // past its right half.
-            let mut j = 0;
-            for ch in row.text.chars() {
-                let width = crate::mux::attach::text_input::char_width(ch);
-                if width == 0 {
+        for row in 0..content.height {
+            for col in 0..content.width {
+                if col < window_w && row < window_h {
                     continue;
                 }
-                if j + width > inner {
-                    break;
+                let (x, y) = self.geometry.content_to_frame(col, row);
+                if x >= self.width || y >= self.height {
+                    continue;
                 }
-                let cell = &mut self.buffer[((x0 + 1 + j) as u16, (y0 + 1 + i) as u16)];
-                j += width;
-                cell.set_symbol(&ch.to_string());
-                if row.accent {
-                    cell.set_style(accent_style);
-                } else if row.footer {
-                    let band = RtStyle::default().bg(RtColor::Rgb(64, 64, 64));
-                    cell.set_style(band);
-                }
-            }
-        }
-        // The overflow scrollbar: a thumb on the ring's right column,
-        // sized and positioned from the panel's scroll state — nothing
-        // painted while the content fits.
-        if let Some((start, visible, total)) = scroll {
-            if total > visible && visible > 0 {
-                let track = height;
-                let thumb_len = (track * visible / total).max(1);
-                let max_start = total.saturating_sub(visible).max(1);
-                let thumb_pos = y0 + 1 + start.min(max_start) * (track - thumb_len) / max_start;
-                for y in thumb_pos..thumb_pos + thumb_len {
-                    let cell = &mut self.buffer[((x0 + inner + 1) as u16, y as u16)];
-                    cell.set_symbol("┃");
-                    cell.set_style(accent_style);
-                }
+                let cell = &mut self.buffer[(x, y)];
+                cell.reset();
+                cell.set_symbol(".");
+                cell.set_style(style);
             }
         }
     }

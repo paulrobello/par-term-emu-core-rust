@@ -1,10 +1,7 @@
 //! The pane renderer's state: layout, focus, emulators, titles, scroll, display
 //! options, and the frame orchestrator.
 
-use super::{
-    DividerHit, Glyphs, Overlay, OverlayAnchor, PaneChrome, PaneEmulator, PaneRect, PaneRenderer,
-};
-use par_term_emu_core::cursor::CursorStyle;
+use super::{DividerHit, Glyphs, PaneChrome, PaneEmulator, PaneRect, PaneRenderer};
 use par_term_emu_core::terminal::Terminal;
 use ratatui::buffer::{Buffer, Cell as RtCell};
 use ratatui::layout::Rect as RtRect;
@@ -342,149 +339,6 @@ impl PaneRenderer {
         }
     }
 
-    /// The painted overlay's geometry (the same math `paint_overlay`
-    /// runs): `(x0, y0, inner_width, height)` while one is up — the read
-    /// the picker's click hit-test makes.
-    pub(crate) fn overlay_geometry(&self) -> Option<(usize, usize, usize, usize)> {
-        let rows = &self.overlay.as_ref()?.1;
-        let inner = rows
-            .iter()
-            .map(|r| crate::mux::attach::text_input::display_width(&r.text))
-            .max()
-            .unwrap_or(0)
-            .min(self.width.saturating_sub(2) as usize)
-            .max(1);
-        let height = rows
-            .len()
-            .min(self.height.saturating_sub(2) as usize)
-            .max(1);
-        let (x0, y0) = match self.overlay_anchor {
-            // Anchored: the box's left ring at the anchor column, pulled
-            // back inside the frame when it would overflow. `Above`
-            // (the command menu beside its chip) puts the bottom ring on
-            // the anchor row — the box opens upward; `Below` (the tab
-            // menu under its tab) puts the top ring on the anchor row —
-            // it opens downward, clamped back up when the rows below
-            // cannot hold it.
-            Some(anchor) => {
-                let (ax, ay, below) = match anchor {
-                    OverlayAnchor::Above(ax, ay) => (usize::from(ax), usize::from(ay), false),
-                    OverlayAnchor::Below(ax, ay) => (usize::from(ax), usize::from(ay), true),
-                };
-                let w = inner + 2;
-                let h = height + 2;
-                let x0 = ax.min((self.width as usize).saturating_sub(w));
-                let y0 = if below {
-                    ay.min((self.height as usize).saturating_sub(h))
-                } else {
-                    (ay + 1)
-                        .saturating_sub(h)
-                        .min((self.height as usize).saturating_sub(h))
-                };
-                (x0, y0)
-            }
-            None => (
-                (self.width as usize).saturating_sub(inner + 2) / 2,
-                (self.height as usize).saturating_sub(height + 2) / 2,
-            ),
-        };
-        Some((x0, y0, inner, height))
-    }
-
-    /// Whether HOST cell `(x, y)` lies on the overlay's box, ring
-    /// included.
-    pub(crate) fn overlay_contains(&self, x: u16, y: u16) -> bool {
-        let Some((x0, y0, inner, height)) = self.overlay_geometry() else {
-            return false;
-        };
-        let Some((_, frame_y)) = self.geometry.host_to_frame(0, y) else {
-            return false;
-        };
-        let (x, frame_y) = (usize::from(x), usize::from(frame_y));
-        x >= x0 && x <= x0 + inner + 1 && frame_y >= y0 && frame_y <= y0 + height + 1
-    }
-
-    /// Anchor the NEXT overlay instead of centering it:
-    /// [`OverlayAnchor::Above`] hangs the box's bottom ring on the
-    /// anchor row, [`OverlayAnchor::Below`] its top ring; a new overlay
-    /// without an anchor clears it.
-    pub(crate) fn set_overlay_anchor(&mut self, anchor: Option<OverlayAnchor>) {
-        if self.overlay_anchor != anchor {
-            self.overlay_anchor = anchor;
-            self.dirty = true;
-        }
-    }
-
-    /// The command menu chip's frame cell `(x_end, y)`: the column just
-    /// right of the chip and its row — wrap it in
-    /// [`OverlayAnchor::Above`] where the command menu anchors.
-    pub(crate) fn sidebar_menu_chip_anchor(&self) -> Option<(u16, u16)> {
-        self.sidebar_lines()
-            .into_iter()
-            .find(|line| line.id == Some(crate::mux::attach::panels::SidebarRowId::Menu))
-            .map(|line| (line.x_end, line.y))
-    }
-
-    /// The overlay's composed panel row (index into the panel's rows:
-    /// 0 is the filter line, the last the footer) at window-relative
-    /// `(x, y)`, or `None` when no overlay is up or the point is off the
-    /// box.
-    pub(crate) fn overlay_row_at(&self, x: u16, y: u16) -> Option<usize> {
-        let (x0, y0, inner, height) = self.overlay_geometry()?;
-        let x = usize::from(x);
-        if x < x0 + 1 || x > x0 + inner {
-            return None;
-        }
-        // The overlay paints at buffer rows y0..y0+height+1 (its top
-        // border at y0, panel row r at y0+1+r); the host row maps into
-        // the buffer through the geometry's strip rebase. The old mapping
-        // dropped that rebase and read every click one row low (the
-        // manual-pass round-8 report: menu actions fired the neighbor).
-        let (_, frame_y) = self.geometry.host_to_frame(0, y)?;
-        let frame_y = usize::from(frame_y);
-        if frame_y < y0 + 1 || frame_y > y0 + height {
-            return None;
-        }
-        Some(frame_y - y0 - 1)
-    }
-
-    /// Set (or clear) the modal overlay's title, rows, and scroll state.
-    /// The overlay paints as the themed modal over the frame; clearing it
-    /// lets the next frame's pane repaint restore the covered cells.
-    pub(crate) fn set_overlay(&mut self, overlay: Option<Overlay>) {
-        let same = match (&self.overlay, &overlay) {
-            (Some((a, ra, sa)), Some((b, rb, sb))) => a == b && ra == rb && sa == sb,
-            (None, None) => true,
-            _ => false,
-        };
-        if !same {
-            if overlay.is_none() {
-                self.overlay_anchor = None;
-            }
-            self.overlay = overlay;
-            self.overlay_highlights.clear();
-            self.dirty = true;
-        }
-    }
-
-    /// Highlight spans `(row, from, to)` in the overlay's inner columns,
-    /// painted reversed (the settings dialog's tab and selection). A new
-    /// overlay clears them.
-    pub(crate) fn set_overlay_highlights(&mut self, highlights: Vec<(usize, usize, usize)>) {
-        if self.overlay_highlights != highlights {
-            self.overlay_highlights = highlights;
-            self.dirty = true;
-        }
-    }
-
-    /// The overlay's inner column at window-relative `x`, while one is up
-    /// and `x` is inside its box.
-    pub(crate) fn overlay_col_at(&self, x: u16) -> Option<usize> {
-        let (x0, _, inner, _) = self.overlay_geometry()?;
-        let x = usize::from(x);
-        (x > x0 && x <= x0 + inner).then(|| x - x0 - 1)
-    }
-
     /// Swap the divider/border glyph set (the border-cycle chord and
     /// the `border-lines` config): the frame marks dirty so the
     /// dividers and pane boxes repaint at the new glyphs.
@@ -559,69 +413,6 @@ impl PaneRenderer {
             }
         }
         None
-    }
-
-    /// The terminal cursor position for the focused pane, mapped through
-    /// its rect origin and the client scroll offset: `Some((x, y, style))`
-    /// where `(x, y)` is the window-relative cell to place the host
-    /// cursor at. `None` — the cursor hides — when nothing is focused,
-    /// the pane's emulator tracks a hidden cursor (DECTCEM), the client
-    /// view is scrolled off live (the wheel/prefix-[ viewport: the live
-    /// cell is not on screen), or the tracked cell is somehow outside
-    /// the pane's rect.
-    ///
-    /// The style is the pane's tracked DECSCUSR shape, for the sink to
-    /// re-emit (`CSI Ps SP q`).
-    pub fn focused_cursor(&self) -> Option<(u16, u16, CursorStyle)> {
-        self.focused_cell(true)
-    }
-
-    /// Where the host cursor PARKS while the focused pane hides its
-    /// cursor (DECTCEM off): the same tracked cell as
-    /// [`Self::focused_cursor`], minus the visibility test. The host
-    /// terminal anchors IME preedit and the candidate window at its
-    /// cursor even when hidden, so a TUI that paints its own cursor
-    /// (agent CLIs) keeps the composition at the input line instead of
-    /// at whatever cell the last diff wrote. `None` for every other
-    /// hide reason (scrolled view, nothing focused, cell outside view).
-    pub fn focused_ime_anchor(&self) -> Option<(u16, u16)> {
-        self.focused_cell(false).map(|(x, y, _)| (x, y))
-    }
-
-    fn focused_cell(&self, require_visible: bool) -> Option<(u16, u16, CursorStyle)> {
-        let Some(focus) = self.focused else {
-            return super::trace_none(format_args!("no focused pane"));
-        };
-        let Some(rect) = self.layout.iter().find(|r| r.pane == focus) else {
-            return super::trace_none(format_args!("focused pane has no layout rect"));
-        };
-        let Some(emulator) = self.emulators.get(&focus) else {
-            return super::trace_none(format_args!("no emulator for focused pane"));
-        };
-        if emulator.scroll_offset() > 0 {
-            return super::trace_none(format_args!(
-                "view scrolled: offset {}",
-                emulator.scroll_offset()
-            ));
-        }
-        let cursor = emulator.terminal().cursor();
-        if require_visible && !cursor.visible {
-            return super::trace_none(format_args!("pane tracked cursor hidden by DECTCEM"));
-        }
-        let (col, row) = (cursor.col, cursor.row);
-        // The placement path shares the paint inset: with the per-pane
-        // border option the cursor maps inside the border ring, hidden
-        // when the tracked cell falls in the cropped perimeter band.
-        let (inset_x, inset_y, view_w, view_h) = self.content_view(rect);
-        if col >= usize::from(view_w) || row >= usize::from(view_h) {
-            return super::trace_none(format_args!(
-                "tracked cell ({col},{row}) outside content view {view_w}x{view_h}"
-            ));
-        }
-        let (x, y) = self
-            .geometry
-            .content_to_frame(rect.x + inset_x + col as u16, rect.y + inset_y + row as u16);
-        Some((x, y, cursor.style))
     }
 
     /// The rect the pane's chrome and content paint into: the layout
@@ -817,43 +608,6 @@ impl PaneRenderer {
     /// exactly one true here.
     pub fn needs_frame(&self) -> bool {
         self.dirty
-    }
-
-    /// Fill the content area past the window's extent with dim `.` cells
-    /// (tmux's padding): the daemon sizes a window to its smallest viewer,
-    /// so a larger client shows the window in its top-left corner and the
-    /// rest marks where the other client's screen ends.
-    fn paint_window_padding(&mut self) {
-        let window_w = self.layout.iter().map(|r| r.x + r.width).max().unwrap_or(0);
-        let window_h = self
-            .layout
-            .iter()
-            .map(|r| r.y + r.height)
-            .max()
-            .unwrap_or(0);
-        let content = self.geometry.content_rect();
-        if self.layout.is_empty() || (window_w >= content.width && window_h >= content.height) {
-            return;
-        }
-        let mut style = RtStyle::default().add_modifier(ratatui::style::Modifier::DIM);
-        if let Some(bg) = self.bg {
-            style = style.bg(bg);
-        }
-        for row in 0..content.height {
-            for col in 0..content.width {
-                if col < window_w && row < window_h {
-                    continue;
-                }
-                let (x, y) = self.geometry.content_to_frame(col, row);
-                if x >= self.width || y >= self.height {
-                    continue;
-                }
-                let cell = &mut self.buffer[(x, y)];
-                cell.reset();
-                cell.set_symbol(".");
-                cell.set_style(style);
-            }
-        }
     }
 
     /// The pane rect containing window-relative `(x, y)`, else `None`

@@ -43,6 +43,7 @@ mod modal_prompt;
 mod modal_settings;
 mod navigate;
 mod notify;
+mod overlay;
 mod paint;
 mod pane_chrome;
 mod pending_cmd;
