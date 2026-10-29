@@ -140,6 +140,13 @@ impl WindowSession {
                 let window = s.window.clone();
                 s.reseed_window(c, &window);
                 if let Some(new_pane) = new_pane {
+                    // A re-seed whose %layout-change lagged the drain
+                    // (fresh pane not installed yet) parks the fresh pane
+                    // for the async install — the same lagging-event race
+                    // the roster landing parks for.
+                    if !s.renderer.layout().iter().any(|r| r.pane == new_pane) {
+                        s.pending.layout_focus = Some(new_pane);
+                    }
                     s.renderer.focus(new_pane);
                     let _ = c.send_forget(&format!("select-pane -t %{new_pane}"));
                 }
@@ -513,6 +520,9 @@ impl WindowSession {
         {
             return;
         }
+        // This click supersedes any parked landing focus: a parked value
+        // that outlived its layout install must not yank focus back later.
+        self.pending.layout_focus = None;
         // The row's highlight is client-local (`renderer.focused()`):
         // move it now and rebuild the panel from the cache, so the
         // clicked row lights on this frame instead of waiting for the
@@ -1002,6 +1012,7 @@ impl WindowSession {
             self.leave_scroll_mode();
         }
         let (layout_event, race) = self.drain_around_layout(conn);
+        let drain_installed = layout_event.is_some();
         if let Some((l, v, f)) = layout_event {
             self.zoomed = f.contains('Z');
             if let Ok(layout) = layout::parse_layout_triple(&l, &v, &f) {
@@ -1050,6 +1061,15 @@ impl WindowSession {
         self.chrome.tab_strip.reset_scroll();
         self.draw_tab_strip();
         self.pending.clear_view_work();
+        // A landing whose %layout-change lagged the drain (the event not
+        // queued at drain time) parks its clicked pane as the async
+        // install's focus: without it the install falls back to the
+        // window's first pane (the multi-pane-tab roster report). A drain
+        // hit installed already, and an ordinary reseed (focus=None)
+        // clears any stale park.
+        if !drain_installed {
+            self.pending.layout_focus = focus;
+        }
         true
     }
 }

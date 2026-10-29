@@ -1273,6 +1273,11 @@ struct PendingWork {
     /// A `%config-changed` arrived: re-read the file and re-apply the
     /// `[client]` settings (a burst collapses into one re-read).
     config_changed: bool,
+    /// A landing's clicked pane, parked when the switched-to window's
+    /// `%layout-change` lags the landing: the async install (step 2)
+    /// re-focuses it after applying the layout, so a roster click on a
+    /// multi-pane tab does not fall to the window's first pane.
+    layout_focus: Option<u32>,
 }
 
 impl PendingWork {
@@ -1283,6 +1288,9 @@ impl PendingWork {
         self.layout = None;
         self.follow_window = None;
         self.follow_session = None;
+        // A parked focus belongs to the view the last landing created; a
+        // reseed replaces that view.
+        self.layout_focus = None;
     }
 }
 
@@ -1659,8 +1667,16 @@ impl WindowSession {
             // `%output` after it feeds normally at the new size: no race
             // list, only the panes new to the renderer replay (ENH-044).
             self.daemon_layout = layout.clone();
+            // A landing that parked its clicked pane (the %layout-change
+            // lagged the landing's drain) re-focuses it here: the install
+            // itself falls back to the first pane, the multi-pane-tab
+            // roster report.
+            let focus_after = self.pending.layout_focus.take();
             let replay = self.install_layout(layout, &[]);
             self.replay_panes(conn, &replay);
+            if let Some(p) = focus_after {
+                self.renderer.focus(p);
+            }
         }
         if let Some(window) = self.pending.follow_window.take() {
             if window != self.window {

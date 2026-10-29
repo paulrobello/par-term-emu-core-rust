@@ -5988,6 +5988,87 @@ fn focus_pane_on_the_shown_window_does_not_land() {
     assert!(session.status_dirty, "the highlight repaint is scheduled");
 }
 
+/// The landing's focus survives a LAGGING `%layout-change`: when the
+/// switched-to window's layout event arrives after the landing — not
+/// queued at the drain — the async install used to reset the focus to
+/// the window's first pane, landing the roster click on the wrong pane
+/// whenever the target tab hosts more than one. The landing parks the
+/// clicked pane as the async install's focus (the drain case is the
+/// cross-window test above).
+#[test]
+fn focus_pane_landing_focus_survives_a_lagging_layout_event() {
+    let layout = "0000,80x23,0,0{40x23,0,0,5,40x23,40,0,6}";
+    let mut replies = std::collections::HashMap::new();
+    replies.insert("pane-info -t %6".to_string(), "%6 @1 40x23".to_string());
+    reseed_replies(&mut replies, "@0 main\n@1 * other", "@1", "%5\n%6");
+    // No `notify`: the %layout-change lags the landing, riding the pump
+    // stream after the re-seed has already set `window`.
+    let (_rx, mut conn, mut session) = two_pane_session(
+        "roster-lagging-layout",
+        FakeScript {
+            replies,
+            ..FakeScript::default()
+        },
+    );
+    session.focus_pane(&mut conn, 6);
+    settle(&mut session, &mut conn);
+    assert_eq!(session.window, "@1", "the view landed on the pane's window");
+    session.handle_event(TmuxNotification::LayoutChange {
+        window_id: "@1".to_string(),
+        window_layout: layout.to_string(),
+        window_visible_layout: layout.to_string(),
+        window_raw_flags: "*".to_string(),
+    });
+    session
+        .apply_pending(&mut conn, &mut RecordingSink::default())
+        .expect("apply pending");
+    assert_eq!(
+        session.renderer.focused(),
+        Some(6),
+        "the async layout install keeps the clicked pane focused"
+    );
+}
+
+/// A split whose `%layout-change` lags the re-seed keeps the fresh pane
+/// focused: the split continuation parks it for the async install when
+/// the fresh pane is not installed yet — the same lagging-event race
+/// the roster landing parks for.
+#[test]
+fn split_focus_survives_a_lagging_layout_event() {
+    let three_pane = "0000,80x23,0,0{20x23,0,0,1,20x23,20,0,3,40x23,40,0,2}";
+    let mut replies = std::collections::HashMap::new();
+    replies.insert("split-window -t %1 -h".to_string(), "%3".to_string());
+    reseed_replies(&mut replies, "@0 * main", "@0", "%1\n%2\n%3");
+    let (_rx, mut conn, mut session) = two_pane_session(
+        "split-lagging-layout",
+        FakeScript {
+            replies,
+            ..FakeScript::default()
+        },
+    );
+    chord(&mut session, &mut conn, b'%');
+    assert_eq!(session.window, "@0");
+    assert_ne!(
+        session.renderer.focused(),
+        Some(3),
+        "pre-condition: the fresh pane is not installed yet (the layout event lags)"
+    );
+    session.handle_event(TmuxNotification::LayoutChange {
+        window_id: "@0".to_string(),
+        window_layout: three_pane.to_string(),
+        window_visible_layout: three_pane.to_string(),
+        window_raw_flags: "*".to_string(),
+    });
+    session
+        .apply_pending(&mut conn, &mut RecordingSink::default())
+        .expect("apply pending");
+    assert_eq!(
+        session.renderer.focused(),
+        Some(3),
+        "the async install re-focuses the fresh split pane"
+    );
+}
+
 /// A refused `select-pane` (the pane is gone) ends the click silently:
 /// no `pane-info`, no landing, no busy flash (ARC-141's early return;
 /// the timed-out case is `focus_pane_chain_stops_at_the_first_timeout`).
