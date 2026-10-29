@@ -54,7 +54,7 @@ flate2 = "1.1.9"
 image = { version = "0.25.10", default-features = false, features = ["bmp", "ff", "gif", "ico", "jpeg", "png", "pnm", "qoi", "tga", "tiff", "webp", "color_quant"] }
 # Optional (ARC-043): only the `screenshot` feature shapes text.
 swash = { version = "0.2.7", optional = true }
-parking_lot = "0.12.5"
+parking_lot = "0.13"
 unicode-segmentation = "1.13.3"
 unicode-normalization = "0.1.25"
 lru = "0.18.0"

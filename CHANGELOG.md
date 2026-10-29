@@ -7,6 +7,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+- **parking_lot 0.12.5 → 0.13** (lock_api 0.4 → 0.5; root `Cargo.toml`, `crates/par-mux/Cargo.toml`, `crates/par-term-emu-core/Cargo.toml`): unblocks par-term crossing to parking_lot 0.13 — its workspace bump hit E0308 against core's exported `Arc<parking_lot::RwLock<Terminal>>` (kanban 01a184c8, filed from par-term's update-packages sweep). No source changes; tokio's own internal parking_lot 0.12 dependency stays in-tree independently and crosses no API boundary. The release carrying it rides the next release cut.
+
 ### Added
 - **streaming: env-gated OpenTelemetry OTLP metrics for the streamer** (`crates/…/src/streaming/metrics.rs` + `otel.rs`/`stub.rs`, `Cargo.toml`, `src/bin/streaming_server/{main.rs,cli.rs}`, `benches/streaming_otel.rs`, `Makefile`, `docs/{STREAMING,CONFIG_REFERENCE}.md`): the `par-term-streamer` health series par-obs wants as a Grafana panel row — connected clients, active sessions, event-send and protobuf-encode latency histograms, connections/reconnects counters (a reconnect = connect to a session whose previous client left within 5 minutes), and mux control-socket errors — recorded through a no-op stub unless the new opt-in `otel` cargo feature is compiled, and silent (zero OTLP calls) unless `--otel-enabled`/`PAR_TERM_STREAMER_OTEL_ENABLED` is set. Default builds carry zero OpenTelemetry code (`make otel-check`, new in `checkall`, pins both directions), the opentelemetry/sdk/otlp trio is pinned at 0.33 lockstep (`cargo tree -d` clean), and the series are pinned by an in-memory-exporter unit test. See [STREAMING.md → OpenTelemetry Metrics](docs/STREAMING.md#opentelemetry-metrics).
 

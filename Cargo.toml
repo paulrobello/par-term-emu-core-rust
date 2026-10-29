@@ -141,7 +141,7 @@ opentelemetry-otlp = { version = "0.33", default-features = false, features = [
     "reqwest-rustls",
 ], optional = true }
 
-parking_lot = "0.12.5"
+parking_lot = "0.13"
 # Streaming-only: constant-time credential compares and zeroizing drops
 # (src/streaming/config.rs, auth paths). Optional so headless profiles
 # (sim/rust-only/mux) pull neither.
