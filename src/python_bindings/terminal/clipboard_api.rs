@@ -588,7 +588,7 @@ impl PyTerminalClipboard {
         label: Option<String>,
     ) -> PyResult<()> {
         self.terminal
-            .borrow_mut(py)
+            .try_borrow_mut(py)?
             .add_to_clipboard_history(slot, content, label)
     }
 
@@ -615,7 +615,7 @@ impl PyTerminalClipboard {
         py: Python<'_>,
         slot: &str,
     ) -> PyResult<Vec<crate::python_bindings::types::PyClipboardEntry>> {
-        self.terminal.borrow(py).get_clipboard_history(slot)
+        self.terminal.try_borrow(py)?.get_clipboard_history(slot)
     }
 
     /// Get the most recent entry for a slot
@@ -641,7 +641,7 @@ impl PyTerminalClipboard {
         py: Python<'_>,
         slot: &str,
     ) -> PyResult<Option<crate::python_bindings::types::PyClipboardEntry>> {
-        self.terminal.borrow(py).get_latest_clipboard(slot)
+        self.terminal.try_borrow(py)?.get_latest_clipboard(slot)
     }
 
     /// Clear one slot's history, or every slot's when `slot` is None
@@ -662,7 +662,7 @@ impl PyTerminalClipboard {
     ///     ```
     #[pyo3(signature = (slot=None))]
     fn clear(&self, py: Python<'_>, slot: Option<&str>) -> PyResult<()> {
-        let mut term = self.terminal.borrow_mut(py);
+        let mut term = self.terminal.try_borrow_mut(py)?;
         match slot {
             Some(slot) => term.clear_clipboard_history(slot),
             None => term.clear_all_clipboard_history(),
@@ -688,7 +688,7 @@ impl PyTerminalClipboard {
     #[pyo3(signature = (content, slot=None))]
     fn set(&self, py: Python<'_>, content: String, slot: Option<String>) -> PyResult<()> {
         self.terminal
-            .borrow_mut(py)
+            .try_borrow_mut(py)?
             .set_clipboard_with_slot(content, slot)
     }
 
@@ -712,7 +712,7 @@ impl PyTerminalClipboard {
     ///     ```
     #[pyo3(signature = (slot=None))]
     fn get(&self, py: Python<'_>, slot: Option<String>) -> PyResult<Option<String>> {
-        self.terminal.borrow(py).get_clipboard_from_slot(slot)
+        self.terminal.try_borrow(py)?.get_clipboard_from_slot(slot)
     }
 
     /// Search history for entries containing a substring
@@ -742,7 +742,7 @@ impl PyTerminalClipboard {
         slot: Option<String>,
     ) -> PyResult<Vec<crate::python_bindings::types::PyClipboardEntry>> {
         self.terminal
-            .borrow(py)
+            .try_borrow(py)?
             .search_clipboard_history(query, slot)
     }
 }
