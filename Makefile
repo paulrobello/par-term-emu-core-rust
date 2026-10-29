@@ -251,9 +251,10 @@ xcframework:
 # macOS only: the Par-mux.app TCC wrapper (crates/par-mux/app/) — a launcher
 # that fires the Screen Recording / Accessibility / Microphone / Local Network
 # prompts and execs the daemon in-process, so pane children inherit the
-# bundle's grants. Deliberately does NOT install: every TCC grant binds to the
-# bundle's adhoc signature, so copying over a granted /Applications/Par-mux.app
-# can void the grants (docs/MUX.md "macOS app bundle"). Not part of checkall.
+# bundle's grants. Deliberately does NOT install: TCC grants bind to the
+# bundle's designated requirement — stable across rebuilds under the Developer
+# ID identity, voided by every rebuild when the ad-hoc fallback signs it
+# (docs/MUX.md "macOS app bundle"). Not part of checkall.
 app:
 	mkdir -p build/Par-mux.app/Contents/MacOS build/Par-mux.app/Contents/Resources
 	cc -O2 -o build/Par-mux.app/Contents/MacOS/Par-mux \
