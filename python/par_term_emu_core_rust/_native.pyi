@@ -5572,7 +5572,7 @@ class Terminal:
         Args:
             key: Key code — a ``TERM_KEY_*``-style value: 1 for a character
                 key, or a functional-key code (9 Tab, 13 Enter, 27 Escape,
-                127 Backspace, 57428 Left … 57437 End, 57376..57387 F1..F12).
+                127 Backspace, 57428 Left … 57435 End, 57376..57387 F1..F12).
             modifiers: Bitfield — shift=1, alt=2, ctrl=4, super=8, hyper=16,
                 meta=32, plus the side-info bit alt_right=64 (the held Alt
                 key is the right one, selecting ``right_option``).
@@ -8519,11 +8519,12 @@ class Terminal:
 
         Args:
             kinds: Optional list of event kinds to receive (strings).
-                   Valid kinds: bell, title_changed, size_changed, mode_changed,
-                   graphics_added, hyperlink_added, dirty_region, cwd_changed,
-                   trigger_matched, user_var_changed, progress_bar_changed,
-                   badge_changed, shell_integration, zone_opened, zone_closed,
-                   zone_scrolled_out, environment_changed, remote_host_transition,
+                   Valid kinds: bell, title_changed, pointer_shape_changed,
+                   size_changed, mode_changed, graphics_added, hyperlink_added,
+                   dirty_region, cwd_changed, trigger_matched, user_var_changed,
+                   progress_bar_changed, badge_changed, shell_integration,
+                   zone_opened, zone_closed, zone_scrolled_out,
+                   environment_changed, remote_host_transition,
                    sub_shell_detected, file_transfer_started,
                    file_transfer_progress, file_transfer_completed,
                    file_transfer_failed, upload_requested, screen_cleared,
