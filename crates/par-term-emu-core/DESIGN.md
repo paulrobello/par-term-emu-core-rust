@@ -102,8 +102,8 @@ with no features compiles neither pyo3 nor swash nor portable-pty
 
 ## Version train
 
-- All members share the root's version (lockstep). `par-term-emu-core` is
-  `0.58.1` today. This is behavior, not tidiness: the XTVERSION/DA reply in
+- All members share the root's version (lockstep). This is behavior, not
+  tidiness: the XTVERSION/DA reply in
   `terminal/sequences/csi/report.rs` embeds `env!("CARGO_PKG_VERSION")`,
   which after the move is the member's version.
 - The root depends on the member with `path` + an exact `version = "=X.Y.Z"`
@@ -112,6 +112,11 @@ with no features compiles neither pyo3 nor swash nor portable-pty
   when `crates/par-term-emu-core/Cargo.toml`, the root version, or the root's
   dependency pin disagree. CLAUDE.md's version-sync list names the member
   manifest.
+- `make set-version VERSION=X.Y.Z` (`scripts/set_version_train.py`, ARC-009)
+  is the writer: it rewrites the five versions, the three exact pins, and
+  the workspace `Cargo.lock` entries in one step, writes nothing when any
+  site has drifted, and re-runs the core-version gate on the result.
+  `make version-train-check` (in `checkall`) self-tests it on a temp copy.
 - `par-term-emu-derive` keeps its independent version (unchanged).
 - **Publish order:** derive (if bumped) → `par-term-emu-core` → `par-mux`
   → root. crates.io strips `path`, so each dependency must exist on the

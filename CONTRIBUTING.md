@@ -98,11 +98,7 @@ Seeds live in `fuzz/corpus/<target>/*.seed` and are committed; everything else t
 
 ## Version Sync
 
-When bumping the project version, update all three files to the same value in one commit:
-
-1. `Cargo.toml` (`version = "X.Y.Z"`)
-2. `pyproject.toml` (`version = "X.Y.Z"`)
-3. `python/par_term_emu_core_rust/__init__.py` (`__version__ = "X.Y.Z"`)
+When bumping the project version, run `make set-version VERSION=X.Y.Z` and commit the result in one commit. It rewrites the whole lockstep train in one step: the versions in `Cargo.toml`, `pyproject.toml`, `python/par_term_emu_core_rust/__init__.py`, `crates/par-term-emu-core/Cargo.toml` and `crates/par-mux/Cargo.toml`, the three exact `=X.Y.Z` pins between them, and the matching `Cargo.lock` entries. It writes nothing if any site has drifted, and it never touches `derive/Cargo.toml`, which versions independently. `make core-version-check` and `make derive-version-check` verify the result. The full list is in CLAUDE.md's "Version Sync".
 
 Also update `CHANGELOG.md` and note breaking changes in both `CHANGELOG.md` and the README "What's New" section.
 

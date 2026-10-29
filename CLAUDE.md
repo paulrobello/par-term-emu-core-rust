@@ -273,7 +273,7 @@ Also update:
 
 ### Version and Python Binding Sync (CRITICAL)
 
-**Version Sync**: When bumping version, update ALL of these files to the same version:
+**Version Sync**: When bumping version, update ALL of these files to the same version. `make set-version VERSION=X.Y.Z` (`scripts/set_version_train.py`) rewrites every site below plus the three `Cargo.lock` workspace entries in one step and refuses (writing nothing) if any site has drifted; `derive/` is never touched:
 - `Cargo.toml` (the `version` key)
 - `pyproject.toml` (the `version` key)
 - `python/par_term_emu_core_rust/__init__.py` (`__version__ = "X.Y.Z"`)
