@@ -528,6 +528,41 @@ fn theme_spelling(name: &str) -> String {
     crate::mux::theme::canonical(name).map_or_else(|| name.to_string(), str::to_string)
 }
 
+/// Reads one chord's bound byte out of [`Management`].
+type ChordGetter = fn(&Management) -> u8;
+
+/// Every management chord's `[client]` key and its [`Management`] field.
+const MANAGEMENT_CHORDS: &[(&str, ChordGetter)] = &[
+    ("split-right", |m| m.split_right),
+    ("split-down", |m| m.split_down),
+    ("kill-pane", |m| m.kill_pane),
+    ("break-pane", |m| m.break_pane),
+    ("join-pane", |m| m.join_pane),
+    ("palette", |m| m.palette),
+    ("new-window", |m| m.new_window),
+    ("resize", |m| m.resize),
+    ("swap-prev", |m| m.swap_prev),
+    ("move-window-left", |m| m.move_window_left),
+    ("move-window-right", |m| m.move_window_right),
+    ("tab-strip-left", |m| m.tab_strip_left),
+    ("tab-strip-right", |m| m.tab_strip_right),
+    ("swap-next", |m| m.swap_next),
+    ("workspace-next", |m| m.workspace_next),
+    ("workspace-prev", |m| m.workspace_prev),
+    ("help", |m| m.help),
+    ("picker", |m| m.picker),
+    ("zoom", |m| m.zoom),
+    ("rename-window", |m| m.rename_window),
+    ("rename-pane", |m| m.rename_pane),
+    ("border-cycle", |m| m.border_cycle),
+    ("label-toggle", |m| m.label_toggle),
+    ("workspace-picker", |m| m.workspace_picker),
+    ("sidebar", |m| m.sidebar),
+    ("status-bar", |m| m.status_bar),
+    ("respawn", |m| m.respawn),
+    ("notify-jump", |m| m.notify_jump),
+];
+
 /// One row's current value: what the row displays and what Enter acts on.
 #[derive(Debug, Clone, PartialEq, Eq)]
 enum FieldVal {
@@ -544,8 +579,31 @@ impl SettingsValues {
     /// The value in force for `key` (`file_mode` covers `mode`, which
     /// has no live mirror).
     fn field(&self, key: &str, file_mode: &str) -> FieldVal {
-        let m = &self.management;
+        self.chord_field(key)
+            .or_else(|| self.option_field(key, file_mode))
+            .unwrap_or_else(|| FieldVal::Text(String::new()))
+    }
+
+    /// A chord row's value: the prefix, the reload chord (prefix + key),
+    /// or one of the [`MANAGEMENT_CHORDS`]. `None` for every other key.
+    fn chord_field(&self, key: &str) -> Option<FieldVal> {
         match key {
+            "prefix" => Some(FieldVal::Text(spell_key(self.prefix))),
+            "reload" => Some(FieldVal::Text(format!(
+                "{} {}",
+                spell_key(self.prefix),
+                spell_key(self.reload)
+            ))),
+            _ => MANAGEMENT_CHORDS
+                .iter()
+                .find(|(name, _)| *name == key)
+                .map(|(_, get)| FieldVal::Text(spell_key(get(&self.management)))),
+        }
+    }
+
+    /// A non-chord row's value. `None` for an unknown key.
+    fn option_field(&self, key: &str, file_mode: &str) -> Option<FieldVal> {
+        Some(match key {
             "sidebar-on-launch" => FieldVal::Bool(self.sidebar_on_launch),
             "sidebar-width" => FieldVal::Num(self.sidebar_width as u32),
             "git-poll-secs" => FieldVal::Num(u32::try_from(self.git_poll_secs).unwrap_or(600)),
@@ -582,42 +640,8 @@ impl SettingsValues {
             "sound-blocked" => FieldVal::Text(self.sound.blocked.clone()),
             "sound-mute" => FieldVal::Text(self.sound.mute.join(", ")),
             "sound-player" => FieldVal::Text(self.sound.player.clone()),
-            "prefix" => FieldVal::Text(spell_key(self.prefix)),
-            "reload" => FieldVal::Text(format!(
-                "{} {}",
-                spell_key(self.prefix),
-                spell_key(self.reload)
-            )),
-            "split-right" => FieldVal::Text(spell_key(m.split_right)),
-            "split-down" => FieldVal::Text(spell_key(m.split_down)),
-            "kill-pane" => FieldVal::Text(spell_key(m.kill_pane)),
-            "break-pane" => FieldVal::Text(spell_key(m.break_pane)),
-            "join-pane" => FieldVal::Text(spell_key(m.join_pane)),
-            "palette" => FieldVal::Text(spell_key(m.palette)),
-            "new-window" => FieldVal::Text(spell_key(m.new_window)),
-            "resize" => FieldVal::Text(spell_key(m.resize)),
-            "swap-prev" => FieldVal::Text(spell_key(m.swap_prev)),
-            "move-window-left" => FieldVal::Text(spell_key(m.move_window_left)),
-            "move-window-right" => FieldVal::Text(spell_key(m.move_window_right)),
-            "tab-strip-left" => FieldVal::Text(spell_key(m.tab_strip_left)),
-            "tab-strip-right" => FieldVal::Text(spell_key(m.tab_strip_right)),
-            "swap-next" => FieldVal::Text(spell_key(m.swap_next)),
-            "workspace-next" => FieldVal::Text(spell_key(m.workspace_next)),
-            "workspace-prev" => FieldVal::Text(spell_key(m.workspace_prev)),
-            "help" => FieldVal::Text(spell_key(m.help)),
-            "picker" => FieldVal::Text(spell_key(m.picker)),
-            "zoom" => FieldVal::Text(spell_key(m.zoom)),
-            "rename-window" => FieldVal::Text(spell_key(m.rename_window)),
-            "rename-pane" => FieldVal::Text(spell_key(m.rename_pane)),
-            "border-cycle" => FieldVal::Text(spell_key(m.border_cycle)),
-            "label-toggle" => FieldVal::Text(spell_key(m.label_toggle)),
-            "workspace-picker" => FieldVal::Text(spell_key(m.workspace_picker)),
-            "sidebar" => FieldVal::Text(spell_key(m.sidebar)),
-            "status-bar" => FieldVal::Text(spell_key(m.status_bar)),
-            "respawn" => FieldVal::Text(spell_key(m.respawn)),
-            "notify-jump" => FieldVal::Text(spell_key(m.notify_jump)),
-            _ => FieldVal::Text(String::new()),
-        }
+            _ => return None,
+        })
     }
 
     /// The preset name the live `agent-rows` matches (`custom` when it
@@ -1358,6 +1382,30 @@ mod tests {
             file_mode: "render".to_string(),
             popups: Vec::new(),
         }
+    }
+
+    /// Every keys-section row resolves to its bound chord: a key missing
+    /// from [`MANAGEMENT_CHORDS`] would fall through to the empty value
+    /// and paint as `built-in`.
+    #[test]
+    fn every_keys_row_resolves_to_a_bound_chord() {
+        let values = values();
+        for spec in SettingsSection::Keys.rows() {
+            assert!(
+                matches!(values.field(spec.key, "render"), FieldVal::Text(ref t) if !t.is_empty()),
+                "{} has no value",
+                spec.key
+            );
+        }
+        let m = Management::default();
+        assert_eq!(
+            values.field("split-right", "render"),
+            FieldVal::Text(spell_key(m.split_right))
+        );
+        assert_eq!(
+            values.field("notify-jump", "render"),
+            FieldVal::Text(spell_key(m.notify_jump))
+        );
     }
 
     /// The integrations tab's footer names its button: Enter (or `u`)
