@@ -14,6 +14,14 @@ impl PtySession {
         self.update_generation.load(Ordering::SeqCst)
     }
 
+    /// Epoch ms of the last processed output read, or 0 when none has been
+    /// processed yet. Stamped by the PTY reader thread on every read and by
+    /// [`PtySession::mark_updated`] for process-fed sessions — the liveness
+    /// signal the par-mux roster's `last_activity_at` reads.
+    pub fn last_output_epoch_ms(&self) -> u64 {
+        self.last_output_at.load(Ordering::Relaxed)
+    }
+
     /// Mark the session's content as updated from OUTSIDE the PTY reader
     /// thread — the generation bump + waiter wake the reader performs on
     /// every read. For a session with no child (par-mux panes fed via
@@ -21,6 +29,13 @@ impl PtySession {
     /// generation-keyed render cache would serve stale cells forever.
     pub fn mark_updated(&self) {
         self.update_generation.fetch_add(1, Ordering::SeqCst);
+        self.last_output_at.store(
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_millis() as u64,
+            Ordering::Relaxed,
+        );
         let _guard = self.update_signal.0.lock();
         self.update_signal.1.notify_all();
     }

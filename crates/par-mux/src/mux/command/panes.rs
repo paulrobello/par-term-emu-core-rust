@@ -26,6 +26,23 @@ pub(super) fn parse_list_agents(_a: &Args<'_>) -> Result<MuxCommand, String> {
     Ok(MuxCommand::ListAgents)
 }
 
+/// tmux's value-taking `events` flag (`--since`).
+pub(super) const EVENTS_VALUE_FLAGS: &[&str] = &["--since"];
+
+/// `events [--since <seq>]` — the replayable lifecycle ring read.
+pub(super) fn parse_events(a: &Args<'_>) -> Result<MuxCommand, String> {
+    let a = a.with_value_flags(EVENTS_VALUE_FLAGS);
+    let since =
+        match a.flag("--since") {
+            Some(raw) => Some(raw.parse::<u64>().map_err(|_| {
+                format!("{}: --since expects a sequence number, got {raw:?}", a.name)
+            })?),
+            None => None,
+        };
+    reject_positionals(&a, EVENTS_VALUE_FLAGS)?;
+    Ok(MuxCommand::Events { since })
+}
+
 pub(super) fn parse_client_snapshot(a: &Args<'_>) -> Result<MuxCommand, String> {
     let window = a.window("-t")?;
     reject_positionals(a, &["-t"])?;

@@ -132,6 +132,27 @@ pub(crate) fn broadcast_notification(clients: &Clients, notification: &TmuxNotif
     push_to_clients(clients, emit(notification));
 }
 
+/// Record the notification into the tree's replayable event ring, then
+/// broadcast it — the seam every lifecycle notification producer calls
+/// instead of [`broadcast_notification`]. Recording takes the tree lock
+/// briefly and releases it BEFORE the broadcast takes the clients lock, so
+/// the documented lock order (tree then clients) holds and no caller may
+/// hold the tree lock here (every current caller already releases it before
+/// broadcasting — the invariant the Registration doc cites).
+pub(crate) fn record_and_broadcast(
+    tree: &Arc<Mutex<MuxTree>>,
+    clients: &Clients,
+    notification: &TmuxNotification,
+) {
+    if crate::mux::events::wants(notification) {
+        let line = emit(notification);
+        if !line.is_empty() {
+            tree.lock().events.record_line(line.trim_end_matches('\n'));
+        }
+    }
+    broadcast_notification(clients, notification);
+}
+
 /// The daemon-wide output epoch: bumped once per `%output` fan-out
 /// BEFORE the push, so the pane-stream seed's race check can tell that a
 /// quiet pane stayed quiet (a bumped epoch means some pane produced

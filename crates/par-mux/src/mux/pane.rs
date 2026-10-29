@@ -154,6 +154,15 @@ impl From<PtyError> for MuxError {
 /// Default scrollback retained per pane.
 const DEFAULT_SCROLLBACK: usize = 10_000;
 
+/// Current time as epoch ms — the clock the roster's activity/staleness
+/// tokens share.
+pub(crate) fn now_epoch_ms() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_millis() as u64
+}
+
 /// One pane: a PTY, its terminal emulator, and its metadata.
 ///
 /// `metadata` is extension seam S2 — empty in the base server, and the place an
@@ -208,6 +217,11 @@ pub struct MuxPane {
     /// working→idle bounce between two polls still counts, and the seen
     /// flip (`done`→`idle`) never does. Ephemeral, never persisted.
     pub(crate) agent_activity: u64,
+    /// Epoch ms of the last accepted hook report (state, session, or
+    /// telemetry), 0 = none. The report half of the roster's
+    /// `last_activity_at` (output is the other half); the roster's
+    /// `last_report_at` token reads it directly. Ephemeral, never persisted.
+    last_report_at: u64,
     /// Last persistence snapshot, valid while the terminal has not changed
     /// since it was taken — see [`MuxPane::persisted_snapshot`]. Shared
     /// handle so a capture started under the tree lock can finish OFF it
@@ -570,6 +584,34 @@ impl MuxPane {
     pub(crate) fn set_agent_claim(&mut self, claim: &crate::mux::hooks::AgentClaim) {
         self.note_agent_state(claim.state.as_deref());
         claim.write_to_metadata(&mut self.metadata);
+    }
+
+    /// The last accepted hook report's epoch ms (0 = none). Written by every
+    /// accepted state, session, and telemetry report; read by the roster's
+    /// `last_report_at` and `last_activity_at` tokens.
+    pub(crate) fn last_report_at(&self) -> u64 {
+        self.last_report_at
+    }
+
+    /// Stamp the pane as hook-reported NOW — the accepted state, session,
+    /// and telemetry report paths all call this after their claim write.
+    pub(crate) fn note_report_now(&mut self) {
+        self.last_report_at = now_epoch_ms();
+    }
+
+    /// Overwrite the report stamp — the tests' way to fake an old report
+    /// without waiting five minutes.
+    #[cfg(test)]
+    pub(crate) fn set_last_report_at_for_test(&mut self, at_ms: u64) {
+        self.last_report_at = at_ms;
+    }
+
+    /// The pane's last activity, epoch ms (0 = none observed): the later of
+    /// the last processed PTY output read and the last accepted hook report.
+    /// The roster's `last_activity_at` token and the `stalled` derivation
+    /// both read this.
+    pub(crate) fn last_activity_at(&self) -> u64 {
+        self.last_report_at.max(self.session.last_output_epoch_ms())
     }
 
     /// Mutate the pane's existing agent claim in place. No-op on an
@@ -979,6 +1021,7 @@ impl ShellPaneFactory {
             host_telemetry: None,
             seq_by_source: HashMap::new(),
             agent_activity: 0,
+            last_report_at: 0,
             snapshot_cache: Arc::new(Mutex::new(None)),
             pane_endpoint,
         }

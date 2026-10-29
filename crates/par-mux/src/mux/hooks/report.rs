@@ -128,6 +128,9 @@ pub(super) fn handle_state_report(
             .map(|message| message.split_whitespace().collect::<Vec<_>>().join(" "));
         pane.set_agent_claim(&claim);
         record_seq(pane, header.source.as_deref(), header.seq);
+        // The report path is the `last_report_at` half of the roster's
+        // activity signal: an accepted report IS the agent's liveness.
+        pane.note_report_now();
 
         Some(TmuxNotification::AgentStateChanged {
             pane_id: header.pane_id.to_string(),
@@ -276,6 +279,9 @@ pub(super) fn handle_session_report(
         }
         pane.set_agent_claim(&claim);
         record_seq(pane, header.source.as_deref(), header.seq);
+        // Same activity stamp as a state report: identity refreshes are
+        // liveness too.
+        pane.note_report_now();
         needs_classify = claim.state.is_none();
 
         // The rebroadcast keeps the state's OWN provenance: a claude-shaped

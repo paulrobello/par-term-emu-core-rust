@@ -524,6 +524,12 @@ pub struct MuxTree {
     /// the scrape tick runs. `None` for embedders and tests, which fall
     /// back to [`crate::mux::scrape::ScrapeEngine::bundled`].
     pub(crate) scrape_engine: Option<Arc<crate::mux::scrape::ScrapeEngine>>,
+    /// The replayable lifecycle event ring (par-director's needs): every
+    /// broadcast lifecycle notification is recorded here under a
+    /// monotonically increasing sequence number, so a reconnecting client
+    /// replays what its disconnected interval dropped. In-memory only —
+    /// never persisted, cleared on restart. See [`crate::mux::events`].
+    pub(crate) events: crate::mux::events::EventRing,
 }
 
 impl MuxTree {
@@ -549,6 +555,7 @@ impl MuxTree {
             client_focus: HashMap::new(),
             pending_observer_batches: Vec::new(),
             scrape_engine: None,
+            events: crate::mux::events::EventRing::default(),
         }
     }
 

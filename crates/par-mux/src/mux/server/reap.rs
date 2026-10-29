@@ -163,7 +163,8 @@ pub(super) fn reap_dead_panes(
     }
     // The death notices first, queued ahead of any removal geometry.
     for &(pane_id, exit_code) in &just_died {
-        broadcast_notification(
+        record_and_broadcast(
+            tree,
             clients,
             &TmuxNotification::PaneExited {
                 pane_id: pane_id.to_string(),
@@ -176,7 +177,8 @@ pub(super) fn reap_dead_panes(
         match removal.surviving_active {
             Some(active) => {
                 broadcast_layout_change(tree, clients, removal.window_id);
-                broadcast_notification(
+                record_and_broadcast(
+                    tree,
                     clients,
                     &TmuxNotification::WindowPaneChanged {
                         window_id: removal.window_id.to_string(),
@@ -185,20 +187,21 @@ pub(super) fn reap_dead_panes(
                 );
             }
             None => {
-                broadcast_notification(
+                record_and_broadcast(
+                    tree,
                     clients,
                     &TmuxNotification::WindowClose {
                         window_id: removal.window_id.to_string(),
                     },
                 );
                 if removal.session_removed {
-                    broadcast_notification(clients, &TmuxNotification::SessionsChanged);
+                    record_and_broadcast(tree, clients, &TmuxNotification::SessionsChanged);
                 }
             }
         }
     }
     if workspaces_changed {
-        broadcast_notification(clients, &TmuxNotification::WorkspacesChanged);
+        record_and_broadcast(tree, clients, &TmuxNotification::WorkspacesChanged);
     }
     // In-place restarts, evaluated after the removals: keep-one-tab
     // restarts its last pane's STORED command (a Remove workspace's

@@ -89,7 +89,9 @@ par-mux --cmd list-panes        # "%N" lines, global
 par-mux --cmd "adopt-pane -t %N claude"   # label a hand-launched agent pane so the roster sees it
 par-mux --cmd list-agents       # agent roster: "%N <agent> <state> <source> [key=value…]"
                                 #   extras: reason=<base64> telemetry=<base64>
-                                #   host_telemetry=<base64> ws=+N — parse fields
+                                #   host_telemetry=<base64> ws=+N
+                                #   last_activity_at=<epoch-ms> last_report_at=<epoch-ms>
+                                #   stalled=1 (working, no activity for 5 min) — parse fields
                                 #   1-4 by position, split the rest on the first
                                 #   "=", ignore unknown keys
 par-mux --cmd list-commands     # every dispatchable command with feature tokens —

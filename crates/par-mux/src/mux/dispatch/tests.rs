@@ -575,6 +575,8 @@ fn roster_row_entry_encodes_the_reason_as_one_unambiguous_token() {
             reason: Some("waiting on telemetry=x hook"),
             telemetry: Some("dGVsZW1ldHJ5"),
             host_telemetry: Some("aG9zdA=="),
+            activity_at: 0,
+            report_at: 0,
         },
         String::new(),
     );
@@ -628,6 +630,8 @@ fn roster_row_entry_encodes_the_reason_as_one_unambiguous_token() {
                 reason: None,
                 telemetry: None,
                 host_telemetry: None,
+                activity_at: 0,
+                report_at: 0,
             },
             String::new()
         )
@@ -2922,4 +2926,80 @@ fn layout_verbs_serve_the_dispatch_layouts_dir() {
     let reply = run("kill-layout unit");
     assert!(!reply.contains("%error"), "kill-layout: {reply}");
     assert!(!saved.exists(), "kill-layout removed the file");
+}
+
+/// The reply block's body lines (framing stripped).
+fn body_lines_of(reply: &str) -> Vec<String> {
+    reply
+        .lines()
+        .filter(|l| {
+            !l.starts_with("%begin ") && !l.starts_with("%end ") && !l.starts_with("%error ")
+        })
+        .map(str::to_string)
+        .collect()
+}
+
+/// The event ring replays what a disconnected client missed: the
+/// lifecycle broadcasts a dispatch produces land in the ring under
+/// increasing sequence numbers, `events` returns `head` plus the wire
+/// lines, and `--since <head>` is the resume point (nothing new).
+#[test]
+fn the_event_ring_replays_lifecycle_lines_and_since_resumes() {
+    let f = Harness::new();
+    assert!(f.run("new-session -s ev").contains("%end"));
+
+    let first = body_lines_of(&f.run("events"));
+    assert!(first[0].starts_with("head "), "{first:?}");
+    let head: u64 = first[0]
+        .split_whitespace()
+        .nth(1)
+        .expect("head carries its number")
+        .parse()
+        .expect("head is a number");
+    assert!(
+        head >= 1,
+        "the spawn's window-add is in the ring: {first:?}"
+    );
+    assert!(
+        first[1..].iter().any(|l| l.contains("%window-add @")),
+        "each event line is <seq> <at-ms> <wire line>: {first:?}"
+    );
+    assert!(
+        first[1..].iter().all(|l| l.split_whitespace().count() >= 3),
+        "seq and timestamp prefix every wire line: {first:?}"
+    );
+
+    assert_eq!(
+        body_lines_of(&f.run(&format!("events --since {head}"))),
+        vec![format!("head {head}")],
+        "--since head is the resume point: nothing new"
+    );
+
+    // A later lifecycle broadcast records after head, and the full replay
+    // carries it.
+    assert!(f.run("rename-window -t ev renamed").contains("%end"));
+    let replay = body_lines_of(&f.run("events --since 0"));
+    assert!(
+        replay.iter().any(|l| l.contains("%window-renamed @")),
+        "the rename is recorded: {replay:?}"
+    );
+    assert!(
+        replay[0].starts_with("head ") && replay.len() > 2,
+        "the whole ring comes back with --since 0: {replay:?}"
+    );
+}
+
+/// `--since` past the head is legal and empty — a consumer that paused
+/// longer than the ring's capacity resyncs to the current head instead of
+/// erroring.
+#[test]
+fn events_since_past_the_head_is_an_empty_ok() {
+    let f = Harness::new();
+    let reply = f.run("events --since 999999");
+    assert!(reply.contains("%end"), "{reply}");
+    assert_eq!(
+        body_lines_of(&reply),
+        vec!["head 0"],
+        "an empty ring: {reply}"
+    );
 }

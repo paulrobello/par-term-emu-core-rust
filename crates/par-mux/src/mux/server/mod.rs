@@ -143,7 +143,7 @@ mod reap;
 use broadcast::*;
 pub(crate) use broadcast::{
     broadcast_layout_change, broadcast_notification, capture_range, layout_change_notification,
-    pane_output_sink, replay_pane_exited_lines, OutputEpoch,
+    pane_output_sink, record_and_broadcast, replay_pane_exited_lines, OutputEpoch,
 };
 use client::*;
 pub use endpoint::sweep_pane_endpoint_remnants;
@@ -658,7 +658,7 @@ fn run_cadence_loop(handles: &CadenceHandles) {
         crate::mux::plugins::reap_expired_hooks();
         if last_scrape.elapsed() >= SCRAPE_INTERVAL {
             for notification in crate::mux::scrape::scrape_tick(tree, engine) {
-                broadcast_notification(clients, &notification);
+                record_and_broadcast(tree, clients, &notification);
             }
             last_scrape = std::time::Instant::now();
         }

@@ -151,6 +151,12 @@ pub struct PtySession {
     cell_pixel_width: u16,
     cell_pixel_height: u16,
     update_generation: Arc<std::sync::atomic::AtomicU64>,
+    /// Epoch ms of the last processed PTY output read (0 = none yet). The
+    /// reader thread stamps it next to the generation bump and
+    /// [`PtySession::mark_updated`] stamps it for process-fed sessions, so
+    /// an embedder can tell a quiet-but-alive pane from one whose output
+    /// has stopped (the par-mux roster's staleness signal).
+    last_output_at: Arc<std::sync::atomic::AtomicU64>,
     /// Signalled by the reader thread once applied content is visible (the
     /// post-write-guard generation bump) and on EOF — what
     /// [`PtySession::wait_for_update`] blocks on instead of sleep-polling.
@@ -250,6 +256,7 @@ impl PtySession {
             cell_pixel_width: 10,
             cell_pixel_height: 20,
             update_generation: Arc::new(std::sync::atomic::AtomicU64::new(0)),
+            last_output_at: Arc::new(std::sync::atomic::AtomicU64::new(0)),
             update_signal: Arc::new((parking_lot::Mutex::new(()), parking_lot::Condvar::new())),
             reply_xtwinops: Arc::new(AtomicBool::new(reply_xtwinops)),
             geometry: Arc::new(GeometryMirror::default()),

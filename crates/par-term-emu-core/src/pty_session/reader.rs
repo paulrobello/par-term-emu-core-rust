@@ -98,6 +98,7 @@ impl PtySession {
         let terminal = Arc::clone(&self.terminal);
         let running = Arc::clone(&self.running);
         let update_generation = Arc::clone(&self.update_generation);
+        let last_output_at = Arc::clone(&self.last_output_at);
         let update_signal = Arc::clone(&self.update_signal);
         let reply_xtwinops = Arc::clone(&self.reply_xtwinops);
         let geometry = Arc::clone(&self.geometry);
@@ -128,6 +129,16 @@ impl PtySession {
                     }
                     Ok(n) => {
                         debug::log_pty_read(n);
+                        // The last-activity stamp: one relaxed store per read,
+                        // the clock the par-mux roster's staleness signal
+                        // reads. Same granularity as the generation bump.
+                        last_output_at.store(
+                            std::time::SystemTime::now()
+                                .duration_since(std::time::UNIX_EPOCH)
+                                .unwrap_or_default()
+                                .as_millis() as u64,
+                            Ordering::Relaxed,
+                        );
 
                         // Bump generation counter IMMEDIATELY on successful read,
                         // before any processing. This guarantees the counter always

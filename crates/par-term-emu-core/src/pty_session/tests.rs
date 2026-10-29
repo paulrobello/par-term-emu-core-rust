@@ -72,6 +72,25 @@ fn mark_updated_advances_generation_for_childless_sessions() {
     assert!(session.has_updates_since(before));
 }
 
+/// The last-activity stamp: 0 before any output, epoch ms after a
+/// process-fed update (the par-mux roster's `last_activity_at` reads it).
+#[test]
+fn last_output_epoch_ms_stamps_on_fed_updates() {
+    let session = new_test_session(80, 24, 1000);
+    assert_eq!(session.last_output_epoch_ms(), 0, "no output yet");
+    session.mark_updated();
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_millis() as u64;
+    let stamped = session.last_output_epoch_ms();
+    assert!(stamped > 0, "the update stamped a timestamp");
+    assert!(
+        now.saturating_sub(stamped) < 60_000,
+        "the stamp is current: {stamped} vs {now}"
+    );
+}
+
 #[test]
 fn test_with_terminal_accessors() {
     let session = new_test_session(80, 24, 1000);

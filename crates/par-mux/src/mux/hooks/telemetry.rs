@@ -122,6 +122,9 @@ pub(super) fn handle_telemetry_report(
     // never puts a pane on the roster.
     pane.set_metadata("agent", &header.agent);
     record_seq(pane, header.source.as_deref(), header.seq);
+    // The telemetry report path stamps the roster's `last_report_at` like
+    // the state and session report paths do.
+    pane.note_report_now();
     if let Some(source) = &header.source {
         pane.set_metadata("agent_source", source);
     }

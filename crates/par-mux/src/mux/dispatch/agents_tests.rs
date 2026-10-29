@@ -841,3 +841,93 @@ fn adopt_pane_without_a_matching_rule_reports_unknown_and_no_roster_row() {
         "no state, no roster row: {roster}"
     );
 }
+
+/// The roster's activity signal (par-director's card): an accepted hook
+/// report stamps `last_report_at`, the row carries `last_activity_at` (the
+/// later of report and pane output), and a `working` agent whose activity
+/// is five minutes stale derives `stalled=1` — a hung tool call is
+/// distinguishable from active work. The quiet fixture's `sleep` pane
+/// never produces output, so the faked report stamp is the whole activity
+/// signal and the stall is deterministic.
+#[test]
+fn the_roster_carries_activity_timestamps_and_derives_stalled() {
+    let f = Fixture::quiet();
+    f.report("claude", "working", 1);
+
+    let roster = f.run("list-agents");
+    let row = roster
+        .lines()
+        .find(|l| l.starts_with("%0 claude working hook"))
+        .expect("the reported pane is on the roster: {roster}");
+    let tokens = row
+        .split_whitespace()
+        .filter(|t| t.contains('='))
+        .map(|t| t.split_once('=').unwrap())
+        .collect::<Vec<_>>();
+    let token = |key: &str| {
+        tokens
+            .iter()
+            .find(|(k, _)| *k == key)
+            .map(|(_, v)| v.to_string())
+    };
+    let report_at: u64 = token("last_report_at")
+        .expect("the report stamped last_report_at")
+        .parse()
+        .expect("epoch ms");
+    let activity: u64 = token("last_activity_at")
+        .expect("activity is at least the report")
+        .parse()
+        .expect("epoch ms");
+    let now = crate::mux::pane::now_epoch_ms();
+    assert!(
+        now.saturating_sub(report_at) < 60_000,
+        "the stamp is current: {report_at} vs {now}"
+    );
+    assert!(
+        activity >= report_at,
+        "activity is the later of report and output: {activity} < {report_at}"
+    );
+    assert!(
+        token("stalled").is_none(),
+        "a freshly-reported working agent is not stalled: {row}"
+    );
+
+    // Fake the report six minutes old (the sleep pane produces no output,
+    // so the report stamp IS the activity): the derived flag flips on.
+    let stale = now.saturating_sub(6 * 60 * 1000);
+    f.tree
+        .lock()
+        .pane_mut(PANE)
+        .unwrap()
+        .set_last_report_at_for_test(stale);
+    let roster = f.run("list-agents");
+    let row = roster
+        .lines()
+        .find(|l| l.starts_with("%0 claude working hook"))
+        .expect("the pane is still on the roster: {roster}");
+    assert!(
+        row.split_whitespace().any(|t| t == "stalled=1"),
+        "five minutes of silence on a working agent reads stalled: {row}"
+    );
+    assert!(
+        row.contains(&format!("last_activity_at={stale}")),
+        "the activity timestamp surfaces: {row}"
+    );
+
+    // The state gate: the same silence on a `done` agent is not a stall.
+    f.report("claude", "done", 2);
+    f.tree
+        .lock()
+        .pane_mut(PANE)
+        .unwrap()
+        .set_last_report_at_for_test(stale);
+    let roster = f.run("list-agents");
+    let row = roster
+        .lines()
+        .find(|l| l.starts_with("%0 claude done hook"))
+        .expect("the done row: {roster}");
+    assert!(
+        !row.split_whitespace().any(|t| t == "stalled=1"),
+        "stalled derives only for working: {row}"
+    );
+}

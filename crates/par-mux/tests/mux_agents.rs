@@ -173,10 +173,16 @@ fn the_agent_arc_lives_and_dies_with_the_daemon() {
     }
 
     let roster = control.body_lines("list-agents");
-    assert_eq!(
-        roster,
-        vec![format!("{pane} kimi blocked hook ws=+0")],
-        "list-agents agrees with the last report, provenance + workspace included"
+    assert_eq!(roster.len(), 1, "one row: {roster:?}");
+    assert!(
+        roster[0].starts_with(&format!("{pane} kimi blocked hook ws=+0")),
+        "list-agents agrees with the last report, provenance + workspace included: {roster:?}"
+    );
+    // The activity tokens ride additively (par-director's card): the
+    // accepted reports stamped them.
+    assert!(
+        roster[0].contains(" last_activity_at=") && roster[0].contains(" last_report_at="),
+        "the activity timestamps surface: {roster:?}"
     );
 
     drop(control.0.shutdown(Shutdown::Both));
@@ -214,10 +220,10 @@ fn the_agent_arc_lives_and_dies_with_the_daemon() {
         "the pane itself survived the restart: {panes:?}"
     );
     let roster = control.body_lines("list-agents");
-    assert_eq!(
-        roster,
-        vec![format!("{pane} kimi blocked hook ws=+0")],
-        "the restored pane stays on the roster with its last-known state"
+    assert_eq!(roster.len(), 1, "one row: {roster:?}");
+    assert!(
+        roster[0].starts_with(&format!("{pane} kimi blocked hook ws=+0")),
+        "the restored pane stays on the roster with its last-known state: {roster:?}"
     );
 
     drop(control.0.shutdown(Shutdown::Both));
@@ -383,10 +389,16 @@ fn a_restart_relabels_an_adopted_pane_from_its_invocation() {
         "the restored pane rejoined the roster via its invocation",
     );
     let roster = control.body_lines("list-agents");
-    assert_eq!(
-        roster,
-        vec![row],
-        "the restored pane is re-labeled from its invocation and back on the roster"
+    assert_eq!(roster.len(), 1, "one row: {roster:?}");
+    assert!(
+        roster[0].starts_with(&row),
+        "the restored pane is re-labeled from its invocation and back on the roster: {roster:?}"
+    );
+    // A scrape claim never stamps the report clock (no hook reported), but
+    // the pane's own output feeds last_activity_at.
+    assert!(
+        roster[0].contains(" last_activity_at=") && !roster[0].contains(" last_report_at="),
+        "output-only activity, no report stamp: {roster:?}"
     );
 
     drop(control.0.shutdown(Shutdown::Both));
@@ -659,4 +671,109 @@ fn roster_ws(control: &mut Control, pane: &str) -> String {
                 .map(str::to_string)
         })
         .unwrap_or_default()
+}
+
+/// par-director's replay contract: a pane exit that lands while no client
+/// is connected is not lost. Pushed notifications are (`--cmd` discards
+/// them; a control client is evicted at 4096 queued lines), so the ring is
+/// the durable path — a client that connects AFTER the exit replays it via
+/// `events --since 0`, and resumes from the head the reply names.
+#[test]
+fn pane_exits_replay_through_the_event_ring_after_a_reconnect() {
+    let fixture = MuxFixture::new("events");
+    let path = fixture.socket();
+
+    let mut daemon = spawn_daemon(&fixture);
+    wait_listening(path);
+    let mut control = Control::connect(path);
+    control.command("new-session -s ev");
+    let pane = control
+        .body_lines("list-panes")
+        .first()
+        .expect("new-session created a pane")
+        .clone();
+    // A short-lived second pane: its exit is what the ring must keep.
+    control.command("new-window -t ev -- sleep 0.3");
+    let dying = control
+        .body_lines("list-panes")
+        .into_iter()
+        .find(|id| *id != pane)
+        .expect("the second pane");
+
+    // Disconnect BEFORE the exit lands: the push has no listener, exactly
+    // the gap the card closes.
+    drop(control.0.shutdown(Shutdown::Both));
+
+    // Reconnect repeatedly until the exit is in the ring; the pane may
+    // need a reap tick to die and another to be recorded.
+    let mut exited = None;
+    let deadline = Instant::now() + Duration::from_secs(10);
+    while Instant::now() < deadline {
+        let mut probe = Control::connect(path);
+        let lines = probe.body_lines("events --since 0");
+        drop(probe.0.shutdown(Shutdown::Both));
+        // A ring event line leads with its numeric seq — this filters out
+        // the registration replay's bare `%pane-exited` line (held-dead
+        // panes replay one ahead of the first reply), which carries no seq.
+        if let Some(line) = lines.iter().find(|l| {
+            l.split_whitespace()
+                .next()
+                .is_some_and(|t| t.parse::<u64>().is_ok())
+                && l.contains(&format!(" %pane-exited {dying}"))
+        }) {
+            exited = Some(line.clone());
+            break;
+        }
+        std::thread::sleep(Duration::from_millis(200));
+    }
+    let exited = exited.expect("the pane-exited event was recorded while nobody listened");
+    let head: u64 = exited
+        .split_whitespace()
+        .next()
+        .expect("event lines lead with their seq")
+        .parse()
+        .expect("the seq is a number");
+    assert!(
+        exited.contains(&format!(" %pane-exited {dying}")),
+        "the event carries the wire line a live client would have received: {exited}"
+    );
+
+    // A fresh client resumes from head: nothing it has not seen. (The
+    // held pane's registration-replay `%pane-exited` arrives ahead of the
+    // reply on any fresh connection — the assertions below read the reply
+    // body's own lines: `head ...` or `<seq> <at-ms> <wire line>`.)
+    let is_event_line = |l: &str| {
+        l.split_whitespace()
+            .next()
+            .is_some_and(|t| t.parse::<u64>().is_ok())
+    };
+    let mut control = Control::connect(path);
+    let tail = control.body_lines(&format!("events --since {head}"));
+    assert!(
+        tail.iter().any(|l| l == &format!("head {head}")),
+        "--since head is the resume point: {tail:?}"
+    );
+    assert!(
+        !tail.iter().any(|l| is_event_line(l)),
+        "no event rides after the head watermark: {tail:?}"
+    );
+
+    // An out-of-range `--since` is a legal empty resync to the head, and
+    // the bare form reads the whole ring.
+    let empty = control.body_lines("events --since 999999");
+    assert!(
+        empty.iter().any(|l| l == &format!("head {head}"))
+            && !empty.iter().any(|l| is_event_line(l)),
+        "past-head resumes at the head: {empty:?}"
+    );
+    assert!(
+        control
+            .body_lines("events")
+            .iter()
+            .any(|l| l.contains(&format!(" %pane-exited {dying}"))),
+        "the bare form reads the ring"
+    );
+
+    drop(control.0.shutdown(Shutdown::Both));
+    sigterm_clean(&mut daemon);
 }

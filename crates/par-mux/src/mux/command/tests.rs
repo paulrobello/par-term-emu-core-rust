@@ -968,6 +968,26 @@ fn parses_list_agents() {
 }
 
 #[test]
+fn parses_events_with_and_without_since() {
+    assert_eq!(
+        parse_command("events").unwrap(),
+        MuxCommand::Events { since: None }
+    );
+    assert_eq!(
+        parse_command("events --since 42").unwrap(),
+        MuxCommand::Events { since: Some(42) }
+    );
+    assert!(
+        parse_command("events --since nope").is_err(),
+        "a non-numeric watermark is a parse error"
+    );
+    assert!(
+        parse_command("events stray").is_err(),
+        "positionals are rejected"
+    );
+}
+
+#[test]
 fn parses_client_snapshot() {
     let cmd = parse_command("client-snapshot -t @3").unwrap();
     assert_eq!(

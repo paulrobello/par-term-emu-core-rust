@@ -22,8 +22,8 @@ use crate::mux::layout::SplitDirection;
 use crate::mux::pane::{MuxError, OutputSink, PaneFactory};
 use crate::mux::persist::{PersistState, SaveOrigin};
 use crate::mux::server::{
-    broadcast_layout_change, broadcast_notification, capture_range, layout_change_notification,
-    pane_output_sink, replay_pane_exited_lines, Clients, OutputEpoch,
+    broadcast_layout_change, capture_range, layout_change_notification, pane_output_sink,
+    record_and_broadcast, replay_pane_exited_lines, Clients, OutputEpoch,
 };
 use crate::mux::tree::{MuxTree, SpawnPlan};
 use base64::Engine as _;
@@ -204,7 +204,7 @@ pub(super) fn dispatch_command(
     emit_outcome(&outcome, ctx, issuer);
     let seen = crate::mux::hooks::mark_viewed_done_seen(&mut ctx.tree.lock());
     for notification in &seen {
-        broadcast_notification(ctx.clients, notification);
+        record_and_broadcast(ctx.tree, ctx.clients, notification);
     }
     if mutates && outcome.succeeded {
         persist_state(ctx, persist);
@@ -276,6 +276,7 @@ fn route_command(
         | MuxCommand::UploadAbort { .. }) => route_upload_command(ctx, command),
         command @ (MuxCommand::RefreshClient { .. }
         | MuxCommand::ListAgents
+        | MuxCommand::Events { .. }
         | MuxCommand::ClientSnapshot { .. }
         | MuxCommand::PaneStream { .. }) => route_client_command(ctx, command),
         command @ (MuxCommand::WorktreeCreate { .. }
@@ -302,7 +303,7 @@ fn emit_outcome(outcome: &Outcome, ctx: &Ctx<'_>, issuer: Option<&SyncSender<Str
         broadcast_layout_change(ctx.tree, ctx.clients, *window_id);
     }
     for notification in &outcome.notifications {
-        broadcast_notification(ctx.clients, notification);
+        record_and_broadcast(ctx.tree, ctx.clients, notification);
     }
     if let Some(tx) = issuer {
         for notification in &outcome.issuer_only {

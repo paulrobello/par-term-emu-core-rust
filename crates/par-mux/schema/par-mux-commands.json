@@ -95,6 +95,16 @@
       "synopsis": "-t <pane>"
     },
     {
+      "name": "events",
+      "features": [
+        "since"
+      ],
+      "flags": [
+        "--since"
+      ],
+      "synopsis": "[--since <seq>]"
+    },
+    {
       "name": "has-session",
       "features": [],
       "flags": [

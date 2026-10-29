@@ -25,7 +25,7 @@
 //! executes. A pane whose child cwd cannot be read is simply not probed.
 
 use crate::mux::ids::PaneId;
-use crate::mux::server::{broadcast_notification, Clients};
+use crate::mux::server::{record_and_broadcast, Clients};
 use crate::mux::tree::MuxTree;
 use par_term_emu_core::tmux_control::TmuxNotification;
 use parking_lot::Mutex;
@@ -687,7 +687,8 @@ pub(crate) fn host_probe_sweep(
         if agent.is_empty() {
             continue;
         }
-        broadcast_notification(
+        record_and_broadcast(
+            tree,
             clients,
             &TmuxNotification::AgentTelemetryChanged {
                 pane_id: format!("%{pane_id}"),

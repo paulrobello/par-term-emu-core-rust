@@ -23,6 +23,7 @@ pub(super) fn route_client_command(ctx: &Ctx<'_>, command: MuxCommand) -> Outcom
             graphics,
         ),
         MuxCommand::ListAgents => cmd_list_agents(ctx),
+        MuxCommand::Events { since } => cmd_events(ctx, since),
         MuxCommand::ClientSnapshot { window } => cmd_client_snapshot(ctx, window),
         // The socket's connection loop serves pane streams before dispatch
         // (it owns the queue the stream narrows); a dispatch with no
@@ -304,11 +305,23 @@ fn size_report_outcome(ctx: &Ctx<'_>, window_id: WindowId, resized: Vec<WindowId
         )
 }
 
+/// How long a `working` agent's silence — no pane output AND no accepted
+/// hook report — before the roster derives `stalled=1` for it. The card
+/// bound: a hung tool call is distinguishable from active work within five
+/// minutes.
+/// cap: Milliseconds of no output and no report before a working agent reads stalled.
+const STALLED_AFTER_MS: u64 = 5 * 60 * 1000;
+
 /// Build one roster row: pane, agent, state, source, then zero or more
 /// whitespace-free `key=value` tokens — `reason=<base64>` (blocked
 /// reason), `telemetry=<base64>`, `host_telemetry=<base64>`, and
 /// `ws=<id>` (the owning workspace, `+N` — the side panel's grouping
-/// key). Every token
+/// key), then the activity tokens: `last_activity_at=<epoch-ms>` (the
+/// later of the last processed pane output and the last accepted hook
+/// report; absent when the pane never showed either),
+/// `last_report_at=<epoch-ms>` (absent until a hook report), and
+/// `stalled=1` when the state is `working` with no activity for five
+/// minutes. Every token
 /// after `source` is key=value, so a consumer parses positions 1-4 then
 /// splits each remaining token on its first `=` (ARC-060: a free-text
 /// reason column was ambiguous).
@@ -316,6 +329,10 @@ pub(super) struct RosterTokens<'a> {
     pub reason: Option<&'a str>,
     pub telemetry: Option<&'a str>,
     pub host_telemetry: Option<&'a str>,
+    /// The pane's `last_activity_at` epoch ms (0 = none observed).
+    pub activity_at: u64,
+    /// The pane's `last_report_at` epoch ms (0 = no accepted report yet).
+    pub report_at: u64,
 }
 
 pub(super) fn roster_row(
@@ -340,6 +357,21 @@ pub(super) fn roster_row(
     if !ws.is_empty() {
         extras.push(("ws".to_string(), ws));
     }
+    if tokens.activity_at > 0 {
+        extras.push((
+            "last_activity_at".to_string(),
+            tokens.activity_at.to_string(),
+        ));
+    }
+    if tokens.report_at > 0 {
+        extras.push(("last_report_at".to_string(), tokens.report_at.to_string()));
+    }
+    if state == "working" && tokens.activity_at > 0 {
+        let now = crate::mux::pane::now_epoch_ms();
+        if now.saturating_sub(tokens.activity_at) >= STALLED_AFTER_MS {
+            extras.push(("stalled".to_string(), "1".to_string()));
+        }
+    }
     crate::mux::ipc::AgentRow {
         pane: pane.to_string(),
         agent: agent.to_string(),
@@ -347,6 +379,22 @@ pub(super) fn roster_row(
         source: source.to_string(),
         extras,
     }
+}
+
+/// `events [--since <seq>]`: the replayable lifecycle ring read. One reply
+/// block, first line `head <seq>` (the highest recorded sequence number, 0
+/// before the first event), then one line per retained event with a
+/// sequence number strictly greater than `since`, in sequence order:
+/// `<seq> <epoch-ms> <wire-line>` — the wire line exactly as a live client
+/// would have received it on the push stream. Eviction past the ring
+/// capacity shows up as holes in the sequence numbers, never renumbering.
+pub(super) fn cmd_events(ctx: &Ctx<'_>, since: Option<u64>) -> Outcome {
+    let guard = ctx.tree.lock();
+    let mut body = format!("head {}", guard.events.head());
+    for event in guard.events.since(since.unwrap_or(0)) {
+        body.push_str(&format!("\n{} {} {}", event.seq, event.at_ms, event.line));
+    }
+    Outcome::ok(ctx, &body)
 }
 
 pub(super) fn cmd_list_agents(ctx: &Ctx<'_>) -> Outcome {
@@ -425,6 +473,8 @@ pub(super) fn roster_rows(guard: &MuxTree) -> Vec<String> {
                                 reason,
                                 telemetry,
                                 host_telemetry: host.as_deref(),
+                                activity_at: pane.last_activity_at(),
+                                report_at: pane.last_report_at(),
                             },
                             ws.clone(),
                         ),

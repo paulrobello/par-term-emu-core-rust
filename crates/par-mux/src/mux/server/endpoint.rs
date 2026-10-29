@@ -219,7 +219,7 @@ pub(super) fn serve_pane_connection(
             Ok(Line::Hook(report)) => {
                 let (reply, broadcast) = crate::mux::hooks::handle_report_for(bound, &report, tree);
                 if let Some(notification) = broadcast {
-                    broadcast_notification(clients, &notification);
+                    record_and_broadcast(tree, clients, &notification);
                 }
                 if write_line(&mut writer, &reply, &never_evicted).is_err() {
                     break;

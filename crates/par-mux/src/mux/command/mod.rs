@@ -155,6 +155,15 @@ pub enum MuxCommand {
     },
     /// List every pane a hook has claimed — the agent roster.
     ListAgents,
+    /// Replay the daemon's lifecycle event ring: every retained event after
+    /// `since` plus the current head sequence number, so a (re)connecting
+    /// consumer reads what its disconnected interval dropped. See
+    /// [`crate::mux::events`].
+    Events {
+        /// `--since <seq>`: return only events with a sequence number
+        /// strictly greater than this. Absent means 0 (the whole ring).
+        since: Option<u64>,
+    },
     /// List every dispatchable command with its feature tokens — capability
     /// discovery, so a client built against one daemon learns what another
     /// daemon supports without probing command by command (ENH-037).
@@ -821,6 +830,7 @@ impl MuxCommand {
             MuxCommand::SwitchClient { target } => target.is_some(),
             MuxCommand::ListPanes { .. }
             | MuxCommand::ListAgents
+            | MuxCommand::Events { .. }
             | MuxCommand::ListCommands { .. }
             | MuxCommand::ClientSnapshot { .. }
             | MuxCommand::ListWindows { .. }
@@ -1563,6 +1573,7 @@ const COMMANDS: &[(&str, CommandParser, &[&str])] = &[
     ("set-exit-action", parse_set_exit_action, &[]),
     ("list-panes", parse_list_panes, &["targeted", "format"]),
     ("list-agents", parse_list_agents, &[]),
+    ("events", parse_events, &["since"]),
     ("list-commands", parse_list_commands, &["schema"]),
     ("client-snapshot", parse_client_snapshot, &["v1"]),
     ("kill-pane", parse_kill_pane, &[]),

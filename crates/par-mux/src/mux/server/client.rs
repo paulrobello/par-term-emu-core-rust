@@ -485,7 +485,7 @@ impl Connection {
     fn on_hook(&mut self, report: &str) -> Flow {
         let (reply, broadcast) = crate::mux::hooks::handle_report(report, &self.tree);
         if let Some(notification) = broadcast {
-            broadcast_notification(&self.clients, &notification);
+            record_and_broadcast(&self.tree, &self.clients, &notification);
         }
         Flow::after_send(self.tx.send(reply))
     }
@@ -701,7 +701,8 @@ impl Connection {
         // reported a size was never introduced to its peers.
         if self.registration.announced {
             let (session_id, window_id) = displayed.unzip();
-            broadcast_notification(
+            record_and_broadcast(
+                &self.tree,
                 &self.clients,
                 &TmuxNotification::ClientLeft {
                     client: client_id.to_string(),
