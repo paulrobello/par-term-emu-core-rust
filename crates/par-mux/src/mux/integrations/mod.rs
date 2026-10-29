@@ -678,11 +678,17 @@ pub(crate) fn has_flat_entry(
     is_ours: &dyn Fn(&JsonValue) -> bool,
 ) -> io::Result<bool> {
     let value = parse_serde(content, settings_path)?;
-    Ok(value
-        .get("hooks")
-        .and_then(|hooks| hooks.get(event))
+    Ok(any_entry(
+        value.get("hooks").and_then(|hooks| hooks.get(event)),
+        is_ours,
+    ))
+}
+
+/// Whether `entries` is an array holding an element `is_ours` accepts.
+fn any_entry(entries: Option<&JsonValue>, is_ours: &dyn Fn(&JsonValue) -> bool) -> bool {
+    entries
         .and_then(JsonValue::as_array)
-        .is_some_and(|entries| entries.iter().any(is_ours)))
+        .is_some_and(|entries| entries.iter().any(is_ours))
 }
 
 /// Merge one flat entry into `hooks.<event>` under the same discipline as
@@ -725,24 +731,15 @@ pub(crate) fn unmerge_flat_entries(
     reject_duplicate_keys(&root, settings_path)?;
     let original = parse_serde(content, settings_path)?;
 
-    let mut updated = content.to_string();
-    let mut changed = false;
-    while let Some(cut) = find_next_flat_cut(&updated, settings_path, event, is_ours)? {
-        let mut next = String::with_capacity(updated.len());
-        next.push_str(&updated[..cut.start]);
-        next.push_str(&updated[cut.end..]);
-        updated = next;
-        changed = true;
-    }
+    let (updated, changed) = apply_cuts(content, |text| {
+        find_next_flat_cut(text, settings_path, event, is_ours)
+    })?;
     if !changed {
         return Ok(None);
     }
-    while let Some(cut) = find_next_empty_container_cut(&updated, settings_path, &[event])? {
-        let mut next = String::with_capacity(updated.len());
-        next.push_str(&updated[..cut.start]);
-        next.push_str(&updated[cut.end..]);
-        updated = next;
-    }
+    let (updated, _) = apply_cuts(&updated, |text| {
+        find_next_empty_container_cut(text, settings_path, &[event])
+    })?;
 
     let mut desired = original;
     if let Some(root_object) = desired.as_object_mut() {
@@ -777,10 +774,7 @@ pub(crate) fn has_root_flat_entry(
     is_ours: &dyn Fn(&JsonValue) -> bool,
 ) -> io::Result<bool> {
     let value = parse_serde(content, settings_path)?;
-    Ok(value
-        .get(event)
-        .and_then(JsonValue::as_array)
-        .is_some_and(|entries| entries.iter().any(is_ours)))
+    Ok(any_entry(value.get(event), is_ours))
 }
 
 /// Merge one flat entry into the root-level `<event>` array under the same
@@ -832,25 +826,16 @@ pub(crate) fn unmerge_root_flat_entry(
     reject_duplicate_keys(&root, settings_path)?;
     let original = parse_serde(content, settings_path)?;
 
-    let mut updated = content.to_string();
-    let mut changed = false;
-    while let Some(cut) = find_next_root_flat_cut(&updated, settings_path, event, is_ours)? {
-        let mut next = String::with_capacity(updated.len());
-        next.push_str(&updated[..cut.start]);
-        next.push_str(&updated[cut.end..]);
-        updated = next;
-        changed = true;
-    }
+    let (updated, changed) = apply_cuts(content, |text| {
+        find_next_root_flat_cut(text, settings_path, event, is_ours)
+    })?;
     if !changed {
         return Ok(None);
     }
     // Prune the emptied event key only; the document itself stays.
-    while let Some(cut) = find_next_empty_root_event_cut(&updated, settings_path, event)? {
-        let mut next = String::with_capacity(updated.len());
-        next.push_str(&updated[..cut.start]);
-        next.push_str(&updated[cut.end..]);
-        updated = next;
-    }
+    let (updated, _) = apply_cuts(&updated, |text| {
+        find_next_empty_root_event_cut(text, settings_path, event)
+    })?;
 
     let mut desired = original;
     if let Some(root_object) = desired.as_object_mut() {
@@ -873,29 +858,7 @@ fn find_next_root_flat_cut(
     is_ours: &dyn Fn(&JsonValue) -> bool,
 ) -> io::Result<Option<Range>> {
     let root = parse_root_object(content, settings_path)?;
-    let Some(event_array) = root.get_array(event) else {
-        return Ok(None);
-    };
-    for (index, element) in event_array.elements.iter().enumerate() {
-        let range = element.range();
-        let value = parse_serde(&content[range.start..range.end], settings_path)?;
-        if !is_ours(&value) {
-            continue;
-        }
-        return Ok(Some(member_cut(
-            index
-                .checked_sub(1)
-                .and_then(|prev| event_array.elements.get(prev))
-                .map(|prev| prev.range().end),
-            range.start,
-            range.end,
-            event_array
-                .elements
-                .get(index + 1)
-                .map(|next| next.range().start),
-        )));
-    }
-    Ok(None)
+    find_flat_cut_in(content, settings_path, root.get_array(event), is_ours)
 }
 
 fn find_next_empty_root_event_cut(
@@ -912,8 +875,7 @@ fn find_next_empty_root_event_cut(
     Ok(None)
 }
 
-/// The next flat entry of ours to cut from `hooks.<event>`, each element
-/// judged by parsing its own text span.
+/// The next flat entry of ours to cut from `hooks.<event>`.
 fn find_next_flat_cut(
     content: &str,
     settings_path: &Path,
@@ -921,10 +883,22 @@ fn find_next_flat_cut(
     is_ours: &dyn Fn(&JsonValue) -> bool,
 ) -> io::Result<Option<Range>> {
     let root = parse_root_object(content, settings_path)?;
-    let Some(event_array) = root
+    let event_array = root
         .get_object("hooks")
-        .and_then(|hooks| hooks.get_array(event))
-    else {
+        .and_then(|hooks| hooks.get_array(event));
+    find_flat_cut_in(content, settings_path, event_array, is_ours)
+}
+
+/// The cut for the first element of `event_array` that `is_ours` accepts,
+/// each element judged by parsing its own text span: the shared walk of
+/// the `hooks.<event>` and root-level `<event>` flat shapes (QA-707).
+fn find_flat_cut_in(
+    content: &str,
+    settings_path: &Path,
+    event_array: Option<&AstArray<'_>>,
+    is_ours: &dyn Fn(&JsonValue) -> bool,
+) -> io::Result<Option<Range>> {
+    let Some(event_array) = event_array else {
         return Ok(None);
     };
     for (index, element) in event_array.elements.iter().enumerate() {
@@ -947,6 +921,25 @@ fn find_next_flat_cut(
         )));
     }
     Ok(None)
+}
+
+/// Apply `next_cut` until it finds nothing, one span per pass, each span
+/// computed against the text it is cut from. Returns the cut text and
+/// whether any cut happened.
+fn apply_cuts(
+    content: &str,
+    mut next_cut: impl FnMut(&str) -> io::Result<Option<Range>>,
+) -> io::Result<(String, bool)> {
+    let mut updated = content.to_string();
+    let mut changed = false;
+    while let Some(cut) = next_cut(&updated)? {
+        let mut next = String::with_capacity(updated.len());
+        next.push_str(&updated[..cut.start]);
+        next.push_str(&updated[cut.end..]);
+        updated = next;
+        changed = true;
+    }
+    Ok((updated, changed))
 }
 
 /// Add `"<key>": <value_json>` to the root object when the key is absent
@@ -991,18 +984,11 @@ pub(crate) fn unmerge_hook_entries(
     let original = parse_serde(content, settings_path)?;
     let events: Vec<&str> = entries.iter().map(|(event, _)| *event).collect();
 
-    let mut updated = content.to_string();
-    let mut changed = false;
-
     // One cut per pass, re-parsing between cuts so every span is computed
     // against the text it is applied to. Settings files are small.
-    while let Some(cut) = find_next_our_cut(&updated, settings_path, entries)? {
-        let mut next = String::with_capacity(updated.len());
-        next.push_str(&updated[..cut.start]);
-        next.push_str(&updated[cut.end..]);
-        updated = next;
-        changed = true;
-    }
+    let (updated, changed) = apply_cuts(content, |text| {
+        find_next_our_cut(text, settings_path, entries)
+    })?;
 
     if !changed {
         return Ok(None);
@@ -1011,12 +997,9 @@ pub(crate) fn unmerge_hook_entries(
     // Prune containers our removals emptied: the events we cut from, then
     // hooks. Each prune is its own re-parsed pass for the same span-safety
     // reason.
-    while let Some(cut) = find_next_empty_container_cut(&updated, settings_path, &events)? {
-        let mut next = String::with_capacity(updated.len());
-        next.push_str(&updated[..cut.start]);
-        next.push_str(&updated[cut.end..]);
-        updated = next;
-    }
+    let (updated, _) = apply_cuts(&updated, |text| {
+        find_next_empty_container_cut(text, settings_path, &events)
+    })?;
 
     let desired = desired_after_removal(original, entries);
     verify_update(updated, settings_path, &desired).map(Some)

@@ -389,51 +389,29 @@ fn parse_count(field: &str) -> Option<u32> {
 /// returns a row whose `Display` parses back to the same row.
 #[cfg(any(test, fuzzing))]
 pub fn assert_round_trip(line: &str) {
-    if let Some(row) = WindowRow::parse(line) {
-        assert_eq!(
-            WindowRow::parse(&row.to_string()),
-            Some(row),
-            "window: {line:?}"
-        );
-    }
-    if let Some(row) = SessionRow::parse(line) {
-        assert_eq!(
-            SessionRow::parse(&row.to_string()),
-            Some(row),
-            "session: {line:?}"
-        );
-    }
-    if let Some(row) = WorkspaceRow::parse(line) {
-        assert_eq!(
-            WorkspaceRow::parse(&row.to_string()),
-            Some(row),
-            "workspace: {line:?}"
-        );
-    }
-    if let Some(row) = WorktreeRow::parse(line) {
-        assert_eq!(
-            WorktreeRow::parse(&row.to_string()),
-            Some(row),
-            "worktree: {line:?}"
-        );
-    }
-    if let Some(row) = GitStatusRow::parse(line) {
-        assert_eq!(
-            GitStatusRow::parse(&row.to_string()),
-            Some(row),
-            "git: {line:?}"
-        );
-    }
+    round_trips(line, "window", WindowRow::parse);
+    round_trips(line, "session", SessionRow::parse);
+    round_trips(line, "workspace", WorkspaceRow::parse);
+    round_trips(line, "worktree", WorktreeRow::parse);
+    round_trips(line, "git", GitStatusRow::parse);
     if let Some(row) = AgentRow::parse(line) {
         assert!(
             row.extras.iter().all(|(k, _)| !k.contains('=')),
             "agent key kept '=': {line:?}"
         );
-        assert_eq!(
-            AgentRow::parse(&row.to_string()),
-            Some(row),
-            "agent: {line:?}"
-        );
+    }
+    round_trips(line, "agent", AgentRow::parse);
+}
+
+/// One parser's half of [`assert_round_trip`]: a row `parse` accepts
+/// must parse back from its own `Display` unchanged.
+#[cfg(any(test, fuzzing))]
+fn round_trips<R>(line: &str, name: &str, parse: fn(&str) -> Option<R>)
+where
+    R: fmt::Display + fmt::Debug + PartialEq,
+{
+    if let Some(row) = parse(line) {
+        assert_eq!(parse(&row.to_string()), Some(row), "{name}: {line:?}");
     }
 }
 
