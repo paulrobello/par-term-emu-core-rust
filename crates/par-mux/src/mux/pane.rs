@@ -601,7 +601,7 @@ impl MuxPane {
 
     /// Overwrite the report stamp — the tests' way to fake an old report
     /// without waiting five minutes.
-    #[cfg(test)]
+    #[cfg(all(test, unix))]
     pub(crate) fn set_last_report_at_for_test(&mut self, at_ms: u64) {
         self.last_report_at = at_ms;
     }
