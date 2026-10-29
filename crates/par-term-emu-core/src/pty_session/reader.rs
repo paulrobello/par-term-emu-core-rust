@@ -29,6 +29,44 @@ fn read_error_is_terminal(err: &std::io::Error) -> bool {
     false
 }
 
+/// Drop every XTWINOPS reply (`CSI … t`) from a drained device-query
+/// response stream, keeping all other bytes in order (QA-706). A CSI runs
+/// from `ESC [` to the first ASCII-alphabetic byte; a CSI with no
+/// alphabetic byte before the end of the stream is kept whole. Pure byte
+/// logic: the reader calls it inside the write guard, before the staged
+/// reply is written (ARC-027).
+fn filter_xtwinops_replies(responses: &[u8]) -> Vec<u8> {
+    let mut filtered = Vec::with_capacity(responses.len());
+    let mut i = 0;
+    while i < responses.len() {
+        if responses[i] == 0x1B && i + 1 < responses.len() && responses[i + 1] == b'[' {
+            // Collect until a final byte; drop if final is 't'
+            let mut j = i + 2;
+            let mut dropped = false;
+            while j < responses.len() {
+                let b = responses[j];
+                if (b as char).is_ascii_alphabetic() {
+                    // Alphabetic final byte for CSI
+                    if b == b't' {
+                        dropped = true;
+                    }
+                    j += 1;
+                    break;
+                }
+                j += 1;
+            }
+            if !dropped {
+                filtered.extend_from_slice(&responses[i..j]);
+            }
+            i = j;
+        } else {
+            filtered.push(responses[i]);
+            i += 1;
+        }
+    }
+    filtered
+}
+
 /// Shared exit path for a dead PTY (a zero-byte read or a terminal read
 /// error): publish the exit, wake anyone blocked on the update signal,
 /// then advance the generation. The notify must come first — `running` is
@@ -157,38 +195,7 @@ impl PtySession {
                                 // PAR_TERM_REPLY_XTWINOPS (default: 1). Set to 0 to suppress.
                                 // (Cached from env var at PtySession initialization)
                                 if !reply_xtwinops.load(Ordering::Relaxed) {
-                                    let mut filtered = Vec::with_capacity(responses.len());
-                                    let mut i = 0;
-                                    while i < responses.len() {
-                                        if responses[i] == 0x1B
-                                            && i + 1 < responses.len()
-                                            && responses[i + 1] == b'['
-                                        {
-                                            // Collect until a final byte; drop if final is 't'
-                                            let mut j = i + 2;
-                                            let mut dropped = false;
-                                            while j < responses.len() {
-                                                let b = responses[j];
-                                                if (b as char).is_ascii_alphabetic() {
-                                                    // Alphabetic final byte for CSI
-                                                    if b == b't' {
-                                                        dropped = true;
-                                                    }
-                                                    j += 1;
-                                                    break;
-                                                }
-                                                j += 1;
-                                            }
-                                            if !dropped {
-                                                filtered.extend_from_slice(&responses[i..j]);
-                                            }
-                                            i = j;
-                                        } else {
-                                            filtered.push(responses[i]);
-                                            i += 1;
-                                        }
-                                    }
-                                    responses = filtered;
+                                    responses = filter_xtwinops_replies(&responses);
                                 }
 
                                 if !responses.is_empty() {
@@ -320,6 +327,39 @@ impl PtySession {
 mod tests {
     use super::*;
     use std::sync::atomic::AtomicUsize;
+
+    /// XTWINOPS replies (`CSI … t`) drop; every other reply and the bytes
+    /// between them pass through in order.
+    #[test]
+    fn xtwinops_filter_drops_only_csi_t_replies() {
+        assert_eq!(filter_xtwinops_replies(b""), b"");
+        assert_eq!(filter_xtwinops_replies(b"\x1b[8;24;80t"), b"");
+        assert_eq!(
+            filter_xtwinops_replies(b"\x1b[?1;2c\x1b[4;600;800t\x1b[0n"),
+            b"\x1b[?1;2c\x1b[0n"
+        );
+        assert_eq!(
+            filter_xtwinops_replies(b"a\x1b[3tb\x1b]11;rgb:0/0/0\x07"),
+            b"ab\x1b]11;rgb:0/0/0\x07"
+        );
+        assert_eq!(filter_xtwinops_replies(b"\x1b[12;5R"), b"\x1b[12;5R");
+    }
+
+    /// The scan's edge cases, pinned as they behave: a CSI cut off before
+    /// any alphabetic byte is kept whole, a lone trailing ESC passes, and
+    /// a non-alphabetic final (`~`) does not end the CSI, so the scan runs
+    /// on to the next alphabetic byte and a following `t` drops both.
+    #[test]
+    fn xtwinops_filter_edge_cases_keep_their_current_shape() {
+        assert_eq!(filter_xtwinops_replies(b"\x1b[8;24"), b"\x1b[8;24");
+        assert_eq!(filter_xtwinops_replies(b"x\x1b"), b"x\x1b");
+        assert_eq!(filter_xtwinops_replies(b"\x1b["), b"\x1b[");
+        assert_eq!(filter_xtwinops_replies(b"\x1b[2~\x1b[1t"), b"");
+        assert_eq!(
+            filter_xtwinops_replies(b"\x1b[2~\x1b[0n"),
+            b"\x1b[2~\x1b[0n"
+        );
+    }
 
     /// A terminal error must include BrokenPipe (the pre-existing fatal
     /// kind) and, on Unix, EIO — the pty's form of EOF after the child's
