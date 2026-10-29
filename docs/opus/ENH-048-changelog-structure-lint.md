@@ -6,6 +6,7 @@
 > - **DOC-139's fold** must rewrite the 0.58.1 body's paths. 23 of its 25 repo paths are pre-split `src/…` paths that do not exist at HEAD.
 >
 > Line-number citations below are pinned to commit `0c6e8f7` (the commit that added this plan); re-locate them by symbol on later trees.
+> **Archived plan:** source paths below predate the ARC-007 workspace split. For example, `src/tmux_control.rs` is now `crates/par-term-emu-core/src/tmux_control/` and `src/bin/par_mux/main.rs` is now `crates/par-mux/src/bin/par_mux/main.rs`. The plan text is kept as written. <!-- doc-path: example -->
 
 **Priority**: low · **Estimate**: S
 
@@ -41,7 +42,7 @@ Any violation exits 1, the same code as a missing commit.
   - Duplicate subsections: `### Added` at `:55`, `:58`, `:80` and `:97` (first at `:24`), and `### Changed` at `:85` (first at `:10`).
   - Detached bullet runs: `:30` (a blank line at `:29` inside `### Added`) and `:92-95` (the unheaded Fixed bullets after the blank at `:91`, which follow `### Changed` at `:85`). The audit cites the second run as `:90-95`, but `:89-90` are real `### Changed` bullets.
   - Eight `` Commit `<this>` `` placeholders at `:75-78` and `:98-101`.
-  - 37 backticked repo paths missing at HEAD, 20 of them `src/mux/…`. The audit counted 18 with a narrower pattern, and this extraction also catches `src/grid/…`, `src/bin/par_mux/main.rs`, `src/tmux_control.rs` and `tests/mux_*.rs`.
+  - 37 backticked repo paths missing at HEAD, 20 of them `src/mux/…`. The audit counted 18 with a narrower pattern, and this extraction also catches `src/grid/…`, `src/bin/par_mux/main.rs`, `src/tmux_control.rs` and `tests/mux_*.rs`. <!-- doc-path: example -->
 - **Version and link state.**
   - `## [0.58.1] - 2026-10-02` at `:103` is dated but untagged (`git tag -l 'v0.58*'` shows only `v0.58.0`).
   - The link block has `[Unreleased]: …/compare/v0.58.0...HEAD` at `:2031` and `[0.58.0]` at `:2032`. There is no `[0.58.1]:` line.
