@@ -261,7 +261,15 @@ app:
 		-framework CoreGraphics -framework ApplicationServices -framework AVFoundation
 	cp crates/par-mux/app/Info.plist build/Par-mux.app/Contents/Info.plist
 	printf 'APPL????' > build/Par-mux.app/Contents/PkgInfo
-	codesign --force -s - build/Par-mux.app
+	@if security find-identity -v -p codesigning 2>/dev/null | grep -q '"Developer ID Application:'; then \
+		ID=$$(security find-identity -v -p codesigning 2>/dev/null | grep '"Developer ID Application:' | head -1 | sed -E 's/.*"(.*)".*/\1/'); \
+		echo "Signing bundle with: $$ID"; \
+		codesign --force --timestamp --options runtime --sign "$$ID" build/Par-mux.app/Contents/MacOS/Par-mux && \
+		codesign --force --timestamp --options runtime --sign "$$ID" build/Par-mux.app; \
+	else \
+		echo "WARNING: no Developer ID identity in keychain; leaving bundle ad-hoc signed — TCC grants (screen recording, microphone, local network) reset on every rebuild"; \
+		codesign --force -s - build/Par-mux.app; \
+	fi
 	plutil -lint build/Par-mux.app/Contents/Info.plist
 
 # macOS only: restart the daemon under the installed Par-mux.app bundle's
