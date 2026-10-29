@@ -10,11 +10,15 @@ mod font_cache;
 mod formats;
 mod renderer;
 mod shaper;
+mod snapshot;
 mod utils;
 
 pub use config::{ImageFormat, ScreenshotConfig, SixelRenderMode};
 pub use error::{ScreenshotError, ScreenshotResult};
 pub use shaper::FontType;
+pub use snapshot::{
+    render_terminal_from_snapshot, save_terminal_from_snapshot, TerminalRenderSnapshot,
+};
 
 use crate::cursor::Cursor;
 use crate::graphics::TerminalGraphic;
@@ -77,49 +81,19 @@ pub fn save_grid(
     Ok(())
 }
 
-/// Apply the terminal's theme/defaults to a screenshot config (ARC-021:
-/// shared by the free functions below and Terminal's forwarding methods).
-fn apply_terminal_theme(term: &Terminal, config: &mut ScreenshotConfig) {
-    // Populate theme colors if not already set
-    if config.link_color.is_none() {
-        config.link_color = Some(term.theme.link_color.to_rgb());
-    }
-    if config.bold_color.is_none() {
-        config.bold_color = Some(term.theme.bold_color.to_rgb());
-    }
-    config.use_bold_color = term.theme.use_bold_color;
-    config.bold_brightening = term.host.bold_brightening;
-    config.faint_text_alpha = term.theme.faint_text_alpha;
-
-    // Use terminal's default background if not specified
-    if config.background_color.is_none() {
-        config.background_color = Some(term.theme.default_bg.to_rgb());
-    }
-}
-
 /// Render a terminal's visible buffer (with optional scrollback offset) to
 /// image bytes. Free-function screenshot entry point over `&Terminal` so the
 /// capability is reachable without the `Terminal` methods (ARC-021).
+///
+/// Defined as capture-then-render ([`Terminal::render_snapshot`] +
+/// [`render_terminal_from_snapshot`]) so the live and snapshot paths cannot
+/// drift — the same construction `export_text` uses (ARC-004).
 pub fn render_terminal(
     term: &Terminal,
-    mut config: ScreenshotConfig,
+    config: ScreenshotConfig,
     scrollback_offset: usize,
 ) -> ScreenshotResult<Vec<u8>> {
-    apply_terminal_theme(term, &mut config);
-
-    let grid = term.grid_with_scrollback(scrollback_offset);
-    let cursor = if config.render_cursor && scrollback_offset == 0 {
-        Some(&term.cursor)
-    } else {
-        None
-    };
-    let graphics =
-        if config.sixel_render_mode != SixelRenderMode::Disabled && scrollback_offset == 0 {
-            term.all_graphics()
-        } else {
-            &[]
-        };
-    render_grid(&grid, cursor, graphics, config)
+    render_terminal_from_snapshot(&term.render_snapshot(scrollback_offset), config)
 }
 
 /// Render a terminal's visible buffer and save it to a file (free-function
@@ -127,24 +101,10 @@ pub fn render_terminal(
 pub fn save_terminal(
     term: &Terminal,
     path: &Path,
-    mut config: ScreenshotConfig,
+    config: ScreenshotConfig,
     scrollback_offset: usize,
 ) -> ScreenshotResult<()> {
-    apply_terminal_theme(term, &mut config);
-
-    let grid = term.grid_with_scrollback(scrollback_offset);
-    let cursor = if config.render_cursor && scrollback_offset == 0 {
-        Some(&term.cursor)
-    } else {
-        None
-    };
-    let graphics =
-        if config.sixel_render_mode != SixelRenderMode::Disabled && scrollback_offset == 0 {
-            term.all_graphics()
-        } else {
-            &[]
-        };
-    save_grid(&grid, cursor, graphics, path, config)
+    save_terminal_from_snapshot(&term.render_snapshot(scrollback_offset), path, config)
 }
 
 #[cfg(test)]

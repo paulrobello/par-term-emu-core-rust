@@ -16,6 +16,7 @@ pub mod iterm;
 pub mod kitty;
 pub mod placeholder;
 pub mod serialization;
+pub mod snapshot;
 
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -32,6 +33,7 @@ pub use placeholder::{
     create_placeholder_with_diacritics, number_to_diacritic, PlaceholderInfo, PLACEHOLDER_CHAR,
 };
 pub use serialization::{GraphicsSnapshot, ImageDataRef, SerializableGraphic};
+pub use snapshot::GraphicsStoreSnapshot;
 
 /// Maximum allowed image dimension (width or height) in pixels.
 ///

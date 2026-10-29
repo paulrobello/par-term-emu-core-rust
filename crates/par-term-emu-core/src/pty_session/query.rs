@@ -152,8 +152,10 @@ impl PtySession {
         config: crate::screenshot::ScreenshotConfig,
         scrollback_offset: usize,
     ) -> crate::screenshot::ScreenshotResult<Vec<u8>> {
-        let term = self.terminal.read();
-        crate::screenshot::render_terminal(&term, config, scrollback_offset)
+        // The read lock is held only to copy the render state (ARC-004);
+        // rendering and encoding run on the detached snapshot.
+        let snapshot = self.terminal.read().render_snapshot(scrollback_offset);
+        crate::screenshot::render_terminal_from_snapshot(&snapshot, config)
     }
 
     /// Take a screenshot and save to file
@@ -175,8 +177,9 @@ impl PtySession {
         config: crate::screenshot::ScreenshotConfig,
         scrollback_offset: usize,
     ) -> crate::screenshot::ScreenshotResult<()> {
-        let term = self.terminal.read();
-        crate::screenshot::save_terminal(&term, path, config, scrollback_offset)
+        // The read lock is held only to copy the render state (ARC-004).
+        let snapshot = self.terminal.read().render_snapshot(scrollback_offset);
+        crate::screenshot::save_terminal_from_snapshot(&snapshot, path, config)
     }
 
     /// Get the current cursor position `(col, row)`
