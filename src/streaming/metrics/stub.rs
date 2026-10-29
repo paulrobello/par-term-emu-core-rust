@@ -9,6 +9,12 @@ pub(crate) struct Metrics;
 /// Marker returned by [`init`] when the feature is compiled out.
 pub struct OtelGuard;
 
+impl OtelGuard {
+    /// Surface parity with the otel module: the stub carries no provider,
+    /// so an explicit shutdown is a no-op (main calls it unconditionally).
+    pub fn shutdown(&self) {}
+}
+
 impl Metrics {
     /// The stub is a unit struct shared by every caller.
     pub(crate) fn global() -> &'static Metrics {

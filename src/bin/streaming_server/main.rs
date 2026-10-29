@@ -451,7 +451,14 @@ async fn main() -> Result<()> {
         http_basic_auth.is_some(),
     );
 
-    serve_until_ctrl_c(streaming_server, &run_mode, factory.as_ref(), &args).await
+    let served = serve_until_ctrl_c(streaming_server, &run_mode, factory.as_ref(), &args).await;
+    // Flush the final metrics window while the process's async runtime is
+    // still alive: the guard's drop-flush can lose the race with runtime
+    // teardown and silently drop it (the short-lived-smoke report).
+    if let Some(guard) = &_otel_guard {
+        guard.shutdown();
+    }
+    served
 }
 
 /// Terminal size. Priority: `--use-tty-size` > `--size` > `--cols`/`--rows`.
