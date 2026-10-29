@@ -798,9 +798,23 @@ fn is_bcrypt(s: &str) -> bool {
 }
 
 /// True if `host` binds only to the loopback interface (not reachable from the network).
+///
+/// Only the exact name `localhost` or an IP literal that parses as loopback
+/// (`127.0.0.0/8`, `::1`, optionally bracketed) qualifies — a hostname such
+/// as `127.example.com` resolves anywhere, so it never suppresses the
+/// unauthenticated-bind warning (SEC-005).
 pub fn is_loopback_host(host: &str) -> bool {
     let h = host.trim().to_ascii_lowercase();
-    h == "127.0.0.1" || h == "::1" || h == "localhost" || h.starts_with("127.")
+    if h == "localhost" {
+        return true;
+    }
+    let literal = h
+        .strip_prefix('[')
+        .and_then(|s| s.strip_suffix(']'))
+        .unwrap_or(&h);
+    literal
+        .parse::<std::net::IpAddr>()
+        .is_ok_and(|ip| ip.is_loopback())
 }
 
 /// Resolve HTTP Basic Auth configuration from CLI arguments
@@ -958,6 +972,41 @@ mod tests {
                     panic!("forwarder still running after keep_running went false")
                 }
             }
+        }
+    }
+}
+
+#[cfg(test)]
+mod loopback_host_tests {
+    use super::is_loopback_host;
+
+    #[test]
+    fn loopback_literals_are_loopback() {
+        for host in [
+            "127.0.0.1",
+            "127.1.2.3",
+            "::1",
+            "[::1]",
+            "localhost",
+            " LOCALHOST ",
+        ] {
+            assert!(is_loopback_host(host), "{host}");
+        }
+    }
+
+    /// SEC-005: a hostname that merely starts with `127.` is not loopback.
+    #[test]
+    fn prefixed_hostnames_and_routable_addresses_are_not_loopback() {
+        for host in [
+            "127.example.com",
+            "127.0.0.1.nip.io",
+            "0.0.0.0",
+            "::",
+            "192.168.1.5",
+            "localhost.example.com",
+            "",
+        ] {
+            assert!(!is_loopback_host(host), "{host}");
         }
     }
 }
