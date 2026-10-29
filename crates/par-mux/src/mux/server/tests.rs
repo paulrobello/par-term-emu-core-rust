@@ -243,6 +243,24 @@ fn summarize_line_redacts_environment_values() {
     let flaglike = summarize_line("set-environment -t $0 K -hunter2");
     assert!(!flaglike.contains("hunter2"), "value leaked: {flaglike}");
 
+    // After `--` the next word is the name even when it starts with `-`.
+    let dashed = summarize_line("set-environment -t $0 -- -X secret");
+    assert!(!dashed.contains("secret"), "value leaked: {dashed}");
+    assert!(dashed.contains("-- -X [redacted]"), "{dashed}");
+
+    // A redacted line is still cut to the head like any other line.
+    let long = format!("new-session -e K=v {}", "x".repeat(500));
+    let cut = summarize_line(&long);
+    assert!(
+        cut.len() < 200,
+        "redacted line not truncated: {} bytes",
+        cut.len()
+    );
+    assert!(
+        cut.contains(&format!("{} bytes total", long.len())),
+        "{cut}"
+    );
+
     // Unset carries no value; the name stays visible.
     assert!(summarize_line("set-environment -u -t $0 DISPLAY").contains("DISPLAY"));
 

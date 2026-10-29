@@ -123,19 +123,21 @@ pub(super) fn summarize_line(line: &str) -> String {
         };
         return format!("{name}{target} [payload redacted, {} bytes]", line.len());
     }
-    if let Some(redacted) = name.and_then(|name| redact_env_values(name, line)) {
-        return redacted;
+    let redacted = name.and_then(|name| redact_env_values(name, line));
+    let shown = redacted.as_deref().unwrap_or(line);
+    if shown.len() <= HEAD {
+        return match redacted {
+            Some(r) => format!("{r} ({} bytes)", line.len()),
+            None => line.to_string(),
+        };
     }
-    if line.len() <= HEAD {
-        return line.to_string();
-    }
-    let cut = line
+    let cut = shown
         .char_indices()
         .take_while(|(i, _)| *i < HEAD)
         .map(|(i, _)| i)
         .last()
         .unwrap_or(0);
-    format!("{}... ({} bytes total)", &line[..cut], line.len())
+    format!("{}... ({} bytes total)", &shown[..cut], line.len())
 }
 
 /// Log form of a line that can carry environment values (SEC-006), or
@@ -143,9 +145,11 @@ pub(super) fn summarize_line(line: &str) -> String {
 /// quoting grammar so a quoted value never leaks a fragment.
 ///
 /// - `set-environment`: flags and the variable name survive; every word
-///   after the name is replaced.
+///   after the name is replaced (after `--`, the next word is the name).
 /// - `new-session`: each `-e NAME=VALUE` keeps `NAME=` with the value
 ///   replaced; an `-e` word without `=` is replaced whole.
+///
+/// The caller applies the same head cut as for any other line.
 fn redact_env_values(name: &str, line: &str) -> Option<String> {
     const REDACTED: &str = "[redacted]";
     let words = crate::mux::command::shell_split(line);
@@ -155,9 +159,16 @@ fn redact_env_values(name: &str, line: &str) -> Option<String> {
             let mut iter = words.into_iter();
             out.extend(iter.next());
             let mut seen_name = false;
+            let mut flags_done = false;
             while let Some(word) = iter.next() {
                 if seen_name {
                     out.push(REDACTED.to_string());
+                } else if flags_done {
+                    out.push(word);
+                    seen_name = true;
+                } else if word == "--" {
+                    out.push(word);
+                    flags_done = true;
                 } else if word == "-t" {
                     out.push(word);
                     out.extend(iter.next());
@@ -186,7 +197,7 @@ fn redact_env_values(name: &str, line: &str) -> Option<String> {
         }
         _ => return None,
     }
-    Some(format!("{} ({} bytes)", out.join(" "), line.len()))
+    Some(out.join(" "))
 }
 
 /// Write one line, tolerating send-timeout wakes: a healthy slow consumer's
