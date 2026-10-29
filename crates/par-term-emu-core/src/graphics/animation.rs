@@ -11,6 +11,13 @@ use std::time::Duration;
 
 use serde::{Deserialize, Serialize};
 
+/// Maximum number of frames one kitty animation retains (SEC-001).
+///
+/// A frame with a new frame number past the cap is dropped; an existing
+/// frame number is still replaced.
+/// cap: Frames retained per kitty animation from escape payloads.
+pub const MAX_ANIMATION_FRAMES: usize = 1024;
+
 /// Animation frame data
 #[derive(Debug, Clone)]
 pub struct AnimationFrame {
@@ -164,8 +171,21 @@ impl Animation {
     }
 
     /// Add a frame to the animation
+    ///
+    /// A new frame number is dropped once the animation holds
+    /// [`MAX_ANIMATION_FRAMES`]; an existing frame number is replaced.
     pub fn add_frame(&mut self, frame: AnimationFrame) {
         let frame_num = frame.frame_number;
+        if self.frames.len() >= MAX_ANIMATION_FRAMES && !self.frames.contains_key(&frame_num) {
+            debug_info!(
+                "ANIMATION",
+                "Dropped frame {} for image_id={}: {} frame cap reached",
+                frame_num,
+                self.image_id,
+                MAX_ANIMATION_FRAMES
+            );
+            return;
+        }
         debug_info!(
             "ANIMATION",
             "Adding frame {} to image_id={} (delay={}ms, size={}x{})",

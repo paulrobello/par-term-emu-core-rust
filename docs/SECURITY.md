@@ -729,6 +729,10 @@ logger = logging.getLogger(__name__)
 
 `decode_pixels()` in `crates/par-term-emu-core/src/graphics/kitty/` decodes the Kitty graphics protocol's raw `Rgba`/`Rgb` pixel formats, where `width`/`height` are attacker-controlled `u32` values taken directly from the escape sequence. Computing the expected buffer size as `width * height * (3 or 4)` can wrap `usize` on overflow, which would bypass the size check that follows it and could yield a `TerminalGraphic` claiming huge dimensions over a tiny backing buffer (out-of-bounds read / panic DoS on later access). The fix uses `checked_mul` for every multiplication in that size calculation and returns a `GraphicsError::KittyError` on overflow instead of silently wrapping. The Kitty PNG decode path is separately guarded by a `MAX_IMAGE_PIXELS` product cap on the decoded width × height.
 
+### Retained Graphics Memory Budget (SEC-001)
+
+Kitty images transmitted with an image ID (`a=t`/`a=T` with `i=`) and animation frames (`a=f`) are retained in the `GraphicsStore` beyond the placement that displays them. Their decoded pixel bytes count against a store-wide budget, `GraphicsLimits::max_total_memory` (default `DEFAULT_MAX_GRAPHICS_MEMORY_BYTES`), and the number of retained image IDs is capped at `MAX_KITTY_IMAGES`. When an insert would exceed either bound, the oldest image ID (its stored image and animation together) is evicted first, the way kitty itself evicts; an image or frame that cannot fit on its own is dropped. Each animation keeps at most `MAX_ANIMATION_FRAMES` frames, and at most `MAX_VIRTUAL_PLACEMENTS` distinct `U=1` virtual placements are kept (existing keys still update). Evictions and drops increment `GraphicsStore::dropped_count()`. Visible placements already hold their own reference to the pixels, so eviction never blanks an image on screen; those placements are bounded separately by `max_graphics_count` (visible) and `max_scrollback_graphics` (scrollback). Numbers: [Resource Limits Reference](#resource-limits-reference).
+
 ### Best Practices for Graphics Protocol
 
 1. ✅ **Run as non-root** - Limits file access to user's own files
@@ -1419,12 +1423,16 @@ sections; the numbers live here.
 | `MAX_CONCURRENT_UPLOADS` | 8 | `crates/par-mux/src/mux/uploads.rs:43` | Uploads staged concurrently daemon-wide. |
 | `MAX_UPLOAD_NAME_BYTES` | 200 | `crates/par-mux/src/mux/uploads.rs:46` | Bytes of one `upload-begin` filename (a bare file name, never a |
 | `MAX_BADGE_FORMAT_LENGTH` | 4 KiB | `crates/par-term-emu-core/src/badge.rs:189` | Badge format bytes accepted from one OSC 1337 SetBadgeFormat payload. |
+| `MAX_ANIMATION_FRAMES` | 1,024 | `crates/par-term-emu-core/src/graphics/animation.rs:18` | Frames retained per kitty animation from escape payloads. |
 | `MAX_IMAGE_DATA_SIZE` | 100 MiB | `crates/par-term-emu-core/src/graphics/iterm.rs:17` | Base64 image bytes accepted from one iTerm2 inline-image sequence. |
 | `MAX_FILE_SIZE` | 100 MiB | `crates/par-term-emu-core/src/graphics/kitty/decode.rs:155` | Bytes read from one kitty file medium named by an escape payload. |
 | `MAX_KITTY_PAYLOAD_BYTES` | 64 MiB | `crates/par-term-emu-core/src/graphics/kitty/mod.rs:21` | Decoded bytes one kitty transmission may accumulate across chunks |
 | `MAX_KITTY_DECOMPRESSED_BYTES` | `MAX_IMAGE_PIXELS * 4` | `crates/par-term-emu-core/src/graphics/kitty/mod.rs:26` | Upper bound on one kitty zlib stream's decompressed output |
-| `MAX_IMAGE_DIMENSION` | 16 KiB | `crates/par-term-emu-core/src/graphics/mod.rs:37` | Width or height accepted for a graphic decoded from a protocol payload. |
-| `MAX_IMAGE_PIXELS` | 67,108,864 | `crates/par-term-emu-core/src/graphics/mod.rs:44` | Total pixels accepted for a graphic decoded from a protocol payload. |
+| `MAX_IMAGE_DIMENSION` | 16 KiB | `crates/par-term-emu-core/src/graphics/mod.rs:40` | Width or height accepted for a graphic decoded from a protocol payload. |
+| `MAX_IMAGE_PIXELS` | 67,108,864 | `crates/par-term-emu-core/src/graphics/mod.rs:47` | Total pixels accepted for a graphic decoded from a protocol payload. |
+| `DEFAULT_MAX_GRAPHICS_MEMORY_BYTES` | 256 MiB | `crates/par-term-emu-core/src/graphics/mod.rs:55` | Bytes of decoded kitty image and animation-frame pixels retained store-wide. |
+| `MAX_KITTY_IMAGES` | 4,096 | `crates/par-term-emu-core/src/graphics/mod.rs:60` | Kitty image IDs (stored images plus animations) retained store-wide. |
+| `MAX_VIRTUAL_PLACEMENTS` | 4,096 | `crates/par-term-emu-core/src/graphics/mod.rs:65` | Distinct kitty virtual placements retained from escape payloads. |
 | `MAX_EVICTED_ZONES` | 10,000 | `crates/par-term-emu-core/src/grid/zone.rs:11` | Evicted zones buffered per grid before they become events. |
 | `SIXEL_HARD_MAX_WIDTH` | 4 KiB | `crates/par-term-emu-core/src/sixel.rs:25` | Hard ceiling on sixel raster width from payload geometry or user config. |
 | `SIXEL_HARD_MAX_HEIGHT` | 4 KiB | `crates/par-term-emu-core/src/sixel.rs:28` | Hard ceiling on sixel raster height from payload geometry or user config. |
