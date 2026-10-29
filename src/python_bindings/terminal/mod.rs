@@ -1671,6 +1671,7 @@ pub(crate) fn transfer_to_py_dict(
 /// Registers this module's pyclasses on the `_native` module (ENH-054).
 pub(crate) fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<PyTerminal>()?;
+    m.add_class::<clipboard_api::PyTerminalClipboard>()?;
     Ok(())
 }
 
