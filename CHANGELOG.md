@@ -7,13 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.74.0] - 2026-10-30
+
 ### Changed
-- **mux: `--cmd help` lists all control verbs, including `report-state`**, directly from the parser registry without needing a daemon. Unknown control commands now point to `par-mux --cmd help`.
+- **mux: `--cmd help` lists all control verbs, including `report-state`** (`e5eaf14`), directly from the parser registry without needing a daemon. Unknown control commands now point to `par-mux --cmd help`.
 
 ### Fixed
-- **mux: `--cmd` rejects empty or whitespace-only commands instead of hanging**: the client exits with a usage error before connecting, and the control socket answers blank lines with an `empty command` error rather than silence.
-- **mux: the attach TUI enables bracketed paste (DECSET 2004) on the host, so multi-line pastes reach panes framed instead of submitting line-by-line** (card 01a18f0437, Paul-reported; `crates/par-mux/src/mux/attach/render/mod.rs`, `docs/MUX.md`): the render client requested alternate screen, mouse capture, and the 2031 theme cue from the host but never 2004, so a tracking host (par-term) delivered pastes raw — the client's paste scanner and per-pane re-framing only fire on framed input, and a multi-line paste reached pane apps like claude code as bare newlines, submitting each line. The screen guard now requests 2004 for the session's lifetime and disables it on exit (tmux's own outer-terminal behavior); hosts without 2004 keep sending pastes raw. Pinned by `screen_guard_sequences_enable_and_disable_bracketed_paste` and `multi_line_paste_forwards_framed_with_interior_newlines`.
-- **mux: `new-workspace` auto-disambiguates its first session's name; `--session-name` decouples it from the workspace name** (card 01a18e57, filed by par-term; `crates/par-mux/src/mux/{command,dispatch/sessions.rs,tree}`, `docs/MUX.md`): the workspace's first session was hard-coupled to the workspace's name, so on any daemon holding a session `main` a bare `new-workspace` could never succeed, and `-n X` failed while any session `X` existed. The workspace still keeps the requested name, but the first session's default name now auto-disambiguates against the global session roster tmux-style (`main`, `main-2`, `main-3`, …, resolved before the workspace row exists — a refused create still leaves no half-created workspace); the new `new-workspace -n X --session-name <name>` names the first session explicitly and keeps the `duplicate session` refusal on a clash. Pinned by `new_workspace_auto_disambiguates_its_first_session_name`, `new_workspace_session_name_decouples_and_explicit_clash_refuses`, and the updated `unknown_targets_error_exactly_and_change_nothing` pin.
+- **mux: `--cmd` rejects empty or whitespace-only commands instead of hanging** (`e5eaf14`): the client exits with a usage error before connecting, and the control socket answers blank lines with an `empty command` error rather than silence.
+- **mux: the attach TUI enables bracketed paste (DECSET 2004) on the host, so multi-line pastes reach panes framed instead of submitting line-by-line** (`9513d85`) (card 01a18f0437, Paul-reported; `crates/par-mux/src/mux/attach/render/mod.rs`, `docs/MUX.md`): the render client requested alternate screen, mouse capture, and the 2031 theme cue from the host but never 2004, so a tracking host (par-term) delivered pastes raw — the client's paste scanner and per-pane re-framing only fire on framed input, and a multi-line paste reached pane apps like claude code as bare newlines, submitting each line. The screen guard now requests 2004 for the session's lifetime and disables it on exit (tmux's own outer-terminal behavior); hosts without 2004 keep sending pastes raw. Pinned by `screen_guard_sequences_enable_and_disable_bracketed_paste` and `multi_line_paste_forwards_framed_with_interior_newlines`.
+- **mux: `new-workspace` auto-disambiguates its first session's name; `--session-name` decouples it from the workspace name** (`6c14a09`) (card 01a18e57, filed by par-term; `crates/par-mux/src/mux/{command,dispatch/sessions.rs,tree}`, `docs/MUX.md`): the workspace's first session was hard-coupled to the workspace's name, so on any daemon holding a session `main` a bare `new-workspace` could never succeed, and `-n X` failed while any session `X` existed. The workspace still keeps the requested name, but the first session's default name now auto-disambiguates against the global session roster tmux-style (`main`, `main-2`, `main-3`, …, resolved before the workspace row exists — a refused create still leaves no half-created workspace); the new `new-workspace -n X --session-name <name>` names the first session explicitly and keeps the `duplicate session` refusal on a clash. Pinned by `new_workspace_auto_disambiguates_its_first_session_name`, `new_workspace_session_name_decouples_and_explicit_clash_refuses`, and the updated `unknown_targets_error_exactly_and_change_nothing` pin.
 
 ## [0.73.0] - 2026-10-30
 
@@ -2401,7 +2403,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Unicode Support**: Full Unicode including emoji and wide characters
 - **Python Integration**: PyO3 bindings for Python 3.12+
 
-[Unreleased]: https://github.com/paulrobello/par-term-emu-core-rust/compare/v0.73.0...HEAD
+[Unreleased]: https://github.com/paulrobello/par-term-emu-core-rust/compare/v0.74.0...HEAD
+[0.74.0]: https://github.com/paulrobello/par-term-emu-core-rust/compare/v0.73.0...v0.74.0
 [0.73.0]: https://github.com/paulrobello/par-term-emu-core-rust/compare/v0.72.0...v0.73.0
 [0.72.0]: https://github.com/paulrobello/par-term-emu-core-rust/compare/v0.71.1...v0.72.0
 [0.71.1]: https://github.com/paulrobello/par-term-emu-core-rust/compare/v0.71.0...v0.71.1
