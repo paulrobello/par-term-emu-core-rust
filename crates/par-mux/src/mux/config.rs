@@ -714,6 +714,51 @@ impl ExitAction {
     }
 }
 
+/// What a restart does with a workspace's panes — the
+/// `set-workspace-restore-policy` choice. The per-pane
+/// `--restore start-command` create flag is the single-pane form of
+/// [`Self::StartCommand`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RestorePolicy {
+    /// Re-run each pane's original start command, every flag; a
+    /// hook-reported session id still rides to it as
+    /// `PAR_MUX_RESUME_SESSION_ID`, so a wrapper can pass `--resume`
+    /// itself.
+    StartCommand,
+    /// The historical behavior: rebuild each agent pane through its
+    /// resume invocation (hook-reported argv first, per-agent table
+    /// second).
+    AgentResume,
+    /// Restore nothing in this workspace: its sessions never rebuild and
+    /// the workspace itself comes back empty (the state `new-workspace`
+    /// creates). Also the no-restore opt-out asked for by the sibling
+    /// card.
+    NoRestore,
+}
+
+impl RestorePolicy {
+    /// The config-file and control-verb spelling.
+    #[must_use]
+    pub fn name(self) -> &'static str {
+        match self {
+            Self::StartCommand => "start-command",
+            Self::AgentResume => "agent-resume",
+            Self::NoRestore => "none",
+        }
+    }
+
+    /// Parse the config-file and control-verb spelling.
+    #[must_use]
+    pub fn parse(value: &str) -> Option<Self> {
+        match value {
+            "start-command" => Some(Self::StartCommand),
+            "agent-resume" => Some(Self::AgentResume),
+            "none" => Some(Self::NoRestore),
+            _ => None,
+        }
+    }
+}
+
 /// The fully resolved settings after flags > env > file > defaults.
 /// `gen-config` renders exactly this; `reload-config` compares a re-read
 /// file's daemon section against the daemon's startup copy of it.

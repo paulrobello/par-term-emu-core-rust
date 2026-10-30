@@ -176,6 +176,10 @@ fn layout_rejects_bad_name_without_io() {
 /// Commands restores handed the factory, in spawn order.
 type RecordedCommands = Vec<(PaneId, Option<String>)>;
 
+/// The `PAR_MUX_RESUME_SESSION_ID` values restores handed the factory,
+/// in spawn order.
+type RecordedResumeIds = Vec<(PaneId, Option<String>)>;
+
 /// Records the command each restore computed, delegating the actual
 /// spawn to a bounded sleeper: restoring an agent pane must not launch a
 /// real agent CLI from a unit test, and the recorded value is the
@@ -187,6 +191,9 @@ struct RecordingFactory {
     /// The size each pane was created at, in spawn order — the grid
     /// allocation input (ARC-113b).
     sizes: std::sync::Arc<std::sync::Mutex<Vec<(PaneId, u16, u16)>>>,
+    /// The `PAR_MUX_RESUME_SESSION_ID` each restore handed the factory,
+    /// in spawn order — the start-command wrapper's resume hook.
+    resume_ids: std::sync::Arc<std::sync::Mutex<RecordedResumeIds>>,
 }
 
 impl RecordingFactory {
@@ -197,6 +204,16 @@ impl RecordingFactory {
             .iter()
             .find(|(pane, _)| *pane == id)
             .and_then(|(_, command)| command.clone())
+    }
+
+    /// The `PAR_MUX_RESUME_SESSION_ID` pane `id` was spawned with.
+    fn resume_session_id_for(&self, id: PaneId) -> Option<String> {
+        self.resume_ids
+            .lock()
+            .unwrap()
+            .iter()
+            .find(|(pane, _)| *pane == id)
+            .and_then(|(_, value)| value.clone())
     }
 
     /// The size pane `id` was created at — what its grid was allocated
@@ -226,6 +243,12 @@ impl PaneFactory for RecordingFactory {
             .unwrap()
             .push((id, command.map(str::to_string)));
         self.sizes.lock().unwrap().push((id, cols, rows));
+        self.resume_ids.lock().unwrap().push((
+            id,
+            context
+                .env
+                .and_then(|env| env.get("PAR_MUX_RESUME_SESSION_ID").cloned()),
+        ));
         ShellPaneFactory::default().create_pane(id, cols, rows, Some("sleep 60"), context)
     }
 
@@ -3022,4 +3045,178 @@ fn previous_format_version_is_refused() {
         ),
         "a v1 file must be refused, not partially read as v2"
     );
+}
+
+/// A pane created with the restore-start-command option keeps its start
+/// command across a restart even after its agent reported a session —
+/// the hook-reported argv and the per-agent table both lose — and the
+/// reported session id reaches that command as `PAR_MUX_RESUME_SESSION_ID`
+/// so a wrapper can pass `--resume` itself. The identity still rides back,
+/// so the roster keeps the pane.
+#[test]
+fn a_flagged_pane_restores_via_its_start_command_with_the_resume_session_id() {
+    let (mut tree, pane_id) =
+        tree_with_metadata(&[("agent", "claude"), ("agent_session_id", "s-9")]);
+    tree.pane_mut(pane_id)
+        .unwrap()
+        .set_restore_start_command(true);
+    let mut state = tree.to_persist_state();
+    state.sessions[0].windows[0].panes[0].spawn_command =
+        Some("claude-wrapper --model sonnet --plugin-dir /opt/mod".to_string());
+
+    let factory = RecordingFactory::default();
+    let restored = MuxTree::from_persist_state(&state, Box::new(factory.clone())).unwrap();
+    assert_eq!(
+        factory.command_for(pane_id).as_deref(),
+        Some("claude-wrapper --model sonnet --plugin-dir /opt/mod"),
+        "the start command re-runs with every flag, not the resume shape"
+    );
+    assert_eq!(
+        factory.resume_session_id_for(pane_id).as_deref(),
+        Some("s-9"),
+        "the hook-reported id reaches the start command as PAR_MUX_RESUME_SESSION_ID"
+    );
+    let claim = restored
+        .pane(pane_id)
+        .unwrap()
+        .agent_claim()
+        .expect("the identity still rides back");
+    assert_eq!(
+        claim.session_id.as_deref(),
+        Some("s-9"),
+        "the roster keeps the reported session"
+    );
+}
+
+/// The workspace-level `start-command` policy does for every pane in the
+/// workspace what the per-pane flag does for one, with no flag set.
+#[test]
+fn the_workspace_start_command_policy_restores_agent_panes_via_their_start_commands() {
+    let (tree, pane_id) = tree_with_metadata(&[("agent", "claude"), ("agent_session_id", "s-1")]);
+    let mut state = tree.to_persist_state();
+    state.sessions[0].windows[0].panes[0].spawn_command = Some("bash -l".to_string());
+    state.workspaces[0].restore_policy = Some("start-command".to_string());
+
+    let factory = RecordingFactory::default();
+    MuxTree::from_persist_state(&state, Box::new(factory.clone())).unwrap();
+    assert_eq!(
+        factory.command_for(pane_id).as_deref(),
+        Some("bash -l"),
+        "the workspace policy re-runs the start command, not a resume"
+    );
+}
+
+/// `none` disables restore of the workspace's panes entirely: their
+/// sessions never rebuild, the workspace itself restores empty (the same
+/// state `new-workspace` creates), and sibling workspaces are untouched.
+#[test]
+fn the_workspace_none_policy_drops_its_panes_and_keeps_the_workspace() {
+    let mut tree = tree();
+    let keep = tree.new_session("keep", 80, 24).unwrap();
+    let drop_workspace = tree.new_workspace("drop");
+    let drop = tree.new_session("drop-agent", 80, 24).unwrap();
+    let drop_pane = tree
+        .session(drop)
+        .unwrap()
+        .windows
+        .iter()
+        .filter_map(|w| tree.window(*w))
+        .flat_map(|w| w.panes())
+        .next()
+        .unwrap();
+    let mut state = tree.to_persist_state();
+    let workspace = state
+        .workspaces
+        .iter_mut()
+        .find(|w| w.id == drop_workspace.0)
+        .expect("the drop workspace was captured");
+    workspace.restore_policy = Some("none".to_string());
+
+    let restored =
+        MuxTree::from_persist_state(&state, Box::new(RecordingFactory::default())).unwrap();
+    assert!(
+        restored.session(drop).is_none(),
+        "the none workspace's session never restores"
+    );
+    assert!(restored.pane(drop_pane).is_none());
+    assert!(restored.session(keep).is_some(), "siblings are untouched");
+    assert!(
+        restored
+            .workspaces
+            .values()
+            .any(|w| w.name == "drop" && w.sessions.is_empty()),
+        "the workspace itself survives, empty"
+    );
+    tree_consistency(&restored);
+}
+
+/// The workspace policy and the pane flag are part of the saved state:
+/// the tree setter lands them on the wire, the JSON round trip keeps
+/// them, and a pre-flag state file (fields stripped, the shape an older
+/// daemon writes) loads with the defaults.
+#[test]
+fn restore_policy_and_the_pane_flag_round_trip_through_the_state_file() {
+    let mut tree = tree();
+    let workspace = tree.new_workspace("policy");
+    let session = tree.new_session("policy", 80, 24).unwrap();
+    let pane_id = tree
+        .session(session)
+        .unwrap()
+        .windows
+        .iter()
+        .filter_map(|w| tree.window(*w))
+        .flat_map(|w| w.panes())
+        .next()
+        .unwrap();
+    tree.set_workspace_restore_policy(
+        workspace,
+        Some(crate::mux::config::RestorePolicy::StartCommand),
+    )
+    .unwrap();
+    tree.pane_mut(pane_id)
+        .unwrap()
+        .set_restore_start_command(true);
+
+    let state = tree.to_persist_state();
+    let saved_workspace = state
+        .workspaces
+        .iter()
+        .find(|w| w.id == workspace.0)
+        .expect("the policy workspace was captured");
+    assert_eq!(
+        saved_workspace.restore_policy.as_deref(),
+        Some("start-command"),
+        "the workspace policy is on the wire"
+    );
+    assert!(
+        state.sessions[0].windows[0].panes[0].restore_start_command,
+        "the pane flag is on the wire"
+    );
+
+    let json = serde_json::to_string(&state).unwrap();
+    let state: PersistState = serde_json::from_str(&json).unwrap();
+    assert_eq!(
+        state.workspaces[0].restore_policy.as_deref(),
+        Some("start-command"),
+        "the policy survives the JSON round trip"
+    );
+    assert!(
+        state.sessions[0].windows[0].panes[0].restore_start_command,
+        "the flag survives the JSON round trip"
+    );
+
+    // A state file written before the fields existed (an older daemon's
+    // shape) loads with the defaults — serde default, not an error.
+    let mut value = serde_json::to_value(&state).unwrap();
+    value["workspaces"][0]
+        .as_object_mut()
+        .unwrap()
+        .remove("restore_policy");
+    value["sessions"][0]["windows"][0]["panes"][0]
+        .as_object_mut()
+        .unwrap()
+        .remove("restore_start_command");
+    let state: PersistState = serde_json::from_value(value).unwrap();
+    assert_eq!(state.workspaces[0].restore_policy, None);
+    assert!(!state.sessions[0].windows[0].panes[0].restore_start_command);
 }

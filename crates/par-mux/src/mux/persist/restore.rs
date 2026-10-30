@@ -74,7 +74,35 @@ impl MuxTree {
         let mut cwd_fallbacks: HashMap<u32, String> = HashMap::new();
         let mut note_batches = Vec::new();
 
+        // Each session's workspace restore policy, read before the pane
+        // loop: panes spawn before `restore_workspaces` re-links the
+        // workspaces, so the policy travels by session id. An unknown
+        // spelling (a hand-edited file) degrades to the default.
+        let mut policy_of_session: HashMap<u32, crate::mux::config::RestorePolicy> = HashMap::new();
+        for workspace in &state.workspaces {
+            let Some(policy) = workspace
+                .restore_policy
+                .as_deref()
+                .and_then(crate::mux::config::RestorePolicy::parse)
+            else {
+                continue;
+            };
+            for session_id in &workspace.sessions {
+                policy_of_session.insert(*session_id, policy);
+            }
+        }
+        // `none` disables restore of the workspace's panes entirely: the
+        // workspace itself still restores (empty), its sessions never do.
+        let no_restore: std::collections::HashSet<u32> = policy_of_session
+            .iter()
+            .filter(|(_, policy)| **policy == crate::mux::config::RestorePolicy::NoRestore)
+            .map(|(session_id, _)| *session_id)
+            .collect();
+
         for session in &state.sessions {
+            if no_restore.contains(&session.id) {
+                continue;
+            }
             let mut session_windows = Vec::with_capacity(session.windows.len());
             for window in &session.windows {
                 // The state file is untrusted input: the window size feeds
@@ -89,6 +117,7 @@ impl MuxTree {
                         window.id,
                         pane,
                         (cols, rows),
+                        policy_of_session.get(&session.id).copied(),
                         agent_append,
                         &mut cwd_fallbacks,
                     )?;
@@ -178,6 +207,10 @@ impl MuxTree {
                         .exit_action
                         .as_deref()
                         .and_then(crate::mux::config::ExitAction::parse),
+                    restore_policy: workspace
+                        .restore_policy
+                        .as_deref()
+                        .and_then(crate::mux::config::RestorePolicy::parse),
                     worktree: workspace
                         .worktree
                         .as_ref()
@@ -227,55 +260,81 @@ impl MuxTree {
 /// persisted cwd. Then re-attach its agent identity, user title, and (for
 /// a dead pane) its OSC 7 cwd. A cwd that vanished records a note in
 /// `cwd_fallbacks` for [`restore_pane_screen`] to print.
+#[allow(clippy::too_many_arguments)]
 fn spawn_restored_pane(
     factory: &dyn PaneFactory,
     session: &PersistSession,
     window_id: u32,
     pane: &PersistPane,
     (cols, rows): (u16, u16),
+    restore_policy: Option<crate::mux::config::RestorePolicy>,
     agent_append: &crate::mux::config::AgentAppend,
     cwd_fallbacks: &mut HashMap<u32, String>,
 ) -> Result<crate::mux::pane::MuxPane, PersistError> {
     // The effective command (D6.3): a resumable agent session rewrites
-    // what the pane respawns as — the hook-reported invocation first, the
-    // per-agent table second, handed to the factory as STRUCTURED argv so
-    // Windows can spawn without a cmd.exe string re-parse (the factory's
-    // string path POSIX-quotes, which cmd treats as literal characters).
-    // Every failure mode of that chain is an Option degrading to the
-    // pane's original `spawn_command`, exactly Phase 3 behavior; no retry
-    // and no probe (an agent that accepts a resume flag and starts fresh
-    // is 6.4's after-the-fact question, not spawn time's). A chain that
-    // BUILDS but fails at runtime (uninstalled binary, rejected session
-    // id) renders with a fallback tail so the failure lands the pane on a
-    // live shell rather than a reaper deletion.
+    // what the pane respawns as. The start-command choice (the pane's own
+    // `--restore start-command` flag, or its workspace's
+    // `start-command` policy) re-runs the ORIGINAL start command — every
+    // flag — exporting the hook-reported session id as
+    // PAR_MUX_RESUME_SESSION_ID, so a supervised wrapper passes --resume
+    // itself. Otherwise the historical resume chain: the hook-reported
+    // invocation first, the per-agent table second, handed to the factory
+    // as STRUCTURED argv so Windows can spawn without a cmd.exe string
+    // re-parse (the factory's string path POSIX-quotes, which cmd treats
+    // as literal characters), with the `[daemon.agent-append]` words
+    // riding along, deduped against the tokens the resume shape itself
+    // carries. Every failure mode of that chain is an Option degrading to
+    // the pane's original `spawn_command`, exactly Phase 3 behavior; no
+    // retry and no probe (an agent that accepts a resume flag and starts
+    // fresh is 6.4's after-the-fact question, not spawn time's). A chain
+    // that BUILDS but fails at runtime (uninstalled binary, rejected
+    // session id) renders with a fallback tail so the failure lands the
+    // pane on a live shell rather than a reaper deletion.
     // A pane persisted held-dead has no process to resume or to land in a
     // cwd: it is rebuilt processless below, so neither the agent resume
     // invocation nor the cwd spawn logic runs for it (ARC-114).
-    let resume_argv = pane
-        .agent_session
-        .as_ref()
-        .filter(|_| !pane.dead)
-        .map(|agent_session| {
-            // The [daemon.agent-append] words ride along on the resume
-            // argv too: a restart-resumed claude gets the same flags an
-            // `agent-start` would have typed, deduped against the tokens
-            // the resume shape itself carries.
-            resume_invocation(agent_session).map(|argv| {
-                crate::mux::agent_resume::argv_with_agent_append(
-                    argv,
-                    &agent_session.agent,
-                    agent_append,
-                    pane.cwd.as_deref(),
-                    pane.id,
-                )
+    let via_start_command = !pane.dead
+        && (pane.restore_start_command
+            || restore_policy == Some(crate::mux::config::RestorePolicy::StartCommand));
+    let resume_argv = if via_start_command {
+        None
+    } else {
+        pane.agent_session
+            .as_ref()
+            .filter(|_| !pane.dead)
+            .map(|agent_session| {
+                resume_invocation(agent_session).map(|argv| {
+                    crate::mux::agent_resume::argv_with_agent_append(
+                        argv,
+                        &agent_session.agent,
+                        agent_append,
+                        pane.cwd.as_deref(),
+                        pane.id,
+                    )
+                })
             })
-        })
-        .and_then(|argv| argv);
+            .and_then(|argv| argv)
+    };
+    // The wrapper's resume hook: only the start-command path exports the
+    // id (the resume shapes carry their own ref); the session env
+    // otherwise rides verbatim.
+    let resume_env = if via_start_command {
+        pane.agent_session
+            .as_ref()
+            .and_then(|agent| agent.session_id.as_deref())
+            .map(|id| {
+                let mut env = session.env.clone();
+                env.insert("PAR_MUX_RESUME_SESSION_ID".to_string(), id.to_string());
+                env
+            })
+    } else {
+        None
+    };
     let cwd = restored_spawn_cwd(pane, cwd_fallbacks);
     let context = SpawnContext {
         session: Some((SessionId(session.id), &session.name)),
         window: Some(WindowId(window_id)),
-        env: Some(&session.env),
+        env: Some(resume_env.as_ref().unwrap_or(&session.env)),
         cwd: cwd.as_deref(),
         // No client can connect before the accept loop starts, so restore
         // wires after the tree is built (`MuxServer::bind_with_tree`); the

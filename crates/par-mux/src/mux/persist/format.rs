@@ -219,6 +219,17 @@ pub struct PersistWorkspace {
         serde(default, skip_serializing_if = "Option::is_none")
     )]
     pub worktree: Option<PersistWorktreeLink>,
+    /// The workspace's restore policy
+    /// ([`crate::mux::config::RestorePolicy`], the
+    /// `set-workspace-restore-policy` choice), stored as its spelled
+    /// name. Absent (the `agent-resume` default) in files written before
+    /// the option existed, and omitted while unset so those files keep
+    /// their shape.
+    #[cfg_attr(
+        feature = "serde",
+        serde(default, skip_serializing_if = "Option::is_none")
+    )]
+    pub restore_policy: Option<String>,
 }
 
 /// A persisted [`crate::mux::tree::WorktreeLink`]. Paths are stored the
@@ -362,6 +373,18 @@ pub struct PersistPane {
         serde(default, skip_serializing_if = "Option::is_none")
     )]
     pub exit_code: Option<i32>,
+    /// The pane was created with `--restore start-command`: a restore
+    /// re-runs its start command — every flag — instead of an agent
+    /// resume invocation, handing the hook-reported session id to the
+    /// command as `PAR_MUX_RESUME_SESSION_ID` so a wrapper can pass
+    /// `--resume` itself. Skipped when false and defaulted on load, so
+    /// pre-flag save files restore exactly as before (and an older
+    /// daemon reading a newer file ignores the field).
+    #[cfg_attr(
+        feature = "serde",
+        serde(default, skip_serializing_if = "std::ops::Not::not")
+    )]
+    pub restore_start_command: bool,
 }
 
 /// The agent-session identity hooks write into pane metadata, persisted so

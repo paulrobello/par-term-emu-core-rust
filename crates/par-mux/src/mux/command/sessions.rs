@@ -5,7 +5,8 @@ use super::*;
 /// tmux's value-taking `new-session` flags, so a tmux-shaped sender's
 /// `-x 80` is not misread as a start command (QA-219). `-F`/`-f` are NOT
 /// here: this parser rejects them loudly (nothing is silently dropped).
-pub(super) const NEW_SESSION_VALUE_FLAGS: &[&str] = &["-s", "-e", "-c", "-n", "-t", "-x", "-y"];
+pub(super) const NEW_SESSION_VALUE_FLAGS: &[&str] =
+    &["-s", "-e", "-c", "-n", "-t", "-x", "-y", "--restore"];
 
 /// The flags `new-session` refuses rather than ignores (R3): `-F`
 /// (format) and `-f` have no meaning on a create command, and a silent
@@ -70,6 +71,7 @@ pub(super) fn parse_new_session(a: &Args<'_>) -> Result<MuxCommand, String> {
     let start_dir = a.quoted_flag("-c")?;
     let cols = a.size("-x")?;
     let rows = a.size("-y")?;
+    let restore_start_command = parse_restore_start_command(&a, command.as_deref())?;
     Ok(MuxCommand::NewSession {
         name,
         env,
@@ -79,7 +81,33 @@ pub(super) fn parse_new_session(a: &Args<'_>) -> Result<MuxCommand, String> {
         cols,
         rows,
         command,
+        restore_start_command,
     })
+}
+
+/// The create commands' `--restore start-command` flag: the pane keeps
+/// its start command across restarts (the supervised-wrapper contract) —
+/// a restore re-runs the start command instead of an agent resume
+/// invocation, and the hook-reported session id reaches it as
+/// `PAR_MUX_RESUME_SESSION_ID`. A value other than `start-command` is
+/// refused loudly, and so is the flag without a start command: a default
+/// shell has nothing to keep.
+fn parse_restore_start_command(a: &Args<'_>, command: Option<&str>) -> Result<bool, String> {
+    match a.flag("--restore") {
+        None => Ok(false),
+        Some(value) if value.trim() == "start-command" => {
+            command.is_some().then_some(true).ok_or_else(|| {
+                format!(
+                    "{}: --restore start-command requires a start command",
+                    a.name
+                )
+            })
+        }
+        Some(other) => Err(format!(
+            "{}: --restore expects start-command, got {other:?}",
+            a.name
+        )),
+    }
 }
 
 /// Refuse every word of `a` that is neither one of its value flags (with
@@ -298,6 +326,30 @@ pub(super) fn parse_set_exit_action(a: &Args<'_>) -> Result<MuxCommand, String> 
         _ => return Err("set-exit-action takes at most one value".to_string()),
     };
     Ok(MuxCommand::SetExitAction { workspace, action })
+}
+
+/// `set-workspace-restore-policy -t +N [start-command|agent-resume|none]`
+/// — at most one value word; none is the query form.
+pub(super) fn parse_set_workspace_restore_policy(a: &Args<'_>) -> Result<MuxCommand, String> {
+    let (lead, positional) = target_then_words(a)?;
+    let raw = required_target(a, &lead)?;
+    let workspace = Target::parse(raw).map_err(|_| format!("invalid workspace target: {raw}"))?;
+    let policy = match positional.as_slice() {
+        [] => None,
+        [value] => Some(
+            crate::mux::config::RestorePolicy::parse(value).ok_or_else(|| {
+                format!(
+                    "set-workspace-restore-policy: expected start-command, agent-resume, or none, got {value:?}"
+                )
+            })?,
+        ),
+        _ => {
+            return Err(
+                "set-workspace-restore-policy takes at most one value".to_string(),
+            )
+        }
+    };
+    Ok(MuxCommand::SetWorkspaceRestorePolicy { workspace, policy })
 }
 
 /// `kill-workspace -t +N [-g]`.

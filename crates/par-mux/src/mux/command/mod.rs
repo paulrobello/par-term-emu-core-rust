@@ -137,6 +137,12 @@ pub enum MuxCommand {
         /// default shell (same shell handling as `respawn-pane`'s
         /// command).
         command: Option<String>,
+        /// `--restore start-command`: a restart re-runs the start command
+        /// — every flag — instead of an agent resume invocation, handing
+        /// the hook-reported session id to it as
+        /// `PAR_MUX_RESUME_SESSION_ID` so a wrapper passes `--resume`
+        /// itself. Requires the start command.
+        restore_start_command: bool,
     },
     /// List live panes: globally when `target` is `None`, or the panes of
     /// one window when a target rides `-t` — a window (`@N`/name)
@@ -661,6 +667,18 @@ pub enum MuxCommand {
         /// `None` = query.
         action: Option<crate::mux::config::ExitAction>,
     },
+    /// Set or read a workspace's restore policy (`set-workspace-restore-
+    /// policy -t +N [start-command|agent-resume|none]`): what a restart
+    /// does with the workspace's panes — re-run their start commands,
+    /// rebuild them through agent resume invocations (the default), or
+    /// restore nothing in the workspace at all. Replies the resulting
+    /// effective value; the bare form is a read-only query.
+    SetWorkspaceRestorePolicy {
+        /// Target workspace.
+        workspace: Target<WorkspaceId>,
+        /// `None` = query.
+        policy: Option<crate::mux::config::RestorePolicy>,
+    },
     /// Kill a workspace and every session, window, and pane in it
     /// (`kill-workspace -t +N [-g]`). A repo workspace with open linked
     /// worktree workspaces is refused unless `-g` closes the whole group.
@@ -847,6 +865,7 @@ impl MuxCommand {
             // The query form reads only.
             MuxCommand::SetWorkspaceRespawn { change, .. } => change.is_some(),
             MuxCommand::SetExitAction { action, .. } => action.is_some(),
+            MuxCommand::SetWorkspaceRestorePolicy { policy, .. } => policy.is_some(),
             MuxCommand::RefreshClient { size, .. } => size.is_some(),
             // The query form reads only; a switch moves persisted pointers.
             MuxCommand::SwitchClient { target } => target.is_some(),
@@ -1593,6 +1612,11 @@ const COMMANDS: &[(&str, CommandParser, &[&str])] = &[
     ("kill-workspace", parse_kill_workspace, &["group"]),
     ("set-workspace-respawn", parse_set_workspace_respawn, &[]),
     ("set-exit-action", parse_set_exit_action, &[]),
+    (
+        "set-workspace-restore-policy",
+        parse_set_workspace_restore_policy,
+        &[],
+    ),
     ("list-panes", parse_list_panes, &["targeted", "format"]),
     ("list-agents", parse_list_agents, &[]),
     ("report-state", parse_report_state, &[]),

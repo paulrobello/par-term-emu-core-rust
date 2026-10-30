@@ -1118,3 +1118,195 @@ fn workspaces_survive_a_restart() {
     }
     sigterm_clean(&mut second);
 }
+
+/// One hook report over its own one-line connection — the send-one-JSON,
+/// read-one-reply, close shape the agent hooks use (`parse_line` routes a
+/// `{` line from any connection to the hook layer).
+fn hook_report(path: &std::path::Path, json: &str) -> String {
+    use std::io::Write as _;
+    use std::os::unix::net::UnixStream;
+    let mut stream = UnixStream::connect(path).expect("hook connection accepted");
+    stream
+        .set_read_timeout(Some(common::CEILING))
+        .expect("timeout installs");
+    writeln!(stream, "{json}").expect("write report");
+    stream.flush().expect("flush");
+    let mut reply = String::new();
+    {
+        use std::io::BufRead as _;
+        BufReader::new(stream.try_clone().expect("clone"))
+            .read_line(&mut reply)
+            .expect("one reply line");
+    }
+    reply
+}
+
+/// Poll a marker file until it holds `want` lines — a pane's start command
+/// writes its evidence from inside the pane, so it lands asynchronously.
+fn wait_marker_lines(path: &std::path::Path, want: usize, what: &str) -> Vec<String> {
+    let deadline = std::time::Instant::now() + common::CEILING;
+    loop {
+        let lines: Vec<String> = std::fs::read_to_string(path)
+            .map(|text| text.lines().map(str::to_string).collect())
+            .unwrap_or_default();
+        if lines.len() >= want {
+            return lines;
+        }
+        assert!(
+            std::time::Instant::now() < deadline,
+            "never saw {want} line(s) in {} for {what}",
+            path.display()
+        );
+        std::thread::sleep(std::time::Duration::from_millis(50));
+    }
+}
+
+/// A pane created with `--restore start-command` is restored by re-running
+/// its start command — every flag — even after its agent reported a
+/// session (the default would rebuild `claude --resume <id>` and lose the
+/// wrapper's flags), and the reported session id reaches that command as
+/// `PAR_MUX_RESUME_SESSION_ID` so the wrapper can pass `--resume` itself.
+#[ignore = "load-sensitive: PTY/timing suite; run via make test-rust-sensitive or checkall-ci"]
+#[test]
+fn a_restart_reruns_a_flagged_panes_start_command_with_the_resume_session_id() {
+    let fixture = MuxFixture::new("restore-cmd");
+    let path = fixture.socket();
+    let marker = fixture.dir().join("wrapper.log");
+
+    let mut first = spawn_daemon(&fixture);
+    wait_listening(path);
+    {
+        let stream = connect_local_stream(path).expect("first daemon accepts");
+        let mut writer = stream.try_clone().expect("clone");
+        let mut reader = BufReader::new(stream);
+        let start_command = format!(
+            "printf 'wrapper resume=%s\\n' \"${{PAR_MUX_RESUME_SESSION_ID:-unset}}\" >> {}; exec sleep 300",
+            marker.display()
+        );
+        command(
+            &mut writer,
+            &mut reader,
+            &format!("new-session -s agent --restore start-command {start_command}"),
+        );
+        let pane = pane_ids(&command(&mut writer, &mut reader, "list-panes").join(""))
+            .first()
+            .expect("new-session created a pane")
+            .clone();
+        wait_marker_lines(&marker, 1, "the wrapper's first run");
+
+        // The agent reports its session through the hook layer, exactly as
+        // claude's SessionStart does — identity enough for the DEFAULT
+        // restore to rebuild `claude --resume <id>` instead.
+        let reply = hook_report(
+            path,
+            &format!(
+                r#"{{"id":1,"method":"pane.report_agent_session","params":{{"pane_id":"{pane}","agent":"claude","agent_session_id":"sess-restore-9","seq":1,"source":"par-mux:test"}}}}"#
+            ),
+        );
+        assert!(
+            reply.contains(r#""result":"ok""#),
+            "report accepted: {reply}"
+        );
+    }
+    sigterm_clean(&mut first);
+
+    let mut second = spawn_daemon(&fixture);
+    wait_listening(path);
+    // The restore runs at daemon startup; the wrapper's run-2 evidence is
+    // the file it appends to, not a daemon reply.
+    let lines = wait_marker_lines(&marker, 2, "the restored wrapper's run");
+    assert_eq!(
+        lines.len(),
+        2,
+        "the start command ran once per daemon: {lines:?}"
+    );
+    assert!(
+        lines[0].contains("wrapper resume=unset"),
+        "run 1 predates any session id: {lines:?}"
+    );
+    assert!(
+        lines[1].contains("wrapper resume=sess-restore-9"),
+        "run 2 re-ran the start command carrying the reported session id: {lines:?}"
+    );
+    assert!(
+        !lines[1].contains("--resume"),
+        "the wrapper ran verbatim, not a rebuilt resume shape: {lines:?}"
+    );
+    sigterm_clean(&mut second);
+}
+
+/// A workspace's `none` restore policy disables restore of its panes
+/// entirely: the session never rebuilds, the workspace itself comes back
+/// (empty), and sibling sessions restore normally.
+#[ignore = "load-sensitive: PTY/timing suite; run via make test-rust-sensitive or checkall-ci"]
+#[test]
+fn a_workspace_none_policy_drops_its_panes_at_the_next_restore() {
+    let fixture = MuxFixture::new("restore-none");
+    let path = fixture.socket();
+
+    let mut first = spawn_daemon(&fixture);
+    wait_listening(path);
+    {
+        let stream = connect_local_stream(path).expect("first daemon accepts");
+        let mut writer = stream.try_clone().expect("clone");
+        let mut reader = BufReader::new(stream);
+        for (line, what) in [
+            ("new-session -s kept", "the kept session"),
+            ("new-workspace -n drop", "the drop workspace"),
+            ("new-session -s doomed", "the doomed session"),
+        ] {
+            let reply = command(&mut writer, &mut reader, line).join("");
+            assert!(!reply.contains("%error"), "{what} failed: {reply}");
+        }
+        let workspaces = command(&mut writer, &mut reader, "list-workspaces").join("");
+        assert!(
+            workspaces.lines().any(|l| l.contains("drop")),
+            "the drop workspace exists before the policy is set: {workspaces}"
+        );
+        let set = command(
+            &mut writer,
+            &mut reader,
+            "set-workspace-restore-policy -t drop none",
+        )
+        .join("");
+        assert!(
+            set.lines().any(|l| l.trim() == "none"),
+            "the set replies the resulting policy: {set}"
+        );
+        let query = command(
+            &mut writer,
+            &mut reader,
+            "set-workspace-restore-policy -t drop",
+        )
+        .join("");
+        assert!(
+            query.lines().any(|l| l.trim() == "none"),
+            "the bare form reads the stored policy: {query}"
+        );
+    }
+    sigterm_clean(&mut first);
+
+    let mut second = spawn_daemon(&fixture);
+    wait_listening(path);
+    {
+        let stream = connect_local_stream(path).expect("second daemon accepts");
+        let mut writer = stream.try_clone().expect("clone");
+        let mut reader = BufReader::new(stream);
+        let kept = command(&mut writer, &mut reader, "has-session -t kept").join("");
+        assert!(
+            !kept.contains("%error"),
+            "the sibling session restored: {kept}"
+        );
+        let doomed = command(&mut writer, &mut reader, "has-session -t doomed").join("");
+        assert!(
+            doomed.contains("%error"),
+            "the none workspace's session never restored: {doomed}"
+        );
+        let workspaces = command(&mut writer, &mut reader, "list-workspaces").join("");
+        assert!(
+            workspaces.lines().any(|l| l.contains("drop")),
+            "the workspace itself survives, empty: {workspaces}"
+        );
+    }
+    sigterm_clean(&mut second);
+}

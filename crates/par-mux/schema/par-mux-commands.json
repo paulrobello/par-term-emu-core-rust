@@ -271,12 +271,13 @@
         "-c",
         "-e",
         "-n",
+        "--restore",
         "-s",
         "-t",
         "-x",
         "-y"
       ],
-      "synopsis": "[-s name] [-e NAME=VALUE]… [-t <workspace>] [-n window-name] [-c dir] [-x cols] [-y rows] [--] [command]"
+      "synopsis": "[-s name] [-e NAME=VALUE]… [-t <workspace>] [-n window-name] [-c dir] [-x cols] [-y rows] [--restore start-command] [--] [command]"
     },
     {
       "name": "new-window",
@@ -514,6 +515,14 @@
         "-t"
       ],
       "synopsis": "-t <workspace> [on|off|toggle]"
+    },
+    {
+      "name": "set-workspace-restore-policy",
+      "features": [],
+      "flags": [
+        "-t"
+      ],
+      "synopsis": "-t <workspace> [start-command|agent-resume|none]"
     },
     {
       "name": "show-buffer",

@@ -16,6 +16,7 @@ pub(super) fn route_session_command(ctx: &Ctx<'_>, command: MuxCommand) -> Outco
             cols,
             rows,
             command,
+            restore_start_command,
         } => cmd_new_session(
             ctx,
             name,
@@ -26,6 +27,7 @@ pub(super) fn route_session_command(ctx: &Ctx<'_>, command: MuxCommand) -> Outco
             cols,
             rows,
             command,
+            restore_start_command,
         ),
         MuxCommand::RenameSession { session, name } => cmd_rename_session(ctx, session, name),
         MuxCommand::KillSession { session } => cmd_kill_session(ctx, session),
@@ -47,6 +49,9 @@ pub(super) fn route_session_command(ctx: &Ctx<'_>, command: MuxCommand) -> Outco
         MuxCommand::SetExitAction { workspace, action } => {
             cmd_set_exit_action(ctx, workspace, action)
         }
+        MuxCommand::SetWorkspaceRestorePolicy { workspace, policy } => {
+            cmd_set_workspace_restore_policy(ctx, workspace, policy)
+        }
         MuxCommand::KillServer => cmd_kill_server(ctx),
         other => unreachable!("route_command sent a non-session command: {other:?}"),
     }
@@ -63,6 +68,7 @@ pub(super) fn cmd_new_session(
     cols: Option<u16>,
     rows: Option<u16>,
     command: Option<String>,
+    restore_start_command: bool,
 ) -> Outcome {
     let env: std::collections::BTreeMap<String, String> = env.into_iter().collect();
     let (cwd, note) = resolve_start_dir(start_dir.as_deref());
@@ -96,10 +102,18 @@ pub(super) fn cmd_new_session(
         (name, plan.with_cwd(cwd), guard.factory())
     };
     let window_id = plan.window_id;
+    let first_pane_id = plan.pane_id;
     let outcome = spawn_and_wire(ctx, &*factory, plan, command.as_deref(), note.as_deref())
         .map(|session_id| (session_id, vec![window_id]));
     match outcome {
         Ok((session_id, window_ids)) => {
+            if restore_start_command {
+                // Record the pane's restore choice; it persists with the
+                // tree and a restart re-runs the start command for it.
+                if let Some(pane) = ctx.tree.lock().pane_mut(first_pane_id) {
+                    pane.set_restore_start_command(true);
+                }
+            }
             let mut result = Outcome::ok(ctx, &session_id.to_string());
             for window in window_ids {
                 result = result.notifying(window_add_notification(ctx.tree, window));
@@ -635,6 +649,32 @@ pub(super) fn cmd_set_exit_action(
                 .map(|config| config.lock().exit_action)
                 .unwrap_or(crate::mux::config::ExitAction::Hold)
         });
+    Outcome::ok(ctx, effective.name())
+}
+
+/// `set-workspace-restore-policy`: apply the choice (if any) and reply the
+/// resulting effective policy — the workspace's own when it has chosen
+/// one, `agent-resume` (the historical resume-invocation behavior) when it
+/// has not.
+pub(super) fn cmd_set_workspace_restore_policy(
+    ctx: &Ctx<'_>,
+    workspace: Target<WorkspaceId>,
+    policy: Option<crate::mux::config::RestorePolicy>,
+) -> Outcome {
+    let mut guard = ctx.tree.lock();
+    let workspace = match guard.resolve_workspace_target(workspace) {
+        Ok(id) => id,
+        Err(err) => return Outcome::err(ctx, &err.to_string()),
+    };
+    if let Some(next) = policy {
+        if let Err(err) = guard.set_workspace_restore_policy(workspace, Some(next)) {
+            return Outcome::err(ctx, &err.to_string());
+        }
+    }
+    let effective = guard
+        .workspace(workspace)
+        .and_then(|ws| ws.restore_policy)
+        .unwrap_or(crate::mux::config::RestorePolicy::AgentResume);
     Outcome::ok(ctx, effective.name())
 }
 

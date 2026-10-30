@@ -121,6 +121,7 @@ fn parses_new_session_with_a_name() {
     assert_eq!(
         cmd,
         MuxCommand::NewSession {
+            restore_start_command: false,
             name: Some("work".into()),
             env: vec![],
             workspace: None,
@@ -139,6 +140,7 @@ fn parses_new_session_env_assignments_in_order_with_quoting() {
     assert_eq!(
         cmd,
         MuxCommand::NewSession {
+            restore_start_command: false,
             name: Some("work".into()),
             env: vec![
                 ("A".into(), "1".into()),
@@ -222,6 +224,7 @@ fn parses_new_session_without_a_name() {
     assert_eq!(
         cmd,
         MuxCommand::NewSession {
+            restore_start_command: false,
             name: None,
             env: vec![],
             workspace: None,
@@ -246,6 +249,7 @@ fn new_session_keeps_a_quoted_name_whole() {
         assert_eq!(
             parse_command(line).expect("parses"),
             MuxCommand::NewSession {
+                restore_start_command: false,
                 name: Some("Par Mux Test".into()),
                 env: vec![],
                 workspace: None,
@@ -268,6 +272,7 @@ fn new_session_resolves_the_embedded_quote_idiom() {
     assert_eq!(
         cmd,
         MuxCommand::NewSession {
+            restore_start_command: false,
             name: Some("Paul's box".into()),
             env: vec![],
             workspace: None,
@@ -288,6 +293,7 @@ fn new_session_flat_names_are_unchanged() {
     assert_eq!(
         parse_command("new-session -s work").expect("parses"),
         MuxCommand::NewSession {
+            restore_start_command: false,
             name: Some("work".into()),
             env: vec![],
             workspace: None,
@@ -301,6 +307,7 @@ fn new_session_flat_names_are_unchanged() {
     assert_eq!(
         parse_command("new-session   -s   work  ").expect("parses"),
         MuxCommand::NewSession {
+            restore_start_command: false,
             name: Some("work".into()),
             env: vec![],
             workspace: None,
@@ -314,6 +321,7 @@ fn new_session_flat_names_are_unchanged() {
     assert_eq!(
         parse_command("new-session -s").expect("parses"),
         MuxCommand::NewSession {
+            restore_start_command: false,
             name: None,
             env: vec![],
             workspace: None,
@@ -329,6 +337,7 @@ fn new_session_flat_names_are_unchanged() {
     assert_eq!(
         parse_command(r"new-session -s a\b").expect("parses"),
         MuxCommand::NewSession {
+            restore_start_command: false,
             name: Some(r"a\b".into()),
             env: vec![],
             workspace: None,
@@ -348,6 +357,7 @@ fn quoted_names_may_look_like_flags() {
     assert_eq!(
         parse_command("new-session -s '-n'").expect("parses"),
         MuxCommand::NewSession {
+            restore_start_command: false,
             name: Some("-n".into()),
             env: vec![],
             workspace: None,
@@ -1849,6 +1859,7 @@ fn mutates_marks_exactly_the_structural_commands() {
     // file on success; content and read-only commands never do.
     let structural = [
         MuxCommand::NewSession {
+            restore_start_command: false,
             name: None,
             env: vec![],
             workspace: None,
@@ -2137,6 +2148,7 @@ fn parses_new_session_with_a_workspace_target() {
     assert_eq!(
         parse_command("new-session -t dev -s build").unwrap(),
         MuxCommand::NewSession {
+            restore_start_command: false,
             name: Some("build".to_string()),
             env: vec![],
             workspace: Some(Target::Name("dev".to_string())),
@@ -2150,6 +2162,7 @@ fn parses_new_session_with_a_workspace_target() {
     assert_eq!(
         parse_command("new-session").unwrap(),
         MuxCommand::NewSession {
+            restore_start_command: false,
             name: None,
             env: vec![],
             workspace: None,
@@ -2193,6 +2206,7 @@ fn parses_new_session_window_name_start_dir_and_size() {
     assert_eq!(
         cmd,
         MuxCommand::NewSession {
+            restore_start_command: false,
             name: Some("work".into()),
             env: vec![],
             workspace: Some(Target::Name("default".into())),
@@ -2829,6 +2843,7 @@ fn new_session_and_new_window_stop_reading_flags_at_the_start_command() {
     assert_eq!(
         parse_command("new-session -s a -- ssh -t host -e X=1 -c /x -n w -x 10").unwrap(),
         MuxCommand::NewSession {
+            restore_start_command: false,
             name: Some("a".into()),
             env: vec![],
             workspace: None,
@@ -2842,6 +2857,7 @@ fn new_session_and_new_window_stop_reading_flags_at_the_start_command() {
     assert_eq!(
         parse_command("new-session -s a sh -c 'echo hi'").unwrap(),
         MuxCommand::NewSession {
+            restore_start_command: false,
             name: Some("a".into()),
             env: vec![],
             workspace: None,
@@ -3123,6 +3139,7 @@ fn target_helpers_skip_flags_inside_quoted_values() {
     assert_eq!(
         parse_command("new-session -s 'w -t +9' -t +1 -n 'x -c /bad' -c /good").unwrap(),
         MuxCommand::NewSession {
+            restore_start_command: false,
             name: Some("w -t +9".into()),
             env: vec![],
             workspace: Some(Target::Id(WorkspaceId(1))),
@@ -3142,6 +3159,7 @@ fn numeric_flags_skip_flags_inside_quoted_values() {
     assert_eq!(
         parse_command("new-session -s 'w -x 5' -x 80").unwrap(),
         MuxCommand::NewSession {
+            restore_start_command: false,
             name: Some("w -x 5".into()),
             env: vec![],
             workspace: None,
@@ -3687,4 +3705,93 @@ fn report_state_rejects_message_without_state() {
 #[test]
 fn report_state_rejects_stray_words() {
     assert!(parse_command("report-state -t %3 stray").is_err());
+}
+
+#[test]
+fn parses_set_workspace_restore_policy_values_and_query() {
+    for (word, expected) in [
+        (
+            "start-command",
+            crate::mux::config::RestorePolicy::StartCommand,
+        ),
+        (
+            "agent-resume",
+            crate::mux::config::RestorePolicy::AgentResume,
+        ),
+        ("none", crate::mux::config::RestorePolicy::NoRestore),
+    ] {
+        let command = parse_command(&format!("set-workspace-restore-policy -t +1 {word}"))
+            .unwrap_or_else(|err| panic!("{word} parses: {err}"));
+        assert_eq!(
+            command,
+            MuxCommand::SetWorkspaceRestorePolicy {
+                workspace: Target::Id(WorkspaceId(1)),
+                policy: Some(expected),
+            }
+        );
+        assert!(command.mutates(), "{word} saves");
+    }
+    let query = parse_command("set-workspace-restore-policy -t main").unwrap();
+    assert_eq!(
+        query,
+        MuxCommand::SetWorkspaceRestorePolicy {
+            workspace: Target::Name("main".to_string()),
+            policy: None,
+        }
+    );
+    assert!(!query.mutates(), "the query form reads only");
+    assert!(
+        parse_command("set-workspace-restore-policy none").is_err(),
+        "-t required"
+    );
+    assert!(parse_command("set-workspace-restore-policy -t +1 maybe").is_err());
+    assert!(parse_command("set-workspace-restore-policy -t +1 none off").is_err());
+}
+
+#[test]
+fn parses_new_session_restore_start_command() {
+    let command = parse_command(
+        "new-session --restore start-command claude-wrapper --model sonnet --plugin-dir /opt/mod",
+    )
+    .unwrap();
+    let MuxCommand::NewSession {
+        command: start,
+        restore_start_command,
+        ..
+    } = command
+    else {
+        panic!("a new-session line parses to NewSession");
+    };
+    assert!(
+        restore_start_command,
+        "--restore start-command sets the pane's keep flag"
+    );
+    assert_eq!(
+        start.as_deref(),
+        Some("claude-wrapper --model sonnet --plugin-dir /opt/mod"),
+        "the start command rides whole after the flag"
+    );
+
+    // The plain create is unchanged.
+    let command = parse_command("new-session -s dev").unwrap();
+    let MuxCommand::NewSession {
+        restore_start_command,
+        ..
+    } = command
+    else {
+        panic!("a new-session line parses to NewSession");
+    };
+    assert!(!restore_start_command);
+}
+
+#[test]
+fn new_session_restore_flag_rejects_bad_values_and_a_missing_start_command() {
+    assert!(
+        parse_command("new-session --restore agent-resume claude").is_err(),
+        "the create flag has one value"
+    );
+    assert!(
+        parse_command("new-session --restore start-command").is_err(),
+        "a default shell has nothing to keep"
+    );
 }

@@ -65,6 +65,7 @@ struct WorkspaceCapture {
     sessions: Vec<SessionId>,
     respawn_last: bool,
     exit_action: Option<crate::mux::config::ExitAction>,
+    restore_policy: Option<crate::mux::config::RestorePolicy>,
     worktree: Option<crate::mux::tree::WorktreeLink>,
 }
 
@@ -94,6 +95,7 @@ struct PaneCapture {
     agent_session: Option<PersistAgentSession>,
     dead: bool,
     exit_code: Option<i32>,
+    restore_start_command: bool,
 }
 
 impl PersistCapture {
@@ -111,6 +113,10 @@ impl PersistCapture {
                 active_session_index: workspace.active,
                 respawn_last: workspace.respawn_last,
                 exit_action: workspace.exit_action.map(|a| a.name().to_string()),
+                restore_policy: workspace
+                    .restore_policy
+                    .map(crate::mux::config::RestorePolicy::name)
+                    .map(str::to_string),
                 worktree: workspace.worktree.as_ref().map(PersistWorktreeLink::from),
                 sessions: workspace
                     .sessions
@@ -156,6 +162,7 @@ impl PersistCapture {
                                 cwd_host: pane.parts.cwd_host(),
                                 dead: pane.dead,
                                 exit_code: pane.exit_code,
+                                restore_start_command: pane.restore_start_command,
                             })
                             .collect(),
                     })
@@ -200,6 +207,7 @@ impl MuxTree {
                     sessions: workspace.sessions.clone(),
                     respawn_last: workspace.respawn_last,
                     exit_action: workspace.exit_action,
+                    restore_policy: workspace.restore_policy,
                     worktree: workspace.worktree.clone(),
                 })
                 .collect(),
@@ -252,6 +260,7 @@ impl MuxTree {
                         agent_session: agent_session_from_metadata(pane.metadata()),
                         dead: pane.dead(),
                         exit_code: pane.exit_code(),
+                        restore_start_command: pane.restore_start_command(),
                     }
                 })
                 .collect(),

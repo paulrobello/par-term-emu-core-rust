@@ -189,6 +189,12 @@ pub struct MuxPane {
     /// [`MuxPane::effective_title`] falls back to the terminal's live OSC
     /// title instead.
     user_title: Option<String>,
+    /// The pane was created with `--restore start-command`: a restore
+    /// re-runs its start command instead of an agent resume invocation,
+    /// handing the hook-reported session id to the command as
+    /// `PAR_MUX_RESUME_SESSION_ID`. Persisted; carried across a respawn
+    /// like the user title.
+    restore_start_command: bool,
     /// The process has been observed dead by a liveness pass. The pane is
     /// HELD in this state (remain-on-exit): its frozen screen stays for
     /// `respawn-pane` to restart in place.
@@ -361,6 +367,19 @@ impl MuxPane {
     /// respawns.
     pub fn spawn_command(&self) -> Option<&str> {
         self.spawn_command.as_deref()
+    }
+
+    /// Whether this pane restores via its start command (`--restore
+    /// start-command` at creation), not an agent resume invocation.
+    pub(crate) fn restore_start_command(&self) -> bool {
+        self.restore_start_command
+    }
+
+    /// Record the restore-start-command choice — the create commands'
+    /// `--restore start-command` flag at dispatch, or the respawn's carry
+    /// of the replaced pane's choice.
+    pub(crate) fn set_restore_start_command(&mut self, on: bool) {
+        self.restore_start_command = on;
     }
 
     /// Record the directory this pane was spawned in — the persistence
@@ -1052,6 +1071,7 @@ impl ShellPaneFactory {
             spawn_command,
             spawn_cwd: None,
             user_title: None,
+            restore_start_command: false,
             dead: false,
             exit_code: None,
             spawned_at: std::time::Instant::now(),

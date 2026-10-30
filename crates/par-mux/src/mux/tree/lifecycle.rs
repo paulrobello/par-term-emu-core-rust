@@ -28,6 +28,7 @@ impl MuxTree {
                 active: 0,
                 respawn_last: false,
                 exit_action: None,
+                restore_policy: None,
                 worktree: None,
             },
         );
@@ -77,6 +78,23 @@ impl MuxTree {
             .get_mut(&workspace_id)
             .ok_or(MuxError::NoSuchWorkspace(workspace_id))?
             .exit_action = action;
+        Ok(())
+    }
+
+    /// Set a workspace's restore policy
+    /// ([`MuxWorkspace::restore_policy`]) — `set-workspace-restore-policy`'s
+    /// write. The verb always names a concrete policy; `None` (the
+    /// `agent-resume` default) is not a verb value, so the setter takes the
+    /// option only for the tree-level completeness the restore path needs.
+    pub fn set_workspace_restore_policy(
+        &mut self,
+        workspace_id: WorkspaceId,
+        policy: Option<crate::mux::config::RestorePolicy>,
+    ) -> Result<(), MuxError> {
+        self.workspaces
+            .get_mut(&workspace_id)
+            .ok_or(MuxError::NoSuchWorkspace(workspace_id))?
+            .restore_policy = policy;
         Ok(())
     }
 
@@ -556,7 +574,7 @@ impl MuxTree {
                 .ok_or(MuxError::NoSuchWindow(window_id))?;
             (session.id, session.name.clone(), session.env.clone())
         };
-        let (cols, rows, stored_command, stored_cwd, user_title, alive) = {
+        let (cols, rows, stored_command, stored_cwd, user_title, restore_start_command, alive) = {
             let pane = self
                 .panes
                 .get_mut(&pane)
@@ -568,6 +586,7 @@ impl MuxTree {
                 pane.spawn_command().map(str::to_string),
                 pane.respawn_cwd(),
                 pane.user_title().map(str::to_string),
+                pane.restore_start_command(),
                 pane.poll_running(),
             )
         };
@@ -587,6 +606,7 @@ impl MuxTree {
             // fallback — where a fresh pane lands (SEC-128).
             cwd: cwd.map(Path::to_owned).or(stored_cwd),
             user_title,
+            restore_start_command,
         })
     }
 
@@ -614,6 +634,11 @@ impl MuxTree {
             if let Some(pane) = self.panes.get_mut(&plan.pane_id) {
                 pane.set_user_title(&title);
             }
+        }
+        // The restore-start-command choice rides the respawn too: a
+        // respawned pane keeps the restore behavior it was created with.
+        if let Some(pane) = self.panes.get_mut(&plan.pane_id) {
+            pane.set_restore_start_command(plan.restore_start_command);
         }
         self.sync_pane_sizes(plan.window_id);
         Ok(plan.pane_id)

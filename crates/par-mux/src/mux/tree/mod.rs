@@ -170,6 +170,10 @@ pub struct MuxWorkspace {
     /// daemon's `exit-action` default (itself `hold` while the legacy
     /// `remain-on-exit` boolean is set). Persisted.
     pub exit_action: Option<crate::mux::config::ExitAction>,
+    /// The workspace's restore policy (`set-workspace-restore-policy`):
+    /// what a restart does with its panes. `None` = the `agent-resume`
+    /// default. Persisted.
+    pub restore_policy: Option<crate::mux::config::RestorePolicy>,
     /// The git worktree this workspace is backed by (`worktree-create` /
     /// `worktree-open`); `None` for an ordinary workspace. Persisted.
     pub worktree: Option<WorktreeLink>,
@@ -254,6 +258,9 @@ pub struct RespawnSpawn {
     pub cwd: Option<std::path::PathBuf>,
     /// The old pane's user title, carried to the replacement.
     user_title: Option<String>,
+    /// The old pane's restore-start-command choice, carried to the
+    /// replacement — a respawn is a new process, not a new pane.
+    restore_start_command: bool,
 }
 
 impl RespawnSpawn {
@@ -1025,6 +1032,7 @@ impl MuxTree {
                 active: 0,
                 respawn_last: false,
                 exit_action: None,
+                restore_policy: None,
                 worktree: None,
             },
         );
