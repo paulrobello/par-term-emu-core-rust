@@ -616,6 +616,11 @@ pub enum MuxCommand {
     NewWorkspace {
         /// `-n`: the workspace name; a default is chosen when absent.
         name: Option<String>,
+        /// `--session-name`: the first session's exact name, decoupled
+        /// from the workspace name; when absent the default (the
+        /// workspace's name) auto-disambiguates against the session
+        /// roster.
+        session_name: Option<String>,
     },
     /// List every workspace, one `+N: name` line per workspace, the
     /// daemon's active one suffixed ` active`.

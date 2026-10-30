@@ -35,7 +35,9 @@ pub(super) fn route_session_command(ctx: &Ctx<'_>, command: MuxCommand) -> Outco
         MuxCommand::HasSession { session } => cmd_has_session(ctx, session),
         MuxCommand::ShowOptions => cmd_show_options(ctx),
         MuxCommand::SetOption { key, value } => cmd_set_option(ctx, &key, &value),
-        MuxCommand::NewWorkspace { name } => cmd_new_workspace(ctx, name),
+        MuxCommand::NewWorkspace { name, session_name } => {
+            cmd_new_workspace(ctx, name, session_name)
+        }
         MuxCommand::ListWorkspaces => cmd_list_workspaces(ctx),
         MuxCommand::SelectWorkspace { workspace } => cmd_select_workspace(ctx, workspace),
         MuxCommand::SwitchClient { target } => cmd_switch_client(ctx, target),
@@ -329,13 +331,18 @@ pub(super) fn cmd_list_sessions(
     Outcome::ok(ctx, &lines.join("\n"))
 }
 
-/// `new-workspace [-n name]`: create the workspace, select it, and reply
+/// `new-workspace [-n name] [--session-name name]`: create the workspace,
+/// select it, and reply
 /// with its `+N` id. `%workspaces-changed` is the roster cue — one
 /// argument-less broadcast covering add, close, select, and rename, the
 /// same re-query convention `%sessions-changed` set (clients re-run
 /// `list-workspaces` rather than parse a diff).
-pub(super) fn cmd_new_workspace(ctx: &Ctx<'_>, name: Option<String>) -> Outcome {
-    let name = name.unwrap_or_else(|| "main".to_string());
+pub(super) fn cmd_new_workspace(
+    ctx: &Ctx<'_>,
+    name: Option<String>,
+    session_name: Option<String>,
+) -> Outcome {
+    let ws_name = name.unwrap_or_else(|| "main".to_string());
     // A workspace with no sessions cannot be landed on — the panel's
     // ` new ` chip must create a USABLE one: the workspace plus its
     // first session/window spawning the default shell, so the
@@ -344,23 +351,50 @@ pub(super) fn cmd_new_workspace(ctx: &Ctx<'_>, name: Option<String>) -> Outcome 
     // in the side panel while the view stayed on the old one's tabs).
     let (id, plan, factory) = {
         let mut guard = ctx.tree.lock();
-        // new-workspace names its first session after the workspace, so a
-        // taken session name fails the whole command before the workspace
-        // row is created — never a half-created workspace on a name clash.
-        if guard.session_name_taken(&name) {
-            return Outcome::err(
-                ctx,
-                &format!(
-                    "duplicate session: {name} — new-workspace names its first session after the workspace"
-                ),
-            );
-        }
-        let id = guard.new_workspace(&name);
+        // Workspace names and session names are different namespaces: the
+        // workspace always keeps the requested name, and only the first
+        // session's name is resolved against the GLOBAL session roster —
+        // BEFORE the workspace row exists, so a refusal never leaves a
+        // half-created workspace. The default name (the workspace's name)
+        // auto-disambiguates tmux-style (`main`, `main-2`, `main-3`, …),
+        // so a session holding that name anywhere in the daemon no longer
+        // fails the create; an explicit `--session-name` keeps the hard
+        // fail — the user asked for that exact name.
+        let first_session = match &session_name {
+            Some(explicit) => {
+                if guard.session_name_taken(explicit) {
+                    return Outcome::err(
+                        ctx,
+                        &MuxError::DuplicateSessionName(explicit.clone()).to_string(),
+                    );
+                }
+                explicit.clone()
+            }
+            None => {
+                let mut candidate = ws_name.clone();
+                let mut suffix = 1usize;
+                while guard.session_name_taken(&candidate) {
+                    let Some(next) = suffix.checked_add(1) else {
+                        return Outcome::err(ctx, "new-workspace: session name space exhausted");
+                    };
+                    suffix = next;
+                    candidate = format!("{ws_name}-{suffix}");
+                }
+                candidate
+            }
+        };
+        let id = guard.new_workspace(&ws_name);
         (
             id,
             guard
-                .begin_session_at(id, &name, DEFAULT_COLS, DEFAULT_ROWS, &Default::default())
-                .expect("session name verified free under the held lock")
+                .begin_session_at(
+                    id,
+                    &first_session,
+                    DEFAULT_COLS,
+                    DEFAULT_ROWS,
+                    &Default::default(),
+                )
+                .expect("first-session name verified free under the held lock")
                 .with_window_name("1"),
             guard.factory(),
         )

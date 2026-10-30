@@ -2003,12 +2003,23 @@ fn parses_workspace_commands() {
     assert_eq!(
         parse_command("new-workspace -n dev").unwrap(),
         MuxCommand::NewWorkspace {
-            name: Some("dev".to_string())
+            name: Some("dev".to_string()),
+            session_name: None
         }
     );
     assert_eq!(
         parse_command("new-workspace").unwrap(),
-        MuxCommand::NewWorkspace { name: None }
+        MuxCommand::NewWorkspace {
+            name: None,
+            session_name: None
+        }
+    );
+    assert_eq!(
+        parse_command("new-workspace -n dev --session-name solo").unwrap(),
+        MuxCommand::NewWorkspace {
+            name: Some("dev".to_string()),
+            session_name: Some("solo".to_string())
+        }
     );
     assert_eq!(
         parse_command("list-workspaces").unwrap(),

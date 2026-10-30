@@ -113,6 +113,7 @@ FOREIGN_FLAGS: dict[str, str] = {
     "base": "worktree-create --base (wire command flag: the start point, D7)",
     "since": "events --since (wire command flag: the replay watermark)",
     "restore": "new-session --restore start-command (wire command flag: the pane keeps its start command across restarts)",
+    "session-name": "new-workspace --session-name (wire command flag: the first session's exact name)",
     "model": "claude --model (agent CLI argv, restore start-command example)",
     "plugin-dir": "claude --plugin-dir (agent CLI argv, restore start-command example)",
     "format": "devin list --format json (devin CLI, session-id fallback)",

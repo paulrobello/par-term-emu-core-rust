@@ -234,11 +234,14 @@ pub(super) fn parse_list_sessions(a: &Args<'_>) -> Result<MuxCommand, String> {
     })
 }
 
-/// `new-workspace [-n name]` — create and select a workspace.
+/// `new-workspace [-n name] [--session-name name]` — create and select a
+/// workspace.
 pub(super) fn parse_new_workspace(a: &Args<'_>) -> Result<MuxCommand, String> {
+    let a = a.with_value_flags(&["-n", "--session-name"]);
     let name = a.quoted_flag("-n")?;
-    reject_positionals(a, &["-n"])?;
-    Ok(MuxCommand::NewWorkspace { name })
+    let session_name = a.quoted_flag("--session-name")?;
+    reject_positionals(&a, &["-n", "--session-name"])?;
+    Ok(MuxCommand::NewWorkspace { name, session_name })
 }
 
 pub(super) fn parse_list_workspaces(_a: &Args<'_>) -> Result<MuxCommand, String> {

@@ -293,9 +293,10 @@
       "name": "new-workspace",
       "features": [],
       "flags": [
-        "-n"
+        "-n",
+        "--session-name"
       ],
-      "synopsis": "[-n name]"
+      "synopsis": "[-n name] [--session-name name]"
     },
     {
       "name": "observe-pane",

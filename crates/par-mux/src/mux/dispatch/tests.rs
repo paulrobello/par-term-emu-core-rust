@@ -1212,8 +1212,8 @@ fn unknown_targets_error_exactly_and_change_nothing() {
         ("kill-workspace -t nope", "no such workspace: nope"),
         ("new-session -s main", "duplicate session: main"),
         (
-            "new-workspace -n main",
-            "duplicate session: main — new-workspace names its first session after the workspace",
+            "new-workspace -n main --session-name main",
+            "duplicate session: main",
         ),
     ];
     let mut mismatches = Vec::new();
@@ -1227,6 +1227,72 @@ fn unknown_targets_error_exactly_and_change_nothing() {
         assert_eq!(h.drain(), Vec::<String>::new(), "`{line}` broadcast");
     }
     assert!(mismatches.is_empty(), "{}", mismatches.join("\n"));
+}
+
+/// new-workspace (card 01a18e57): the workspace keeps its requested name
+/// while its first session auto-disambiguates against the GLOBAL session
+/// roster (tmux-style `name`, `name-2`, `name-3`, …), so a session named
+/// like the workspace — the bare default is `main` — anywhere in the
+/// daemon never fails the create.
+#[test]
+fn new_workspace_auto_disambiguates_its_first_session_name() {
+    let h = Harness::new();
+    assert_ok(&h.run("new-session -s main"));
+    h.drain();
+
+    // Bare `new-workspace` while a session `main` exists: the workspace is
+    // still named `main`, its first session lands as `main-2`.
+    let reply = h.run("new-workspace");
+    let created = assert_ok(&reply);
+    assert_eq!(created.len(), 1, "the reply is the workspace id: {reply:?}");
+    {
+        let guard = h.tree.lock();
+        let ws_id = guard.active_workspace().unwrap();
+        assert_eq!(guard.workspace(ws_id).unwrap().name, "main");
+        let sid = guard.workspace(ws_id).unwrap().sessions[0];
+        assert_eq!(guard.session(sid).unwrap().name, "main-2");
+    }
+    h.drain();
+
+    // `-n other` while a session `other` exists in another workspace:
+    // `other-2`.
+    assert_ok(&h.run("new-session -s other -t +0"));
+    assert_ok(&h.run("new-workspace -n other"));
+    {
+        let guard = h.tree.lock();
+        let ws_id = guard.active_workspace().unwrap();
+        assert_eq!(guard.workspace(ws_id).unwrap().name, "other");
+        let sid = guard.workspace(ws_id).unwrap().sessions[0];
+        assert_eq!(guard.session(sid).unwrap().name, "other-2");
+    }
+}
+
+/// `--session-name` decouples the first session's name from the workspace
+/// name; a clash on the EXPLICIT name refuses the whole command and leaves
+/// no workspace row behind — the no-half-created-workspace invariant.
+#[test]
+fn new_workspace_session_name_decouples_and_explicit_clash_refuses() {
+    let h = Harness::new();
+    assert_ok(&h.run("new-session -s main"));
+    h.drain();
+
+    // Decoupled naming: workspace `w1`, first session `solo`.
+    assert_ok(&h.run("new-workspace -n w1 --session-name solo"));
+    {
+        let guard = h.tree.lock();
+        let ws_id = guard.active_workspace().unwrap();
+        assert_eq!(guard.workspace(ws_id).unwrap().name, "w1");
+        let sid = guard.workspace(ws_id).unwrap().sessions[0];
+        assert_eq!(guard.session(sid).unwrap().name, "solo");
+    }
+    h.drain();
+    let before = h.snapshot();
+
+    // An explicit clash refuses the whole command: no workspace row.
+    let reply = h.run("new-workspace -n w2 --session-name main");
+    assert_error(&reply, "duplicate session: main");
+    assert_eq!(h.snapshot(), before, "the refused create changed the tree");
+    assert_eq!(h.drain(), Vec::<String>::new(), "the refusal broadcast");
 }
 
 /// A bad target is reported before an empty buffer: `paste-buffer -t
