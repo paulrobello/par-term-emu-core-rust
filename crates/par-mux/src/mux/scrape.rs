@@ -592,11 +592,12 @@ impl ScrapeEngine {
 /// tree lock is released before any notification leaves, the discipline
 /// `hooks.rs` set. Eligibility is claim-based membership plus structural
 /// precedence: the pane must carry an `agent` label (hook report or
-/// factory tag), must not be hook-authoritative (`agent_state_source` =
-/// `hook` — permanent once any hook state report is accepted), and must
-/// have patterns for its agent. Hook-authoritative panes are still visited
-/// by the liveness sweep: a claim whose agent provably left the pane's
-/// process tree is cleared and released (see `foreground.rs`).
+/// factory tag), must not be hook- or self-authoritative
+/// (`agent_state_source` = `hook` or `self` — permanent once any hook or
+/// self state report is accepted), and must have patterns for its agent.
+/// Authoritative panes are still visited by the liveness sweep: a claim
+/// whose agent provably left the pane's process tree is cleared and
+/// released (see `foreground.rs`).
 pub fn scrape_tick(tree: &Arc<Mutex<MuxTree>>, engine: &ScrapeEngine) -> Vec<TmuxNotification> {
     scrape_tick_with(tree, engine, ProcessTable::snapshot().as_ref())
 }
@@ -701,9 +702,9 @@ pub(crate) fn scrape_tick_with(
             continue;
         };
         let prior_source = pane.metadata().get("agent_state_source").cloned();
-        if prior_source.as_deref() == Some("hook") {
-            // Hook authority is never scraped — but a claim whose agent
-            // provably left the pane's process tree is cleared here. A
+        if matches!(prior_source.as_deref(), Some("hook") | Some("self")) {
+            // Hook and self authority are never scraped — but a claim whose
+            // agent provably left the pane's process tree is cleared here. A
             // crashed agent's hook never sends `pane.release_agent`; see
             // `foreground.rs` for why the sweep asks the descendant tree,
             // not the foreground process.
@@ -805,14 +806,14 @@ pub(crate) fn classify_claimed_pane(
         return None;
     }
     let agent = pane.metadata().get("agent").cloned()?;
-    if pane
-        .metadata()
-        .get("agent_state_source")
-        .map(String::as_str)
-        == Some("hook")
-    {
-        // Hook authority is never scraped (the tick's rule): a hook-sourced
-        // stateless pane's own next state report re-establishes it.
+    if matches!(
+        pane.metadata()
+            .get("agent_state_source")
+            .map(String::as_str),
+        Some("hook") | Some("self")
+    ) {
+        // Hook and self authority are never scraped (the tick's rule): an
+        // authoritative stateless pane's own next report re-establishes it.
         return None;
     }
     let snapshot = {

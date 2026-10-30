@@ -3636,3 +3636,55 @@ fn send_keys_literal_keeps_single_quoted_backslashes() {
         br"printf \033]x"
     );
 }
+
+#[test]
+fn report_state_parses_the_full_form() {
+    let MuxCommand::ReportState {
+        pane,
+        agent,
+        state,
+        message,
+    } = parse_command("report-state -t %3 -a claude -s working -m 'awaiting 2 background agents'")
+        .expect("parses")
+    else {
+        panic!("not report-state");
+    };
+    assert_eq!(pane, Target::parse("%3").unwrap());
+    assert_eq!(agent.as_deref(), Some("claude"));
+    assert_eq!(state.as_deref(), Some("working"));
+    assert_eq!(message.as_deref(), Some("awaiting 2 background agents"));
+}
+
+#[test]
+fn report_state_without_s_is_the_clear_form() {
+    let MuxCommand::ReportState { state, message, .. } =
+        parse_command("report-state -t %3").expect("parses")
+    else {
+        panic!("not report-state");
+    };
+    assert_eq!(state, None);
+    assert_eq!(message, None);
+}
+
+#[test]
+fn report_state_rejects_unknown_states() {
+    // `unknown` is the absence of a claim, never a stored state — the clear
+    // form is `-s` omitted, not `-s unknown`. (`-s` with no following word
+    // reads as omitted under the shared flag grammar, the clear form.)
+    for raw in ["unknown", "WORKING", "banana"] {
+        assert!(
+            parse_command(&format!("report-state -t %3 -s {raw}")).is_err(),
+            "{raw} must not parse"
+        );
+    }
+}
+
+#[test]
+fn report_state_rejects_message_without_state() {
+    assert!(parse_command("report-state -t %3 -m lonely").is_err());
+}
+
+#[test]
+fn report_state_rejects_stray_words() {
+    assert!(parse_command("report-state -t %3 stray").is_err());
+}

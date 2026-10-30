@@ -777,3 +777,117 @@ fn pane_exits_replay_through_the_event_ring_after_a_reconnect() {
     drop(control.0.shutdown(Shutdown::Both));
     sigterm_clean(&mut daemon);
 }
+
+/// The control verb's self report rides the hook pipeline end to end over
+/// a live daemon: the parked state lands in the roster (state, message,
+/// source `self`), a second control client observes the
+/// `%agent-state-changed` broadcast, the bare form clears through the same
+/// path (derived `done` for a pane no viewer shows), and a later hook
+/// report re-takes the state column. The tree's sessions map is
+/// HashMap-ordered — every assertion goes through the pane id, never a
+/// positional index.
+#[test]
+fn report_state_rides_the_hook_pipeline_over_a_live_daemon() {
+    let fixture = MuxFixture::new("report-state");
+    let path = fixture.socket();
+
+    let mut daemon = spawn_daemon(&fixture);
+    wait_listening(path);
+    let mut observer = Control::connect(path);
+    let mut actor = Control::connect(path);
+    // A client joins the broadcast set on its FIRST control command, not on
+    // connect — the observer registers with a query before the park.
+    observer.command("list-sessions");
+    actor.command("new-session -s park");
+    let pane = actor
+        .body_lines("list-panes")
+        .first()
+        .expect("new-session created a pane")
+        .clone();
+
+    // The park: working with a message, provenance self.
+    let reply = actor.command(&format!(
+        "report-state -t {pane} -a claude -s working -m 'awaiting 2 background agents'"
+    ));
+    assert!(
+        reply
+            .iter()
+            .any(|l| l.contains(&format!("{pane} claude working self"))),
+        "the set reply mirrors the roster row: {reply:?}"
+    );
+    let broadcast = observer.line_until(
+        |line| line.starts_with("%agent-state-changed"),
+        "the parked-state broadcast",
+    );
+    // Read once the row exists, so the push and the roster are asserted to
+    // agree (the ENH-061 shape the hook arc pins).
+    let ws = roster_ws(&mut actor, &pane);
+    let message_b64 =
+        base64::engine::general_purpose::STANDARD.encode("awaiting 2 background agents");
+    assert_eq!(
+        broadcast,
+        format!(
+            "%agent-state-changed {pane} claude working source=self ws={ws} msg={message_b64}\n"
+        ),
+        "the observer saw the park, provenance and message included"
+    );
+    let roster = actor.body_lines("list-agents");
+    let row = roster
+        .iter()
+        .find(|l| l.starts_with(&pane))
+        .expect("the roster row");
+    assert!(
+        row.starts_with(&format!(
+            "{pane} claude working self reason={message_b64} ws={ws}"
+        )),
+        "state, message, and source=self on the roster: {roster:?}"
+    );
+    assert!(
+        roster[0].contains(" last_report_at="),
+        "the accepted self report stamped the activity: {roster:?}"
+    );
+
+    // The clear: the bare form reports idle through the same path — done,
+    // because no viewer shows the pane — and the message drops.
+    let reply = actor.command(&format!("report-state -t {pane}"));
+    assert!(
+        reply
+            .iter()
+            .any(|l| l.contains(&format!("{pane} claude done self"))),
+        "the clear reply: {reply:?}"
+    );
+    let broadcast = observer.line_until(
+        |line| line.starts_with("%agent-state-changed"),
+        "the clear broadcast",
+    );
+    assert_eq!(
+        broadcast,
+        format!("%agent-state-changed {pane} claude done source=self ws={ws}\n"),
+        "the observer saw the clear, message token gone"
+    );
+
+    // Hook authority wins back the column.
+    script_reports(path, &pane, "working", None);
+    let broadcast = observer.line_until(
+        |line| line.starts_with("%agent-state-changed"),
+        "the hook reclaim broadcast",
+    );
+    assert_eq!(
+        broadcast,
+        format!("%agent-state-changed {pane} kimi working source=hook ws={ws}\n"),
+        "the hook report re-took the state"
+    );
+    let roster = actor.body_lines("list-agents");
+    let row = roster
+        .iter()
+        .find(|l| l.starts_with(&pane))
+        .expect("the roster row after the reclaim");
+    assert!(
+        row.starts_with(&format!("{pane} kimi working hook ws={ws}")),
+        "the roster shows the hook provenance again: {roster:?}"
+    );
+
+    drop(actor.0.shutdown(Shutdown::Both));
+    drop(observer.0.shutdown(Shutdown::Both));
+    sigterm_clean(&mut daemon);
+}

@@ -931,3 +931,96 @@ fn the_roster_carries_activity_timestamps_and_derives_stalled() {
         "stalled derives only for working: {row}"
     );
 }
+
+/// The control verb's set form: the parked state, its message, and the
+/// `self` provenance show in list-agents — the same claim a hook report
+/// writes, the same activity stamp.
+#[test]
+fn report_state_sets_state_message_and_self_source() {
+    let f = Fixture::new();
+    let reply = f.run("report-state -t %0 -a claude -s working -m 'awaiting 2 background agents'");
+    assert!(!reply.contains("%error"), "set failed: {reply}");
+    assert!(
+        reply.contains("%0 claude working self"),
+        "the reply mirrors the roster row: {reply}"
+    );
+    assert_eq!(f.metadata("agent_state").as_deref(), Some("working"));
+    assert_eq!(f.metadata("agent_state_source").as_deref(), Some("self"));
+    assert_eq!(
+        f.metadata("agent_message").as_deref(),
+        Some("awaiting 2 background agents")
+    );
+    // The activity stamp: an accepted self report IS the agent's liveness,
+    // same as a hook report.
+    let roster = f.run("list-agents");
+    let row = roster
+        .lines()
+        .find(|l| l.starts_with("%0 claude working self"))
+        .expect("the roster row: {roster}");
+    assert!(
+        row.contains("reason=") && row.contains("last_report_at=") && row.contains("ws="),
+        "message, activity stamp, and workspace ride the row: {row}"
+    );
+}
+
+/// The clear form (`-s` omitted) reports idle through the same path —
+/// derived to `done` for a pane no viewer shows, exactly like a hook's
+/// idle — and the next hook report re-takes the state column.
+#[test]
+fn report_state_bare_form_clears_and_a_hook_reclaims() {
+    let f = Fixture::new();
+    f.run("report-state -t %0 -a claude -s working");
+    // No client views the pane, so the idle derives to done (the seen-once
+    // rule the hook path shares).
+    let reply = f.run("report-state -t %0");
+    assert!(!reply.contains("%error"), "clear failed: {reply}");
+    assert!(
+        reply.contains("%0 claude done self"),
+        "the unseen clear stores done: {reply}"
+    );
+    assert_eq!(f.metadata("agent_state").as_deref(), Some("done"));
+    assert_eq!(f.metadata("agent_state_source").as_deref(), Some("self"));
+    // Hook authority wins back the column.
+    f.report("claude", "working", 1);
+    assert_eq!(f.metadata("agent_state").as_deref(), Some("working"));
+    assert_eq!(f.metadata("agent_state_source").as_deref(), Some("hook"));
+}
+
+/// `-a` omitted resolves to the pane's existing claim's label — the
+/// parked pane is the agent that already claimed it.
+#[test]
+fn report_state_defaults_the_agent_to_the_existing_claim() {
+    let f = Fixture::new();
+    f.report("claude", "working", 1);
+    let reply = f.run("report-state -t %0 -s blocked -m 'needs input'");
+    assert!(!reply.contains("%error"), "set failed: {reply}");
+    assert!(
+        reply.contains("%0 claude blocked self"),
+        "the label rides from the claim: {reply}"
+    );
+}
+
+/// A pane with no claim and no `-a` has nothing to report under.
+#[test]
+fn report_state_on_an_unclaimed_pane_without_agent_errors() {
+    let f = Fixture::new();
+    let reply = f.run("report-state -t %0 -s working");
+    assert!(
+        reply.contains("%error") && reply.contains("carries no agent label"),
+        "unclaimed + unlabeled must %error: {reply}"
+    );
+    assert_eq!(f.metadata("agent_state"), None, "nothing written");
+}
+
+/// Self authority is the scrape tier's to respect: a tick after the park
+/// leaves the parked state alone, the structural precedence rule a hook
+/// claim has always had.
+#[test]
+fn report_state_self_authority_is_not_scraped() {
+    let f = Fixture::quiet();
+    f.run("report-state -t %0 -a claude -s working -m parked");
+    let engine = crate::mux::scrape::ScrapeEngine::bundled();
+    crate::mux::scrape::scrape_tick_with(&f.tree, &engine, None);
+    assert_eq!(f.metadata("agent_state").as_deref(), Some("working"));
+    assert_eq!(f.metadata("agent_state_source").as_deref(), Some("self"));
+}

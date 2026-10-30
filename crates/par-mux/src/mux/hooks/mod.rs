@@ -74,7 +74,7 @@ pub fn handle_report(line: &str, tree: &Arc<Mutex<MuxTree>>) -> (String, Option<
     };
 
     let (reply, notification) = match method {
-        "pane.report_agent" => handle_state_report(id, params, tree),
+        "pane.report_agent" => handle_state_report(id, params, "hook", tree),
         "pane.report_agent_session" => handle_session_report(id, params, tree),
         "pane.report_agent_session_cwd" => handle_session_report_cwd(id, params, tree),
         "pane.report_agent_telemetry" => handle_telemetry_report(id, params, tree),
@@ -90,6 +90,44 @@ pub fn handle_report(line: &str, tree: &Arc<Mutex<MuxTree>>) -> (String, Option<
         &reply,
     );
     (reply, notification)
+}
+
+/// The control verb's state report (`report-state`): the SAME write path a
+/// hook's `pane.report_agent` takes — validation, derive-state, per-source
+/// staleness, claim write, activity stamp, broadcast — with provenance
+/// `self` so the roster tells a pane's own claim from a hook's. `params`
+/// carries `pane_id`, `agent`, `state`, and optionally `message`; the seq
+/// and source tag are filled here, stamping the verb's own epoch-nanos
+/// order into its own staleness bucket (the hooks stamp `time.time_ns()`,
+/// so sharing a bucket would see one side's clock drop the other's
+/// reports).
+pub(crate) fn handle_self_state_report(
+    mut params: serde_json::Value,
+    tree: &Arc<Mutex<MuxTree>>,
+) -> Result<Option<TmuxNotification>, String> {
+    params["seq"] = serde_json::json!(epoch_nanos());
+    params["source"] = serde_json::json!("self");
+    let (reply, notification) = report::handle_state_report(None, &params, "self", tree);
+    // The reply is the hook path's JSON: surface its error message as the
+    // verb's %error body instead of discarding it.
+    match serde_json::from_str::<serde_json::Value>(reply.trim()) {
+        Ok(value) if value.get("error").is_some() => Err(value
+            .get("error")
+            .and_then(serde_json::Value::as_str)
+            .unwrap_or("report rejected")
+            .to_string()),
+        _ => Ok(notification),
+    }
+}
+
+/// Epoch nanos: the self report's seq — the same wall clock and scale the
+/// hook scripts stamp, so interleaved hook/self reports order correctly
+/// wherever a consumer compares them.
+fn epoch_nanos() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_nanos() as u64)
+        .unwrap_or(0)
 }
 
 /// The fields every report carries: the pane it claims, the agent label,

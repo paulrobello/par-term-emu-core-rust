@@ -57,6 +57,12 @@ pub(super) fn route_agent_command(ctx: &Ctx<'_>, command: MuxCommand) -> Outcome
         } => cmd_agent_prompt(ctx, pane, &text, wait, &until, timeout_ms),
         MuxCommand::AgentExplain { pane } => cmd_agent_explain(ctx, pane),
         MuxCommand::AdoptPane { pane, kind } => cmd_adopt_pane(ctx, pane, &kind),
+        MuxCommand::ReportState {
+            pane,
+            agent,
+            state,
+            message,
+        } => cmd_report_state(ctx, pane, agent, state, message),
         other => unreachable!("route_command sent {other:?} to the agent group"),
     }
 }
@@ -732,6 +738,84 @@ pub(super) fn cmd_adopt_pane(ctx: &Ctx<'_>, pane: Target<PaneId>, kind: &str) ->
             },
         ),
         None => Outcome::ok(ctx, &format!("{id} {kind} unknown none")),
+    }
+}
+
+/// `report-state -t %N [-a agent] [-s state] [-m message]`: the pane's own
+/// agent-state report — the control-verb spelling of the hook
+/// `pane.report_agent`. The write goes through
+/// [`crate::mux::hooks::handle_self_state_report`], so validation,
+/// derive-state, the per-source staleness rule, the activity stamp, and
+/// the `%agent-state-changed` broadcast are the hook path's by
+/// construction; only the provenance differs (`self` in the roster's
+/// source column, and the scrape tier skips the state exactly as it skips
+/// a hook's). `-s` omitted reports idle — the roster's resting state, and
+/// the same derive-state path a hook's idle takes — so a pane parks a
+/// `working` with `-s working -m '…'` while harness-tracked background
+/// work runs and clears it with the bare form when the work drains; the
+/// next hook report re-takes the state (its source wins back the column).
+pub(super) fn cmd_report_state(
+    ctx: &Ctx<'_>,
+    pane: Target<PaneId>,
+    agent: Option<String>,
+    state: Option<String>,
+    message: Option<String>,
+) -> Outcome {
+    let pane_id = match ctx.tree.lock().resolve_pane_target(pane) {
+        Ok(id) => id,
+        Err(err) => return Outcome::err(ctx, &err.to_string()),
+    };
+    // The roster label: the explicit `-a`, else the claim the pane already
+    // carries. A pane with neither has nothing to report under.
+    let agent = match agent {
+        Some(agent) => agent,
+        None => match ctx.tree.lock().pane(pane_id).and_then(|p| p.agent_claim()) {
+            Some(claim) => claim.agent,
+            None => {
+                return Outcome::err(
+                    ctx,
+                    &format!("report-state: pane {pane_id} carries no agent label; pass -a"),
+                )
+            }
+        },
+    };
+    // The clear form: idle through the same report path (see the handler
+    // doc). The state set was validated at parse; the report path
+    // re-validates.
+    let state = state.unwrap_or_else(|| "idle".to_string());
+    let mut params = serde_json::json!({
+        "pane_id": pane_id.to_string(),
+        "agent": agent,
+        "state": state,
+    });
+    if let Some(message) = message {
+        params["message"] = serde_json::json!(message);
+    }
+    match crate::mux::hooks::handle_self_state_report(params, ctx.tree) {
+        Ok(notification) => {
+            // The reply mirrors the roster row shape, source included, so a
+            // scripting agent reads back what the roster now shows.
+            let body = ctx
+                .tree
+                .lock()
+                .pane(pane_id)
+                .and_then(|p| p.agent_claim())
+                .map(|claim| {
+                    format!(
+                        "{} {} {} self",
+                        pane_id,
+                        claim.agent,
+                        claim.state.as_deref().unwrap_or("unknown")
+                    )
+                })
+                .unwrap_or_default();
+            let outcome = Outcome::ok(ctx, &body);
+            match notification {
+                Some(notification) => outcome.notifying(notification),
+                None => outcome,
+            }
+        }
+        Err(message) => Outcome::err(ctx, &message),
     }
 }
 

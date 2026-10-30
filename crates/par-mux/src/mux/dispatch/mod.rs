@@ -290,7 +290,8 @@ fn route_command(
         command @ (MuxCommand::AgentStart { .. }
         | MuxCommand::AgentPrompt { .. }
         | MuxCommand::AgentExplain { .. }
-        | MuxCommand::AdoptPane { .. }) => route_agent_command(ctx, command),
+        | MuxCommand::AdoptPane { .. }
+        | MuxCommand::ReportState { .. }) => route_agent_command(ctx, command),
     }
 }
 

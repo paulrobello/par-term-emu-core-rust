@@ -9,10 +9,14 @@ use parking_lot::Mutex;
 use std::sync::Arc;
 
 /// `pane.report_agent`: state (working/blocked/done/idle), plus whatever session
-/// identity the hook happens to know.
+/// identity the hook happens to know. `state_source` is the provenance the
+/// accepted report stores and broadcasts: `"hook"` for the hook method,
+/// `"self"` for the control verb's own report (`report-state`) — both are
+/// authoritative claims the scrape tier never overwrites.
 pub(super) fn handle_state_report(
     id: Option<serde_json::Value>,
     params: &serde_json::Value,
+    state_source: &str,
     tree: &Arc<Mutex<MuxTree>>,
 ) -> (String, Option<TmuxNotification>) {
     let header = match parse_header(params) {
@@ -95,10 +99,11 @@ pub(super) fn handle_state_report(
         let state = super::derive_state(claim.state.as_deref(), state, in_view);
         claim.agent = header.agent.clone();
         claim.state = Some(state.to_string());
-        // A hook state report makes this pane hook-authoritative from now
-        // on: the scrape tier skips it forever after (the structural
+        // The state report makes this pane authoritative under the report's
+        // own provenance from now on: the scrape tier skips both a hook's
+        // and a self report's state forever after (the structural
         // precedence rule — a claim is never overwritten by a guess).
-        claim.state_source = Some("hook".to_string());
+        claim.state_source = Some(state_source.to_string());
         claim.seq = Some(header.seq);
         if let Some(source) = &header.source {
             claim.source = Some(source.clone());
@@ -136,7 +141,7 @@ pub(super) fn handle_state_report(
             pane_id: header.pane_id.to_string(),
             agent: header.agent.clone(),
             state: state.to_string(),
-            source: "hook".to_string(),
+            source: state_source.to_string(),
             ws,
             msg: claim.message.clone().unwrap_or_default(),
         })

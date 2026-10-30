@@ -155,6 +155,27 @@ pub enum MuxCommand {
     },
     /// List every pane a hook has claimed — the agent roster.
     ListAgents,
+    /// An agent's own state report over the control socket (`report-state`):
+    /// the pane parks itself on harness-tracked background work and the
+    /// roster shows that instead of idle. The write rides the hook report
+    /// path ([`crate::mux::hooks`]) — same state set, message, staleness,
+    /// and broadcast — with provenance `self` in the roster's source
+    /// column, so consumers tell a pane's own claim from a hook's.
+    ReportState {
+        /// Target pane.
+        pane: Target<PaneId>,
+        /// `-a <agent>`: the roster label. Absent resolves to the pane's
+        /// existing claim's label; a pane neither carries errors.
+        agent: Option<String>,
+        /// `-s <state>`: the state to store (working/blocked/question/done/
+        /// idle). Absent reports idle — the roster's resting state — the
+        /// same derive-state path a hook's idle takes.
+        state: Option<String>,
+        /// `-m <message>`: the state's reason or context, whitespace-
+        /// collapsed and base64-encoded on the wire like a hook's. Requires
+        /// `-s`.
+        message: Option<String>,
+    },
     /// Replay the daemon's lifecycle event ring: every retained event after
     /// `since` plus the current head sequence number, so a (re)connecting
     /// consumer reads what its disconnected interval dropped. See
@@ -821,7 +842,8 @@ impl MuxCommand {
             | MuxCommand::LoadLayout { .. }
             | MuxCommand::KillLayout { .. } => true,
             | MuxCommand::AgentStart { .. }
-            | MuxCommand::AdoptPane { .. } => true,
+            | MuxCommand::AdoptPane { .. }
+            | MuxCommand::ReportState { .. } => true,
             // The query form reads only.
             MuxCommand::SetWorkspaceRespawn { change, .. } => change.is_some(),
             MuxCommand::SetExitAction { action, .. } => action.is_some(),
@@ -1573,6 +1595,7 @@ const COMMANDS: &[(&str, CommandParser, &[&str])] = &[
     ("set-exit-action", parse_set_exit_action, &[]),
     ("list-panes", parse_list_panes, &["targeted", "format"]),
     ("list-agents", parse_list_agents, &[]),
+    ("report-state", parse_report_state, &[]),
     ("events", parse_events, &["since"]),
     ("list-commands", parse_list_commands, &["schema"]),
     ("client-snapshot", parse_client_snapshot, &["v1"]),

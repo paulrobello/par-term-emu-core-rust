@@ -289,6 +289,16 @@ printf '%s\n' "{\"id\":1,\"method\":\"pane.report_agent\",\"params\":{
   screen-scrape (claude/codex/grok/muse/droid/copilot/cursor) never
   overrides it. Panes whose agents
   never report a hook get scraped state instead (roster `source=scrape`).
+- The control-verb spelling is `par-mux --cmd 'report-state -t %N [-a agent]
+  [-s state] [-m message]'` — the same claim a hook report writes, roster
+  source `self`. The convention it enables: when your turn ends but
+  harness-tracked background work keeps running, park the pane with
+  `par-mux --cmd "report-state -t $PAR_MUX_PANE_ID -s working -m 'awaiting 2
+  background agents'"` so the roster shows the park instead of idle, and
+  clear it with the bare form (`-s` omitted reports `idle`) when the work
+  drains. The state rides the normal notify/sound pipeline (the
+  `%agent-state-changed` broadcast), and the next hook report re-takes the
+  state (`source=hook` again).
 - `nc -U` needs a netcat with Unix-socket support (macOS built-in works).
 
 ## Requirements

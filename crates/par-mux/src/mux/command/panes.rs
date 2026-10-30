@@ -26,6 +26,45 @@ pub(super) fn parse_list_agents(_a: &Args<'_>) -> Result<MuxCommand, String> {
     Ok(MuxCommand::ListAgents)
 }
 
+/// `report-state`'s value-taking flags.
+const REPORT_STATE_VALUE_FLAGS: &[&str] = &["-t", "-a", "-s", "-m"];
+
+/// `report-state -t <pane> [-a agent] [-s state] [-m message]` — the pane's
+/// own agent-state report, the control-verb spelling of the hook
+/// `pane.report_agent` shape. `-s` accepts the hook states minus `unknown`
+/// (unknown is the absence of a claim, never a stored state); omitting `-s`
+/// reports idle, which the shared report path derives to `done` for a pane
+/// no viewer shows — the same semantics a hook's idle takes.
+pub(super) fn parse_report_state(a: &Args<'_>) -> Result<MuxCommand, String> {
+    let a = a.with_value_flags(REPORT_STATE_VALUE_FLAGS);
+    let pane = a.pane("-t")?;
+    let agent = a.quoted_flag("-a")?;
+    let message = a.quoted_flag("-m")?;
+    let state = match a.flag("-s") {
+        Some(raw) => {
+            let state = raw.trim();
+            if !matches!(state, "working" | "blocked" | "question" | "done" | "idle") {
+                return Err(format!(
+                    "{}: invalid state: {state} (working, blocked, question, done, or idle)",
+                    a.name
+                ));
+            }
+            Some(state.to_string())
+        }
+        None => None,
+    };
+    if message.is_some() && state.is_none() {
+        return Err(format!("{}: -m requires -s", a.name));
+    }
+    reject_positionals(&a, REPORT_STATE_VALUE_FLAGS)?;
+    Ok(MuxCommand::ReportState {
+        pane,
+        agent,
+        state,
+        message,
+    })
+}
+
 /// tmux's value-taking `events` flag (`--since`).
 pub(super) const EVENTS_VALUE_FLAGS: &[&str] = &["--since"];
 

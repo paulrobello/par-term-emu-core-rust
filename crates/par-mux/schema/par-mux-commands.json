@@ -384,6 +384,17 @@
       "synopsis": "-t <workspace> <name>"
     },
     {
+      "name": "report-state",
+      "features": [],
+      "flags": [
+        "-a",
+        "-m",
+        "-s",
+        "-t"
+      ],
+      "synopsis": "-t <pane> [-a agent] [-s state] [-m message]"
+    },
+    {
       "name": "resize-pane",
       "features": [
         "zoom",
