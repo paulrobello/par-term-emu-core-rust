@@ -1149,7 +1149,14 @@ impl WindowSession {
                 }
             },
             SettingKind::Chord => {
-                if crate::mux::config::parse_chord(text).is_some() {
+                // The prefix is a bare byte (no Alt); every other chord row
+                // accepts the full chord grammar.
+                let valid = if edit.key == "prefix" {
+                    crate::mux::config::parse_prefix(text).is_some()
+                } else {
+                    crate::mux::config::parse_chord(text).is_some()
+                };
+                if valid {
                     Some(SettingValue::Str(text.to_string()))
                 } else {
                     self.chrome.flash(format!(

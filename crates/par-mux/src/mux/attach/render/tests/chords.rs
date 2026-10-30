@@ -2,6 +2,34 @@
 
 use super::*;
 
+/// The settings dialog's `prefix` row is a bare byte: `M-1` is rejected
+/// at the prompt (flash, nothing written) while a management chord row
+/// still accepts the Alt spelling.
+#[test]
+fn settings_prefix_row_rejects_alt_but_chord_rows_accept_it() {
+    let (_rx, mut conn, mut session) = command_menu_session("prefixalt");
+    let dir = tempfile::tempdir().expect("tempdir");
+    let path = dir.path().join("config.toml");
+    std::fs::write(&path, "[client]\n").unwrap();
+    session.settings_path = Some(path.clone());
+    session.enter_settings();
+    session.route_stdin_bytes(&mut conn, b"\t\t\t\t\t");
+    session.route_stdin_bytes(&mut conn, b"\r");
+    assert!(session.is_prompt(), "the prefix row opens the prompt");
+    type_and_commit(&mut session, &mut conn, "M-1");
+    assert!(session.is_prompt(), "an Alt prefix keeps the prompt up");
+    assert!(session.chrome.flash_text().is_some(), "and flashes");
+    let written = std::fs::read_to_string(&path).unwrap();
+    assert!(!written.contains("prefix"), "nothing written: {written}");
+    session.leave_prompt();
+
+    session.route_stdin_bytes(&mut conn, b"jj\r");
+    assert!(session.is_prompt(), "the split-right row opens the prompt");
+    type_and_commit(&mut session, &mut conn, "M-1");
+    let written = std::fs::read_to_string(&path).unwrap();
+    assert!(written.contains("split-right = \"M-1\""), "{written}");
+}
+
 /// A session whose status saw `$0` but whose session roster comes
 /// back EMPTY (another client killed the last session before the
 /// throttled refresh noticed): prefix `)` must be a no-op — no
