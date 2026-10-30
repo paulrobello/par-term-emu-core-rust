@@ -268,8 +268,8 @@ app:
 	@if security find-identity -v -p codesigning 2>/dev/null | grep -q '"Developer ID Application:'; then \
 		ID=$$(security find-identity -v -p codesigning 2>/dev/null | grep '"Developer ID Application:' | head -1 | sed -E 's/.*"(.*)".*/\1/'); \
 		echo "Signing bundle with: $$ID"; \
-		codesign --force --timestamp --options runtime --sign "$$ID" build/Par-mux.app/Contents/MacOS/Par-mux && \
-		codesign --force --timestamp --options runtime --sign "$$ID" build/Par-mux.app; \
+		codesign --force --timestamp --options runtime --entitlements crates/par-mux/app/Par-mux.entitlements --sign "$$ID" build/Par-mux.app/Contents/MacOS/Par-mux && \
+		codesign --force --timestamp --options runtime --entitlements crates/par-mux/app/Par-mux.entitlements --sign "$$ID" build/Par-mux.app; \
 	else \
 		echo "WARNING: no Developer ID identity in keychain; leaving bundle ad-hoc signed — TCC grants (screen recording, microphone, local network) reset on every rebuild"; \
 		codesign --force -s - build/Par-mux.app; \
