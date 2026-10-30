@@ -1028,7 +1028,7 @@ impl WindowSession {
                 shaded: false,
             });
         }
-        let chip = status::help_chip(self.prefix, self.management.help);
+        let chip = status::help_chip(self.prefix, self.management.help.key);
         let reserved: usize = head
             .iter()
             .chain(std::iter::once(&chip))

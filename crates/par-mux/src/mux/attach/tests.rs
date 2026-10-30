@@ -1546,7 +1546,7 @@ fn help_rows_carry_effective_bindings_and_categories() {
         0x02,
         0x12,
         Management {
-            split_right: b's',
+            split_right: crate::mux::config::ChordKey::plain(b's'),
             ..Management::default()
         },
         2,
@@ -2397,7 +2397,7 @@ fn palette_action_chord_spells_the_live_binding() {
         Some("C-b d")
     );
     // A remapped chord shows the remapped key.
-    m.kill_pane = b'K';
+    m.kill_pane = crate::mux::config::ChordKey::plain(b'K');
     assert_eq!(
         palette_action_chord(9, 0x02, 0x12, &m).as_deref(),
         Some("C-b K")
@@ -2562,34 +2562,35 @@ fn reload_client_chords_errors_on_malformed_chords() {
             prefix: 0x02,
             reload: 0x12,
             management: crate::mux::config::Management {
-                split_right: b'&',
-                split_down: b'*',
-                kill_pane: b'X',
-                break_pane: b'!',
-                join_pane: b'J',
-                palette: b':',
-                new_window: b'C',
-                resize: b'R',
-                swap_prev: b'{',
-                swap_next: b'}',
-                move_window_left: b'<',
-                move_window_right: b'>',
-                tab_strip_left: b'H',
-                tab_strip_right: b'L',
-                workspace_next: b'N',
-                workspace_prev: b'P',
-                help: b'?',
-                picker: b'w',
-                zoom: b'z',
-                rename_window: b',',
-                rename_pane: b'$',
-                border_cycle: b'B',
-                label_toggle: b'l',
-                workspace_picker: b'g',
-                sidebar: b's',
-                status_bar: b'S',
-                respawn: b'r',
-                notify_jump: b'j',
+                split_right: crate::mux::config::ChordKey::plain(b'&'),
+                split_down: crate::mux::config::ChordKey::plain(b'*'),
+                kill_pane: crate::mux::config::ChordKey::plain(b'X'),
+                break_pane: crate::mux::config::ChordKey::plain(b'!'),
+                join_pane: crate::mux::config::ChordKey::plain(b'J'),
+                palette: crate::mux::config::ChordKey::plain(b':'),
+                new_window: crate::mux::config::ChordKey::plain(b'C'),
+                resize: crate::mux::config::ChordKey::plain(b'R'),
+                swap_prev: crate::mux::config::ChordKey::plain(b'{'),
+                swap_next: crate::mux::config::ChordKey::plain(b'}'),
+                move_window_left: crate::mux::config::ChordKey::plain(b'<'),
+                move_window_right: crate::mux::config::ChordKey::plain(b'>'),
+                tab_strip_left: crate::mux::config::ChordKey::plain(b'H'),
+                tab_strip_right: crate::mux::config::ChordKey::plain(b'L'),
+                workspace_next: crate::mux::config::ChordKey::plain(b'N'),
+                workspace_prev: crate::mux::config::ChordKey::plain(b'P'),
+                help: crate::mux::config::ChordKey::plain(b'?'),
+                picker: crate::mux::config::ChordKey::plain(b'w'),
+                zoom: crate::mux::config::ChordKey::plain(b'z'),
+                rename_window: crate::mux::config::ChordKey::plain(b','),
+                rename_pane: crate::mux::config::ChordKey::plain(b'$'),
+                border_cycle: crate::mux::config::ChordKey::plain(b'B'),
+                label_toggle: crate::mux::config::ChordKey::plain(b'l'),
+                workspace_picker: crate::mux::config::ChordKey::plain(b'g'),
+                sidebar: crate::mux::config::ChordKey::plain(b's'),
+                status_bar: crate::mux::config::ChordKey::plain(b'S'),
+                respawn: crate::mux::config::ChordKey::plain(b'r'),
+                notify_jump: crate::mux::config::ChordKey::plain(b'j'),
+                ..crate::mux::config::Management::default()
             },
             resize_step: 1,
             ..crate::mux::config::Chords::with_defaults()
@@ -2602,34 +2603,35 @@ fn reload_client_chords_errors_on_malformed_chords() {
             prefix: 0x02,
             reload: 0x12,
             management: crate::mux::config::Management {
-                split_right: b'&',
-                split_down: b'*',
-                kill_pane: b'X',
-                break_pane: b'!',
-                join_pane: b'J',
-                palette: b':',
-                new_window: b'C',
-                resize: b'R',
-                swap_prev: b'{',
-                swap_next: b'}',
-                move_window_left: b'<',
-                move_window_right: b'>',
-                tab_strip_left: b'H',
-                tab_strip_right: b'L',
-                workspace_next: b'N',
-                workspace_prev: b'P',
-                help: b'?',
-                picker: b'w',
-                zoom: b'z',
-                rename_window: b',',
-                rename_pane: b'$',
-                border_cycle: b'B',
-                label_toggle: b'l',
-                workspace_picker: b'g',
-                sidebar: b's',
-                status_bar: b'S',
-                respawn: b'r',
-                notify_jump: b'j',
+                split_right: crate::mux::config::ChordKey::plain(b'&'),
+                split_down: crate::mux::config::ChordKey::plain(b'*'),
+                kill_pane: crate::mux::config::ChordKey::plain(b'X'),
+                break_pane: crate::mux::config::ChordKey::plain(b'!'),
+                join_pane: crate::mux::config::ChordKey::plain(b'J'),
+                palette: crate::mux::config::ChordKey::plain(b':'),
+                new_window: crate::mux::config::ChordKey::plain(b'C'),
+                resize: crate::mux::config::ChordKey::plain(b'R'),
+                swap_prev: crate::mux::config::ChordKey::plain(b'{'),
+                swap_next: crate::mux::config::ChordKey::plain(b'}'),
+                move_window_left: crate::mux::config::ChordKey::plain(b'<'),
+                move_window_right: crate::mux::config::ChordKey::plain(b'>'),
+                tab_strip_left: crate::mux::config::ChordKey::plain(b'H'),
+                tab_strip_right: crate::mux::config::ChordKey::plain(b'L'),
+                workspace_next: crate::mux::config::ChordKey::plain(b'N'),
+                workspace_prev: crate::mux::config::ChordKey::plain(b'P'),
+                help: crate::mux::config::ChordKey::plain(b'?'),
+                picker: crate::mux::config::ChordKey::plain(b'w'),
+                zoom: crate::mux::config::ChordKey::plain(b'z'),
+                rename_window: crate::mux::config::ChordKey::plain(b','),
+                rename_pane: crate::mux::config::ChordKey::plain(b'$'),
+                border_cycle: crate::mux::config::ChordKey::plain(b'B'),
+                label_toggle: crate::mux::config::ChordKey::plain(b'l'),
+                workspace_picker: crate::mux::config::ChordKey::plain(b'g'),
+                sidebar: crate::mux::config::ChordKey::plain(b's'),
+                status_bar: crate::mux::config::ChordKey::plain(b'S'),
+                respawn: crate::mux::config::ChordKey::plain(b'r'),
+                notify_jump: crate::mux::config::ChordKey::plain(b'j'),
+                ..crate::mux::config::Management::default()
             },
             resize_step: 1,
             ..crate::mux::config::Chords::with_defaults()
@@ -3231,12 +3233,16 @@ fn resolve_client_cli_wins_over_the_file() {
     let from_file = resolve_client_with(&cli_options(None, None), file.clone()).expect("file");
     assert_eq!(from_file.chords.prefix, 0x01);
     assert_eq!(from_file.chords.reload, 0x13);
-    assert_eq!(from_file.chords.management.split_right, b'|');
+    assert_eq!(
+        from_file.chords.management.split_right,
+        crate::mux::config::ChordKey::plain(b'|')
+    );
     let cli = resolve_client_with(&cli_options(Some("C-x"), Some("C-x C-e")), file).expect("cli");
     assert_eq!(cli.chords.prefix, 0x18, "--prefix wins over the file");
     assert_eq!(cli.chords.reload, 0x05, "the CLI reload chord wins");
     assert_eq!(
-        cli.chords.management.split_right, b'|',
+        cli.chords.management.split_right,
+        crate::mux::config::ChordKey::plain(b'|'),
         "the file still fills the rest"
     );
 }

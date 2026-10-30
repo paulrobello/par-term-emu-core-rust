@@ -10,6 +10,7 @@ use crate::mux::attach::input::SgrMouse;
 use crate::mux::attach::layout::PaneRect;
 use crate::mux::attach::text_input::{fold_fullwidth_ascii, Utf8Assembler, Utf8Step};
 use crate::mux::attach::ManagementKey;
+use crate::mux::config::ChordKey;
 use par_term_emu_core::keyboard::TermKeyEvent;
 
 /// The status flash for a prefix chord typed as a non-ASCII character:
@@ -408,13 +409,13 @@ impl WindowSession {
         if let Some(key) = self.management_key(byte) {
             return PrefixChord::Management(key);
         }
-        if byte == self.management.resize {
+        if ChordKey::plain(byte) == self.management.resize {
             return PrefixChord::Resize;
         }
-        if byte == self.management.help {
+        if ChordKey::plain(byte) == self.management.help {
             return PrefixChord::Help;
         }
-        if byte == self.management.picker {
+        if ChordKey::plain(byte) == self.management.picker {
             return PrefixChord::Picker;
         }
         match byte {
@@ -459,7 +460,7 @@ impl WindowSession {
         ];
         table
             .into_iter()
-            .find(|(bound, _)| *bound == byte)
+            .find(|(bound, _)| *bound == ChordKey::plain(byte))
             .map(|(_, key)| key)
     }
 

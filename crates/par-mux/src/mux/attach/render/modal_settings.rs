@@ -219,8 +219,8 @@ impl SettingSpec {
 }
 
 /// A chord row's value: the bound byte in the tmux spelling.
-fn chord(byte: u8) -> FieldVal {
-    FieldVal::Text(spell_key(byte))
+fn chord(key: crate::mux::config::ChordKey) -> FieldVal {
+    FieldVal::Text(crate::mux::config::spell_chord(&key))
 }
 
 /// The sidebar section's rows.
@@ -409,7 +409,7 @@ const NOTIFY_ROWS: &[SettingSpec] = &[
 /// management chord.
 const KEYS_ROWS: &[SettingSpec] = &[
     SettingSpec::new("prefix", "prefix", SettingKind::Chord, |v, _| {
-        chord(v.prefix)
+        chord(crate::mux::config::ChordKey::plain(v.prefix))
     }),
     SettingSpec::new(
         "reload",
@@ -1149,7 +1149,7 @@ impl WindowSession {
                 }
             },
             SettingKind::Chord => {
-                if crate::mux::config::parse_prefix(text).is_some() {
+                if crate::mux::config::parse_chord(text).is_some() {
                     Some(SettingValue::Str(text.to_string()))
                 } else {
                     self.chrome.flash(format!(
@@ -1419,11 +1419,11 @@ mod tests {
         let m = Management::default();
         assert_eq!(
             lookup("split-right").value(&values, "render"),
-            FieldVal::Text(spell_key(m.split_right))
+            FieldVal::Text(crate::mux::config::spell_chord(&m.split_right))
         );
         assert_eq!(
             lookup("notify-jump").value(&values, "render"),
-            FieldVal::Text(spell_key(m.notify_jump))
+            FieldVal::Text(crate::mux::config::spell_chord(&m.notify_jump))
         );
     }
 

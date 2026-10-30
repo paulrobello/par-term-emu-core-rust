@@ -3042,7 +3042,7 @@ fn prefix_chord_classifies_bytes_in_precedence_order() {
     assert_eq!(session.prefix_chord(b'q'), PrefixChord::Unbound);
 
     // A management key rebound onto a fixed-table byte wins over it.
-    session.management.zoom = b'n';
+    session.management.zoom = crate::mux::config::ChordKey::plain(b'n');
     assert_eq!(
         session.prefix_chord(b'n'),
         PrefixChord::Management(ManagementKey::Zoom)
@@ -3208,7 +3208,7 @@ fn exit_cue_and_respawn_chord_follow_the_held_pane() {
         pane_id: "%1".to_string(),
         exit_code: None,
     });
-    session.management.respawn = b'&';
+    session.management.respawn = crate::mux::config::ChordKey::plain(b'&');
     assert_eq!(
         session.exit_cue().as_deref(),
         Some("(exited ? — C-b & respawns)")

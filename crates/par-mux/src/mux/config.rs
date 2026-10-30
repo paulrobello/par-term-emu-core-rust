@@ -93,6 +93,41 @@ pub struct ClientSection {
         skip_serializing_if = "Option::is_none"
     )]
     pub split_right: Option<String>,
+    /// The `layout-even-horizontal` layout-preset chord (default `M-1`).
+    #[serde(
+        default,
+        rename = "layout-even-horizontal",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub layout_even_horizontal: Option<String>,
+    /// The `layout-even-vertical` layout-preset chord (default `M-2`).
+    #[serde(
+        default,
+        rename = "layout-even-vertical",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub layout_even_vertical: Option<String>,
+    /// The `layout-main-horizontal` layout-preset chord (default `M-3`).
+    #[serde(
+        default,
+        rename = "layout-main-horizontal",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub layout_main_horizontal: Option<String>,
+    /// The `layout-main-vertical` layout-preset chord (default `M-4`).
+    #[serde(
+        default,
+        rename = "layout-main-vertical",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub layout_main_vertical: Option<String>,
+    /// The `layout-tiled` layout-preset chord (default `M-5`).
+    #[serde(
+        default,
+        rename = "layout-tiled",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub layout_tiled: Option<String>,
     /// The split-down chord (tmux's `"`): the key matched after the
     /// prefix that splits the focused pane below and lands on the new pane.
     #[serde(
@@ -1170,6 +1205,11 @@ pub fn render(eff: &EffectiveConfig) -> String {
             git_poll_secs: Some(eff.git_poll_secs),
             agents_sort: Some(defaults.agents_sort.clone()),
             split_right: None,
+            layout_even_horizontal: None,
+            layout_even_vertical: None,
+            layout_main_horizontal: None,
+            layout_main_vertical: None,
+            layout_tiled: None,
             split_down: None,
             kill_pane: None,
             break_pane: None,
@@ -1187,7 +1227,7 @@ pub fn render(eff: &EffectiveConfig) -> String {
             workspace_next: None,
             workspace_prev: None,
             help: None,
-            picker: Some(char::from(defaults.management.picker).to_string()),
+            picker: Some(spell_chord(&defaults.management.picker)),
             zoom: None,
             rename_window: None,
             rename_pane: None,
@@ -1509,145 +1549,172 @@ impl Chords {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Management {
     /// Split the focused pane right — `split-window -t <pane> -h`.
-    pub split_right: u8,
+    pub split_right: ChordKey,
     /// Split the focused pane down — `split-window -t <pane>`.
-    pub split_down: u8,
+    pub split_down: ChordKey,
     /// Kill the focused pane — `kill-pane -t <pane>`.
-    pub kill_pane: u8,
+    pub kill_pane: ChordKey,
     /// Break the focused pane out into a new window of its session —
     /// `break-pane -s <pane>` — and land on the fresh window.
-    pub break_pane: u8,
+    pub break_pane: ChordKey,
     /// Open the window picker in join mode: the picked window receives
     /// the focused pane (`join-pane -s <pane> -t <pane>`).
-    pub join_pane: u8,
+    pub join_pane: ChordKey,
     /// Open the command palette: every management action (and
     /// settings/keybinds/reload/detach) as one filterable list.
-    pub palette: u8,
+    pub palette: ChordKey,
     /// New window in the focused pane's session — `new-window -t <session>`.
-    pub new_window: u8,
+    pub new_window: ChordKey,
     /// Enter the sticky resize mode — arrows adjust the focused pane's
     /// edges by `Chords::resize_step` per press until Enter/Escape/`q`.
-    pub resize: u8,
+    pub resize: ChordKey,
     /// Swap the focused pane with the previous pane in layout order —
     /// `swap-pane -s <focused> -t <prev>`.
-    pub swap_prev: u8,
+    pub swap_prev: ChordKey,
     /// Swap the focused pane with the next pane in layout order —
     /// `swap-pane -s <focused> -t <next>`.
-    pub swap_next: u8,
+    pub swap_next: ChordKey,
     /// Move the shown window one tab left in its session's order —
     /// `swap-window -s <shown> -t <prev>` (tmux's `<`).
-    pub move_window_left: u8,
+    pub move_window_left: ChordKey,
     /// Move the shown window one tab right in its session's order —
     /// `swap-window -s <shown> -t <next>` (tmux's `>`).
-    pub move_window_right: u8,
+    pub move_window_right: ChordKey,
     /// Scroll the overflowing tab strip's visible run one wheel-notch
     /// left — toward the earlier windows — without switching (render
     /// mode).
-    pub tab_strip_left: u8,
+    pub tab_strip_left: ChordKey,
     /// Scroll the overflowing tab strip's visible run one wheel-notch
     /// right — toward the later windows — without switching (render
     /// mode).
-    pub tab_strip_right: u8,
+    pub tab_strip_right: ChordKey,
     /// Select the next workspace in id order — `select-workspace -t +N`
     /// — and land the view on the workspace's session. Prefix `W` by
     /// default (prefix `w` is reserved for the workspace picker).
-    pub workspace_next: u8,
+    pub workspace_next: ChordKey,
     /// Select the previous workspace in id order —
     /// `select-workspace -t +N` — and land the view on the workspace's
     /// session. Prefix `C-w` by default.
-    pub workspace_prev: u8,
+    pub workspace_prev: ChordKey,
     /// Open the bindings help panel — every chord at its effective
     /// binding, from the live config.
-    pub help: u8,
+    pub help: ChordKey,
     /// Open the session/window picker modal — sessions with their
     /// windows nested, the current one emphasized, keyboard and mouse
     /// navigable.
-    pub picker: u8,
+    pub picker: ChordKey,
     /// Toggle the focused pane between its layout rect and the full
     /// window — tmux's zoom.
-    pub zoom: u8,
+    pub zoom: ChordKey,
     /// Open the rename prompt for the shown window (its `name`).
-    pub rename_window: u8,
+    pub rename_window: ChordKey,
     /// Open the rename prompt for the focused pane's user title.
-    pub rename_pane: u8,
+    pub rename_pane: ChordKey,
     /// Cycle the divider/border glyph set.
-    pub border_cycle: u8,
+    pub border_cycle: ChordKey,
     /// Toggle pane titles embedded in the pane borders (render mode).
-    pub label_toggle: u8,
+    pub label_toggle: ChordKey,
     /// Open the workspace picker modal — the session/window picker's
     /// workspace sibling: the daemon's workspace roster, the current one
     /// marked, keyboard and mouse navigable, Enter lands on it.
-    pub workspace_picker: u8,
+    pub workspace_picker: ChordKey,
     /// Toggle the workspace side panel (render mode): a left strip with
     /// the workspace list, click-to-land; more sections will follow.
-    pub sidebar: u8,
+    pub sidebar: ChordKey,
     /// Toggle the bottom status bar (render mode): shown by default;
     /// hiding it hands the row back to the pane grid.
-    pub status_bar: u8,
+    pub status_bar: ChordKey,
     /// Respawn the focused pane when it is held dead — `respawn-pane -t
     /// <pane>`. A live pane is left alone.
-    pub respawn: u8,
+    pub respawn: ChordKey,
     /// Focus the pane behind the most recent agent notification this
     /// client delivered (herdr's `open_notification_target`; render mode).
-    pub notify_jump: u8,
+    pub notify_jump: ChordKey,
+    /// Apply the even-horizontal layout preset (tmux `M-1`).
+    pub layout_even_horizontal: ChordKey,
+    /// Apply the even-vertical layout preset (tmux `M-2`).
+    pub layout_even_vertical: ChordKey,
+    /// Apply the main-horizontal layout preset (tmux `M-3`).
+    pub layout_main_horizontal: ChordKey,
+    /// Apply the main-vertical layout preset (tmux `M-4`).
+    pub layout_main_vertical: ChordKey,
+    /// Apply the tiled layout preset (tmux `M-5`).
+    pub layout_tiled: ChordKey,
 }
 
 impl Default for Management {
     fn default() -> Self {
         Self {
-            split_right: b'%',
-            split_down: b'"',
-            kill_pane: b'x',
-            break_pane: b'!',
-            join_pane: b'J',
-            palette: b':',
-            new_window: b'c',
-            resize: b'R',
-            swap_prev: b'{',
-            swap_next: b'}',
-            move_window_left: b'<',
-            move_window_right: b'>',
-            tab_strip_left: b'H',
-            tab_strip_right: b'L',
-            workspace_next: b'W',
-            workspace_prev: 0x17, // C-w
-            help: b'?',
-            picker: b'w',
-            zoom: b'z',
-            rename_window: b',',
-            rename_pane: b'$',
-            border_cycle: b'B',
-            label_toggle: b'l',
-            workspace_picker: b'g',
-            sidebar: b's',
-            status_bar: b'S',
-            respawn: b'r',
-            notify_jump: b'j',
+            split_right: ChordKey::plain(b'%'),
+            split_down: ChordKey::plain(b'"'),
+            kill_pane: ChordKey::plain(b'x'),
+            break_pane: ChordKey::plain(b'!'),
+            join_pane: ChordKey::plain(b'J'),
+            palette: ChordKey::plain(b':'),
+            new_window: ChordKey::plain(b'c'),
+            resize: ChordKey::plain(b'R'),
+            swap_prev: ChordKey::plain(b'{'),
+            swap_next: ChordKey::plain(b'}'),
+            move_window_left: ChordKey::plain(b'<'),
+            move_window_right: ChordKey::plain(b'>'),
+            tab_strip_left: ChordKey::plain(b'H'),
+            tab_strip_right: ChordKey::plain(b'L'),
+            workspace_next: ChordKey::plain(b'W'),
+            workspace_prev: ChordKey::plain(0x17), // C-w
+            help: ChordKey::plain(b'?'),
+            picker: ChordKey::plain(b'w'),
+            zoom: ChordKey::plain(b'z'),
+            rename_window: ChordKey::plain(b','),
+            rename_pane: ChordKey::plain(b'$'),
+            border_cycle: ChordKey::plain(b'B'),
+            label_toggle: ChordKey::plain(b'l'),
+            workspace_picker: ChordKey::plain(b'g'),
+            sidebar: ChordKey::plain(b's'),
+            status_bar: ChordKey::plain(b'S'),
+            respawn: ChordKey::plain(b'r'),
+            notify_jump: ChordKey::plain(b'j'),
+            layout_even_horizontal: ChordKey::alt(b'1'),
+            layout_even_vertical: ChordKey::alt(b'2'),
+            layout_main_horizontal: ChordKey::alt(b'3'),
+            layout_main_vertical: ChordKey::alt(b'4'),
+            layout_tiled: ChordKey::alt(b'5'),
         }
     }
 }
 
-/// One after-prefix management key: a single token parsed with the shared
-/// prefix parser. A management chord is ONE key matched by byte after the
-/// prefix (the reload chord's multi-token spelling exists for
-/// documentation only; a management chord keeps the single-key shape).
+/// One after-prefix management key as a byte, for callers that cannot
+/// carry Alt (popup keys). An `M-` spelling is rejected here.
+pub fn management_key(chord: &str, name: &str) -> Result<u8, String> {
+    let c = management_chord(chord, name)?;
+    if c.alt {
+        return Err(format!(
+            "[client] {name} chord {chord:?} cannot use M- (Alt) here"
+        ));
+    }
+    Ok(c.key)
+}
+
+/// One after-prefix management chord: a single token parsed with
+/// [`parse_chord`] (plain, `C-x`, or `M-x`). A management chord is ONE key
+/// matched after the prefix (the reload chord's multi-token spelling exists
+/// for documentation only; a management chord keeps the single-key shape).
 /// Public for the settings dialog's chord validation, which must accept
 /// exactly what a reload would.
-pub fn management_key(chord: &str, name: &str) -> Result<u8, String> {
+pub fn management_chord(chord: &str, name: &str) -> Result<ChordKey, String> {
     let token = chord
         .split_whitespace()
         .last()
         .ok_or_else(|| format!("[client] {name} chord is empty"))?;
     for token in chord.split_whitespace() {
-        if parse_prefix(token).is_none() {
+        if parse_chord(token).is_none() {
             return Err(format!(
-                "[client] {name} chord {token:?} does not parse (expected the tmux spelling, e.g. C-b or a single key)"
+                "[client] {name} chord {token:?} does not parse (expected the tmux spelling, e.g. C-b, M-1 or a single key)"
             ));
         }
     }
-    parse_prefix(token).ok_or_else(|| {
+    parse_chord(token).ok_or_else(|| {
         format!(
-            "[client] {name} chord {token:?} does not parse (expected the tmux spelling, e.g. C-b or a single key)"
+            "[client] {name} chord {token:?} does not parse (expected the tmux spelling, e.g. C-b, M-1 or a single key)"
         )
     })
 }
@@ -1675,7 +1742,7 @@ pub fn reload_client_chords(file: &ConfigFile, current: &Chords) -> Result<Chord
     macro_rules! chord {
         ($field:ident, $label:literal) => {
             match file.client.$field.as_deref() {
-                Some(chord) => management_key(chord, $label)?,
+                Some(chord) => management_chord(chord, $label)?,
                 None => current.management.$field,
             }
         };
@@ -1709,6 +1776,11 @@ pub fn reload_client_chords(file: &ConfigFile, current: &Chords) -> Result<Chord
         status_bar: chord!(status_bar, "status-bar"),
         respawn: chord!(respawn, "respawn"),
         notify_jump: chord!(notify_jump, "notify-jump"),
+        layout_even_horizontal: chord!(layout_even_horizontal, "layout-even-horizontal"),
+        layout_even_vertical: chord!(layout_even_vertical, "layout-even-vertical"),
+        layout_main_horizontal: chord!(layout_main_horizontal, "layout-main-horizontal"),
+        layout_main_vertical: chord!(layout_main_vertical, "layout-main-vertical"),
+        layout_tiled: chord!(layout_tiled, "layout-tiled"),
     };
     // A step the file names floors at 1 — a zero/negative step would make
     // every resize a no-op by construction.
@@ -2141,6 +2213,57 @@ pub fn parse_hex_color(value: &str) -> Option<(u8, u8, u8)> {
         u8::from_str_radix(&hex[2..4], 16).ok()?,
         u8::from_str_radix(&hex[4..6], 16).ok()?,
     ))
+}
+
+/// One after-prefix chord key: the key byte and whether Alt (`M-`) is held.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ChordKey {
+    /// The key byte (control keys are their C0 byte).
+    pub key: u8,
+    /// Alt/Meta is held (`M-x`).
+    pub alt: bool,
+}
+
+impl ChordKey {
+    /// A chord with no modifier.
+    #[must_use]
+    pub const fn plain(key: u8) -> Self {
+        Self { key, alt: false }
+    }
+
+    /// A chord with Alt held.
+    #[must_use]
+    pub const fn alt(key: u8) -> Self {
+        Self { key, alt: true }
+    }
+}
+
+/// Parse a chord spelling: `M-x` (Alt + one key, case-insensitive prefix),
+/// or anything [`parse_prefix`] accepts (`C-x`, a single character). The
+/// combined `M-C-x` form is not supported.
+pub fn parse_chord(spec: &str) -> Option<ChordKey> {
+    let bytes = spec.as_bytes();
+    if bytes.len() >= 2 && bytes[0].eq_ignore_ascii_case(&b'm') && bytes[1] == b'-' {
+        let rest = &spec[2..];
+        let rb = rest.as_bytes();
+        return (rb.len() == 1).then(|| ChordKey::alt(rb[0]));
+    }
+    parse_prefix(spec).map(ChordKey::plain)
+}
+
+/// The inverse of [`parse_chord`]: `M-1`, `%`, `C-a`.
+#[must_use]
+pub fn spell_chord(c: &ChordKey) -> String {
+    let plain = match c.key {
+        0x00 => "C-Space".to_string(),
+        k @ 0x01..=0x1a => format!("C-{}", char::from(k - 1 + b'a')),
+        k => char::from(k).to_string(),
+    };
+    if c.alt {
+        format!("M-{plain}")
+    } else {
+        plain
+    }
 }
 
 /// Parse the tmux prefix spelling (`C-b`, `C-a`, `C-Space`) or a literal
@@ -2809,6 +2932,67 @@ remain-on-exit = true
     }
 
     #[test]
+    fn parse_chord_understands_m_keys() {
+        assert_eq!(parse_chord("M-1"), Some(ChordKey::alt(b'1')));
+        assert_eq!(parse_chord("m-a"), Some(ChordKey::alt(b'a')));
+        assert_eq!(parse_chord("M-A"), Some(ChordKey::alt(b'A')));
+        assert_eq!(parse_chord("M-%"), Some(ChordKey::alt(b'%')));
+        assert_eq!(parse_chord("M-"), None);
+        assert_eq!(parse_chord("M-12"), None);
+        assert_eq!(parse_chord("M-C-a"), None);
+    }
+
+    #[test]
+    fn parse_chord_keeps_plain_and_c_keys() {
+        assert_eq!(parse_chord("%"), Some(ChordKey::plain(b'%')));
+        assert_eq!(parse_chord("C-a"), Some(ChordKey::plain(0x01)));
+        assert_eq!(parse_chord("C-Space"), Some(ChordKey::plain(0x00)));
+        assert_eq!(parse_chord("M"), Some(ChordKey::plain(b'M')));
+        assert_eq!(parse_chord("Mx"), None);
+        assert_eq!(parse_chord("ab"), None);
+        assert_eq!(parse_chord(""), None);
+    }
+
+    #[test]
+    fn spell_chord_round_trips_parse_chord() {
+        for spec in ["M-1", "%", "C-a", "C-Space", "x", "M-x", "M-%"] {
+            let parsed = parse_chord(spec).expect(spec);
+            assert_eq!(spell_chord(&parsed), spec);
+        }
+    }
+
+    #[test]
+    fn management_defaults_bind_m1_through_m5() {
+        let m = Management::default();
+        assert_eq!(m.layout_even_horizontal, ChordKey::alt(b'1'));
+        assert_eq!(m.layout_even_vertical, ChordKey::alt(b'2'));
+        assert_eq!(m.layout_main_horizontal, ChordKey::alt(b'3'));
+        assert_eq!(m.layout_main_vertical, ChordKey::alt(b'4'));
+        assert_eq!(m.layout_tiled, ChordKey::alt(b'5'));
+    }
+
+    #[test]
+    fn config_file_layout_keys_round_trip() {
+        let defaults = Chords::with_defaults();
+        let file: ConfigFile =
+            toml::from_str("[client]\nlayout-even-horizontal = \"M-x\"\nlayout-tiled = \"t\"\n")
+                .unwrap();
+        let m = reload_client_chords(&file, &defaults).unwrap().management;
+        assert_eq!(m.layout_even_horizontal, ChordKey::alt(b'x'));
+        assert_eq!(m.layout_tiled, ChordKey::plain(b't'));
+        assert_eq!(
+            m.layout_even_vertical,
+            ChordKey::alt(b'2'),
+            "unstated keeps default"
+        );
+        let bad: ConfigFile = toml::from_str("[client]\nlayout-tiled = \"M-\"\n").unwrap();
+        assert!(reload_client_chords(&bad, &defaults).is_err());
+        // The generated file does not emit the layout keys (defaults stand).
+        let eff = resolve(&ConfigFile::default(), &Overrides::default());
+        assert!(!render(&eff).contains("layout-"));
+    }
+
+    #[test]
     fn management_chords_parse_route_and_error() {
         let defaults = Chords {
             prefix: 0x02,
@@ -2820,34 +3004,35 @@ remain-on-exit = true
         assert_eq!(
             reload_client_chords(&file, &defaults).unwrap().management,
             Management {
-                split_right: b'%',
-                split_down: b'"',
-                kill_pane: b'x',
-                break_pane: b'!',
-                join_pane: b'J',
-                palette: b':',
-                new_window: b'c',
-                resize: b'R',
-                swap_prev: b'{',
-                swap_next: b'}',
-                move_window_left: b'<',
-                move_window_right: b'>',
-                tab_strip_left: b'H',
-                tab_strip_right: b'L',
-                workspace_next: b'W',
-                workspace_prev: 0x17,
-                help: b'?',
-                picker: b'w',
-                zoom: b'z',
-                rename_window: b',',
-                rename_pane: b'$',
-                border_cycle: b'B',
-                label_toggle: b'l',
-                workspace_picker: b'g',
-                sidebar: b's',
-                status_bar: b'S',
-                respawn: b'r',
-                notify_jump: b'j',
+                split_right: ChordKey::plain(b'%'),
+                split_down: ChordKey::plain(b'"'),
+                kill_pane: ChordKey::plain(b'x'),
+                break_pane: ChordKey::plain(b'!'),
+                join_pane: ChordKey::plain(b'J'),
+                palette: ChordKey::plain(b':'),
+                new_window: ChordKey::plain(b'c'),
+                resize: ChordKey::plain(b'R'),
+                swap_prev: ChordKey::plain(b'{'),
+                swap_next: ChordKey::plain(b'}'),
+                move_window_left: ChordKey::plain(b'<'),
+                move_window_right: ChordKey::plain(b'>'),
+                tab_strip_left: ChordKey::plain(b'H'),
+                tab_strip_right: ChordKey::plain(b'L'),
+                workspace_next: ChordKey::plain(b'W'),
+                workspace_prev: ChordKey::plain(0x17),
+                help: ChordKey::plain(b'?'),
+                picker: ChordKey::plain(b'w'),
+                zoom: ChordKey::plain(b'z'),
+                rename_window: ChordKey::plain(b','),
+                rename_pane: ChordKey::plain(b'$'),
+                border_cycle: ChordKey::plain(b'B'),
+                label_toggle: ChordKey::plain(b'l'),
+                workspace_picker: ChordKey::plain(b'g'),
+                sidebar: ChordKey::plain(b's'),
+                status_bar: ChordKey::plain(b'S'),
+                respawn: ChordKey::plain(b'r'),
+                notify_jump: ChordKey::plain(b'j'),
+                ..Management::default()
             }
         );
         // Full override, tmux spellings and literals alike.
@@ -2856,29 +3041,41 @@ remain-on-exit = true
         )
         .unwrap();
         let m = reload_client_chords(&file, &defaults).unwrap().management;
-        assert_eq!(m.split_right, 0x13);
-        assert_eq!(m.split_down, b'v');
-        assert_eq!(m.kill_pane, 0x18);
-        assert_eq!(m.new_window, b'W');
+        assert_eq!(m.split_right, ChordKey::plain(0x13));
+        assert_eq!(m.split_down, ChordKey::plain(b'v'));
+        assert_eq!(m.kill_pane, ChordKey::plain(0x18));
+        assert_eq!(m.new_window, ChordKey::plain(b'W'));
         // A partial override keeps the untouched keys.
         let partial: ConfigFile = toml::from_str("[client]\nnew-window = \"n\"\n").unwrap();
         let m = reload_client_chords(&partial, &defaults)
             .unwrap()
             .management;
-        assert_eq!(m.split_right, b'%', "unstated keeps the current/default");
-        assert_eq!(m.new_window, b'n');
+        assert_eq!(
+            m.split_right,
+            ChordKey::plain(b'%'),
+            "unstated keeps the current/default"
+        );
+        assert_eq!(m.new_window, ChordKey::plain(b'n'));
         // The workspace chords parse through the same grammar; unstated
         // keeps the defaults (W / C-w).
         let file: ConfigFile =
             toml::from_str("[client]\nworkspace-next = \"C-n\"\nworkspace-prev = \"C-p\"\n")
                 .unwrap();
         let m = reload_client_chords(&file, &defaults).unwrap().management;
-        assert_eq!(m.workspace_next, 0x0e, "C-n overrides the W default");
-        assert_eq!(m.workspace_prev, 0x10, "C-p overrides the C-w default");
+        assert_eq!(
+            m.workspace_next,
+            ChordKey::plain(0x0e),
+            "C-n overrides the W default"
+        );
+        assert_eq!(
+            m.workspace_prev,
+            ChordKey::plain(0x10),
+            "C-p overrides the C-w default"
+        );
         let empty: ConfigFile = toml::from_str("[client]\n").unwrap();
         let m = reload_client_chords(&empty, &defaults).unwrap().management;
-        assert_eq!(m.workspace_next, b'W');
-        assert_eq!(m.workspace_prev, 0x17, "C-w");
+        assert_eq!(m.workspace_next, ChordKey::plain(b'W'));
+        assert_eq!(m.workspace_prev, ChordKey::plain(0x17), "C-w");
         // Malformed spellings error, naming the key.
         for (key, spec) in [
             ("split-right", "C-"),
@@ -2902,20 +3099,24 @@ remain-on-exit = true
         // Defaults.
         let file: ConfigFile = toml::from_str("[client]\n").unwrap();
         let m = reload_client_chords(&file, &defaults).unwrap().management;
-        assert_eq!(m.tab_strip_left, b'H');
-        assert_eq!(m.tab_strip_right, b'L');
+        assert_eq!(m.tab_strip_left, ChordKey::plain(b'H'));
+        assert_eq!(m.tab_strip_right, ChordKey::plain(b'L'));
         // A rebind parses with the tmux spelling.
         let file: ConfigFile =
             toml::from_str("[client]\ntab-strip-left = \"C-j\"\ntab-strip-right = \"C-l\"\n")
                 .unwrap();
         let m = reload_client_chords(&file, &defaults).unwrap().management;
-        assert_eq!(m.tab_strip_left, 0x0a, "C-j");
-        assert_eq!(m.tab_strip_right, 0x0c, "C-l");
+        assert_eq!(m.tab_strip_left, ChordKey::plain(0x0a), "C-j");
+        assert_eq!(m.tab_strip_right, ChordKey::plain(0x0c), "C-l");
         // A partial override keeps the sibling's default.
         let file: ConfigFile = toml::from_str("[client]\ntab-strip-left = \"h\"\n").unwrap();
         let m = reload_client_chords(&file, &defaults).unwrap().management;
-        assert_eq!(m.tab_strip_left, b'h');
-        assert_eq!(m.tab_strip_right, b'L', "unstated keeps the default");
+        assert_eq!(m.tab_strip_left, ChordKey::plain(b'h'));
+        assert_eq!(
+            m.tab_strip_right,
+            ChordKey::plain(b'L'),
+            "unstated keeps the default"
+        );
         // Malformed spellings error, naming the key.
         let file: ConfigFile = toml::from_str("[client]\ntab-strip-left = \"C-]\"\n").unwrap();
         let err = reload_client_chords(&file, &defaults).unwrap_err();
@@ -2952,14 +3153,14 @@ remain-on-exit = true
         // Unstated keys keep their current values.
         let file: ConfigFile = toml::from_str("[client]\n").unwrap();
         let chords = reload_client_chords(&file, &defaults).unwrap();
-        assert_eq!(chords.management.resize, b'R');
+        assert_eq!(chords.management.resize, ChordKey::plain(b'R'));
         assert_eq!(chords.resize_step, 1);
         // Full override: the chord through the shared grammar, the step
         // through the file tier.
         let file: ConfigFile =
             toml::from_str("[client]\nresize = \"C-z\"\nresize-step = 3\n").unwrap();
         let chords = reload_client_chords(&file, &defaults).unwrap();
-        assert_eq!(chords.management.resize, 0x1a);
+        assert_eq!(chords.management.resize, ChordKey::plain(0x1a));
         assert_eq!(chords.resize_step, 3);
         // Zero and unstated-file floors: 0 clamps to 1.
         let file: ConfigFile = toml::from_str("[client]\nresize-step = 0\n").unwrap();
@@ -3333,7 +3534,11 @@ remain-on-exit = true
         let spellings: Vec<String> = expected
             .iter()
             .map(|(key, doc, field, byte)| {
-                assert_eq!(field, byte, "{key}'s documented default is wrong");
+                assert_eq!(
+                    *field,
+                    ChordKey::plain(*byte),
+                    "{key}'s documented default is wrong"
+                );
                 (*doc).to_string()
             })
             .collect();

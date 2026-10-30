@@ -72,6 +72,7 @@ pub(crate) mod text_input;
 use panels::*;
 use targets::*;
 
+use crate::mux::config::ChordKey;
 use crate::mux::resolve_socket_path;
 use par_term_emu_core::tmux_control::TmuxNotification;
 use std::io::Write as _;
@@ -696,14 +697,14 @@ impl Session {
         }
         // The resize chord: a sticky mode — arrows adjust
         // the focused pane's edges until Enter/Escape/q.
-        if byte == self.management.resize {
+        if ChordKey::plain(byte) == self.management.resize {
             self.enter_resize_mode();
             return false;
         }
         // The help chord: the bindings panel, printed as
         // plain text (passthrough has no overlay surface;
         // the pane's next output redraws over it).
-        if byte == self.management.help {
+        if ChordKey::plain(byte) == self.management.help {
             self.show_help();
             return false;
         }

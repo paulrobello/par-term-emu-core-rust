@@ -5738,7 +5738,10 @@ fn notify_jump_chord_focuses_the_last_notified_pane() {
     session.notify.states = vec!["blocked".to_string()];
     session.refresh_status_facts(&mut conn).expect("seed");
     drained(&rx);
-    assert_eq!(session.management.notify_jump, b'j');
+    assert_eq!(
+        session.management.notify_jump,
+        crate::mux::config::ChordKey::plain(b'j')
+    );
     // Nothing delivered yet: a flash, no command.
     chord(&mut session, &mut conn, b'j');
     assert_eq!(

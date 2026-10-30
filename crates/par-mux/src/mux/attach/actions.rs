@@ -3,6 +3,7 @@
 //! new-window), the config reload, and the chunked key forward.
 
 use super::*;
+use crate::mux::config::ChordKey;
 use std::io::Write as _;
 
 impl Session {
@@ -162,22 +163,22 @@ impl Session {
     pub(super) fn management_command(&self, key: u8) -> Option<ManagementKey> {
         let m = self.management;
         match key {
-            k if k == m.split_right => Some(ManagementKey::SplitRight),
-            k if k == m.split_down => Some(ManagementKey::SplitDown),
-            k if k == m.kill_pane => Some(ManagementKey::KillPane),
-            k if k == m.break_pane => Some(ManagementKey::BreakPane),
-            k if k == m.join_pane => Some(ManagementKey::JoinPane),
-            k if k == m.palette => Some(ManagementKey::Palette),
-            k if k == m.new_window => Some(ManagementKey::NewWindow),
-            k if k == m.swap_prev => Some(ManagementKey::SwapPrev),
-            k if k == m.swap_next => Some(ManagementKey::SwapNext),
-            k if k == m.move_window_left => Some(ManagementKey::MoveWindowLeft),
-            k if k == m.move_window_right => Some(ManagementKey::MoveWindowRight),
-            k if k == m.tab_strip_left => Some(ManagementKey::TabStripLeft),
-            k if k == m.tab_strip_right => Some(ManagementKey::TabStripRight),
-            k if k == m.workspace_next => Some(ManagementKey::WorkspaceNext),
-            k if k == m.workspace_prev => Some(ManagementKey::WorkspacePrev),
-            k if k == m.respawn => Some(ManagementKey::Respawn),
+            k if ChordKey::plain(k) == m.split_right => Some(ManagementKey::SplitRight),
+            k if ChordKey::plain(k) == m.split_down => Some(ManagementKey::SplitDown),
+            k if ChordKey::plain(k) == m.kill_pane => Some(ManagementKey::KillPane),
+            k if ChordKey::plain(k) == m.break_pane => Some(ManagementKey::BreakPane),
+            k if ChordKey::plain(k) == m.join_pane => Some(ManagementKey::JoinPane),
+            k if ChordKey::plain(k) == m.palette => Some(ManagementKey::Palette),
+            k if ChordKey::plain(k) == m.new_window => Some(ManagementKey::NewWindow),
+            k if ChordKey::plain(k) == m.swap_prev => Some(ManagementKey::SwapPrev),
+            k if ChordKey::plain(k) == m.swap_next => Some(ManagementKey::SwapNext),
+            k if ChordKey::plain(k) == m.move_window_left => Some(ManagementKey::MoveWindowLeft),
+            k if ChordKey::plain(k) == m.move_window_right => Some(ManagementKey::MoveWindowRight),
+            k if ChordKey::plain(k) == m.tab_strip_left => Some(ManagementKey::TabStripLeft),
+            k if ChordKey::plain(k) == m.tab_strip_right => Some(ManagementKey::TabStripRight),
+            k if ChordKey::plain(k) == m.workspace_next => Some(ManagementKey::WorkspaceNext),
+            k if ChordKey::plain(k) == m.workspace_prev => Some(ManagementKey::WorkspacePrev),
+            k if ChordKey::plain(k) == m.respawn => Some(ManagementKey::Respawn),
             _ => None,
         }
     }
