@@ -138,6 +138,35 @@ pub(crate) fn argv_with_agent_append(
     argv
 }
 
+/// Agents whose verified resume CLI accepts a trailing positional prompt
+/// (`claude --resume <id> "<prompt>"` begins the turn). The table above
+/// exists to not guess vendor CLI shapes; the same rule gates this
+/// injection, so an agent lands here only after its resume-prompt shape is
+/// verified against the real CLI.
+const AGENTS_THAT_TAKE_A_RESUME_PROMPT: [&str; 1] = ["claude"];
+
+/// The continuation prompt for a resumed session, or `None` when the
+/// config disables the injection. A persisted park message composes in
+/// front of the configured text so the agent regains its own parked
+/// context ("awaiting 2 background agents") before the assess-first
+/// instruction.
+#[must_use]
+pub fn resume_prompt(session: &PersistAgentSession, configured: &str) -> Option<String> {
+    if configured.is_empty() || !AGENTS_THAT_TAKE_A_RESUME_PROMPT.contains(&session.agent.as_str())
+    {
+        return None;
+    }
+    let parked = session
+        .message
+        .as_deref()
+        .map(str::trim)
+        .filter(|message| !message.is_empty());
+    Some(match parked {
+        Some(message) => format!("You were parked as: {message}. {configured}"),
+        None => configured.to_string(),
+    })
+}
+
 /// Render an argv as a POSIX shell command line — the shape the factory's
 /// `sh -c` spawn consumes (task 6.3). Every argument is single-quoted
 /// unconditionally: the argv crosses from a validated structure into a

@@ -705,6 +705,7 @@ remain-on-exit = false  # hold a pane whose child exited instead of removing it 
 exit-action = "remove"  # the default exit action: remove, hold, or shell (see Pane Reaping); absent folds remain-on-exit = true to hold
 exit-empty = true       # exit after the 5 s grace once no sessions (or only dead panes) remain; attached clients do not hold it
 split-start-dir = "home-dir"  # what a split-window pane starts in with no -c: "home-dir", "previous-pane-dir" (the target pane's live cwd), or "workspace-dir" (the workspace's launch folder)
+agent-resume-prompt = "You were interrupted by a daemon restart. Before doing anything else, re-ground yourself: check the par-mux roster, any background tasks, gates, and running processes for what survived, then continue the work you were doing when the session ended."  # what a daemon restart passes to a resumed agent so it picks its work back up instead of idling at its prompt; empty disables the injection
 
 [daemon.agent-append]
 # Extra words agent-start appends when launching/resuming an agent — the
@@ -757,6 +758,7 @@ setting:
 | `daemon.exit-empty` | **Live** — a stated difference applies at once (`applied: daemon.exit-empty`); the cadence worker re-reads the applied copy every tick, so an off daemon holds past the grace without a restart. |
 | `daemon.split-start-dir` | **Live** — a stated difference applies at once (`applied: daemon.split-start-dir`); the next `split-window` honors it. A value other than `home-dir`, `previous-pane-dir`, or `workspace-dir` keeps the home default; a setting source that is gone (a stale pane cwd, a workspace without a launch folder) does too. An explicit `split-window -c` always wins. |
 | `daemon.agent-append.<kind>` | **Live** — a stated difference applies at once (`applied: daemon.agent-append.<kind>`), one report line per supported kind; the next `agent-start` of that kind appends the words, and a daemon restart's resume invocation appends the same words onto the resume argv (deduped against the tokens the resume shape itself carries). Words are whitespace-split and shell-quoted on typing (a value can never execute shell syntax); `{name}` expands to the pane cwd's basename, unknown `{tokens}` stay literal. Blank = launch bare. |
+| `daemon.agent-resume-prompt` | Restart-required (reported as such) — it feeds the boot restore: the next daemon start passes it to every resumed claude session as a trailing positional prompt (`claude --resume <id> "<prompt>"`), so the session picks its work back up instead of idling at its prompt. A persisted park message (`report-state -m`) composes in front: `You were parked as: <message>. <prompt>`. Only agents whose resume CLI verifiably takes a trailing positional are injected (claude today; the resume table's no-guesses rule gates the list). Empty disables the injection. The start-command restore path is untouched — a wrapper owns its own prompts. |
 | `daemon.pane-endpoints` / `daemon.expose-control-socket` | Startup-only in v1 (reported as restart-required). |
 | `daemon.state-dir` | Startup-only — the daemon resolves the persist path once at startup and the persist worker writes to that fixed path. |
 

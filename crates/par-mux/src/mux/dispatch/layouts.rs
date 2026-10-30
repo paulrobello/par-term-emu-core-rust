@@ -101,6 +101,7 @@ fn cmd_load_layout(ctx: &Ctx<'_>, name: &str, force: bool) -> Outcome {
         Box::new(SharedFactory(factory)),
         remain_on_exit,
         &agent_append,
+        &crate::mux::config::daemon_agent_resume_prompt(),
     ) {
         Ok(tree) => tree,
         Err(err) => return Outcome::err(ctx, &err.to_string()),

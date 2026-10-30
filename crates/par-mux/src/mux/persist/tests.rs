@@ -548,6 +548,7 @@ fn a_dead_panes_cwd_is_seeded_for_its_resume() {
         Box::new(crate::mux::pane::ShellPaneFactory::default()),
         true,
         &crate::mux::config::AgentAppend::default(),
+        "",
     )
     .expect("the state restores");
     let restored_pane = restored.pane(pane).unwrap();
@@ -1008,6 +1009,7 @@ fn a_held_dead_pane_round_trips_as_held_dead() {
         Box::new(factory.clone()),
         true,
         &crate::mux::config::AgentAppend::default(),
+        "",
     )
     .unwrap();
 
@@ -1066,6 +1068,7 @@ fn auto_remove_restore_drops_dead_entries() {
         Box::new(RecordingFactory::default()),
         false,
         &crate::mux::config::AgentAppend::default(),
+        "",
     )
     .unwrap();
     assert!(restored.pane(dead_id).is_none(), "the dead entry is gone");
@@ -1093,6 +1096,7 @@ fn auto_remove_restore_cascades_a_workspaces_last_dead_pane() {
         Box::new(RecordingFactory::default()),
         false,
         &crate::mux::config::AgentAppend::default(),
+        "",
     )
     .unwrap();
     assert!(
@@ -1121,6 +1125,7 @@ fn auto_remove_restore_keeps_a_respawn_workspaces_last_dead_pane_held() {
         Box::new(RecordingFactory::default()),
         false,
         &crate::mux::config::AgentAppend::default(),
+        "",
     )
     .unwrap();
     let pane = restored.pane(pane_id).expect("the last pane is kept");
@@ -1147,6 +1152,7 @@ fn auto_remove_restore_drops_dead_entries_down_to_the_last() {
         Box::new(RecordingFactory::default()),
         false,
         &crate::mux::config::AgentAppend::default(),
+        "",
     )
     .unwrap();
     assert!(
@@ -1176,6 +1182,7 @@ fn hold_restore_keeps_a_dead_entry_held_dead() {
         Box::new(RecordingFactory::default()),
         true,
         &crate::mux::config::AgentAppend::default(),
+        "",
     )
     .unwrap();
     assert!(restored.pane(pane_id).unwrap().dead());
@@ -1197,6 +1204,7 @@ fn dead_state_is_per_pane_and_live_panes_still_respawn() {
         Box::new(factory.clone()),
         true,
         &crate::mux::config::AgentAppend::default(),
+        "",
     )
     .unwrap();
     assert!(restored.pane(dead_id).unwrap().dead());
@@ -1226,6 +1234,7 @@ fn a_save_file_without_the_dead_fields_loads_alive() {
         Box::new(RecordingFactory::default()),
         true,
         &crate::mux::config::AgentAppend::default(),
+        "",
     )
     .unwrap();
     assert!(!restored.pane(pane_id).unwrap().dead());
@@ -1268,6 +1277,7 @@ fn a_dead_panes_cwd_survives_restore_for_respawn() {
         Box::new(RecordingFactory::default()),
         true,
         &crate::mux::config::AgentAppend::default(),
+        "",
     )
     .unwrap();
     assert_eq!(
@@ -1400,6 +1410,7 @@ fn a_dead_panes_remote_osc7_host_survives_restore() {
         Box::new(RecordingFactory::default()),
         true,
         &crate::mux::config::AgentAppend::default(),
+        "",
     )
     .unwrap();
     let pane = restored.pane(pane_id).unwrap();
@@ -1439,6 +1450,7 @@ fn worktree_link_persists_and_old_files_load_unlinked() {
         Box::new(RecordingFactory::default()),
         true,
         &crate::mux::config::AgentAppend::default(),
+        "",
     )
     .unwrap();
     assert_eq!(restored.workspace(ws).unwrap().worktree, Some(link));
@@ -1453,6 +1465,7 @@ fn worktree_link_persists_and_old_files_load_unlinked() {
         Box::new(RecordingFactory::default()),
         true,
         &crate::mux::config::AgentAppend::default(),
+        "",
     )
     .unwrap();
     assert_eq!(restored.workspace(ws).unwrap().worktree, None);
@@ -1485,6 +1498,7 @@ fn a_save_file_without_cwd_host_loads_as_before() {
         Box::new(RecordingFactory::default()),
         true,
         &crate::mux::config::AgentAppend::default(),
+        "",
     )
     .unwrap();
     let pane = restored.pane(pane_id).unwrap();
@@ -2645,7 +2659,7 @@ fn restore_appends_the_agent_append_words_onto_the_resume_argv() {
         claude: "--continue --dangerously-skip-permissions".into(),
         ..Default::default()
     };
-    MuxTree::from_persist_state_with_policy(&state, Box::new(factory.clone()), false, &table)
+    MuxTree::from_persist_state_with_policy(&state, Box::new(factory.clone()), false, &table, "")
         .unwrap();
     let invocation = "'claude' '--resume' 'abc-123' '--continue' '--dangerously-skip-permissions'";
     let expected = if cfg!(windows) {
@@ -3085,6 +3099,112 @@ fn a_flagged_pane_restores_via_its_start_command_with_the_resume_session_id() {
         claim.session_id.as_deref(),
         Some("s-9"),
         "the roster keeps the reported session"
+    );
+}
+
+/// The default-on continuation prompt: a daemon restart that resumes a
+/// claude session passes the configured prompt as the trailing positional,
+/// so the resumed session starts working instead of idling at its prompt.
+#[test]
+fn a_restart_passes_the_continuation_prompt_to_a_resumed_claude() {
+    let (tree, pane_id) = tree_with_metadata(&[("agent", "claude"), ("agent_session_id", "s-9")]);
+    let state = tree.to_persist_state();
+
+    let factory = RecordingFactory::default();
+    MuxTree::from_persist_state_with_policy(
+        &state,
+        Box::new(factory.clone()),
+        false,
+        &crate::mux::config::AgentAppend::default(),
+        crate::mux::config::DEFAULT_AGENT_RESUME_PROMPT,
+    )
+    .unwrap();
+    let command = factory.command_for(pane_id).expect("the resume argv");
+    assert!(
+        command.contains("'--resume' 's-9'"),
+        "the session still resumes: {command}"
+    );
+    assert!(
+        command.contains("interrupted by a daemon restart"),
+        "the continuation prompt rides the argv: {command}"
+    );
+}
+
+/// An empty `agent-resume-prompt` disables the injection: the resumed
+/// argv is exactly the historical resume shape.
+#[test]
+fn an_empty_resume_prompt_config_injects_nothing() {
+    let (tree, pane_id) = tree_with_metadata(&[("agent", "claude"), ("agent_session_id", "s-9")]);
+    let state = tree.to_persist_state();
+
+    let factory = RecordingFactory::default();
+    MuxTree::from_persist_state_with_policy(
+        &state,
+        Box::new(factory.clone()),
+        false,
+        &crate::mux::config::AgentAppend::default(),
+        "",
+    )
+    .unwrap();
+    let command = factory.command_for(pane_id).expect("the resume argv");
+    assert!(
+        !command.contains("interrupted"),
+        "no prompt rides a disabled config: {command}"
+    );
+    assert!(
+        command.contains("'--resume' 's-9'"),
+        "the session still resumes: {command}"
+    );
+}
+
+/// A persisted park message composes in front of the configured prompt, so
+/// the agent regains its own parked context before the assess-first text.
+#[test]
+fn a_parked_message_composes_into_the_continuation_prompt() {
+    let (tree, pane_id) = tree_with_metadata(&[
+        ("agent", "claude"),
+        ("agent_session_id", "s-9"),
+        ("agent_message", "awaiting 2 background agents"),
+    ]);
+    let state = tree.to_persist_state();
+
+    let factory = RecordingFactory::default();
+    MuxTree::from_persist_state_with_policy(
+        &state,
+        Box::new(factory.clone()),
+        false,
+        &crate::mux::config::AgentAppend::default(),
+        crate::mux::config::DEFAULT_AGENT_RESUME_PROMPT,
+    )
+    .unwrap();
+    let command = factory.command_for(pane_id).expect("the resume argv");
+    assert!(
+        command.contains("You were parked as: awaiting 2 background agents."),
+        "the parked context leads the prompt: {command}"
+    );
+}
+
+/// The injection is allowlisted to agents whose resume CLI verifiably takes
+/// a trailing positional prompt: a codex resume argv stays prompt-less even
+/// with the prompt configured.
+#[test]
+fn agents_without_a_verified_resume_prompt_shape_are_not_injected() {
+    let (tree, pane_id) = tree_with_metadata(&[("agent", "codex"), ("agent_session_id", "s-9")]);
+    let state = tree.to_persist_state();
+
+    let factory = RecordingFactory::default();
+    MuxTree::from_persist_state_with_policy(
+        &state,
+        Box::new(factory.clone()),
+        false,
+        &crate::mux::config::AgentAppend::default(),
+        crate::mux::config::DEFAULT_AGENT_RESUME_PROMPT,
+    )
+    .unwrap();
+    let command = factory.command_for(pane_id).expect("the resume argv");
+    assert!(
+        !command.contains("interrupted"),
+        "an unverified resume shape stays prompt-less: {command}"
     );
 }
 

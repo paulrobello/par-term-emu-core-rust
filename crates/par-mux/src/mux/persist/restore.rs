@@ -40,8 +40,10 @@ impl MuxTree {
             crate::mux::config::daemon_remain_on_exit(),
             // Test/embedder form: the resume-append table pins blank here;
             // the daemon boots through `_with_policy` with the resolved
-            // table, so no test inherits the host's config entries.
+            // table, so no test inherits the host's config entries. The
+            // resume prompt pins empty the same way: no injected turn.
             &crate::mux::config::AgentAppend::default(),
+            "",
         )
     }
 
@@ -56,6 +58,7 @@ impl MuxTree {
         factory: Box<dyn PaneFactory>,
         remain_on_exit: bool,
         agent_append: &crate::mux::config::AgentAppend,
+        agent_resume_prompt: &str,
     ) -> Result<MuxTree, PersistError> {
         if state.format_version != FORMAT_VERSION {
             return Err(PersistError::UnsupportedVersion {
@@ -119,6 +122,7 @@ impl MuxTree {
                         (cols, rows),
                         policy_of_session.get(&session.id).copied(),
                         agent_append,
+                        agent_resume_prompt,
                         &mut cwd_fallbacks,
                     )?;
                     panes.insert(PaneId(pane.id), created);
@@ -269,6 +273,7 @@ fn spawn_restored_pane(
     (cols, rows): (u16, u16),
     restore_policy: Option<crate::mux::config::RestorePolicy>,
     agent_append: &crate::mux::config::AgentAppend,
+    agent_resume_prompt: &str,
     cwd_fallbacks: &mut HashMap<u32, String>,
 ) -> Result<crate::mux::pane::MuxPane, PersistError> {
     // The effective command (D6.3): a resumable agent session rewrites
@@ -304,13 +309,27 @@ fn spawn_restored_pane(
             .filter(|_| !pane.dead)
             .map(|agent_session| {
                 resume_invocation(agent_session).map(|argv| {
-                    crate::mux::agent_resume::argv_with_agent_append(
+                    let argv = crate::mux::agent_resume::argv_with_agent_append(
                         argv,
                         &agent_session.agent,
                         agent_append,
                         pane.cwd.as_deref(),
                         pane.id,
-                    )
+                    );
+                    // The continuation turn: a configured, agent-supported
+                    // prompt rides as the trailing positional so the resumed
+                    // session starts working instead of idling at its prompt.
+                    match crate::mux::agent_resume::resume_prompt(
+                        agent_session,
+                        agent_resume_prompt,
+                    ) {
+                        Some(prompt) => {
+                            let mut argv = argv;
+                            argv.push(prompt);
+                            argv
+                        }
+                        None => argv,
+                    }
                 })
             })
             .and_then(|argv| argv)

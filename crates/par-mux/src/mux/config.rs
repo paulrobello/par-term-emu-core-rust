@@ -670,6 +670,14 @@ pub struct DaemonSection {
     /// [`AgentAppendFile`]); a key the file omits stays blank.
     #[serde(default, rename = "agent-append")]
     pub agent_append: AgentAppendFile,
+    /// The continuation prompt a daemon restart passes to a resumed agent
+    /// (`[daemon] agent-resume-prompt`). Empty disables the injection.
+    #[serde(
+        default,
+        rename = "agent-resume-prompt",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub agent_resume_prompt: Option<String>,
 }
 
 /// What happens when a pane's child process exits on its own — the
@@ -838,7 +846,16 @@ pub struct EffectiveConfig {
     /// read at each `agent-start`, so `reload-config` applies a change at
     /// once.
     pub agent_append: AgentAppend,
+    /// The continuation prompt a daemon restart passes to a resumed agent
+    /// (the fifth live daemon setting: read at each restore, so
+    /// `reload-config` applies a change at once). Empty = inject nothing.
+    pub agent_resume_prompt: String,
 }
+
+/// The default continuation prompt: assess-first wording, so a resumed
+/// agent re-grounds itself instead of blindly redoing whatever was in
+/// flight when the daemon died.
+pub const DEFAULT_AGENT_RESUME_PROMPT: &str = "You were interrupted by a daemon restart. Before doing anything else, re-ground yourself: check the par-mux roster, any background tasks, gates, and running processes for what survived, then continue the work you were doing when the session ended.";
 
 impl Default for EffectiveConfig {
     fn default() -> Self {
@@ -861,6 +878,7 @@ impl Default for EffectiveConfig {
             git_poll_secs: 10,
             split_start_dir: "home-dir".to_string(),
             agent_append: AgentAppend::default(),
+            agent_resume_prompt: DEFAULT_AGENT_RESUME_PROMPT.to_string(),
             config_path: None,
         }
     }
@@ -1012,6 +1030,11 @@ pub fn resolve(file: &ConfigFile, o: &Overrides) -> EffectiveConfig {
     // tier); an unknown spelling keeps the home default.
     if let Some(v) = file.daemon.split_start_dir.as_ref() {
         eff.split_start_dir = v.clone();
+    }
+    // agent-resume-prompt is file-only daemon behavior like
+    // split-start-dir; an empty value disables the injection entirely.
+    if let Some(v) = file.daemon.agent_resume_prompt.as_ref() {
+        eff.agent_resume_prompt = v.clone();
     }
     // agent-append is file-only daemon behavior like split-start-dir; a
     // stated key replaces the blank entry, an omitted key keeps it.
@@ -1214,6 +1237,7 @@ pub fn render(eff: &EffectiveConfig) -> String {
             exit_action: Some(eff.exit_action.name().to_string()),
             exit_empty: Some(eff.exit_empty),
             split_start_dir: Some(eff.split_start_dir.clone()),
+            agent_resume_prompt: Some(eff.agent_resume_prompt.clone()),
             agent_append: AgentAppendFile {
                 claude: Some(eff.agent_append.claude.clone()),
                 codex: Some(eff.agent_append.codex.clone()),
@@ -1916,6 +1940,15 @@ pub fn reload_report(applied: &mut EffectiveConfig, file: Option<&ConfigFile>) -
             _ => format!("unchanged: {name}"),
         });
     }
+    // agent-resume-prompt feeds the boot restore only: a stated difference
+    // is restart-required (it applies at the next daemon start's restore),
+    // never applied in place.
+    lines.push(match file.daemon.agent_resume_prompt.as_deref() {
+        Some(v) if v != applied.agent_resume_prompt => {
+            "restart-required: daemon.agent-resume-prompt".to_string()
+        }
+        _ => "unchanged: daemon.agent-resume-prompt".to_string(),
+    });
     for (name, stated, current) in [
         (
             "daemon.pane-endpoints",
@@ -2084,6 +2117,15 @@ pub fn daemon_remain_on_exit() -> bool {
 #[must_use]
 pub fn daemon_agent_append() -> AgentAppend {
     resolve(&load_canonical(), &Overrides::default()).agent_append
+}
+
+/// The daemon's resolved `[daemon] agent-resume-prompt` from the canonical
+/// config file (file tier only). Empty = restore injects no continuation
+/// prompt; the boot restore path reads this alongside
+/// [`daemon_agent_append`].
+#[must_use]
+pub fn daemon_agent_resume_prompt() -> String {
+    resolve(&load_canonical(), &Overrides::default()).agent_resume_prompt
 }
 
 /// Parse a `#rrggbb` hex color (the border-color config spellings).
@@ -2316,6 +2358,7 @@ remain-on-exit = true
     #[test]
     fn render_round_trips_through_the_parser() {
         let eff = EffectiveConfig {
+            agent_resume_prompt: "continue where you left off".into(),
             auto_update: true,
             update_interval: "weekly".into(),
             prefix: "C-a".into(),

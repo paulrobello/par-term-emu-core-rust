@@ -373,6 +373,7 @@ impl DaemonLaunch {
                     Box::new(factory()),
                     par_mux::mux::config::daemon_remain_on_exit(),
                     &par_mux::mux::config::daemon_agent_append(),
+                    &par_mux::mux::config::daemon_agent_resume_prompt(),
                 ) {
                     Ok(tree) => Some(tree),
                     Err(err) => {
