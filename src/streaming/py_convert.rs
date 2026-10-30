@@ -292,32 +292,46 @@ mod agent_roster_dict {
             workspace: "+1".into(),
             project: "proj".into(),
             pane_label: "label".into(),
+            last_activity_at: 1_700_000_000_000,
+            last_report_at: 1_700_000_000_500,
+            last_input_at: 1_700_000_001_000,
+            viewer_count: 2,
+            last_viewed_at: 1_700_000_002_000,
+            cpu_ms: 42_000,
+            stalled: true,
         }
     }
 
     /// The roster dict shape, pinned byte-for-byte (ARC-008): `agents`
     /// always present (an empty list when the roster is empty), each entry
-    /// exactly `pane_id`/`agent`/`state`/`source`/`reason` — `workspace`,
-    /// `project` and `pane_label` are not part of the Python dict.
+    /// the positional five plus the v0.72 activity/presence stats —
+    /// `workspace`, `project` and `pane_label` are not part of the Python
+    /// dict.
     #[test]
     fn roster_dicts_match_pinned_shape() {
+        let entry_repr = "{'pane_id': 3, 'agent': 'claude', 'state': 'working', 'source': 'hook', 'reason': '', 'last_activity_at': 1700000000000, 'last_report_at': 1700000000500, 'last_input_at': 1700000001000, 'viewer_count': 2, 'last_viewed_at': 1700000002000, 'cpu_ms': 42000, 'stalled': True}";
+        let roster_case = format!("{{'type': 'agent_roster', 'agents': [{entry_repr}]}}");
+        let state_case = format!(
+            "{{'type': 'agent_state_changed', 'agent': {}, 'released': True}}",
+            entry_repr.replace("'pane_id': 3", "'pane_id': 7")
+        );
         let cases = [
             (
                 ServerMessage::AgentRoster { agents: vec![] },
-                "{'type': 'agent_roster', 'agents': []}",
+                "{'type': 'agent_roster', 'agents': []}".to_string(),
             ),
             (
                 ServerMessage::AgentRoster {
                     agents: vec![entry(3)],
                 },
-                "{'type': 'agent_roster', 'agents': [{'pane_id': 3, 'agent': 'claude', 'state': 'working', 'source': 'hook', 'reason': ''}]}",
+                roster_case,
             ),
             (
                 ServerMessage::AgentStateChanged {
                     agent: entry(7),
                     released: true,
                 },
-                "{'type': 'agent_state_changed', 'agent': {'pane_id': 7, 'agent': 'claude', 'state': 'working', 'source': 'hook', 'reason': ''}, 'released': True}",
+                state_case,
             ),
         ];
         Python::attach(|py| {

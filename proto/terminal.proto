@@ -596,6 +596,13 @@ message AgentEntry {
   string workspace = 6; // par-mux workspace id (`+N`) from the ws= token ("" when unknown)
   string project = 7;   // host-attributed project from the host_telemetry token ("" when unknown)
   string pane_label = 8; // pane title/label from the daemon's pane-title query ("" when unknown)
+  uint64 last_activity_at = 9;  // unix ms of the last processed output read or hook report (0 = absent)
+  uint64 last_report_at = 10;   // unix ms of the last accepted hook report (0 = absent)
+  uint64 last_input_at = 11;    // unix ms of the last CLIENT-sent keystroke/paste (0 = absent)
+  uint32 viewer_count = 12;     // attached clients whose focused window shows the pane
+  uint64 last_viewed_at = 13;   // unix ms a viewer last held the pane (0 = absent)
+  uint64 cpu_ms = 14;           // cumulative CPU ms of the pane's child process tree
+  bool stalled = 15;            // working with no activity for STALLED_AFTER_MS
 }
 
 // Full roster snapshot (pane-id ascending), pushed once per client connect.

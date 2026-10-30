@@ -7,6 +7,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- **streaming: the roster frame carries the v0.72 activity/presence stats** (`proto/terminal.proto`, `src/streaming/{protocol,roster,roster_watcher}.rs`, `docs/STREAMING.md`, filed by pardeck): `AgentEntry` gains additive fields — `last_activity_at`/`last_report_at`/`last_input_at`/`last_viewed_at` (unix ms), `viewer_count`, `cpu_ms`, and `stalled` — parsed from the `list-agents` row's same-named tokens, so a streamer client sees everything the mux CLI roster shows. State-change deltas enrich from the watcher's cache, now including the stats: a push carries none of these tokens, so the fetched values hold until the next full snapshot refetches them, matching the pane_label/project contract. proto3 omits zero defaults, so pre-0.72 wire bytes are unchanged; the Python dict shape gains the seven keys additively (`roster_dicts_match_pinned_shape` re-pinned). Pinned by `presence_tokens_fill_the_activity_and_presence_fields`, the stats-carrying warm-cache asserts in `state_deltas_enrich_from_the_cache_and_first_seen_panes_send_bare`, and a populated golden fixture entry carrying every stat.
+
 ## [0.72.0] - 2026-10-29
 
 ### Added

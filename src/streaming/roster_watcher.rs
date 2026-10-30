@@ -260,13 +260,22 @@ fn run(
                         let mut map = roster.lock();
                         match delta {
                             RosterDelta::Upsert(mut entry) => {
-                                // State pushes carry no title/project: a
-                                // pane the watcher knows keeps its fetched
-                                // values (the attach roster patch keeps the
+                                // State pushes carry no title/project and no
+                                // activity/presence tokens: a pane the
+                                // watcher knows keeps its fetched values
+                                // until the next full roster fetch refreshes
+                                // them (the attach roster patch keeps the
                                 // known one over a bare push).
                                 if let Some(prev) = map.get(&entry.pane_id) {
                                     entry.pane_label = prev.pane_label.clone();
                                     entry.project = prev.project.clone();
+                                    entry.last_activity_at = prev.last_activity_at;
+                                    entry.last_report_at = prev.last_report_at;
+                                    entry.last_input_at = prev.last_input_at;
+                                    entry.viewer_count = prev.viewer_count;
+                                    entry.last_viewed_at = prev.last_viewed_at;
+                                    entry.cpu_ms = prev.cpu_ms;
+                                    entry.stalled = prev.stalled;
                                 }
                                 map.insert(entry.pane_id, entry.clone());
                                 RosterDelta::Upsert(entry)
@@ -560,7 +569,7 @@ mod tests {
         let path = serve(
             dir.path(),
             vec![Conn {
-                list_agents_body: "3 zed idle hook host_telemetry=eyJwcm9qZWN0Ijp7InNhbXBsZWRfYXRfdW5peF9tcyI6MSwidmFsdWUiOiJwYXJkZWNrIn19\n",
+                list_agents_body: "3 zed idle hook host_telemetry=eyJwcm9qZWN0Ijp7InNhbXBsZWRfYXRfdW5peF9tcyI6MSwidmFsdWUiOiJwYXJkZWNrIn19 last_activity_at=1700000000000 last_input_at=1700000001000 viewer_count=2 last_viewed_at=1700000002000 cpu_ms=42000 stalled=1\n",
                 list_panes_body: "%3 zed\n",
                 pane_titles: &[],
                 then_send: &[
@@ -583,6 +592,12 @@ mod tests {
                 assert_eq!((agent.pane_id, agent.state.as_str()), (3, "working"));
                 assert_eq!(agent.pane_label, "zed");
                 assert_eq!(agent.project, "pardeck");
+                // The v0.72 presence stats ride the same cache: the push
+                // carries none, the fetched row's values hold until the
+                // next full snapshot refetches them.
+                assert_eq!(agent.last_activity_at, 1_700_000_000_000);
+                assert_eq!(agent.viewer_count, 2);
+                assert!(agent.stalled);
             }
             other => panic!("expected warm-cache delta, got {other:?}"),
         }

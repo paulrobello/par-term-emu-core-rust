@@ -46,6 +46,21 @@ fn agent(pane_id: u32) -> AppAgentEntry {
     }
 }
 
+/// A roster row carrying every v0.72 activity/presence stat, so the
+/// golden pins the wire encoding of the non-zero additive fields.
+fn agent_stats() -> AppAgentEntry {
+    AppAgentEntry {
+        last_activity_at: 1_700_000_000_000,
+        last_report_at: 1_700_000_000_500,
+        last_input_at: 1_700_000_001_000,
+        viewer_count: 2,
+        last_viewed_at: 1_700_000_002_000,
+        cpu_ms: 42_000,
+        stalled: true,
+        ..agent(9)
+    }
+}
+
 fn server_fixtures() -> Vec<AppServerMessage> {
     use AppServerMessage as S;
     vec![
@@ -348,7 +363,7 @@ fn server_fixtures() -> Vec<AppServerMessage> {
             include_scrollback: true,
         },
         S::AgentRoster {
-            agents: vec![agent(0), agent(7)],
+            agents: vec![agent(0), agent(7), agent_stats()],
         },
         S::AgentStateChanged {
             agent: agent(0),

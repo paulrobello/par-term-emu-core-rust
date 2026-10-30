@@ -16,6 +16,10 @@ pub fn parse_agents_output(raw: &str) -> Vec<AgentEntry> {
 }
 
 /// A roster change derived from a single par-mux control notification.
+// AgentEntry's v0.72 activity/presence stats widened the size gap the lint
+// measures; the delta lives for the length of one cache merge, so boxing
+// would buy nothing.
+#[allow(clippy::large_enum_variant)]
 #[derive(Debug, Clone, PartialEq)]
 pub enum RosterDelta {
     /// Insert or replace an agent entry.
@@ -95,6 +99,13 @@ fn parse_line(line: &str) -> Option<AgentEntry> {
     let mut reason = String::new();
     let mut workspace = "";
     let mut project = String::new();
+    let mut last_activity_at = 0u64;
+    let mut last_report_at = 0u64;
+    let mut last_input_at = 0u64;
+    let mut viewer_count = 0u32;
+    let mut last_viewed_at = 0u64;
+    let mut cpu_ms = 0u64;
+    let mut stalled = false;
     for token in tokens {
         if let Some((key, value)) = token.split_once('=') {
             match key {
@@ -109,6 +120,13 @@ fn parse_line(line: &str) -> Option<AgentEntry> {
                 "host_telemetry" => {
                     project = project_from_host_telemetry(value);
                 }
+                "last_activity_at" => last_activity_at = value.parse().unwrap_or(0),
+                "last_report_at" => last_report_at = value.parse().unwrap_or(0),
+                "last_input_at" => last_input_at = value.parse().unwrap_or(0),
+                "viewer_count" => viewer_count = value.parse().unwrap_or(0),
+                "last_viewed_at" => last_viewed_at = value.parse().unwrap_or(0),
+                "cpu_ms" => cpu_ms = value.parse().unwrap_or(0),
+                "stalled" => stalled = value == "1",
                 _ => {}
             }
         }
@@ -121,6 +139,13 @@ fn parse_line(line: &str) -> Option<AgentEntry> {
         reason,
         workspace: workspace.to_owned(),
         project,
+        last_activity_at,
+        last_report_at,
+        last_input_at,
+        viewer_count,
+        last_viewed_at,
+        cpu_ms,
+        stalled,
         ..Default::default()
     })
 }
@@ -204,6 +229,35 @@ mod tests {
         // Absent ws stays empty, never guessed.
         let got = parse_agents_output("12 claude working hook\n");
         assert_eq!(got[0].workspace, "");
+    }
+
+    /// The v0.72 activity/presence tokens parse into the entry additively —
+    /// the streamer frame carries what the mux CLI serves (pardeck card
+    /// 01a18d2825be73b3bb07e89898e6816f).
+    #[test]
+    fn presence_tokens_fill_the_activity_and_presence_fields() {
+        let got = parse_agents_output(
+            "12 claude working hook last_activity_at=1700000000000 last_report_at=1700000000500 \
+             last_input_at=1700000001000 viewer_count=2 last_viewed_at=1700000002000 cpu_ms=42000 stalled=1\n\
+             15 kimi idle scrape stalled=0\n\
+             16 zed working hook stalled=yes\n",
+        );
+        let e = &got[0];
+        assert_eq!(e.last_activity_at, 1_700_000_000_000);
+        assert_eq!(e.last_report_at, 1_700_000_000_500);
+        assert_eq!(e.last_input_at, 1_700_000_001_000);
+        assert_eq!(e.viewer_count, 2);
+        assert_eq!(e.last_viewed_at, 1_700_000_002_000);
+        assert_eq!(e.cpu_ms, 42_000);
+        assert!(e.stalled);
+        // Absent tokens stay zero/false; stalled=0 parses false.
+        let idle = &got[1];
+        assert_eq!(idle.last_activity_at, 0);
+        assert!(!idle.stalled);
+        // A non-numeric value is ignored, never guessed.
+        let zed = &got[2];
+        assert!(!zed.stalled, "stalled=yes does not parse as true");
+        assert_eq!(zed.last_input_at, 0);
     }
 
     #[test]

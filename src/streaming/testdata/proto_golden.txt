@@ -88,10 +88,10 @@ S a202050a0374677a
   = Ok(UploadRequested { format: "tgz" })
 S aa02020801
   = Ok(ScreenCleared { include_scrollback: true })
-S b202480a211206636c617564651a07776f726b696e672204686f6f6b2a04746f6f6c32022b300a2308071206636c617564651a07776f726b696e672204686f6f6b2a04746f6f6c32022b30
-  = Ok(AgentRoster { agents: [AgentEntry { pane_id: 0, agent: "claude", state: "working", source: "hook", reason: "tool", workspace: "+0", project: "", pane_label: "" }, AgentEntry { pane_id: 7, agent: "claude", state: "working", source: "hook", reason: "tool", workspace: "+0", project: "", pane_label: "" }] })
+S b20291010a211206636c617564651a07776f726b696e672204686f6f6b2a04746f6f6c32022b300a2308071206636c617564651a07776f726b696e672204686f6f6b2a04746f6f6c32022b300a4708091206636c617564651a07776f726b696e672204686f6f6b2a04746f6f6c32022b304880d095ffbc3150f4d395ffbc3158e8d795ffbc31600268d0df95ffbc317090c8027801
+  = Ok(AgentRoster { agents: [AgentEntry { pane_id: 0, agent: "claude", state: "working", source: "hook", reason: "tool", workspace: "+0", project: "", pane_label: "", last_activity_at: 0, last_report_at: 0, last_input_at: 0, viewer_count: 0, last_viewed_at: 0, cpu_ms: 0, stalled: false }, AgentEntry { pane_id: 7, agent: "claude", state: "working", source: "hook", reason: "tool", workspace: "+0", project: "", pane_label: "", last_activity_at: 0, last_report_at: 0, last_input_at: 0, viewer_count: 0, last_viewed_at: 0, cpu_ms: 0, stalled: false }, AgentEntry { pane_id: 9, agent: "claude", state: "working", source: "hook", reason: "tool", workspace: "+0", project: "", pane_label: "", last_activity_at: 1700000000000, last_report_at: 1700000000500, last_input_at: 1700000001000, viewer_count: 2, last_viewed_at: 1700000002000, cpu_ms: 42000, stalled: true }] })
 S ba02250a211206636c617564651a07776f726b696e672204686f6f6b2a04746f6f6c32022b301001
-  = Ok(AgentStateChanged { agent: AgentEntry { pane_id: 0, agent: "claude", state: "working", source: "hook", reason: "tool", workspace: "+0", project: "", pane_label: "" }, released: true })
+  = Ok(AgentStateChanged { agent: AgentEntry { pane_id: 0, agent: "claude", state: "working", source: "hook", reason: "tool", workspace: "+0", project: "", pane_label: "", last_activity_at: 0, last_report_at: 0, last_input_at: 0, viewer_count: 0, last_viewed_at: 0, cpu_ms: 0, stalled: false }, released: true })
 S c2020b0a0965772d726573697a65
   = Ok(PointerShapeChanged { shape: Some("ew-resize") })
 S c20200
@@ -167,7 +167,7 @@ LS selection truncates u16
 LS agent state missing agent
   = Err(InvalidMessage("AgentStateChanged is missing its agent field"))
 LS agent state pane zero default entry
-  = Ok(AgentStateChanged { agent: AgentEntry { pane_id: 0, agent: "", state: "", source: "", reason: "", workspace: "", project: "", pane_label: "" }, released: false })
+  = Ok(AgentStateChanged { agent: AgentEntry { pane_id: 0, agent: "", state: "", source: "", reason: "", workspace: "", project: "", pane_label: "", last_activity_at: 0, last_report_at: 0, last_input_at: 0, viewer_count: 0, last_viewed_at: 0, cpu_ms: 0, stalled: false }, released: false })
 LS inline image payload over cap
   = Err(InvalidMessage("InlineImage payload exceeds 8388608 byte limit"))
 LS connected graphic payload over cap

@@ -1284,6 +1284,27 @@ pub struct AgentEntry {
         pydict(skip)
     )]
     pub pane_label: String,
+    /// Unix ms of the pane's last processed output read or accepted hook
+    /// report, from the row's `last_activity_at=` token (0 = absent)
+    pub last_activity_at: u64,
+    /// Unix ms of the pane's last accepted hook report, from
+    /// `last_report_at=` (0 = absent; scrape classification never sets it)
+    pub last_report_at: u64,
+    /// Unix ms of the last CLIENT-sent keystroke or paste, from
+    /// `last_input_at=` (0 = absent) — the human-presence clock
+    pub last_input_at: u64,
+    /// Attached clients whose focused window shows the pane, from
+    /// `viewer_count=`
+    pub viewer_count: u32,
+    /// Unix ms a viewer last held the pane, from `last_viewed_at=`
+    /// (0 = absent; live while viewed, frozen at the last viewer's leave)
+    pub last_viewed_at: u64,
+    /// Cumulative CPU milliseconds of the pane's child process tree, from
+    /// `cpu_ms=` (0 = absent or dead pane)
+    pub cpu_ms: u64,
+    /// `working` with no activity for the daemon's stall window, from
+    /// `stalled=1`
+    pub stalled: bool,
 }
 
 /// Messages sent from client to server

@@ -74,8 +74,10 @@ with open(payload_path, "rb") as stdin_file:
     else:
         cmd = ["sh", hook, action]
     proc = subprocess.run(cmd, stdin=stdin_file, env=env, capture_output=True, timeout=30)
-with open(result_path, "w") as out:
+tmp_path = result_path + ".part"
+with open(tmp_path, "w") as out:
     out.write(json.dumps({"code": proc.returncode, "err": proc.stderr.decode()}))
+os.replace(tmp_path, result_path)
 "#;
 
 /// Run the hook once, fully detached, and resolve with the run's exit code
