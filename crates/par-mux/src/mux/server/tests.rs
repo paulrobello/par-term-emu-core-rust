@@ -1203,14 +1203,19 @@ fn pane_info_reports_the_window_and_the_pane_grid_size() {
             .collect()
     };
     let reply = dispatch("pane-info -t %0", 3, &tree, &clients, None);
-    // The harness pane runs a real shell, so the reply may carry the
-    // optional `cmd=` token; the fixed prefix must stay parseable by
-    // older clients either way.
+    // The fixed prefix must stay parseable by older clients: everything
+    // after the grid size is additive whitespace-free `key=value` tokens
+    // (`cmd=` where a foreground resolves, `constraint_*`/`viewer*`/
+    // `cpu_ms=` where the daemon knows), never prose.
     let line = body(&reply).join("");
-    assert!(
-        line == "%0 @0 100x30" || line.starts_with("%0 @0 100x30 cmd="),
-        "pane-info keeps its fixed prefix: {reply}"
-    );
+    let tail = line.strip_prefix("%0 @0 100x30").map(str::trim_start);
+    let tokens_parse = match tail {
+        // The bare prefix, or the prefix followed only by whitespace-free
+        // `key=value` tokens — anything else broke older-client parsing.
+        Some(t) => t.is_empty() || t.split(' ').all(|tok| tok.contains('=') && !tok.is_empty()),
+        None => false,
+    };
+    assert!(tokens_parse, "pane-info keeps its fixed prefix: {reply}");
 
     let split = dispatch("split-window -h -t %0", 4, &tree, &clients, None);
     assert!(!split.contains("%error"), "{split}");
