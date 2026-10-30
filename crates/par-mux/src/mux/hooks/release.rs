@@ -41,6 +41,22 @@ pub(super) fn handle_release_report(
         if pane.metadata().get("agent").map(String::as_str) != Some(header.agent.as_str()) {
             return (ok_reply(id), None);
         }
+        // A release carrying a session id that is not the claim's is a
+        // nested agent's exit: the id is proof the reporter never owned
+        // this claim (a v4 hook stamps its own session id on every report
+        // for exactly this check). Absent keeps the legacy behavior —
+        // older hooks release on the label match alone.
+        let proof = params
+            .get("agent_session_id")
+            .and_then(serde_json::Value::as_str)
+            .map(str::trim)
+            .filter(|value| !value.is_empty());
+        if let (Some(proof), Some(claimed)) = (proof, pane.agent_claim().and_then(|c| c.session_id))
+        {
+            if proof != claimed {
+                return (ok_reply(id), None);
+            }
+        }
         clear_agent_claim(pane);
         Some(TmuxNotification::AgentReleased {
             pane_id: header.pane_id.to_string(),

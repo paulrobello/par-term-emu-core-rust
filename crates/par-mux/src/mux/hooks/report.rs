@@ -192,10 +192,11 @@ pub(super) fn handle_session_report(
             return (error_reply(id, &message), None);
         }
     }
-    if let Some(start) = params
+    let start_source = params
         .get("session_start_source")
         .and_then(serde_json::Value::as_str)
-    {
+        .map(str::trim);
+    if let Some(start) = start_source {
         if let Err(message) = check_value_len("session_start_source", start) {
             return (error_reply(id, &message), None);
         }
@@ -234,6 +235,30 @@ pub(super) fn handle_session_report(
         let mut claim = pane.agent_claim().unwrap_or_default();
         let prior_session_id = claim.session_id.clone();
         let prior_session_path = claim.session_path.clone();
+
+        // A FRESH session report that would REPLACE a live identity under
+        // the same agent label is a nested agent's report: a pane runs one
+        // foreground agent, so a second claude starting inside it — the
+        // `claude -p` a sub-agent shells out to — must not re-key the pane's
+        // claim to the child's session, or a daemon restart would resume
+        // the child (and the parent's transcript ref would point at the
+        // child's). Silent ok no-op like the stale rule. Everything else
+        // passes: a claim-less pane, a same-id re-report, and the
+        // resume/fork/compact/clear start sources, which legitimately
+        // re-key identity (`claude --resume <id>` after a hard kill).
+        let fresh_start = matches!(start_source, Some("startup") | Some("new"));
+        let identity_change = match (session_id, session_path) {
+            (Some(id), _) => prior_session_id.as_deref() != Some(id),
+            (None, Some(path)) => prior_session_path.as_deref() != Some(path),
+            (None, None) => false,
+        };
+        if fresh_start
+            && claim.agent == header.agent
+            && prior_session_id.is_some()
+            && identity_change
+        {
+            return (ok_reply(id), None);
+        }
 
         // A report that moves the pane to a DIFFERENT agent ends the
         // previous agent's claim: its state, hook authority, and blocked

@@ -178,6 +178,196 @@ fn session_report_records_identity_without_a_broadcast() {
     );
 }
 
+/// A nested agent's fresh-start session report (the `claude -p` a sub-agent
+/// shells out to fires SessionStart with the CHILD's session id under the
+/// PARENT pane's env) must not re-key the pane's claim: the guard drops it
+/// as a silent ok no-op — no identity change, no seq stamp, no broadcast.
+#[test]
+fn a_fresh_session_report_that_would_replace_a_live_identity_is_dropped() {
+    let (tree, pane_id) = tree_with_pane();
+    let claim_report = format!(
+        r#"{{"id":"t-1","method":"pane.report_agent_session","params":{{"pane_id":"{pane_id}","agent":"claude","seq":1000,"agent_session_id":"s-parent","session_start_source":"startup","source":"par-mux:claude"}}}}"#
+    );
+    let (reply, _) = handle_report(&claim_report, &tree);
+    assert!(
+        reply.contains(r#""result":"ok""#),
+        "the claim lands: {reply}"
+    );
+
+    // The nested child's report: same pane, same agent, fresh start, a
+    // DIFFERENT session id.
+    let hijack = format!(
+        r#"{{"id":"t-2","method":"pane.report_agent_session","params":{{"pane_id":"{pane_id}","agent":"claude","seq":2000,"agent_session_id":"s-child","session_start_source":"startup","source":"par-mux:claude"}}}}"#
+    );
+    let (reply, notification) = handle_report(&hijack, &tree);
+    assert!(reply.contains(r#""result":"ok""#), "silent no-op: {reply}");
+    assert!(notification.is_none(), "nothing is broadcast");
+    {
+        let guard = tree.lock();
+        let pane = guard.pane(pane_id).expect("pane exists");
+        assert_eq!(
+            pane.metadata().get("agent_session_id").map(String::as_str),
+            Some("s-parent"),
+            "the parent's identity survives the child's report"
+        );
+        assert_eq!(
+            pane.metadata().get("agent_seq").map(String::as_str),
+            Some("1000"),
+            "the dropped report leaves no seq stamp"
+        );
+    }
+}
+
+/// The guard is keyed to FRESH starts only: a resume-source report
+/// legitimately re-keys identity (`claude --resume <id>` after a hard kill
+/// left the old claim in place), so it must still land.
+#[test]
+fn a_resume_session_report_may_replace_a_live_identity() {
+    let (tree, pane_id) = tree_with_pane();
+    let claim_report = format!(
+        r#"{{"id":"t-1","method":"pane.report_agent_session","params":{{"pane_id":"{pane_id}","agent":"claude","seq":1000,"agent_session_id":"s-old","session_start_source":"startup","source":"par-mux:claude"}}}}"#
+    );
+    let (reply, _) = handle_report(&claim_report, &tree);
+    assert!(reply.contains(r#""result":"ok""#), "{reply}");
+
+    let resume = format!(
+        r#"{{"id":"t-2","method":"pane.report_agent_session","params":{{"pane_id":"{pane_id}","agent":"claude","seq":2000,"agent_session_id":"s-resumed","session_start_source":"resume","source":"par-mux:claude"}}}}"#
+    );
+    let (reply, _) = handle_report(&resume, &tree);
+    assert!(reply.contains(r#""result":"ok""#), "{reply}");
+    let guard = tree.lock();
+    assert_eq!(
+        guard
+            .pane(pane_id)
+            .expect("pane")
+            .metadata()
+            .get("agent_session_id")
+            .map(String::as_str),
+        Some("s-resumed"),
+        "a resume legitimately re-keys the pane"
+    );
+}
+
+/// The release proof: a `pane.release_agent` carrying a session id that is
+/// not the claim's is a nested agent's exit — it must NOT clear the
+/// parent's claim, so the parent stays on the roster and its session id
+/// (the state file's resume identity) survives the child's whole run.
+#[test]
+fn a_release_with_a_mismatched_session_proof_leaves_the_claim() {
+    let (tree, pane_id) = tree_with_pane();
+    let claim_report = format!(
+        r#"{{"id":"t-1","method":"pane.report_agent_session","params":{{"pane_id":"{pane_id}","agent":"claude","seq":1000,"agent_session_id":"s-parent","session_start_source":"startup","source":"par-mux:claude"}}}}"#
+    );
+    handle_report(&claim_report, &tree);
+
+    let release = format!(
+        r#"{{"id":"t-2","method":"pane.release_agent","params":{{"pane_id":"{pane_id}","agent":"claude","seq":2000,"agent_session_id":"s-child","source":"par-mux:claude"}}}}"#
+    );
+    let (reply, notification) = handle_report(&release, &tree);
+    assert!(reply.contains(r#""result":"ok""#), "silent no-op: {reply}");
+    assert!(notification.is_none(), "nothing is broadcast");
+    {
+        let guard = tree.lock();
+        let pane = guard.pane(pane_id).expect("pane exists");
+        assert_eq!(
+            pane.metadata().get("agent").map(String::as_str),
+            Some("claude"),
+            "the roster entry survives the child's release"
+        );
+        assert_eq!(
+            pane.metadata().get("agent_session_id").map(String::as_str),
+            Some("s-parent"),
+            "the state file's resume identity survives"
+        );
+    }
+
+    // The parent's own release — proof matching the claim — still clears.
+    let own = format!(
+        r#"{{"id":"t-3","method":"pane.release_agent","params":{{"pane_id":"{pane_id}","agent":"claude","seq":3000,"agent_session_id":"s-parent","source":"par-mux:claude"}}}}"#
+    );
+    let (reply, notification) = handle_report(&own, &tree);
+    assert!(reply.contains(r#""result":"ok""#), "{reply}");
+    assert!(
+        matches!(notification, Some(TmuxNotification::AgentReleased { .. })),
+        "the parent's own release clears and broadcasts"
+    );
+    let guard = tree.lock();
+    assert!(
+        guard
+            .pane(pane_id)
+            .expect("pane")
+            .metadata()
+            .get("agent")
+            .is_none(),
+        "the matching-proof release cleared the claim"
+    );
+}
+
+/// Claim recovery (scope (b)): after any claim-losing event, the parent's
+/// next state report — which the v4 hook stamps with the session id and
+/// transcript path — re-establishes the persisted identity without waiting
+/// for a SessionStart. The resume invocation itself is NOT persisted by a
+/// state report; restore rebuilds `claude --resume <id>` from the session
+/// id via the per-agent table, so the id alone keeps the parent resumable.
+#[test]
+fn a_state_report_with_identity_re_establishes_a_released_claim() {
+    let (tree, pane_id) = tree_with_pane();
+    let claim_report = format!(
+        r#"{{"id":"t-1","method":"pane.report_agent_session","params":{{"pane_id":"{pane_id}","agent":"claude","seq":1000,"agent_session_id":"s-parent","agent_session_path":"/tmp/parent.jsonl","session_start_source":"startup","source":"par-mux:claude"}}}}"#
+    );
+    handle_report(&claim_report, &tree);
+    // A legacy (pre-proof) release clears the claim.
+    let release = format!(
+        r#"{{"id":"t-2","method":"pane.release_agent","params":{{"pane_id":"{pane_id}","agent":"claude","seq":2000,"source":"par-mux:claude"}}}}"#
+    );
+    handle_report(&release, &tree);
+    {
+        let guard = tree.lock();
+        assert!(
+            guard
+                .pane(pane_id)
+                .expect("pane")
+                .metadata()
+                .get("agent")
+                .is_none(),
+            "the legacy release cleared the claim"
+        );
+    }
+
+    // The parent's next UserPromptSubmit: a state report carrying identity.
+    let recovery = format!(
+        r#"{{"id":"t-3","method":"pane.report_agent","params":{{"pane_id":"{pane_id}","agent":"claude","seq":3000,"state":"working","agent_session_id":"s-parent","agent_session_path":"/tmp/parent.jsonl","source":"par-mux:claude"}}}}"#
+    );
+    let (reply, notification) = handle_report(&recovery, &tree);
+    assert!(reply.contains(r#""result":"ok""#), "{reply}");
+    assert!(
+        matches!(
+            notification,
+            Some(TmuxNotification::AgentStateChanged { .. })
+        ),
+        "the re-established claim is announced"
+    );
+    let guard = tree.lock();
+    let pane = guard.pane(pane_id).expect("pane exists");
+    assert_eq!(
+        pane.metadata().get("agent").map(String::as_str),
+        Some("claude"),
+        "the roster entry is back"
+    );
+    assert_eq!(
+        pane.metadata().get("agent_session_id").map(String::as_str),
+        Some("s-parent"),
+        "the resume identity is restored"
+    );
+    assert_eq!(
+        pane.metadata()
+            .get("agent_session_path")
+            .map(String::as_str),
+        Some("/tmp/parent.jsonl"),
+        "the transcript ref is restored"
+    );
+}
+
 /// The daemon-side clock the freshness window compares against.
 fn now_unix_ms() -> u64 {
     std::time::SystemTime::now()

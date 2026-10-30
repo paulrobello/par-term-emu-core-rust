@@ -677,6 +677,8 @@ mod tests {
     /// The hook assets dispatch the new actions: the POSIX reporter and
     /// its PowerShell port both speak pane.report_agent with a state, and
     /// the version marker moved so status surfaces flag stale installs.
+    /// V4 adds the nested-claude ancestry guard and stamps the session id
+    /// on every report (release proof, identity recovery).
     #[test]
     fn the_hook_assets_handle_the_mid_flight_state_actions() {
         for asset in [CLAUDE_HOOK_ASSET_POSIX, CLAUDE_HOOK_ASSET_WINDOWS] {
@@ -689,8 +691,17 @@ mod tests {
                 "the state-report method"
             );
             assert!(
-                asset.contains("PAR_MUX_INTEGRATION_VERSION=3"),
-                "the version marker moved past the two-event install"
+                asset.contains("PAR_MUX_INTEGRATION_VERSION=4"),
+                "the version marker moved past the state-report install"
+            );
+            assert!(
+                asset.contains("agent_session_id"),
+                "every report carries the session id: the release proof and \
+                 the identity a state report re-establishes"
+            );
+            assert!(
+                asset.contains("nested_claude") || asset.contains("Test-NestedClaude"),
+                "the ancestry walk guards every arm"
             );
         }
         assert!(
@@ -917,4 +928,11 @@ mod tests {
         assert!(CLAUDE_HOOK_ASSET_WINDOWS.contains("PAR_MUX_PANE_ID"));
         assert!(CLAUDE_HOOK_ASSET_WINDOWS.contains("PAR_MUX_SOCKET"));
     }
+
+    /// The v4 hook asset executed for real (nested-claude guard, identity
+    /// stamps, release proof) — the runtime contract lives in its own file
+    /// so the corpus of installer tests stays readable.
+    #[cfg(all(test, unix))]
+    #[path = "claude_hook_runtime_tests.rs"]
+    mod hook_runtime;
 }
