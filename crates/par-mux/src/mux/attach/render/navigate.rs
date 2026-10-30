@@ -1031,6 +1031,11 @@ impl WindowSession {
         // changed position/shape re-emits even when the recorded state
         // coincidentally matches the old window's.
         self.cursor.invalidate();
+        // A lagging layout leaves the old emulators visible until the
+        // broadcast arrives. Drop their images too, or the next frame
+        // would re-upload the placements just deleted from the host.
+        self.renderer.clear_all_graphics();
+        self.notify.outbox.extend(self.kitty.invalidate());
         // Fresh facts for the new view. On a client-snapshot daemon the
         // re-seed's snapshot rides the pump's one-in-flight machinery
         // like the seed's does — the last synchronous snapshot call

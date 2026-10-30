@@ -188,6 +188,16 @@ impl PaneRenderer {
         self.feed_output(pane, bytes);
     }
 
+    /// Drop every mirror's graphics (a re-seed replaced the view): the
+    /// per-pane drop [`Self::feed_replay`] serves, for the panes a
+    /// lagging layout leaves standing — kept, the frame after the
+    /// re-land would re-upload the placements the view change deletes.
+    pub(crate) fn clear_all_graphics(&mut self) {
+        for emulator in self.emulators.values_mut() {
+            emulator.clear_graphics();
+        }
+    }
+
     /// Every kitty placement visible in the current layout, in frame
     /// coordinates — the same rect, inset, and clamps
     /// [`PaneRenderer::paint_pane`] maps cells through. Placements the

@@ -3864,6 +3864,124 @@ fn reland_via_lagging_layout_leaves_no_stale_fragments() {
     );
 }
 
+/// A transmit-and-display of a `w`x`h` RGBA image (the kitty.rs test
+/// helper's shape, local so the session suite stays self-contained).
+fn reland_kitty_image(w: usize, h: usize) -> Vec<u8> {
+    use base64::Engine as _;
+    let pixels = vec![0x7fu8; w * h * 4];
+    let data = base64::engine::general_purpose::STANDARD.encode(pixels);
+    format!("\x1b_Ga=T,f=32,s={w},v={h},C=1;{data}\x1b\\").into_bytes()
+}
+
+/// The re-land's kitty half: a re-seed replaces the view, so what the
+/// previous one put on the host is deleted at the seam — the same
+/// contract the seed and `resize_to` serve with their own
+/// `kitty.invalidate()`. The new view's replays carry no images, so the
+/// frame after the re-land deletes the old placement and image and
+/// never draws the previous view's graphic again.
+#[test]
+fn reseed_window_deletes_the_previous_views_kitty_graphics() {
+    let layout = "0000,80x23,0,0{40x23,0,0,5,40x23,40,0,6}";
+    let mut notify = std::collections::HashMap::new();
+    notify.insert(
+        "refresh-client -t %5 -C 80x23".to_string(),
+        format!("%layout-change @1 {layout} {layout} *"),
+    );
+    let mut replies = std::collections::HashMap::new();
+    reseed_replies(&mut replies, "@0 main\n@1 * other", "@1", "%5\n%6");
+    let (_rx, mut conn, mut session) = two_pane_session(
+        "reland-kitty",
+        FakeScript {
+            replies,
+            notify,
+            ..FakeScript::default()
+        },
+    );
+    session.renderer.feed_output(1, b"\x1b[4;3H");
+    session.renderer.feed_output(1, &reland_kitty_image(20, 40));
+    session.set_kitty_supported(true);
+    let mut view_a = RecordingSink::default();
+    session.frame(&mut view_a);
+    assert!(
+        String::from_utf8_lossy(&view_a.raw).contains("a=p,i=10000"),
+        "view A drew the image: {:?}",
+        String::from_utf8_lossy(&view_a.raw)
+    );
+
+    assert!(session.reseed_window(&mut conn, "@1"), "the reseed landed");
+    let mut view_b = RecordingSink::default();
+    session.frame(&mut view_b);
+    let drawn = String::from_utf8_lossy(&view_b.raw);
+    assert!(
+        drawn.contains("\x1b_Ga=d,d=i,i=10000,p=1,q=2;\x1b\\"),
+        "the old placement must be deleted at the re-land: {drawn:?}"
+    );
+    assert!(
+        drawn.contains("\x1b_Ga=d,d=I,i=10000,q=2;\x1b\\"),
+        "the old image must be freed at the re-land: {drawn:?}"
+    );
+    assert!(
+        !drawn.contains("a=p,") && !drawn.contains("a=t,"),
+        "the previous view's graphic must not paint into the new view: {drawn:?}"
+    );
+}
+
+/// The same seam through the LAGGING `%layout-change` path: the reseed
+/// returns with the previous layout still installed, whose emulators
+/// still hold their graphics — the next frame's placement diff would
+/// keep every old pixel — so the delete must go out at the seam
+/// regardless of when the new layout lands.
+#[test]
+fn reseed_window_deletes_the_kitty_graphics_even_when_the_layout_lags() {
+    let layout = "0000,80x23,0,0{40x23,0,0,5,40x23,40,0,6}";
+    let mut replies = std::collections::HashMap::new();
+    reseed_replies(&mut replies, "@0 main\n@1 * other", "@1", "%5\n%6");
+    let (_rx, mut conn, mut session) = two_pane_session(
+        "reland-kitty-lag",
+        FakeScript {
+            replies,
+            ..FakeScript::default()
+        },
+    );
+    session.renderer.feed_output(1, b"\x1b[4;3H");
+    session.renderer.feed_output(1, &reland_kitty_image(20, 40));
+    session.set_kitty_supported(true);
+    let mut view_a = RecordingSink::default();
+    session.frame(&mut view_a);
+    assert!(
+        String::from_utf8_lossy(&view_a.raw).contains("a=p,i=10000"),
+        "view A drew the image: {:?}",
+        String::from_utf8_lossy(&view_a.raw)
+    );
+
+    // The reseed's drain misses the broadcast; the old layout stands.
+    assert!(session.reseed_window(&mut conn, "@1"), "the reseed landed");
+    let mut interim = RecordingSink::default();
+    session.frame(&mut interim);
+    assert!(
+        String::from_utf8_lossy(&interim.raw).contains("\x1b_Ga=d,d=i,i=10000,p=1,q=2;\x1b\\"),
+        "the seam delete must fire even with the layout event pending: {:?}",
+        String::from_utf8_lossy(&interim.raw)
+    );
+    assert!(
+        !String::from_utf8_lossy(&interim.raw).contains("a=t,"),
+        "the dropped mirrors must not re-upload the deleted image in the same frame: {:?}",
+        String::from_utf8_lossy(&interim.raw)
+    );
+
+    session.on_layout_change(layout, layout, "*");
+    session
+        .apply_pending(&mut conn, &mut RecordingSink::default())
+        .expect("pending install");
+    let mut view_b = RecordingSink::default();
+    session.frame(&mut view_b);
+    let drawn = String::from_utf8_lossy(&view_b.raw);
+    assert!(
+        !drawn.contains("a=t,") && !drawn.contains("a=p,"),
+        "the previous view's graphic must not paint into the new view: {drawn:?}"
+    );
+}
+
 /// The composed host screen of two consecutive flushes, as text: what a
 /// terminal that painted `a`'s cells and then `b`'s cells on top shows.
 fn composed_host_text(a: &RecordingSink, b: &RecordingSink) -> String {
