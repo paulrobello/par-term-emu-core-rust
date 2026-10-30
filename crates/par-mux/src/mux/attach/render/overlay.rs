@@ -149,15 +149,6 @@ impl PaneRenderer {
         (x > x0 && x <= x0 + inner).then(|| x - x0 - 1)
     }
 
-    /// Paint the help overlay as the themed modal (the round-3 restyle):
-    /// every cell carries the resolved theme bg — the same rule the frame
-    /// fill applies, so no default-style (light) cell ever shows — ringed
-    /// by a rounded box-drawing border in the accent color, title
-    /// `keybinds` left and `esc close` badge top-right embedded in the
-    /// top border, category headers in the accent, and the footer hints
-    /// line inside the box. Clamped to the window; paints last in
-    /// `render_frame`, covering panes and dividers; dismissal lets the
-    /// next frame's pane repaint restore the covered cells.
     /// Reverse the overlay's highlight spans (the settings dialog's tab
     /// and selection bands), clipped to its inner box.
     pub(super) fn paint_overlay_highlights(&mut self) {
@@ -176,6 +167,15 @@ impl PaneRenderer {
         }
     }
 
+    /// Paint the help overlay as the themed modal (the round-3 restyle):
+    /// every cell carries the resolved theme bg — the same rule the frame
+    /// fill applies, so no default-style (light) cell ever shows — ringed
+    /// by a rounded box-drawing border in the accent color, title
+    /// `keybinds` left and `esc close` badge top-right embedded in the
+    /// top border, category headers in the accent, and the footer hints
+    /// line inside the box. Clamped to the window; paints last in
+    /// `render_frame`, covering panes and dividers; dismissal lets the
+    /// next frame's pane repaint restore the covered cells.
     pub(super) fn paint_overlay(
         &mut self,
         title: &str,
