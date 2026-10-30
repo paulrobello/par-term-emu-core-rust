@@ -3521,6 +3521,21 @@ remain-on-exit = true
             ("help", "?", m.help, b'?'),
             ("picker", "w", m.picker, b'w'),
             ("zoom", "z", m.zoom, b'z'),
+            (
+                "layout-even-horizontal",
+                "M-1",
+                m.layout_even_horizontal,
+                b'1',
+            ),
+            ("layout-even-vertical", "M-2", m.layout_even_vertical, b'2'),
+            (
+                "layout-main-horizontal",
+                "M-3",
+                m.layout_main_horizontal,
+                b'3',
+            ),
+            ("layout-main-vertical", "M-4", m.layout_main_vertical, b'4'),
+            ("layout-tiled", "M-5", m.layout_tiled, b'5'),
             ("rename-window", ",", m.rename_window, b','),
             ("rename-pane", "$", m.rename_pane, b'$'),
             ("border-cycle", "B", m.border_cycle, b'B'),
@@ -3534,11 +3549,12 @@ remain-on-exit = true
         let spellings: Vec<String> = expected
             .iter()
             .map(|(key, doc, field, byte)| {
-                assert_eq!(
-                    *field,
-                    ChordKey::plain(*byte),
-                    "{key}'s documented default is wrong"
-                );
+                let chord = if doc.starts_with("M-") {
+                    ChordKey::alt(*byte)
+                } else {
+                    ChordKey::plain(*byte)
+                };
+                assert_eq!(*field, chord, "{key}'s documented default is wrong");
                 (*doc).to_string()
             })
             .collect();

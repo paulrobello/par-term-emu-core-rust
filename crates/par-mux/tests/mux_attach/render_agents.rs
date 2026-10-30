@@ -1052,7 +1052,8 @@ fn render_mode_settings_keys_tab_lists_the_respawn_chord() {
         Duration::from_secs(10),
         "the dialog is up",
     );
-    // Five Tabs reach the keys section; 30 downs clamp at its last row.
+    // Five Tabs reach the keys section; the downs clamp at its last row
+    // (the list grew by the five layout-preset rows).
     host.to_child.write_all(b"\t\t\t\t\t").expect("tabs");
     host.to_child.flush().ok();
     expect_output(
@@ -1061,7 +1062,7 @@ fn render_mode_settings_keys_tab_lists_the_respawn_chord() {
         Duration::from_secs(10),
         "the keys tab is up",
     );
-    host.to_child.write_all(&[b'j'; 30]).expect("downs");
+    host.to_child.write_all(&[b'j'; 40]).expect("downs");
     host.to_child.flush().ok();
     let mut got = wait_for_output(&host, b"respawn dead pane", Duration::from_secs(10));
     screen_stable(
@@ -1076,8 +1077,12 @@ fn render_mode_settings_keys_tab_lists_the_respawn_chord() {
         .find(|line| line.contains("respawn dead pane"))
         .unwrap_or_default()
         .to_string();
-    assert!(
-        row.trim_end().trim_end_matches('\u{2502}').trim_end().ends_with(" r"),
+    let binding = row.split_once("respawn dead pane").map(|(_, tail)| {
+        tail.trim_matches(|c: char| c.is_whitespace() || c == '\u{2502}' || c == '\u{fffd}')
+    });
+    assert_eq!(
+        binding,
+        Some("r"),
         "the keys tab lists the respawn chord at its binding. stderr: {} row: {row:?} screen: {screen}",
         stderr.lock().unwrap()
     );

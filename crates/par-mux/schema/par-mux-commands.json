@@ -438,7 +438,7 @@
       "flags": [
         "-t"
       ],
-      "synopsis": "-t <window> <preset>"
+      "synopsis": "-t <window|session|pane> <preset> (window required; a session means its active window, a pane its owning window)"
     },
     {
       "name": "select-pane",
