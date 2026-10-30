@@ -222,6 +222,19 @@ pub struct MuxPane {
     /// `last_activity_at` (output is the other half); the roster's
     /// `last_report_at` token reads it directly. Ephemeral, never persisted.
     last_report_at: u64,
+    /// Epoch ms of the last CLIENT-sent input written to this pane's PTY
+    /// (`send-keys` and `paste-buffer` — attach chunks, the streamer
+    /// bridge, and control clients all land there), 0 = none. Deliberately
+    /// separate from the agent-hook `last_report_at` clock: a supervisor
+    /// must tell a human's keystrokes from an agent's own reports (D35).
+    /// Ephemeral, never persisted.
+    last_client_input_at: u64,
+    /// Epoch ms the pane last had a viewer — the seen rule's slot (some
+    /// client's focused window shows it zoomed-or-active), 0 = never. The
+    /// per-dispatch viewed pass refreshes it while a viewer holds the pane,
+    /// so it freezes when the last viewer leaves, never before. Ephemeral,
+    /// never persisted.
+    last_viewed_at: u64,
     /// Last persistence snapshot, valid while the terminal has not changed
     /// since it was taken — see [`MuxPane::persisted_snapshot`]. Shared
     /// handle so a capture started under the tree lock can finish OFF it
@@ -604,6 +617,32 @@ impl MuxPane {
     #[cfg(all(test, unix))]
     pub(crate) fn set_last_report_at_for_test(&mut self, at_ms: u64) {
         self.last_report_at = at_ms;
+    }
+
+    /// The epoch ms of the last client-sent input written to this pane's
+    /// PTY (0 = none). pane-info's and the roster's `last_input_at` tokens
+    /// read it.
+    pub(crate) fn last_client_input_at(&self) -> u64 {
+        self.last_client_input_at
+    }
+
+    /// Stamp the pane as client-input-received NOW — the `send-keys` and
+    /// `paste-buffer` handlers call this after a successful PTY write.
+    pub(crate) fn note_client_input_now(&mut self) {
+        self.last_client_input_at = now_epoch_ms();
+    }
+
+    /// The epoch ms the pane last had a viewer (0 = never). pane-info's
+    /// `last_viewed_at` token reads it.
+    pub(crate) fn last_viewed_at(&self) -> u64 {
+        self.last_viewed_at
+    }
+
+    /// Stamp the pane as viewed NOW — the per-dispatch viewed pass
+    /// ([`crate::mux::hooks::mark_viewed_done_seen`]) refreshes every
+    /// currently-viewed pane.
+    pub(crate) fn note_viewed_now(&mut self) {
+        self.last_viewed_at = now_epoch_ms();
     }
 
     /// The pane's last activity, epoch ms (0 = none observed): the later of
@@ -1022,6 +1061,8 @@ impl ShellPaneFactory {
             seq_by_source: HashMap::new(),
             agent_activity: 0,
             last_report_at: 0,
+            last_client_input_at: 0,
+            last_viewed_at: 0,
             snapshot_cache: Arc::new(Mutex::new(None)),
             pane_endpoint,
         }

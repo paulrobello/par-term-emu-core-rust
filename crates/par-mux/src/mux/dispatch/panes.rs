@@ -177,7 +177,7 @@ pub(super) fn cmd_send_keys(
     // kernel buffer, so it must not run under the tree mutex. Snapshot
     // the terminal (key encoding reads live modes) and the input handle
     // under the lock, then encode and write with the lock released.
-    let (terminal, input) = {
+    let (terminal, input, pane_id) = {
         let guard = ctx.tree.lock();
         let pane = match guard.resolve_pane_target(pane) {
             Ok(id) => id,
@@ -187,7 +187,7 @@ pub(super) fn cmd_send_keys(
             return Outcome::err(ctx, &format!("no such pane: {pane}"));
         };
         match target.input_handle() {
-            Ok(handle) => (target.terminal(), handle),
+            Ok(handle) => (target.terminal(), handle, pane),
             Err(err) => return Outcome::err(ctx, &err.to_string()),
         }
     };
@@ -195,7 +195,17 @@ pub(super) fn cmd_send_keys(
     // (DECCKM, kitty flags); the read guard drops before the write.
     let bytes = keys.encode(|| terminal.read());
     match input.write(&bytes) {
-        Ok(()) => Outcome::ok(ctx, ""),
+        Ok(()) => {
+            // Every door a client's keystrokes or pastes enter through —
+            // attach chunks, the streamer bridge, control clients — lands
+            // on this verb, so this is the human-presence stamp (D35).
+            // The pane may have closed on its own output since the write;
+            // nothing to stamp then. Off the tree lock, per QA-225.
+            if let Some(target) = ctx.tree.lock().pane_mut(pane_id) {
+                target.note_client_input_now();
+            }
+            Outcome::ok(ctx, "")
+        }
         Err(err) => Outcome::err(ctx, &err.to_string()),
     }
 }
@@ -414,7 +424,19 @@ pub(super) fn cmd_pane_info(ctx: &Ctx<'_>, pane: Target<PaneId>, mirror: bool) -
     // can still render the remain-on-exit state (ARC-095). Both are
     // whitespace-free `key=value` tail tokens, so older clients keep
     // parsing the fixed prefix.
-    let (pane, window, cols, rows, child_pid, dead, exit_code, status) = {
+    let (
+        pane,
+        window,
+        cols,
+        rows,
+        child_pid,
+        dead,
+        exit_code,
+        status,
+        viewer_count,
+        last_viewed,
+        last_input,
+    ) = {
         let mut guard = ctx.tree.lock();
         if mirror {
             if let Some(id) = ctx.client_id {
@@ -429,6 +451,14 @@ pub(super) fn cmd_pane_info(ctx: &Ctx<'_>, pane: Target<PaneId>, mirror: bool) -
             return Outcome::err(ctx, &MuxError::NoSuchPane(pane).to_string());
         };
         let (cols, rows) = target.terminal().read().size();
+        let viewer_count = guard.viewer_counts().get(&pane).copied().unwrap_or(0);
+        // Reported fresh while someone watches; the stored stamp serves
+        // once the last viewer is gone (that is when it froze).
+        let last_viewed = if viewer_count > 0 {
+            crate::mux::pane::now_epoch_ms()
+        } else {
+            target.last_viewed_at()
+        };
         (
             pane,
             window,
@@ -438,13 +468,17 @@ pub(super) fn cmd_pane_info(ctx: &Ctx<'_>, pane: Target<PaneId>, mirror: bool) -
             target.dead(),
             target.exit_code(),
             guard.viewer_status_tokens(window),
+            viewer_count,
+            last_viewed,
+            target.last_client_input_at(),
         )
     };
-    // The process table snapshot reads the whole OS process list; taking
-    // it outside the tree lock keeps a slow read from stalling clients.
+    // The process table snapshots read the whole OS process list; taking
+    // them outside the tree lock keeps a slow read from stalling clients.
     let cmd = child_pid
         .and_then(|pid| ProcessTable::snapshot().and_then(|table| table.foreground_command(pid)))
         .map(|name| base64::engine::general_purpose::STANDARD.encode(name));
+    let cpu_ms = child_pid.and_then(crate::mux::process_cpu::group_cpu_ms);
     // The row's Display is the wire line, so the attach client's
     // `PaneInfoRow::parse` cannot drift from it (ARC-141).
     let row = crate::mux::ipc::PaneInfoRow {
@@ -454,7 +488,20 @@ pub(super) fn cmd_pane_info(ctx: &Ctx<'_>, pane: Target<PaneId>, mirror: bool) -
         cmd,
         exited: dead.then_some(exit_code),
     };
-    Outcome::ok(ctx, &format!("{row} {status}"))
+    // The presence tail (D35): all whitespace-free key=value tokens, so
+    // older clients keep parsing the fixed prefix, and a timestamp with
+    // nothing to show stays absent.
+    let mut presence = vec![format!("viewer_count={viewer_count}")];
+    if last_viewed > 0 {
+        presence.push(format!("last_viewed_at={last_viewed}"));
+    }
+    if last_input > 0 {
+        presence.push(format!("last_input_at={last_input}"));
+    }
+    if let Some(ms) = cpu_ms {
+        presence.push(format!("cpu_ms={ms}"));
+    }
+    Outcome::ok(ctx, &format!("{row} {status} {}", presence.join(" ")))
 }
 
 /// ENH-042: queue the held panes' `%pane-exited` lines on the issuing

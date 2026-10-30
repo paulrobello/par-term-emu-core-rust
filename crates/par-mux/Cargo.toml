@@ -62,6 +62,10 @@ ratatui = { version = "0.30", optional = true, default-features = false, feature
 # The attach settings dialog's config writes: one key edited in place, the
 # user's comments and layout preserved.
 toml_edit = { version = "0.25", optional = true }
+# Pane process-group CPU for pane-info (`process_cpu`); already a workspace
+# dependency of the root's `streaming` feature, so the lockfile resolves the
+# same version.
+sysinfo = { version = "0.39.3", optional = true }
 
 [target.'cfg(target_os = "linux")'.dependencies]
 # logind inhibitor for the `shutdown-inhibit` feature (MUX_DECISIONS.md D9);
@@ -95,7 +99,7 @@ default = []
 # The multiplexer library: PTYs, session tree, control-mode socket, on-disk
 # persistence. `serde` and `dirs` are intrinsic — a mux build that cannot
 # save is not a configuration the daemon supports (par-mux.md D3).
-mux = ["dep:interprocess", "dep:toml", "dep:dirs", "dep:nix", "dep:widestring", "dep:windows-sys", "serde"]
+mux = ["dep:interprocess", "dep:toml", "dep:dirs", "dep:nix", "dep:widestring", "dep:windows-sys", "dep:sysinfo", "serde"]
 # Serde derives on the mux ids/layout/persist types (the on-disk format).
 serde = ["par-term-emu-core/serde"]
 # The `par-mux` daemon binary: `mux` plus its CLI parser and the

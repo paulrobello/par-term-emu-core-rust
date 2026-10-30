@@ -37,6 +37,7 @@ pub mod persist;
 /// machine subcommands and --machine relay read it; toml_edit rides mux-bin).
 pub mod plugins;
 pub mod popup;
+pub(crate) mod process_cpu;
 pub mod scrape;
 pub mod server;
 #[cfg(all(target_os = "linux", feature = "shutdown-inhibit"))]

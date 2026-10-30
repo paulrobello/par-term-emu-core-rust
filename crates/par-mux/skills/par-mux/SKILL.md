@@ -91,6 +91,7 @@ par-mux --cmd list-agents       # agent roster: "%N <agent> <state> <source> [ke
                                 #   extras: reason=<base64> telemetry=<base64>
                                 #   host_telemetry=<base64> ws=+N
                                 #   last_activity_at=<epoch-ms> last_report_at=<epoch-ms>
+                                #   last_input_at=<epoch-ms> (client keystroke/paste)
                                 #   stalled=1 (working, no activity for 5 min) — parse fields
                                 #   1-4 by position, split the rest on the first
                                 #   "=", ignore unknown keys

@@ -808,6 +808,24 @@ impl MuxTree {
         format!("constraint_cols={cols} constraint_rows={rows} viewers={viewers}")
     }
 
+    /// How many attached clients currently view each pane — the seen
+    /// rule's slot: each tracked client counts toward the zoomed pane of
+    /// its focused window, else that window's active pane. The per-pane
+    /// complement of the window-scoped [`Self::viewer_status_tokens`].
+    pub(crate) fn viewer_counts(&self) -> std::collections::HashMap<PaneId, usize> {
+        let mut counts: std::collections::HashMap<PaneId, usize> = std::collections::HashMap::new();
+        for client_id in self.client_views.keys() {
+            if let Some(window_id) = self.client_focus_window(*client_id) {
+                if let Some(window) = self.window(window_id) {
+                    *counts
+                        .entry(window.zoomed.unwrap_or(window.active))
+                        .or_default() += 1;
+                }
+            }
+        }
+        counts
+    }
+
     /// Drop `client_id`'s sizing contribution and re-fit the window it was
     /// displaying — the disconnect path: with the constraining report gone
     /// the window may grow to the remaining viewers' minimum.

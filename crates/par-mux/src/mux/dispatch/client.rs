@@ -319,7 +319,10 @@ const STALLED_AFTER_MS: u64 = 5 * 60 * 1000;
 /// key), then the activity tokens: `last_activity_at=<epoch-ms>` (the
 /// later of the last processed pane output and the last accepted hook
 /// report; absent when the pane never showed either),
-/// `last_report_at=<epoch-ms>` (absent until a hook report), and
+/// `last_report_at=<epoch-ms>` (absent until a hook report),
+/// `last_input_at=<epoch-ms>` (absent until a client sends a keystroke
+/// or paste — the send-keys/paste-buffer stamp, separate from the hook
+/// clock), and
 /// `stalled=1` when the state is `working` with no activity for five
 /// minutes. Every token
 /// after `source` is key=value, so a consumer parses positions 1-4 then
@@ -333,6 +336,8 @@ pub(super) struct RosterTokens<'a> {
     pub activity_at: u64,
     /// The pane's `last_report_at` epoch ms (0 = no accepted report yet).
     pub report_at: u64,
+    /// The pane's `last_input_at` epoch ms (0 = no client-sent input yet).
+    pub input_at: u64,
 }
 
 pub(super) fn roster_row(
@@ -365,6 +370,9 @@ pub(super) fn roster_row(
     }
     if tokens.report_at > 0 {
         extras.push(("last_report_at".to_string(), tokens.report_at.to_string()));
+    }
+    if tokens.input_at > 0 {
+        extras.push(("last_input_at".to_string(), tokens.input_at.to_string()));
     }
     if state == "working" && tokens.activity_at > 0 {
         let now = crate::mux::pane::now_epoch_ms();
@@ -404,8 +412,11 @@ pub(super) fn cmd_list_agents(ctx: &Ctx<'_>) -> Outcome {
     // tier's provenance rule: a consumer must tell a claim from a
     // guess), then zero or more whitespace-free `key=value` tokens:
     // `reason=<base64>` (the blocked reason, standard base64 of the
-    // whitespace-collapsed message) and `telemetry=<base64>` /
-    // `host_telemetry=<base64>` (fresh samples only). Every token
+    // whitespace-collapsed message), `telemetry=<base64>` /
+    // `host_telemetry=<base64>` (fresh samples only), and the
+    // activity/presence timestamps (`last_activity_at`, `last_report_at`,
+    // `last_input_at` — the client-keystroke stamp, separate from the
+    // hook clock). Every token
     // after `source` is key=value, so a consumer parses positions 1-4
     // then splits each remaining token on its first `=` — a free-text
     // reason column after `source` was ambiguous (ARC-060: a reason
@@ -475,6 +486,7 @@ pub(super) fn roster_rows(guard: &MuxTree) -> Vec<String> {
                                 host_telemetry: host.as_deref(),
                                 activity_at: pane.last_activity_at(),
                                 report_at: pane.last_report_at(),
+                                input_at: pane.last_client_input_at(),
                             },
                             ws.clone(),
                         ),

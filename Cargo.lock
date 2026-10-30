@@ -2422,6 +2422,7 @@ dependencies = [
  "regex",
  "serde",
  "serde_json",
+ "sysinfo",
  "tempfile",
  "toml",
  "toml_edit",

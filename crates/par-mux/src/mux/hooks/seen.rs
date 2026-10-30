@@ -28,15 +28,8 @@ use par_term_emu_core::tmux_control::TmuxNotification;
 /// The panes the attached render clients show: per viewer, the zoomed
 /// pane of its focused window, else that window's active pane.
 fn viewed_panes(tree: &MuxTree) -> Vec<PaneId> {
-    let mut viewed: Vec<PaneId> = tree
-        .client_views
-        .keys()
-        .filter_map(|client_id| tree.client_focus_window(*client_id))
-        .filter_map(|window_id| tree.window(window_id))
-        .map(|window| window.zoomed.unwrap_or(window.active))
-        .collect();
+    let mut viewed: Vec<PaneId> = tree.viewer_counts().into_keys().collect();
     viewed.sort_unstable();
-    viewed.dedup();
     viewed
 }
 
@@ -61,7 +54,9 @@ pub(crate) fn derive_state<'a>(prior: Option<&str>, incoming: &'a str, in_view: 
 
 /// Clear every viewed pane's `done` to `idle` and return the
 /// `%agent-state-changed` pushes announcing it. Only `agent_state` is
-/// written: provenance, sequence stamps, and the message survive.
+/// written: provenance, sequence stamps, and the message survive. The
+/// same pass refreshes every viewed pane's `last_viewed_at`, so the
+/// stamp freezes the moment the last viewer leaves, never before.
 pub(crate) fn mark_viewed_done_seen(tree: &mut MuxTree) -> Vec<TmuxNotification> {
     let mut notifications = Vec::new();
     for pane_id in viewed_panes(tree) {
@@ -72,6 +67,7 @@ pub(crate) fn mark_viewed_done_seen(tree: &mut MuxTree) -> Vec<TmuxNotification>
         let Some(pane) = tree.pane_mut(pane_id) else {
             continue;
         };
+        pane.note_viewed_now();
         let metadata = pane.metadata();
         if metadata.get("agent_state").map(String::as_str) != Some("done") {
             continue;

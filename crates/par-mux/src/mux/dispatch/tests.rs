@@ -290,7 +290,10 @@ fn size_reports_take_the_minimum_and_wake_only_on_a_move() {
     assert!(status.contains("viewers=attach:1,attach:2"), "{status}");
     let marked = run_as(2, "pane-info -t %0 -M", &tx1);
     assert!(marked.contains("constraint_rows=stream:2"), "{marked}");
-    assert!(marked.contains("viewers=attach:1\n"), "{marked}");
+    assert!(
+        marked.contains("viewers=attach:1 viewer_count="),
+        "{marked}"
+    );
 
     // The constraining client detaches (the server teardown's clearing):
     // the window grows to the remaining viewer's report.
@@ -577,6 +580,7 @@ fn roster_row_entry_encodes_the_reason_as_one_unambiguous_token() {
             host_telemetry: Some("aG9zdA=="),
             activity_at: 0,
             report_at: 0,
+            input_at: 0,
         },
         String::new(),
     );
@@ -632,6 +636,7 @@ fn roster_row_entry_encodes_the_reason_as_one_unambiguous_token() {
                 host_telemetry: None,
                 activity_at: 0,
                 report_at: 0,
+                input_at: 0,
             },
             String::new()
         )
@@ -3020,5 +3025,195 @@ fn events_since_past_the_head_is_an_empty_ok() {
         body_lines_of(&reply),
         vec!["head 0"],
         "an empty ring: {reply}"
+    );
+}
+
+/// Client keystrokes land on exactly one daemon-side door — `send-keys`
+/// (attach forwards its input as `send-keys -H` chunks, the streamer
+/// bridge writes the same verb, and a control client spells it directly)
+/// — so the client-input stamp lives in that one handler. pane-info and
+/// the roster report it as `last_input_at=`, a token separate from the
+/// hook path's `last_report_at=` (D35: a supervisor must know a human is
+/// driving before it acts on a pane).
+#[test]
+fn send_keys_stamps_last_input_and_pane_info_and_roster_report_it() {
+    let tree = Arc::new(Mutex::new(MuxTree::new(Box::new(
+        ShellPaneFactory::default(),
+    ))));
+    let clients = Arc::new(Mutex::new(Vec::new()));
+    let __output_epoch: crate::mux::server::OutputEpoch = std::sync::Arc::default();
+    let ctx = Ctx {
+        layouts_dir: None,
+        output_epoch: &__output_epoch,
+        tree: &tree,
+        clients: &clients,
+        command_number: 1,
+        shutdown: None,
+        config: None,
+        client_id: None,
+    };
+    let run = |line: &str| dispatch_command(parse_command(line).unwrap(), &ctx, None, None);
+    run("new-session -s main");
+    let pane = {
+        let guard = tree.lock();
+        let session = guard.sessions()[0];
+        let window = guard.session(session).unwrap().windows[0];
+        guard.window(window).unwrap().panes()[0]
+    };
+    // The hook half of the separation: an accepted agent report stamps
+    // the report clock, never the client-input one.
+    let (hook_reply, _) = crate::mux::hooks::handle_report(
+        &format!(
+            r#"{{"id":1,"method":"pane.report_agent","params":{{"pane_id":"{pane}","agent":"kimi","seq":1,"state":"working"}}}}"#
+        ),
+        &tree,
+    );
+    assert!(
+        hook_reply.contains("\"result\":\"ok\""),
+        "the hook report must land: {hook_reply}"
+    );
+    assert_eq!(
+        tree.lock().pane(pane).unwrap().last_client_input_at(),
+        0,
+        "a hook report is not client input"
+    );
+    let reply = run(&format!("send-keys -t {pane} -H 68"));
+    assert!(!reply.contains("%error"), "send-keys failed: {reply}");
+    assert!(
+        tree.lock().pane(pane).unwrap().last_client_input_at() > 0,
+        "a client keystroke stamps the pane"
+    );
+    let info = run(&format!("pane-info -t {pane}"));
+    assert!(
+        info.contains(" last_input_at="),
+        "pane-info carries the client-input stamp: {info}"
+    );
+    let roster = run("list-agents");
+    let row = roster
+        .lines()
+        .find(|line| line.starts_with(&pane.to_string()))
+        .expect("the claimed pane is on the roster");
+    assert!(
+        row.contains(" last_report_at="),
+        "the hook stamp keeps its own token: {row}"
+    );
+    assert!(
+        row.contains(" last_input_at="),
+        "the client stamp rides the roster: {row}"
+    );
+}
+
+/// A `paste-buffer` is client input like a keystroke: the same
+/// `last_input_at` stamp, so a supervisor reads the paste as human
+/// presence too.
+#[test]
+fn paste_buffer_stamps_last_input_too() {
+    let tree = Arc::new(Mutex::new(MuxTree::new(Box::new(
+        ShellPaneFactory::default(),
+    ))));
+    let clients = Arc::new(Mutex::new(Vec::new()));
+    let __output_epoch: crate::mux::server::OutputEpoch = std::sync::Arc::default();
+    let ctx = Ctx {
+        layouts_dir: None,
+        output_epoch: &__output_epoch,
+        tree: &tree,
+        clients: &clients,
+        command_number: 1,
+        shutdown: None,
+        config: None,
+        client_id: None,
+    };
+    let run = |line: &str| dispatch_command(parse_command(line).unwrap(), &ctx, None, None);
+    run("new-session -s main");
+    let pane = {
+        let guard = tree.lock();
+        let session = guard.sessions()[0];
+        let window = guard.session(session).unwrap().windows[0];
+        guard.window(window).unwrap().panes()[0]
+    };
+    let reply = run("set-buffer human-typed-text");
+    assert!(!reply.contains("%error"), "set-buffer failed: {reply}");
+    let reply = run(&format!("paste-buffer -t {pane}"));
+    assert!(!reply.contains("%error"), "paste-buffer failed: {reply}");
+    assert!(
+        tree.lock().pane(pane).unwrap().last_client_input_at() > 0,
+        "a client paste stamps the pane"
+    );
+    let info = run(&format!("pane-info -t {pane}"));
+    assert!(
+        info.contains(" last_input_at="),
+        "pane-info carries the paste stamp: {info}"
+    );
+}
+
+/// pane-info reports the pane's per-pane viewer count and
+/// `last_viewed_at`: zero viewers and no stamp for a pane nobody shows;
+/// one viewer and a fresh stamp once a client's view/focus lands on the
+/// pane's window — the seen rule's zoomed-or-active slot (D35). A live
+/// pane also reports its process group's cumulative CPU.
+#[test]
+fn pane_info_reports_viewer_count_and_last_viewed_at() {
+    let tree = Arc::new(Mutex::new(MuxTree::new(Box::new(
+        ShellPaneFactory::default(),
+    ))));
+    let clients = Arc::new(Mutex::new(Vec::new()));
+    let __output_epoch: crate::mux::server::OutputEpoch = std::sync::Arc::default();
+    let ctx = Ctx {
+        layouts_dir: None,
+        output_epoch: &__output_epoch,
+        tree: &tree,
+        clients: &clients,
+        command_number: 1,
+        shutdown: None,
+        config: None,
+        client_id: None,
+    };
+    let run = |line: &str| dispatch_command(parse_command(line).unwrap(), &ctx, None, None);
+    run("new-session -s main");
+    let (window, pane) = {
+        let guard = tree.lock();
+        let session = guard.sessions()[0];
+        let window = guard.session(session).unwrap().windows[0];
+        let pane = guard.window(window).unwrap().panes()[0];
+        (window, pane)
+    };
+    let info = run(&format!("pane-info -t {pane}"));
+    assert!(
+        info.contains(" viewer_count=0"),
+        "nobody views the pane yet: {info}"
+    );
+    assert!(
+        !info.contains("last_viewed_at"),
+        "never viewed, never stamped: {info}"
+    );
+    {
+        let mut guard = tree.lock();
+        guard.set_client_focus(7, window, crate::mux::tree::FocusSource::Selection);
+        guard.set_client_view(7, window, 80, 24, crate::mux::layout::PaneChrome::default());
+    }
+    let info = run(&format!("pane-info -t {pane}"));
+    assert!(
+        info.contains(" viewer_count=1"),
+        "the attached viewer counts: {info}"
+    );
+    assert!(
+        info.contains(" last_viewed_at="),
+        "being viewed stamps the pane: {info}"
+    );
+    assert!(
+        info.contains(" cpu_ms="),
+        "a live pane reports its process group's CPU: {info}"
+    );
+    // The viewer leaves: the count drops and the stamp freezes at the
+    // last moment of attention instead of vanishing.
+    tree.lock().clear_client_view(7);
+    let info = run(&format!("pane-info -t {pane}"));
+    assert!(
+        info.contains(" viewer_count=0"),
+        "the detached viewer is gone: {info}"
+    );
+    assert!(
+        info.contains(" last_viewed_at="),
+        "the stamp outlives the viewer: {info}"
     );
 }

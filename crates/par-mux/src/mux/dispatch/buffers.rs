@@ -328,7 +328,7 @@ pub(super) fn cmd_paste_buffer(ctx: &Ctx<'_>, pane: Target<PaneId>) -> Outcome {
     // not run under the tree mutex. Snapshot the target pane, the buffer
     // content, and the pane's input handle under the lock, then write with
     // the lock released (the QA-221 snapshot-then-write shape).
-    let (input, content) = {
+    let (input, content, pane_id) = {
         let guard = ctx.tree.lock();
         let pane = match guard.resolve_pane_target(pane) {
             Ok(id) => id,
@@ -341,12 +341,19 @@ pub(super) fn cmd_paste_buffer(ctx: &Ctx<'_>, pane: Target<PaneId>) -> Outcome {
             return Outcome::err(ctx, "no buffers");
         };
         match target.input_handle() {
-            Ok(handle) => (handle, content),
+            Ok(handle) => (handle, content, pane),
             Err(err) => return Outcome::err(ctx, &err.to_string()),
         }
     };
     match input.write(content.as_bytes()) {
-        Ok(()) => Outcome::ok(ctx, ""),
+        Ok(()) => {
+            // A paste is client input like a keystroke: the same stamp,
+            // taken after the PTY write and off the tree lock (QA-225).
+            if let Some(target) = ctx.tree.lock().pane_mut(pane_id) {
+                target.note_client_input_now();
+            }
+            Outcome::ok(ctx, "")
+        }
         Err(err) => Outcome::err(ctx, &err.to_string()),
     }
 }
