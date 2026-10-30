@@ -3217,3 +3217,122 @@ fn pane_info_reports_viewer_count_and_last_viewed_at() {
         "the stamp outlives the viewer: {info}"
     );
 }
+
+/// Window with `n` panes (right-splits off the first), plus its id.
+fn select_layout_window(h: &Harness, n: usize) -> crate::mux::ids::WindowId {
+    assert_ok(&h.run("new-session -s main"));
+    let w = h.windows_of(h.session_named("main"))[0];
+    for _ in 1..n {
+        let last = *h.panes_of(w).last().unwrap();
+        assert_ok(&h.run(&format!("split-window -h -t {last}")));
+    }
+    assert_eq!(h.panes_of(w).len(), n);
+    w
+}
+
+fn select_layout_rects(
+    h: &Harness,
+    w: crate::mux::ids::WindowId,
+) -> Vec<crate::mux::layout::PaneGeometry> {
+    let guard = h.tree.lock();
+    let window = guard.window(w).unwrap();
+    window
+        .layout
+        .geometry(0, 0, window.cols as usize, window.rows as usize)
+}
+
+#[test]
+fn select_layout_reshapes_the_window() {
+    let h = Harness::new();
+    let w = select_layout_window(&h, 3);
+    let (cols, rows) = {
+        let guard = h.tree.lock();
+        let window = guard.window(w).unwrap();
+        (window.cols as usize, window.rows as usize)
+    };
+    let before = select_layout_rects(&h, w);
+    assert!(
+        before.iter().all(|g| g.height == rows),
+        "right-splits are full height: {before:?}"
+    );
+    h.drain();
+
+    assert_ok(&h.run(&format!("select-layout -t {w} tiled")));
+    let sent = h.drain();
+    assert!(
+        sent.iter()
+            .any(|l| l.starts_with(&format!("%layout-change {w} "))),
+        "the window announces its new layout: {sent:?}"
+    );
+    let after = select_layout_rects(&h, w);
+    assert_eq!(after.len(), 3);
+    assert!(
+        after.iter().any(|g| g.width == cols),
+        "tiled puts the odd pane on a full-width row: {after:?}"
+    );
+    assert!(
+        after.iter().all(|g| g.height < rows),
+        "tiled has two rows: {after:?}"
+    );
+}
+
+#[test]
+fn select_layout_unzooms_and_reshapes() {
+    let h = Harness::new();
+    let w = select_layout_window(&h, 2);
+    let first = h.panes_of(w)[0];
+    assert_ok(&h.run(&format!("resize-pane -Z -t {first}")));
+    assert!(h.tree.lock().window(w).unwrap().zoomed.is_some());
+
+    assert_ok(&h.run(&format!("select-layout -t {w} even-vertical")));
+    assert!(
+        h.tree.lock().window(w).unwrap().zoomed.is_none(),
+        "select-layout unzooms"
+    );
+    let rects = select_layout_rects(&h, w);
+    assert_eq!(rects.len(), 2);
+    let cols = h.tree.lock().window(w).unwrap().cols as usize;
+    assert!(
+        rects.iter().all(|g| g.width == cols),
+        "even-vertical stacks full-width panes: {rects:?}"
+    );
+}
+
+#[test]
+fn select_layout_one_pane_is_noop() {
+    let h = Harness::new();
+    let w = select_layout_window(&h, 1);
+    let pane = h.panes_of(w)[0];
+    let before = select_layout_rects(&h, w);
+    assert_ok(&h.run(&format!("select-layout -t {w} main-vertical")));
+    assert_eq!(select_layout_rects(&h, w), before);
+    assert_eq!(h.panes_of(w), vec![pane]);
+}
+
+#[test]
+fn select_layout_rejects_unknown_preset() {
+    let err = parse_command("select-layout -t @0 grid").unwrap_err();
+    assert!(err.contains("unknown layout grid"), "{err}");
+    for name in [
+        "even-horizontal",
+        "even-vertical",
+        "main-horizontal",
+        "main-vertical",
+        "tiled",
+    ] {
+        assert!(err.contains(name), "{name} missing from: {err}");
+    }
+}
+
+#[test]
+fn select_layout_requires_target() {
+    let err = parse_command("select-layout tiled").unwrap_err();
+    assert!(err.contains("requires -t"), "{err}");
+}
+
+#[test]
+fn select_layout_saves_state() {
+    assert!(parse_command("select-layout -t @0 tiled")
+        .unwrap()
+        .mutates());
+}

@@ -3,7 +3,7 @@
 use std::ops::Deref;
 
 use crate::mux::ids::{AnyTarget, PaneId, SessionId, Target, WindowId, WorkspaceId};
-use crate::mux::layout::{ResizeDirection, SplitDirection};
+use crate::mux::layout::{LayoutPreset, ResizeDirection, SplitDirection};
 use par_term_emu_core::keyboard::{self, modifiers, TermKey, TermKeyEvent};
 use par_term_emu_core::terminal::Terminal;
 
@@ -410,6 +410,14 @@ pub enum MuxCommand {
         target: Target<PaneId>,
         /// Pane swapped into the target's position (`-s`).
         source: Target<PaneId>,
+    },
+    /// Rearrange a window's panes into a preset tiling (`select-layout`).
+    SelectLayout {
+        /// Window to rearrange (`-t`); a session names its active window,
+        /// a pane its owning window.
+        target: AnyTarget,
+        /// The arrangement to apply.
+        preset: LayoutPreset,
     },
     /// Move a pane out of its window into a new window of the same
     /// session (`break-pane`).
@@ -839,6 +847,7 @@ impl MuxCommand {
             | MuxCommand::SelectPane { .. }
             | MuxCommand::ResizePane { .. }
             | MuxCommand::SwapPanes { .. }
+            | MuxCommand::SelectLayout { .. }
             | MuxCommand::BreakPane { .. }
             | MuxCommand::JoinPane { .. }
             | MuxCommand::MoveWindow { .. }
@@ -1658,6 +1667,7 @@ const COMMANDS: &[(&str, CommandParser, &[&str])] = &[
     ("clear-history", parse_clear_history, &[]),
     ("resize-pane", parse_resize_pane, &["zoom", "absolute"]),
     ("swap-pane", parse_swap_pane, &[]),
+    ("select-layout", parse_select_layout, &[]),
     ("break-pane", parse_break_pane, &[]),
     ("join-pane", parse_join_pane, &[]),
     ("move-window", parse_move_window, &[]),

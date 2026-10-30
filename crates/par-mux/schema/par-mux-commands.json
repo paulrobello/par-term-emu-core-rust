@@ -433,6 +433,14 @@
       "synopsis": "<name>"
     },
     {
+      "name": "select-layout",
+      "features": [],
+      "flags": [
+        "-t"
+      ],
+      "synopsis": "-t <window> <preset>"
+    },
+    {
       "name": "select-pane",
       "features": [],
       "flags": [
