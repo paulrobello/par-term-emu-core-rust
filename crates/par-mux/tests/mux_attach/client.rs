@@ -672,7 +672,7 @@ fn dead_pane_takes_no_typing_and_prefix_r_respawns() {
     // client attaches, the deterministic shape (the %pane-exited-mid-view
     // path sets the same `exited` flag — pinned at the router level).
     client
-        .send(&format!("send-keys -t {pane} -l 'exit'"))
+        .send(&format!("send-keys -t {pane} -l 'exit 0'"))
         .expect("exit");
     client
         .send(&format!("send-keys -t {pane} Enter"))
