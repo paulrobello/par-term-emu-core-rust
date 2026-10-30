@@ -3083,10 +3083,10 @@ fn settings_keys_section_scrolls_to_every_row() {
     assert_eq!(state.selected, 0);
     assert_eq!(state.top, 0);
     // Down to the last row: the window follows the selection (the keys
-    // section holds every management chord plus prefix and reload — 29
+    // section holds every management chord plus prefix and reload — 35
     // rows with break-pane, join-pane, the move-tab and tab-strip
-    // chords, and notify-jump aboard).
-    session.route_stdin_bytes(&mut conn, &[b'j'; 29][..]);
+    // chords, notify-jump, and the five layout chords aboard).
+    session.route_stdin_bytes(&mut conn, &[b'j'; 34][..]);
     let Modal::Settings(state) = &session.modal else {
         panic!("open")
     };
@@ -3099,7 +3099,7 @@ fn settings_keys_section_scrolls_to_every_row() {
     assert!(last_row.contains("respawn dead pane"), "{last_row}");
     assert!(last_row.trim_end().ends_with(" r"), "{last_row}");
     // Up to the first: the window snaps back.
-    session.route_stdin_bytes(&mut conn, &[b'k'; 29][..]);
+    session.route_stdin_bytes(&mut conn, &[b'k'; 34][..]);
     let Modal::Settings(state) = &session.modal else {
         panic!("open")
     };

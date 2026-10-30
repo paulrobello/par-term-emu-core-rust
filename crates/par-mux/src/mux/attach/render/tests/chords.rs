@@ -3381,3 +3381,57 @@ fn drag_selection_paints_the_swept_cells_reversed() {
     assert!(!reversed(2, 4), "below the span is untouched");
     assert!(!reversed(2, 0), "above the span is untouched");
 }
+
+/// Committing a layout row's chord writes `layout-* = "M-1"`; a bogus
+/// chord flashes and writes nothing.
+#[test]
+fn settings_chord_prompt_accepts_m_keys() {
+    let (_rx, mut conn, mut session) = command_menu_session("layoutchord");
+    let dir = tempfile::tempdir().expect("tempdir");
+    let path = dir.path().join("config.toml");
+    std::fs::write(&path, "[client]\n").unwrap();
+    session.settings_path = Some(path.clone());
+    session.enter_settings();
+    session.route_stdin_bytes(&mut conn, b"\t\t\t\t\t");
+    // layout-even-horizontal sits five rows above the last (respawn).
+    let row = super::modal_settings::SettingsSection::Keys.row_count() - 6;
+    for _ in 0..row {
+        session.route_stdin_bytes(&mut conn, b"j");
+    }
+    session.route_stdin_bytes(&mut conn, b"\r");
+    assert!(session.is_prompt(), "the layout row opens the prompt");
+    type_and_commit(&mut session, &mut conn, "bogus");
+    assert!(session.is_prompt(), "a bogus chord keeps the prompt up");
+    assert!(session.chrome.flash_text().is_some(), "and flashes");
+    let written = std::fs::read_to_string(&path).unwrap();
+    assert!(!written.contains("layout-"), "nothing written: {written}");
+    type_and_commit(&mut session, &mut conn, "M-1");
+    let written = std::fs::read_to_string(&path).unwrap();
+    assert!(
+        written.contains("layout-even-horizontal = \"M-1\""),
+        "{written}"
+    );
+}
+
+/// The help panel and the palette both list the five layout chords at
+/// their live bindings.
+#[test]
+fn help_and_palette_list_the_layout_chords() {
+    let rows = crate::mux::attach::help_rows(0x02, 0x12, Default::default(), 1);
+    assert!(
+        rows.iter()
+            .any(|r| r.text.contains("C-b M-1 / M-2 / M-3 / M-4 / M-5")),
+        "help lists the layout chords"
+    );
+    let m = crate::mux::config::Management::default();
+    let chords: Vec<_> = crate::mux::attach::panels::PALETTE_ACTIONS
+        .iter()
+        .enumerate()
+        .filter(|(_, (_, l))| l.starts_with("layout "))
+        .map(|(i, _)| crate::mux::attach::panels::palette_action_chord(i, 0x02, 0x12, &m).unwrap())
+        .collect();
+    assert_eq!(
+        chords,
+        ["C-b M-1", "C-b M-2", "C-b M-3", "C-b M-4", "C-b M-5"]
+    );
+}

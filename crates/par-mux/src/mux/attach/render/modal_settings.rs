@@ -541,6 +541,36 @@ const KEYS_ROWS: &[SettingSpec] = &[
         |v, _| chord(v.management.notify_jump),
     ),
     SettingSpec::new(
+        "layout-even-horizontal",
+        "layout even horizontal",
+        SettingKind::Chord,
+        |v, _| chord(v.management.layout_even_horizontal),
+    ),
+    SettingSpec::new(
+        "layout-even-vertical",
+        "layout even vertical",
+        SettingKind::Chord,
+        |v, _| chord(v.management.layout_even_vertical),
+    ),
+    SettingSpec::new(
+        "layout-main-horizontal",
+        "layout main horizontal",
+        SettingKind::Chord,
+        |v, _| chord(v.management.layout_main_horizontal),
+    ),
+    SettingSpec::new(
+        "layout-main-vertical",
+        "layout main vertical",
+        SettingKind::Chord,
+        |v, _| chord(v.management.layout_main_vertical),
+    ),
+    SettingSpec::new(
+        "layout-tiled",
+        "layout tiled",
+        SettingKind::Chord,
+        |v, _| chord(v.management.layout_tiled),
+    ),
+    SettingSpec::new(
         "respawn",
         "respawn dead pane",
         SettingKind::Chord,
@@ -1607,6 +1637,37 @@ mod tests {
         let last = composed.rows[5 + BODY_ROWS - 1].text.clone();
         assert!(last.contains("respawn dead pane"), "{last}");
         assert!(last.trim_end().ends_with(" r"), "{last}");
+    }
+
+    /// The five layout-preset chords each get a keys row, spelled
+    /// `M-1`..`M-5` by default.
+    #[test]
+    fn settings_keys_tab_lists_the_five_layout_chords() {
+        let count = SettingsSection::Keys.row_count();
+        let mut seen = Vec::new();
+        for i in 0..count {
+            let mut st = state(SettingsSection::Keys);
+            st.selected = i;
+            st.top = i;
+            let row = compose_settings(&st, &values()).rows[5].text.clone();
+            if row.contains("layout ") {
+                seen.push(row);
+            }
+        }
+        assert_eq!(seen.len(), 5, "{seen:?}");
+        for (i, (label, value)) in [
+            ("layout even horizontal", "M-1"),
+            ("layout even vertical", "M-2"),
+            ("layout main horizontal", "M-3"),
+            ("layout main vertical", "M-4"),
+            ("layout tiled", "M-5"),
+        ]
+        .iter()
+        .enumerate()
+        {
+            assert!(seen[i].contains(label), "{}", seen[i]);
+            assert!(seen[i].trim_end().ends_with(value), "{}", seen[i]);
+        }
     }
 
     /// The preset mapping round-trips: a live default reads `default`,

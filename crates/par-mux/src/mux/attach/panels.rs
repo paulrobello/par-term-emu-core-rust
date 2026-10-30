@@ -229,6 +229,17 @@ pub(crate) fn help_rows(
                 format!("{p} {}", spell_chord(&m.rename_pane)),
                 "rename the focused pane".to_string(),
             ),
+            (
+                format!(
+                    "{p} {} / {} / {} / {} / {}",
+                    spell_chord(&m.layout_even_horizontal),
+                    spell_chord(&m.layout_even_vertical),
+                    spell_chord(&m.layout_main_horizontal),
+                    spell_chord(&m.layout_main_vertical),
+                    spell_chord(&m.layout_tiled)
+                ),
+                "layout: even-h / even-v / main-h / main-v / tiled".to_string(),
+            ),
         ],
     );
     push_cat(
@@ -542,6 +553,23 @@ pub(crate) const PALETTE_ACTIONS: &[(Option<ManagementKey>, &str)] = &[
     (Some(ManagementKey::MoveWindowRight), "move tab right"),
     (None, "move tab to start"),
     (None, "move tab to end"),
+    (
+        Some(ManagementKey::LayoutEvenHorizontal),
+        "layout even horizontal",
+    ),
+    (
+        Some(ManagementKey::LayoutEvenVertical),
+        "layout even vertical",
+    ),
+    (
+        Some(ManagementKey::LayoutMainHorizontal),
+        "layout main horizontal",
+    ),
+    (
+        Some(ManagementKey::LayoutMainVertical),
+        "layout main vertical",
+    ),
+    (Some(ManagementKey::LayoutTiled), "layout tiled"),
 ];
 
 /// A palette action's chord at its EFFECTIVE binding, the help panel's
@@ -579,6 +607,11 @@ pub(crate) fn palette_action_chord(
             ManagementKey::NotifyJump => m.notify_jump,
             ManagementKey::MoveWindowLeft => m.move_window_left,
             ManagementKey::MoveWindowRight => m.move_window_right,
+            ManagementKey::LayoutEvenHorizontal => m.layout_even_horizontal,
+            ManagementKey::LayoutEvenVertical => m.layout_even_vertical,
+            ManagementKey::LayoutMainHorizontal => m.layout_main_horizontal,
+            ManagementKey::LayoutMainVertical => m.layout_main_vertical,
+            ManagementKey::LayoutTiled => m.layout_tiled,
             _ => return None,
         },
     };
