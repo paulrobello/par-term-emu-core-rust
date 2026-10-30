@@ -118,11 +118,14 @@ pub(super) fn cmd_new_session(
 }
 
 /// `has-session -t <session>`: the existence probe — ok when the target
-/// resolves, `%error` naming it when it does not.
+/// resolves to a live session, `%error` naming it when it does not.
 pub(super) fn cmd_has_session(ctx: &Ctx<'_>, session: Target<SessionId>) -> Outcome {
     let guard = ctx.tree.lock();
     match guard.resolve_session_target(session) {
-        Ok(_) => Outcome::ok(ctx, ""),
+        // Typed `$N` ids pass the resolver through unchecked (its
+        // documented contract), so the probe checks the map itself.
+        Ok(id) if guard.session(id).is_some() => Outcome::ok(ctx, ""),
+        Ok(id) => Outcome::err(ctx, &MuxError::NoSuchSession(id).to_string()),
         Err(err) => Outcome::err(ctx, &err.to_string()),
     }
 }

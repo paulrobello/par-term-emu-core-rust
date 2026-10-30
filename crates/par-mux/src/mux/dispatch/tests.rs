@@ -2227,6 +2227,25 @@ fn has_session_answers_ok_and_error_by_existence() {
     );
 }
 
+/// `has-session -t $N`: the typed-id form is the same existence probe —
+/// an id no session holds must error, not answer ok, or every script
+/// branching on the exit code sees a phantom session.
+#[test]
+fn has_session_errors_for_a_typed_id_no_session_holds() {
+    let h = Harness::new();
+    assert_ok(&h.run("new-session -s work"));
+    let live = h.run("has-session -t $0");
+    assert!(
+        !live.contains("%error"),
+        "the live session's typed id probes ok: {live}"
+    );
+    let missing = h.run("has-session -t $99");
+    assert!(
+        missing.contains("%error") && missing.contains("$99"),
+        "an id no session holds errors: {missing}"
+    );
+}
+
 /// `set-option`/`show-options`: the two live daemon booleans round-trip;
 /// anything else is refused as restart-required; a bad value is refused.
 #[test]
