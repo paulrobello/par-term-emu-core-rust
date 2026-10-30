@@ -2209,6 +2209,34 @@ fn theme_presets_and_auto_follow_the_host() {
     assert_eq!(session.renderer.palette(), palette("dracula"));
 }
 
+/// The render screen guard enables bracketed paste (DECSET 2004) on the
+/// host for the TUI's lifetime and disables it on drop: a host (par-term)
+/// that tracks child 2004 then delivers every paste as one framed
+/// `ESC[200~…ESC[201~` run the scanner can route (a multi-line paste
+/// reaching panes as raw newlines made pane apps like claude code submit
+/// line-by-line). Mirrors tmux's own outer-terminal 2004 handling.
+#[test]
+fn screen_guard_sequences_enable_and_disable_bracketed_paste() {
+    let enter = super::RenderScreenGuard::enter_sequence().as_bytes();
+    assert!(
+        enter.windows(8).any(|w| w == b"\x1b[?2004h"),
+        "enter must enable DECSET 2004 so hosts bracket pastes: {enter:?}"
+    );
+    assert!(
+        enter.windows(8).any(|w| w == b"\x1b[?2031h"),
+        "the existing theme-report cue stays: {enter:?}"
+    );
+    let exit = super::RenderScreenGuard::exit_sequence().as_bytes();
+    assert!(
+        exit.windows(8).any(|w| w == b"\x1b[?2004l"),
+        "exit must disable DECSET 2004: {exit:?}"
+    );
+    assert!(
+        exit.windows(11).any(|w| w == b"\x1b]22;text\x1b\\"),
+        "the pointer-restore cue stays: {exit:?}"
+    );
+}
+
 /// ARC-129: the render screen guard restores on an early `?` return —
 /// the path the old trailing manual restore skipped (a config or seed
 /// error used to leave the host in the alternate screen with mouse

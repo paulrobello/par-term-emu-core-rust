@@ -672,26 +672,47 @@ fn render_session_inner(
     result
 }
 
-/// RAII owner of the render client's alternate screen and mouse
-/// capture: entering switches to the alternate screen and enables SGR
-/// mouse capture; dropping releases the mouse, leaves the alternate
-/// screen, and shows the cursor, ignoring errors. Without a tty (raw
-/// mode never came up) it emits nothing.
+/// RAII owner of the render client's alternate screen, mouse capture,
+/// and bracketed paste: entering switches to the alternate screen and
+/// enables SGR mouse capture plus DECSET 2004; dropping releases the
+/// mouse, leaves the alternate screen, disables 2004, and shows the
+/// cursor, ignoring errors. Without a tty (raw mode never came up) it
+/// emits nothing. The 2004 request is what makes a tracking host
+/// (par-term) deliver every paste as one framed `ESC[200~…ESC[201~` run
+/// the scanner can route — without it a multi-line paste reaches panes
+/// as raw newlines and pane apps like claude code submit line-by-line
+/// (tmux enables 2004 on its outer terminal for the same reason).
 pub(crate) struct RenderScreenGuard {
     active: bool,
 }
 
 impl RenderScreenGuard {
+    /// The bytes `enter` writes on a tty host.
+    fn enter_sequence() -> &'static str {
+        // Mode 2031: the host reports light/dark switches as
+        // `CSI ? 997 ; 1|2 n` (the `auto` theme's live signal); a host
+        // without it ignores the private mode. Mode 2004: the host
+        // frames every paste; a host without it sends pastes raw, as
+        // before.
+        "\x1b[?2004h\x1b[?2031h"
+    }
+
+    /// The bytes [`Drop`] writes on a tty host.
+    fn exit_sequence() -> &'static str {
+        // Restore the pointer before the screen flips back: a shaped
+        // pointer (OSC 22) survives the alternate-screen exit on
+        // terminals that scope it to the window, and the host shell
+        // should not inherit the theme or paste cues.
+        "\x1b]22;text\x1b\\\x1b[?2031l\x1b[?2004l"
+    }
+
     fn enter(tty: bool) -> Self {
         if tty {
-            // Mode 2031: the host reports light/dark switches as
-            // `CSI ? 997 ; 1|2 n` (the `auto` theme's live signal); a host
-            // without it ignores the private mode.
             let _ = crossterm::execute!(
                 std::io::stdout(),
                 crossterm::terminal::EnterAlternateScreen,
                 crossterm::event::EnableMouseCapture,
-                crossterm::style::Print("\x1b[?2031h")
+                crossterm::style::Print(Self::enter_sequence())
             );
         }
         Self { active: tty }
@@ -703,13 +724,9 @@ impl Drop for RenderScreenGuard {
         #[cfg(test)]
         screen_guard_drops::record();
         if self.active {
-            // Restore the pointer before the screen flips back: a
-            // shaped pointer (OSC 22) survives the alternate-screen
-            // exit on terminals that scope it to the window, and the
-            // host shell should not inherit the resize cue.
             let _ = crossterm::execute!(
                 std::io::stdout(),
-                crossterm::style::Print("\x1b]22;text\x1b\\\x1b[?2031l"),
+                crossterm::style::Print(Self::exit_sequence()),
                 crossterm::event::DisableMouseCapture,
                 crossterm::terminal::LeaveAlternateScreen,
                 crossterm::cursor::Show

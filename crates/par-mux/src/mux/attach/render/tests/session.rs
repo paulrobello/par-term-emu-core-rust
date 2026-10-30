@@ -3325,6 +3325,28 @@ fn paste_into_a_plain_pane_forwards_the_body_bare() {
     assert_eq!(drained(&rx), vec![hex_wire("%1", b"ab\x02xcd")]);
 }
 
+/// The paste bug's exact shape (card 01a18f0437): a host with 2004 on
+/// (the guard now requests it) delivers a MULTI-LINE paste framed, and
+/// the frame carries the interior newlines into a 2004 pane whole — a
+/// pane app like claude code inserts the block instead of submitting
+/// line-by-line. The unframed pane keeps the bare body.
+#[test]
+fn multi_line_paste_forwards_framed_with_interior_newlines() {
+    let (rx, mut conn, mut session) = paste_session("multiline-paste");
+    session.renderer.feed_output(1, b"\x1b[?2004h");
+    session.route_stdin_bytes(&mut conn, b"\x1b[200~first\r\nsecond\x1b[201~");
+    settle(&mut session, &mut conn);
+    assert_eq!(
+        drained(&rx),
+        vec![hex_wire("%1", b"\x1b[200~first\r\nsecond\x1b[201~")]
+    );
+
+    let (rx, mut conn, mut session) = paste_session("multiline-plain");
+    session.route_stdin_bytes(&mut conn, b"\x1b[200~first\r\nsecond\x1b[201~");
+    settle(&mut session, &mut conn);
+    assert_eq!(drained(&rx), vec![hex_wire("%1", b"first\r\nsecond")]);
+}
+
 /// SEC-208: a paste cancels a pending prefix (tmux's rule), so the
 /// paste's first byte is not taken as a chord key.
 #[test]
