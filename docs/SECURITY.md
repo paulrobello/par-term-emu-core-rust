@@ -1419,13 +1419,13 @@ sections; the numbers live here.
 | `MAX_REPLY_LINE_BYTES` | 4 MiB | `crates/par-mux/src/mux/client.rs:33` | Bytes accumulated from one daemon reply or notification line before the client closes the connection. |
 | `NOTIFICATION_TITLE_MAX` | 80 | `crates/par-mux/src/mux/command/buffers.rs:181` | Characters of a `show-notification` title (herdr's 80); longer is truncated. |
 | `NOTIFICATION_BODY_MAX` | 240 | `crates/par-mux/src/mux/command/buffers.rs:184` | Characters of a `show-notification` body (herdr's 240); longer is truncated. |
-| `MAX_CLIENT_COLS` | 1,000 | `crates/par-mux/src/mux/command/mod.rs:945` | Columns a par-mux client may report for a window grid (`refresh-client -C`). |
-| `MAX_CLIENT_ROWS` | 500 | `crates/par-mux/src/mux/command/mod.rs:947` | Rows a par-mux client may report for a window grid (`refresh-client -C`). |
-| `MAX_CELL_PIXELS` | 512 | `crates/par-mux/src/mux/command/mod.rs:949` | Pixels per cell axis a par-mux client may report (`refresh-client -p`). |
+| `MAX_CLIENT_COLS` | 1,000 | `crates/par-mux/src/mux/command/mod.rs:967` | Columns a par-mux client may report for a window grid (`refresh-client -C`). |
+| `MAX_CLIENT_ROWS` | 500 | `crates/par-mux/src/mux/command/mod.rs:969` | Rows a par-mux client may report for a window grid (`refresh-client -C`). |
+| `MAX_CELL_PIXELS` | 512 | `crates/par-mux/src/mux/command/mod.rs:971` | Pixels per cell axis a par-mux client may report (`refresh-client -p`). |
 | `STALLED_AFTER_MS` | 300,000 | `crates/par-mux/src/mux/dispatch/client.rs:312` | Milliseconds of no output and no report before a working agent reads stalled. |
 | `EVENT_RING_CAPACITY` | 1,024 | `crates/par-mux/src/mux/events.rs:27` | Lifecycle events retained by the daemon's replay ring. |
 | `MAX_FOREGROUND_NAME_LEN` | 128 | `crates/par-mux/src/mux/foreground.rs:42` | Bytes of a pane's foreground command name served by pane-info. |
-| `MAX_REPORT_VALUE_LEN` | 4,096 | `crates/par-mux/src/mux/hooks/mod.rs:110` | Bytes accepted for one hook or agent report value sent from a pane. |
+| `MAX_REPORT_VALUE_LEN` | 4,096 | `crates/par-mux/src/mux/hooks/mod.rs:148` | Bytes accepted for one hook or agent report value sent from a pane. |
 | `MAX_GIT_BRANCH_LEN` | 128 | `crates/par-mux/src/mux/host_probe.rs:174` | Bytes of git branch name the host probe serves for one pane cwd. |
 | `MAX_PROJECT_LEN` | 128 | `crates/par-mux/src/mux/host_probe.rs:289` | Bytes of project name the host probe serves for one pane cwd. |
 | `MAX_STREAM_LINE_BYTES` | 64 MiB | `crates/par-mux/src/mux/pane_stream.rs:29` | Bytes accumulated from one daemon line by a pane stream client before it closes the connection. |
