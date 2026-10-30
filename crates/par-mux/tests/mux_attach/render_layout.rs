@@ -2222,6 +2222,10 @@ fn render_mode_held_pane_shows_the_exit_cue_and_the_chord_respawns_it() {
         Duration::from_secs(10),
     );
 
+    // `true` pins the shell's last status to 0: the exit cue embeds the exit
+    // status, and a host rc that leaves $? nonzero would leak its digit here.
+    host.to_child.write_all(b"true\r").expect("type true");
+    host.to_child.flush().ok();
     host.to_child.write_all(&[0x04]).expect("Ctrl+D");
     host.to_child.flush().ok();
     let got = wait_for_output(&host, b"respawns)", Duration::from_secs(10));
