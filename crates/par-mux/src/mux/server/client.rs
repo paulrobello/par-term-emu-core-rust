@@ -472,9 +472,6 @@ impl Connection {
         while line.ends_with('\n') || line.ends_with('\r') {
             line.pop();
         }
-        if line.trim().is_empty() {
-            return Flow::Continue;
-        }
         match parse_line(&line) {
             Ok(Line::Hook(report)) => self.on_hook(&report),
             Ok(Line::Control(command)) => self.on_control(command, &line),

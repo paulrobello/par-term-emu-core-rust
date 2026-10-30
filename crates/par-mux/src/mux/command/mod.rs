@@ -1705,6 +1705,13 @@ pub fn is_command_name(name: &str) -> bool {
     COMMANDS.iter().any(|(known, _, _)| *known == name)
 }
 
+/// Sorted control verb names from the parser's registry, for CLI help.
+pub fn command_names() -> Vec<&'static str> {
+    let mut names: Vec<_> = COMMANDS.iter().map(|(name, _, _)| *name).collect();
+    names.sort_unstable();
+    names
+}
+
 /// The `list-commands` reply body (ENH-037): one `name [feature …]` line
 /// per [`COMMANDS`] row, sorted by name, plus one daemon-level trailing
 /// line announcing that registration replays held state. The `features`
@@ -1785,7 +1792,9 @@ pub fn parse_command(line: &str) -> Result<MuxCommand, String> {
     let (_, parse, _) = COMMANDS
         .iter()
         .find(|(known, _, _)| known == name)
-        .ok_or_else(|| format!("unknown command: {name}"))?;
+        .ok_or_else(|| {
+            format!("unknown command: {name} — see `par-mux --cmd help` for valid verbs")
+        })?;
     parse(&a)
 }
 

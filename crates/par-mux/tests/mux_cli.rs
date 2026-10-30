@@ -92,6 +92,65 @@ fn cmd_ok(socket: &Path, command: &str) -> String {
     run.stdout
 }
 
+#[test]
+fn empty_cmd_is_a_usage_error_before_connecting() {
+    let fixture = MuxFixture::new("cliempty");
+    for command in ["", "   ", "\t\r\n"] {
+        let run = cmd(fixture.socket(), command);
+        assert_eq!(run.code, Some(2), "stderr={:?}", run.stderr);
+        assert!(run.stderr.contains("empty command"), "{:?}", run.stderr);
+        assert!(run.stdout.is_empty());
+    }
+}
+
+#[test]
+fn blank_control_lines_receive_an_error_reply() {
+    let fixture = MuxFixture::new("cliblank");
+    let _daemon = spawn_daemon(&fixture);
+    wait_listening(fixture.socket());
+    let mut client = par_mux::mux::MuxClient::connect(fixture.socket()).unwrap();
+    for command in ["", "   "] {
+        let reply = client
+            .send_checked_timeout(command, Duration::from_secs(10))
+            .expect("every control line gets a reply");
+        assert!(!reply.ok);
+        assert_eq!(reply.body, ["empty command"]);
+    }
+}
+
+#[test]
+fn cmd_help_lists_every_registered_verb_without_a_daemon() {
+    let fixture = MuxFixture::new("clihelp");
+    let run = cmd(fixture.socket(), "help");
+    assert_eq!(run.code, Some(0), "stderr={:?}", run.stderr);
+    let schema: serde_json::Value =
+        serde_json::from_str(par_mux::mux::command::COMMAND_SCHEMA_JSON).unwrap();
+    for entry in schema["commands"].as_array().unwrap() {
+        let name = entry["name"].as_str().unwrap();
+        assert!(
+            run.stdout.lines().any(|line| line == name),
+            "missing {name}: {}",
+            run.stdout
+        );
+    }
+    assert!(run.stdout.lines().any(|line| line == "report-state"));
+}
+
+#[test]
+fn unknown_cmd_points_to_help() {
+    let fixture = MuxFixture::new("cliunknown");
+    let _daemon = spawn_daemon(&fixture);
+    wait_listening(fixture.socket());
+    let run = cmd(fixture.socket(), "bogus-verb");
+    assert_ne!(run.code, Some(0));
+    assert!(
+        run.stderr.contains("unknown command: bogus-verb"),
+        "{}",
+        run.stderr
+    );
+    assert!(run.stderr.contains("--cmd help"), "{}", run.stderr);
+}
+
 /// A daemon on the fixture's socket with one session in it.
 fn daemon_with_session(fixture: &MuxFixture, session: &str) -> DaemonGuard {
     let daemon = spawn_daemon(fixture);

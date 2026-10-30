@@ -1993,7 +1993,10 @@ fn parse_line_routes_hook_reports_and_control_commands() {
     let Err(err) = parse_line("frobnicate") else {
         panic!("an unknown command is a parse error");
     };
-    assert_eq!(err, "unknown command: frobnicate");
+    assert_eq!(
+        err,
+        "unknown command: frobnicate — see `par-mux --cmd help` for valid verbs"
+    );
 }
 
 // --- Workspaces ---

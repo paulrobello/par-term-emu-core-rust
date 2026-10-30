@@ -57,10 +57,23 @@ fn parse_size(raw: &str) -> Result<(u16, u16), String> {
 /// Run one control command against the daemon on `path` (client mode).
 ///
 /// Returns the process exit code: 0 on `%end`, 1 on `%error` or when no
-/// daemon owns the socket, 2 on a transport failure after connecting.
+/// daemon owns the socket, 2 on an empty command or a transport failure.
 pub(super) fn run_command(path: &std::path::Path, command: &str) -> std::process::ExitCode {
     use std::io::Write;
     use std::process::ExitCode;
+    if command.trim().is_empty() {
+        eprintln!("par-mux: empty command");
+        return ExitCode::from(2);
+    }
+    if command.trim() == "help" {
+        let mut out = std::io::stdout().lock();
+        for name in par_mux::mux::command::command_names() {
+            if writeln!(out, "{name}").is_err() {
+                break;
+            }
+        }
+        return ExitCode::SUCCESS;
+    }
     let mut client = match par_mux::mux::MuxClient::connect(path) {
         Ok(client) => client,
         Err(err) => {
