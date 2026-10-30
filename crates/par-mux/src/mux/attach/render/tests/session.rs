@@ -3750,6 +3750,140 @@ fn same_size_refit_reemits_unchanged_content() {
     );
 }
 
+/// The re-land ghost report: a re-seed repaints the view IN PLACE —
+/// unlike the seed and `resize_to` it never clears the host — so the
+/// composed host screen after a re-land (the old view's flush, then the
+/// re-land's flush on top) must hold the new view alone, with no stale
+/// fragment of the previous window anywhere the new view is blank.
+/// Pinning this also pins the invariant the whole re-land contract
+/// leans on: after `invalidate_frame` the next frame's diff re-emits
+/// every cell (the core grid's blank cells carry a non-default fg, so
+/// they diff against a blank baseline) — if that ever stops holding,
+/// the previous window's fragments start surviving here first.
+#[test]
+fn reland_repaints_the_cells_the_new_view_leaves_blank() {
+    let layout = "0000,80x23,0,0{40x23,0,0,5,40x23,40,0,6}";
+    let mut notify = std::collections::HashMap::new();
+    notify.insert(
+        "refresh-client -t %5 -C 80x23".to_string(),
+        format!("%layout-change @1 {layout} {layout} *"),
+    );
+    let mut replies = std::collections::HashMap::new();
+    reseed_replies(&mut replies, "@0 main\n@1 * other", "@1", "%5\n%6");
+    let (_rx, mut conn, mut session) = two_pane_session(
+        "reland-ghost",
+        FakeScript {
+            replies,
+            notify,
+            ..FakeScript::default()
+        },
+    );
+    // View A: pane %1 carries a dialog row and figures; frame it onto
+    // the (simulated) host.
+    session
+        .renderer
+        .feed_output(1, b"[ approved ] confirm?\r\ntotal 12 34 56\r\n");
+    session.renderer.feed_output(2, b"side pane body\r\n");
+    let mut view_a = RecordingSink::default();
+    session.frame(&mut view_a);
+
+    // Re-land on @1, whose panes are nearly blank: the %layout-change
+    // rides the size report, so the reseed installs the new layout
+    // synchronously.
+    assert!(session.reseed_window(&mut conn, "@1"), "the reseed landed");
+    session.renderer.feed_output(5, b"$");
+    session.renderer.feed_output(6, b"$");
+    let mut view_b = RecordingSink::default();
+    session.frame(&mut view_b);
+
+    let text = composed_host_text(&view_a, &view_b);
+    assert!(
+        text.contains('$'),
+        "the new view reached the host: {text:?}"
+    );
+    assert!(
+        !text.contains("approved"),
+        "the previous view's dialog row survived the re-land: {text:?}"
+    );
+    assert!(
+        !text.contains("confirm?") && !text.contains("12 34 56"),
+        "stale fragments of the previous view survived: {text:?}"
+    );
+}
+
+/// The same re-land contract through the LAGGING `%layout-change` path
+/// (a roster click or split whose layout broadcast misses the reseed's
+/// drain): the reseed returns with the old view still laid out, the
+/// broadcast parks `pending.layout` on a later tick, and `apply_pending`
+/// installs it with NO invalidation — the frame diffs the new view
+/// against the old baseline in place. The composed host screen must
+/// still hold the new view alone.
+#[test]
+fn reland_via_lagging_layout_leaves_no_stale_fragments() {
+    let layout = "0000,80x23,0,0{40x23,0,0,5,40x23,40,0,6}";
+    let mut replies = std::collections::HashMap::new();
+    reseed_replies(&mut replies, "@0 main\n@1 * other", "@1", "%5\n%6");
+    let (_rx, mut conn, mut session) = two_pane_session(
+        "reland-lag",
+        FakeScript {
+            replies,
+            ..FakeScript::default()
+        },
+    );
+    session
+        .renderer
+        .feed_output(1, b"[ approved ] confirm?\r\ntotal 12 34 56\r\n");
+    session.renderer.feed_output(2, b"side pane body\r\n");
+    let mut view_a = RecordingSink::default();
+    session.frame(&mut view_a);
+
+    // The reseed's drain misses the broadcast (nothing notify-scripted);
+    // the layout arrives afterwards and parks for the pump.
+    assert!(session.reseed_window(&mut conn, "@1"), "the reseed landed");
+    session.on_layout_change(layout, layout, "*");
+    session
+        .apply_pending(&mut conn, &mut RecordingSink::default())
+        .expect("pending install");
+    session.renderer.feed_output(5, b"$");
+    session.renderer.feed_output(6, b"$");
+    let mut view_b = RecordingSink::default();
+    session.frame(&mut view_b);
+
+    let text = composed_host_text(&view_a, &view_b);
+    assert!(
+        text.contains('$'),
+        "the new view reached the host: {text:?}"
+    );
+    assert!(
+        !text.contains("approved"),
+        "the previous view's dialog row survived the re-land: {text:?}"
+    );
+    assert!(
+        !text.contains("confirm?") && !text.contains("12 34 56"),
+        "stale fragments of the previous view survived: {text:?}"
+    );
+}
+
+/// The composed host screen of two consecutive flushes, as text: what a
+/// terminal that painted `a`'s cells and then `b`'s cells on top shows.
+fn composed_host_text(a: &RecordingSink, b: &RecordingSink) -> String {
+    let mut screen = vec![vec![' '; 80]; 25];
+    for cells in [&a.cells, &b.cells] {
+        for &(x, y, ref cell) in cells.iter() {
+            if let Some(sym) = cell.symbol().chars().next() {
+                if x < 80 && y < 25 {
+                    screen[y as usize][x as usize] = sym;
+                }
+            }
+        }
+    }
+    screen
+        .iter()
+        .map(|row| row.iter().collect::<String>())
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
 /// ENH-044: an open modal overlay survives a host resize (the old
 /// renderer rebuild dropped it while the session still believed it was up).
 #[test]
