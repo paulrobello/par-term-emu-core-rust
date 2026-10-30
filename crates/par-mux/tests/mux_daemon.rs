@@ -3428,15 +3428,75 @@ fn select_layout_e2e_tiled_via_control_socket() {
         }
     }
     let layout = tiled.expect("a tiled %layout-change arrived within 15s");
+    // Tiled at three panes: two share the top row (y=0, half width each)
+    // and one sits below. main-horizontal at three panes keeps ONE pane
+    // at y=0 (the full-width main pane above the pair), so the pane count
+    // at y=0 discriminates. Pane entries in the layout string are spelled
+    // `WxH,X,Y[,id]`.
+    let bytes = layout.as_bytes();
+    let mut panes: Vec<(u32, u32, u32)> = Vec::new();
+    let mut i = 0;
+    while i < bytes.len() {
+        // Token boundary: never start inside a number or right after the
+        // WxH separator.
+        let token_start = i == 0 || !(bytes[i - 1].is_ascii_digit() || bytes[i - 1] == b'x');
+        let mut at = i;
+        let mut fields: [Option<u32>; 4] = [None; 4];
+        let mut ok = token_start;
+        // `WxH,X,Y`: three separators, four numbers. Window and group
+        // extents spell the same `WxH,X,Y` but close with '[' or '{';
+        // a real pane is followed by ',', '}', ']', or its id.
+        for (idx, sep) in b"x,,".iter().enumerate() {
+            let start = at;
+            while at < bytes.len() && bytes[at].is_ascii_digit() {
+                at += 1;
+            }
+            if at == start || at >= bytes.len() || bytes[at] != *sep {
+                ok = false;
+                break;
+            }
+            fields[idx] = std::str::from_utf8(&bytes[start..at])
+                .ok()
+                .and_then(|s| s.parse().ok());
+            at += 1;
+        }
+        if ok {
+            // The third leg consumed the comma after X, so the digits
+            // here are Y; any further `,id` tail stays unread.
+            let start = at;
+            while at < bytes.len() && bytes[at].is_ascii_digit() {
+                at += 1;
+            }
+            if at > start {
+                fields[3] = std::str::from_utf8(&bytes[start..at])
+                    .ok()
+                    .and_then(|s| s.parse().ok());
+            }
+            if matches!(bytes.get(at), Some(b'[' | b'{')) {
+                ok = false;
+            }
+        }
+        if ok {
+            if let [Some(w), Some(_h), Some(x), Some(y)] = fields {
+                panes.push((x, y, w));
+            }
+        }
+        i += 1;
+    }
     assert_eq!(
-        layout.matches('{').count(),
-        1,
-        "one side-by-side row: {layout}"
+        panes.len(),
+        3,
+        "every pane appears as WxH,X,Y in the layout: {layout}"
     );
     assert_eq!(
-        layout.matches('[').count(),
+        panes.iter().filter(|&&(_, y, _)| y == 0).count(),
+        2,
+        "two panes share the top row: {layout}"
+    );
+    assert_eq!(
+        panes.iter().filter(|&&(_, y, _)| y > 0).count(),
         1,
-        "one top-level stack: {layout}"
+        "the third pane sits below: {layout}"
     );
     client.send("kill-server").expect("kill-server");
 }
