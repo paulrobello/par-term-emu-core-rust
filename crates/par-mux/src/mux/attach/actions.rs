@@ -4,6 +4,7 @@
 
 use super::*;
 use crate::mux::config::ChordKey;
+use crate::mux::layout::LayoutPreset;
 use std::io::Write as _;
 
 impl Session {
@@ -160,26 +161,56 @@ impl Session {
     /// Which management chord (if any) `key` is. Matched by byte BEFORE
     /// the fixed command table — the chords are configurable, so they
     /// cannot be static table arms.
-    pub(super) fn management_command(&self, key: u8) -> Option<ManagementKey> {
+    pub(super) fn management_command(&self, chord: ChordKey) -> Option<ManagementKey> {
         let m = self.management;
-        match key {
-            k if ChordKey::plain(k) == m.split_right => Some(ManagementKey::SplitRight),
-            k if ChordKey::plain(k) == m.split_down => Some(ManagementKey::SplitDown),
-            k if ChordKey::plain(k) == m.kill_pane => Some(ManagementKey::KillPane),
-            k if ChordKey::plain(k) == m.break_pane => Some(ManagementKey::BreakPane),
-            k if ChordKey::plain(k) == m.join_pane => Some(ManagementKey::JoinPane),
-            k if ChordKey::plain(k) == m.palette => Some(ManagementKey::Palette),
-            k if ChordKey::plain(k) == m.new_window => Some(ManagementKey::NewWindow),
-            k if ChordKey::plain(k) == m.swap_prev => Some(ManagementKey::SwapPrev),
-            k if ChordKey::plain(k) == m.swap_next => Some(ManagementKey::SwapNext),
-            k if ChordKey::plain(k) == m.move_window_left => Some(ManagementKey::MoveWindowLeft),
-            k if ChordKey::plain(k) == m.move_window_right => Some(ManagementKey::MoveWindowRight),
-            k if ChordKey::plain(k) == m.tab_strip_left => Some(ManagementKey::TabStripLeft),
-            k if ChordKey::plain(k) == m.tab_strip_right => Some(ManagementKey::TabStripRight),
-            k if ChordKey::plain(k) == m.workspace_next => Some(ManagementKey::WorkspaceNext),
-            k if ChordKey::plain(k) == m.workspace_prev => Some(ManagementKey::WorkspacePrev),
-            k if ChordKey::plain(k) == m.respawn => Some(ManagementKey::Respawn),
-            _ => None,
+        [
+            (m.split_right, ManagementKey::SplitRight),
+            (m.split_down, ManagementKey::SplitDown),
+            (m.kill_pane, ManagementKey::KillPane),
+            (m.break_pane, ManagementKey::BreakPane),
+            (m.join_pane, ManagementKey::JoinPane),
+            (m.palette, ManagementKey::Palette),
+            (m.new_window, ManagementKey::NewWindow),
+            (m.swap_prev, ManagementKey::SwapPrev),
+            (m.swap_next, ManagementKey::SwapNext),
+            (m.move_window_left, ManagementKey::MoveWindowLeft),
+            (m.move_window_right, ManagementKey::MoveWindowRight),
+            (m.tab_strip_left, ManagementKey::TabStripLeft),
+            (m.tab_strip_right, ManagementKey::TabStripRight),
+            (m.workspace_next, ManagementKey::WorkspaceNext),
+            (m.workspace_prev, ManagementKey::WorkspacePrev),
+            (m.respawn, ManagementKey::Respawn),
+            (
+                m.layout_even_horizontal,
+                ManagementKey::LayoutEvenHorizontal,
+            ),
+            (m.layout_even_vertical, ManagementKey::LayoutEvenVertical),
+            (
+                m.layout_main_horizontal,
+                ManagementKey::LayoutMainHorizontal,
+            ),
+            (m.layout_main_vertical, ManagementKey::LayoutMainVertical),
+            (m.layout_tiled, ManagementKey::LayoutTiled),
+        ]
+        .into_iter()
+        .find(|(bound, _)| *bound == chord)
+        .map(|(_, key)| key)
+    }
+
+    /// prefix M-1..M-5: `select-layout <preset> -t <window>`. The daemon
+    /// unzooms, re-lays, and broadcasts; a refusal flashes.
+    pub(super) fn select_layout(&mut self, preset: LayoutPreset) {
+        let ok = self
+            .conn
+            .send_checked(&format!(
+                "select-layout {} -t {}",
+                preset.name(),
+                self.window
+            ))
+            .is_ok_and(|reply| reply.ok);
+        if !ok {
+            self.flash = Some(format!("layout {}: refused", preset.name()));
+            self.draw_status();
         }
     }
 

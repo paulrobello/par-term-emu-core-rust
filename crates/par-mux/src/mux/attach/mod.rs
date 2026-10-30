@@ -73,6 +73,7 @@ use panels::*;
 use targets::*;
 
 use crate::mux::config::ChordKey;
+use crate::mux::layout::LayoutPreset;
 use crate::mux::resolve_socket_path;
 use par_term_emu_core::tmux_control::TmuxNotification;
 use std::io::Write as _;
@@ -673,6 +674,20 @@ impl Session {
             return false;
         }
         if byte == 0x1b {
+            // ESC + a printable that is not a CSI/SS3 opener (or `<`) is an
+            // Alt chord: bound runs, unbound is consumed.
+            if let Some(&alt) = rest.get(*index) {
+                if alt.is_ascii_graphic() && !matches!(alt, b'[' | b'O' | b'<') {
+                    *index += 1;
+                    if let Some(key) = self.management_command(ChordKey {
+                        key: alt,
+                        alt: true,
+                    }) {
+                        self.passthrough_management(key);
+                    }
+                    return false;
+                }
+            }
             // An arrow chord: collect the rest of the CSI sequence.
             let taken = rest[*index..].iter().take(2).copied().collect::<Vec<u8>>();
             *index += taken.len();
@@ -691,7 +706,7 @@ impl Session {
         // command table: they are configurable, so they cannot be
         // static arms, and the defaults (`%`, `"`, `x`, `c`) are
         // consumed unbound by the table today.
-        if let Some(key) = self.management_command(byte) {
+        if let Some(key) = self.management_command(ChordKey::plain(byte)) {
             self.passthrough_management(key);
             return false;
         }
@@ -762,6 +777,11 @@ impl Session {
             | ManagementKey::Sidebar
             | ManagementKey::StatusBar
             | ManagementKey::NotifyJump => {}
+            ManagementKey::LayoutEvenHorizontal => self.select_layout(LayoutPreset::EvenHorizontal),
+            ManagementKey::LayoutEvenVertical => self.select_layout(LayoutPreset::EvenVertical),
+            ManagementKey::LayoutMainHorizontal => self.select_layout(LayoutPreset::MainHorizontal),
+            ManagementKey::LayoutMainVertical => self.select_layout(LayoutPreset::MainVertical),
+            ManagementKey::LayoutTiled => self.select_layout(LayoutPreset::Tiled),
         }
     }
 
@@ -923,6 +943,16 @@ pub(crate) enum ManagementKey {
     /// Focus the pane behind the most recent agent notification this
     /// client delivered (render mode).
     NotifyJump,
+    /// Apply the even-horizontal layout preset to the window.
+    LayoutEvenHorizontal,
+    /// Apply the even-vertical layout preset to the window.
+    LayoutEvenVertical,
+    /// Apply the main-horizontal layout preset to the window.
+    LayoutMainHorizontal,
+    /// Apply the main-vertical layout preset to the window.
+    LayoutMainVertical,
+    /// Apply the tiled layout preset to the window.
+    LayoutTiled,
 }
 
 /// The prefix command table: d detach; o / arrows cycle panes; n/p

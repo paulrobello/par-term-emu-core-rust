@@ -3759,3 +3759,20 @@ fn picked_target_stays_out_of_the_way() {
     };
     assert_eq!(picked_target(&mut single, None, true, &mut never), Ok(None));
 }
+
+/// prefix M-5 (ESC 5) sends `select-layout tiled -t <window>`; an unbound
+/// Alt chord is consumed without reaching the pane.
+#[test]
+fn passthrough_m5_sends_select_layout() {
+    let (rx, mut session) = management_session("m5-layout");
+    assert!(!session.route_bytes(&[0x02, 0x1b, b'5']));
+    assert_eq!(
+        wait_for_line(&rx, "select-layout"),
+        "select-layout tiled -t @0"
+    );
+    assert!(!session.route_bytes(&[0x02, 0x1b, b'7']));
+    match rx.recv_timeout(std::time::Duration::from_millis(300)) {
+        Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {}
+        other => panic!("unbound Alt chord must be consumed: {other:?}"),
+    }
+}

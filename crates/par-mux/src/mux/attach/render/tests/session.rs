@@ -7010,3 +7010,89 @@ fn layouts_escape_from_load_confirm_backs_out_without_sending() {
     settle(&mut session, &mut conn);
     assert!(!drained(&rx).iter().any(|l| l.starts_with("load-layout")));
 }
+
+/// A session on the three-pane snapshot layout, wire drained.
+fn layout_chord_session(
+    tag: &str,
+) -> (
+    std::sync::mpsc::Receiver<(String, String)>,
+    crate::mux::attach::conn::AttachConn,
+    WindowSession,
+) {
+    let (rx, conn) = fake_daemon(tag, FakeScript::default());
+    let mut session = WindowSession::new(90, 26);
+    session
+        .renderer
+        .apply_layout(parse_layout(THREE_PANE).expect("parses"));
+    session.window = "@0".to_string();
+    drained(&rx);
+    (rx, conn, session)
+}
+
+/// prefix + M-1..M-5 each send `select-layout <preset> -t <shown window>`.
+#[test]
+fn alt_digit_chords_send_select_layout_per_preset() {
+    let presets = [
+        (b'1', "even-horizontal"),
+        (b'2', "even-vertical"),
+        (b'3', "main-horizontal"),
+        (b'4', "main-vertical"),
+        (b'5', "tiled"),
+    ];
+    for (digit, name) in presets {
+        let (rx, mut conn, mut session) = layout_chord_session("altlayout");
+        session.route_stdin_bytes(&mut conn, &[0x02, 0x1b, digit]);
+        assert_eq!(
+            received_within_300ms(&rx),
+            vec![format!("select-layout {name} -t @0")],
+            "M-{}",
+            digit as char
+        );
+    }
+}
+
+#[test]
+fn m1_chord_sends_select_layout_even_horizontal() {
+    let (rx, mut conn, mut session) = layout_chord_session("m1layout");
+    session.route_stdin_bytes(&mut conn, &[0x02, 0x1b, b'1']);
+    assert_eq!(
+        received_within_300ms(&rx),
+        vec!["select-layout even-horizontal -t @0".to_string()]
+    );
+}
+
+/// An unbound Alt chord after the prefix is consumed: nothing on the wire,
+/// nothing forwarded to the pane.
+#[test]
+fn unbound_alt_chord_with_prefix_armed_is_consumed() {
+    let (rx, mut conn, mut session) = layout_chord_session("altunbound");
+    session.route_stdin_bytes(&mut conn, &[0x02, 0x1b, b'7']);
+    assert!(received_within_300ms(&rx).is_empty());
+    assert!(!session.prefix_pending, "the prefix is spent");
+}
+
+/// Without the prefix an Alt key still reaches the pane program.
+#[test]
+fn alt_key_without_prefix_still_forwards() {
+    let (rx, mut conn, mut session) = layout_chord_session("altfwd");
+    session.route_stdin_bytes(&mut conn, &[0x1b, b'1']);
+    let lines = received_within_300ms(&rx);
+    assert!(
+        lines.iter().any(|l| l.starts_with("send-keys")),
+        "Alt+1 forwards to the pane: {lines:?}"
+    );
+    assert!(!lines.iter().any(|l| l.starts_with("select-layout")));
+}
+
+/// M-5 on a zoomed window still sends the command; the daemon unzooms and
+/// the %layout-change reseed clears the cue.
+#[test]
+fn m5_on_zoomed_window_unzooms_then_tiles() {
+    let (rx, mut conn, mut session) = layout_chord_session("m5zoom");
+    session.zoomed = true;
+    session.route_stdin_bytes(&mut conn, &[0x02, 0x1b, b'5']);
+    assert_eq!(
+        received_within_300ms(&rx),
+        vec!["select-layout tiled -t @0".to_string()]
+    );
+}
