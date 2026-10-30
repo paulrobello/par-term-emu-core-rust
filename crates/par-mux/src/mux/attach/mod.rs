@@ -777,11 +777,13 @@ impl Session {
             | ManagementKey::Sidebar
             | ManagementKey::StatusBar
             | ManagementKey::NotifyJump => {}
-            ManagementKey::LayoutEvenHorizontal => self.select_layout(LayoutPreset::EvenHorizontal),
-            ManagementKey::LayoutEvenVertical => self.select_layout(LayoutPreset::EvenVertical),
-            ManagementKey::LayoutMainHorizontal => self.select_layout(LayoutPreset::MainHorizontal),
-            ManagementKey::LayoutMainVertical => self.select_layout(LayoutPreset::MainVertical),
-            ManagementKey::LayoutTiled => self.select_layout(LayoutPreset::Tiled),
+            key @ (ManagementKey::LayoutEvenHorizontal
+            | ManagementKey::LayoutEvenVertical
+            | ManagementKey::LayoutMainHorizontal
+            | ManagementKey::LayoutMainVertical
+            | ManagementKey::LayoutTiled) => {
+                self.select_layout(key.layout_preset().expect("layout key"))
+            }
         }
     }
 
@@ -953,6 +955,44 @@ pub(crate) enum ManagementKey {
     LayoutMainVertical,
     /// Apply the tiled layout preset to the window.
     LayoutTiled,
+}
+
+impl ManagementKey {
+    /// The window preset selected by a layout action.
+    pub(crate) fn layout_preset(self) -> Option<LayoutPreset> {
+        match self {
+            Self::LayoutEvenHorizontal => Some(LayoutPreset::EvenHorizontal),
+            Self::LayoutEvenVertical => Some(LayoutPreset::EvenVertical),
+            Self::LayoutMainHorizontal => Some(LayoutPreset::MainHorizontal),
+            Self::LayoutMainVertical => Some(LayoutPreset::MainVertical),
+            Self::LayoutTiled => Some(LayoutPreset::Tiled),
+            Self::SplitRight
+            | Self::SplitDown
+            | Self::KillPane
+            | Self::BreakPane
+            | Self::JoinPane
+            | Self::Palette
+            | Self::NewWindow
+            | Self::SwapPrev
+            | Self::SwapNext
+            | Self::MoveWindowLeft
+            | Self::MoveWindowRight
+            | Self::TabStripLeft
+            | Self::TabStripRight
+            | Self::WorkspaceNext
+            | Self::WorkspacePrev
+            | Self::Zoom
+            | Self::RenameWindow
+            | Self::RenamePane
+            | Self::BorderCycle
+            | Self::Labels
+            | Self::WorkspacePicker
+            | Self::Sidebar
+            | Self::StatusBar
+            | Self::Respawn
+            | Self::NotifyJump => None,
+        }
+    }
 }
 
 /// The prefix command table: d detach; o / arrows cycle panes; n/p

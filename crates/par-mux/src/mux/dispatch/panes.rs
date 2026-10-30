@@ -2,6 +2,7 @@
 //! info, exited-replay, clear-history, resize, swap, break, join, respawn.
 
 use super::*;
+use crate::mux::layout::LayoutPreset;
 
 /// The pane group's router; `route_command` sends only this group's
 /// variants here. `issuer` is for `pane-exited-replay`, which answers on
@@ -589,11 +590,7 @@ pub(super) fn cmd_swap_panes(
     }
 }
 
-pub(super) fn cmd_select_layout(
-    ctx: &Ctx<'_>,
-    target: AnyTarget,
-    preset: crate::mux::layout::LayoutPreset,
-) -> Outcome {
+pub(super) fn cmd_select_layout(ctx: &Ctx<'_>, target: AnyTarget, preset: LayoutPreset) -> Outcome {
     let mut guard = ctx.tree.lock();
     let outcome = guard
         .resolve_pane_listing_target(target)

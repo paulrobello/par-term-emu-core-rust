@@ -8,11 +8,7 @@ use crate::mux::config::{spell_chord, ChordKey};
 /// The tmux spelling of a chord byte: `C-x` for control bytes (0 = the
 /// Space spelling), the literal character otherwise.
 pub(crate) fn spell_key(byte: u8) -> String {
-    match byte {
-        0 => "C-Space".to_string(),
-        b if (1..27).contains(&b) => format!("C-{}", (b - 1 + b'a') as char),
-        other => (other as char).to_string(),
-    }
+    spell_chord(&ChordKey::plain(byte))
 }
 
 /// One help panel row: the text and whether it renders as an accent row

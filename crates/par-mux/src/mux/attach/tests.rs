@@ -3776,3 +3776,13 @@ fn passthrough_m5_sends_select_layout() {
         other => panic!("unbound Alt chord must be consumed: {other:?}"),
     }
 }
+
+#[test]
+fn passthrough_select_layout_refusal_flashes() {
+    let (_rx, mut session) = scripted_passthrough(
+        "pt-layout-refused",
+        &[("select-layout tiled -t @0", "!err")],
+    );
+    assert!(!session.route_bytes(&[0x02, 0x1b, b'5']));
+    assert_eq!(session.flash.as_deref(), Some("layout tiled: refused"));
+}

@@ -7084,10 +7084,10 @@ fn alt_key_without_prefix_still_forwards() {
     assert!(!lines.iter().any(|l| l.starts_with("select-layout")));
 }
 
-/// M-5 on a zoomed window still sends the command; the daemon unzooms and
-/// the %layout-change reseed clears the cue.
+/// M-5 on a zoomed window still sends the command; the daemon-side
+/// unzoom and the %layout-change reseed clear the cue.
 #[test]
-fn m5_on_zoomed_window_unzooms_then_tiles() {
+fn m5_on_zoomed_window_sends_select_layout_tiled() {
     let (rx, mut conn, mut session) = layout_chord_session("m5zoom");
     session.zoomed = true;
     session.route_stdin_bytes(&mut conn, &[0x02, 0x1b, b'5']);
@@ -7095,4 +7095,64 @@ fn m5_on_zoomed_window_unzooms_then_tiles() {
         received_within_300ms(&rx),
         vec!["select-layout tiled -t @0".to_string()]
     );
+}
+
+#[test]
+fn select_layout_refusal_flashes() {
+    let script = FakeScript {
+        failing: ["select-layout tiled -t @0".to_string()].into(),
+        ..FakeScript::default()
+    };
+    let (rx, mut conn, mut session) = two_pane_session("layout-refused", script);
+    session.route_stdin_bytes(&mut conn, &[0x02, 0x1b, b'5']);
+    settle(&mut session, &mut conn);
+    assert_eq!(drained(&rx), vec!["select-layout tiled -t @0"]);
+    assert_eq!(session.chrome.flash_text(), Some("layout tiled: refused"));
+}
+
+#[test]
+fn plain_byte_lookup_does_not_resolve_an_alt_bound_layout_chord() {
+    let session = WindowSession::new(90, 26);
+    assert_eq!(
+        session.management_key(crate::mux::config::ChordKey::alt(b'1')),
+        Some(ManagementKey::LayoutEvenHorizontal)
+    );
+    assert_eq!(
+        session.management_key(crate::mux::config::ChordKey::plain(b'1')),
+        None
+    );
+    assert!(crate::mux::config::management_key("M-1", "popup[0].key").is_err());
+    assert_eq!(
+        crate::mux::config::management_key("1", "popup[0].key"),
+        Ok(b'1')
+    );
+}
+
+#[test]
+fn alt_non_ascii_chord_with_prefix_flashes_the_ascii_hint() {
+    let (rx, mut conn, mut session) = layout_chord_session("altnonascii");
+    for ch in ['中', ' '] {
+        session.route_plain(&[0x02], &mut conn);
+        session.route_key(
+            &mut conn,
+            &TermKeyEvent::char_(ch, par_term_emu_core::keyboard::modifiers::ALT),
+        );
+        assert_eq!(
+            session.chrome.flash_text(),
+            Some(non_ascii_chord_hint(ch).as_str())
+        );
+        assert!(!session.prefix_pending);
+    }
+    assert!(received_within_300ms(&rx).is_empty());
+}
+
+#[test]
+fn palette_layout_row_sends_select_layout() {
+    let (rx, mut conn, mut session) = two_pane_session("palette-layout", FakeScript::default());
+    chord(&mut session, &mut conn, b':');
+    drained(&rx);
+    session.route_plain(b"layout tiled", &mut conn);
+    session.route_plain(b"\r", &mut conn);
+    settle(&mut session, &mut conn);
+    assert_eq!(drained(&rx), vec!["select-layout tiled -t @0"]);
 }

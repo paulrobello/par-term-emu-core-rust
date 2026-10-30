@@ -71,19 +71,13 @@ impl WindowSession {
             ManagementKey::Sidebar => self.toggle_sidebar(conn),
             ManagementKey::Respawn => self.chord_respawn(conn),
             ManagementKey::NotifyJump => self.chord_notify_jump(conn),
-            ManagementKey::LayoutEvenHorizontal => {
-                self.chord_select_layout(conn, LayoutPreset::EvenHorizontal)
+            key @ (ManagementKey::LayoutEvenHorizontal
+            | ManagementKey::LayoutEvenVertical
+            | ManagementKey::LayoutMainHorizontal
+            | ManagementKey::LayoutMainVertical
+            | ManagementKey::LayoutTiled) => {
+                self.chord_select_layout(conn, key.layout_preset().expect("layout key"));
             }
-            ManagementKey::LayoutEvenVertical => {
-                self.chord_select_layout(conn, LayoutPreset::EvenVertical)
-            }
-            ManagementKey::LayoutMainHorizontal => {
-                self.chord_select_layout(conn, LayoutPreset::MainHorizontal)
-            }
-            ManagementKey::LayoutMainVertical => {
-                self.chord_select_layout(conn, LayoutPreset::MainVertical)
-            }
-            ManagementKey::LayoutTiled => self.chord_select_layout(conn, LayoutPreset::Tiled),
         }
     }
 

@@ -1190,7 +1190,7 @@ impl WindowSession {
                     Some(SettingValue::Str(text.to_string()))
                 } else {
                     self.chrome.flash(format!(
-                        "{}: expected one key, tmux spelling (e.g. x or C-x)",
+                        "{}: expected one key, tmux spelling (e.g. x, C-x or M-1)",
                         edit.label
                     ));
                     None
@@ -1643,31 +1643,32 @@ mod tests {
     /// `M-1`..`M-5` by default.
     #[test]
     fn settings_keys_tab_lists_the_five_layout_chords() {
-        let count = SettingsSection::Keys.row_count();
-        let mut seen = Vec::new();
-        for i in 0..count {
-            let mut st = state(SettingsSection::Keys);
-            st.selected = i;
-            st.top = i;
-            let row = compose_settings(&st, &values()).rows[5].text.clone();
-            if row.contains("layout ") {
-                seen.push(row);
-            }
-        }
-        assert_eq!(seen.len(), 5, "{seen:?}");
-        for (i, (label, value)) in [
+        let expected = [
             ("layout even horizontal", "M-1"),
             ("layout even vertical", "M-2"),
             ("layout main horizontal", "M-3"),
             ("layout main vertical", "M-4"),
             ("layout tiled", "M-5"),
-        ]
-        .iter()
-        .enumerate()
-        {
-            assert!(seen[i].contains(label), "{}", seen[i]);
-            assert!(seen[i].trim_end().ends_with(value), "{}", seen[i]);
+        ];
+        let mut seen = Vec::new();
+        for i in 0..SettingsSection::Keys.row_count() {
+            let mut st = state(SettingsSection::Keys);
+            st.selected = i;
+            st.top = i;
+            let row = compose_settings(&st, &values()).rows[5].text.clone();
+            // The row's selection pointer and padding lead the label.
+            let text = row.trim_start_matches(['\u{25B8}', ' ']);
+            for (label, value) in expected {
+                if text.starts_with(label) {
+                    assert!(
+                        text.trim_end().ends_with(value),
+                        "{label} spells {value}: {row}"
+                    );
+                    seen.push((label, value));
+                }
+            }
         }
+        assert_eq!(seen, expected);
     }
 
     /// The preset mapping round-trips: a live default reads `default`,

@@ -503,6 +503,11 @@ impl WindowSession {
                     }
                     return;
                 }
+                if let Some(ch) = char::from_u32(ev.codepoint) {
+                    self.chrome.flash(non_ascii_chord_hint(ch));
+                    self.draw_status_row();
+                }
+                return;
             }
             self.prefix_pane_arrow(conn, ev);
             return;

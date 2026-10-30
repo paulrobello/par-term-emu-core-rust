@@ -203,6 +203,14 @@ fn child_extents(along_axis: bool, ratio: f32, extent: usize) -> (usize, usize) 
     (first, extent - first)
 }
 
+impl std::fmt::Display for NoSuchLeaf {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "no such pane in layout: {}", self.0)
+    }
+}
+
+impl std::error::Error for NoSuchLeaf {}
+
 /// A tmux-style arrangement of a window's panes, built by
 /// [`LayoutTree::for_preset`]. Names are tmux's `select-layout` spellings.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -261,14 +269,6 @@ fn chain(direction: SplitDirection, mut items: Vec<LayoutTree>) -> LayoutTree {
     tree
 }
 
-impl std::fmt::Display for NoSuchLeaf {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "no such pane in layout: {}", self.0)
-    }
-}
-
-impl std::error::Error for NoSuchLeaf {}
-
 impl LayoutTree {
     /// A tree holding a single pane, the shape every new window starts with.
     pub fn leaf(pane: PaneId) -> Self {
@@ -279,7 +279,7 @@ impl LayoutTree {
     /// pane is the main pane for the `main-*` presets). `panes` must be
     /// non-empty.
     pub fn for_preset(panes: &[PaneId], preset: LayoutPreset) -> LayoutTree {
-        assert!(!panes.is_empty(), "for_preset needs at least one pane");
+        debug_assert!(!panes.is_empty(), "for_preset needs at least one pane");
         let leaves = |ids: &[PaneId]| ids.iter().map(|id| LayoutTree::leaf(*id)).collect();
         match preset {
             LayoutPreset::EvenHorizontal => chain(SplitDirection::Vertical, leaves(panes)),
@@ -1435,115 +1435,6 @@ mod tests {
         assert_eq!(width_of(PaneId(2)), 30);
     }
 
-    fn preset_geo(n: usize, preset: LayoutPreset) -> Vec<PaneGeometry> {
-        let ids: Vec<PaneId> = (0..n as u32).map(PaneId).collect();
-        let tree = LayoutTree::for_preset(&ids, preset);
-        assert_eq!(tree.pane_ids(), ids, "leaf order is preserved");
-        tree.geometry(0, 0, 80, 24)
-    }
-
-    const ALL_PRESETS: [LayoutPreset; 5] = [
-        LayoutPreset::EvenHorizontal,
-        LayoutPreset::EvenVertical,
-        LayoutPreset::MainHorizontal,
-        LayoutPreset::MainVertical,
-        LayoutPreset::Tiled,
-    ];
-
-    #[test]
-    fn preset_even_horizontal_is_one_row() {
-        let geo = preset_geo(4, LayoutPreset::EvenHorizontal);
-        assert_eq!(geo.len(), 4);
-        for g in &geo {
-            assert_eq!((g.y, g.height), (0, 24));
-            assert!((19..=21).contains(&g.width), "width {}", g.width);
-        }
-    }
-
-    #[test]
-    fn preset_even_vertical_is_one_column() {
-        let geo = preset_geo(4, LayoutPreset::EvenVertical);
-        assert_eq!(geo.len(), 4);
-        for g in &geo {
-            assert_eq!((g.x, g.width), (0, 80));
-            assert!((5..=7).contains(&g.height), "height {}", g.height);
-        }
-    }
-
-    #[test]
-    fn preset_tiled_grid_shapes() {
-        let rows_of = |n: usize| {
-            let geo = preset_geo(n, LayoutPreset::Tiled);
-            let mut ys: Vec<usize> = geo.iter().map(|g| g.y).collect();
-            ys.dedup();
-            ys.iter()
-                .map(|y| geo.iter().filter(|g| g.y == *y).count())
-                .collect::<Vec<_>>()
-        };
-        assert_eq!(rows_of(2), vec![1, 1]);
-        assert_eq!(rows_of(3), vec![2, 1]);
-        assert_eq!(rows_of(5), vec![2, 2, 1]);
-        assert_eq!(rows_of(9), vec![3, 3, 3]);
-        let geo = preset_geo(3, LayoutPreset::Tiled);
-        assert_eq!(geo[2].width, 80, "lone last-row pane takes the full row");
-    }
-
-    #[test]
-    fn preset_main_horizontal_top_main_bottom_row() {
-        let geo = preset_geo(4, LayoutPreset::MainHorizontal);
-        assert_eq!((geo[0].y, geo[0].width, geo[0].height), (0, 80, 16));
-        for g in &geo[1..] {
-            assert_eq!((g.y, g.height), (16, 8));
-            assert!((26..=27).contains(&g.width), "width {}", g.width);
-        }
-    }
-
-    #[test]
-    fn preset_main_vertical_left_main_right_column() {
-        let geo = preset_geo(4, LayoutPreset::MainVertical);
-        assert_eq!((geo[0].x, geo[0].width, geo[0].height), (0, 53, 24));
-        for g in &geo[1..] {
-            assert_eq!((g.x, g.width), (53, 27));
-            assert_eq!(g.height, 8);
-        }
-    }
-
-    #[test]
-    fn preset_preserves_minimum_pane_size() {
-        for g in preset_geo(9, LayoutPreset::EvenHorizontal) {
-            assert!(g.width >= 1, "width {}", g.width);
-        }
-    }
-
-    #[test]
-    fn preset_covers_full_extent() {
-        for preset in ALL_PRESETS {
-            for n in 1..=9 {
-                let geo = preset_geo(n, preset);
-                let area: usize = geo.iter().map(|g| g.width * g.height).sum();
-                assert_eq!(area, 80 * 24, "{} n={n}", preset.name());
-                for (i, a) in geo.iter().enumerate() {
-                    assert!(a.x + a.width <= 80 && a.y + a.height <= 24);
-                    for b in &geo[i + 1..] {
-                        let disjoint = a.x + a.width <= b.x
-                            || b.x + b.width <= a.x
-                            || a.y + a.height <= b.y
-                            || b.y + b.height <= a.y;
-                        assert!(disjoint, "{} n={n} overlap {a:?} {b:?}", preset.name());
-                    }
-                }
-            }
-        }
-    }
-
-    #[test]
-    fn preset_name_parse_round_trip() {
-        for preset in ALL_PRESETS {
-            assert_eq!(LayoutPreset::parse(preset.name()), Some(preset));
-        }
-        assert_eq!(LayoutPreset::parse("bogus"), None);
-    }
-
     #[test]
     fn geometry_of_a_single_pane_fills_the_window() {
         let tree = LayoutTree::leaf(PaneId(0));
@@ -1871,5 +1762,115 @@ mod tests {
                 Some((num, &s[end..]))
             }
         }
+    }
+    fn preset_geo(n: usize, preset: LayoutPreset) -> Vec<PaneGeometry> {
+        let ids: Vec<PaneId> = (0..n as u32).map(PaneId).collect();
+        let tree = LayoutTree::for_preset(&ids, preset);
+        assert_eq!(tree.pane_ids(), ids, "leaf order is preserved");
+        tree.geometry(0, 0, 80, 24)
+    }
+
+    const ALL_PRESETS: [LayoutPreset; 5] = [
+        LayoutPreset::EvenHorizontal,
+        LayoutPreset::EvenVertical,
+        LayoutPreset::MainHorizontal,
+        LayoutPreset::MainVertical,
+        LayoutPreset::Tiled,
+    ];
+
+    #[test]
+    fn preset_even_horizontal_is_one_row() {
+        let geo = preset_geo(4, LayoutPreset::EvenHorizontal);
+        assert_eq!(geo.len(), 4);
+        for g in &geo {
+            assert_eq!((g.y, g.height), (0, 24));
+            assert!((19..=21).contains(&g.width), "width {}", g.width);
+        }
+    }
+
+    #[test]
+    fn preset_even_vertical_is_one_column() {
+        let geo = preset_geo(4, LayoutPreset::EvenVertical);
+        assert_eq!(geo.len(), 4);
+        for g in &geo {
+            assert_eq!((g.x, g.width), (0, 80));
+            assert!((5..=7).contains(&g.height), "height {}", g.height);
+        }
+    }
+
+    #[test]
+    fn preset_tiled_grid_shapes() {
+        let rows_of = |n: usize| {
+            let geo = preset_geo(n, LayoutPreset::Tiled);
+            let mut ys: Vec<usize> = geo.iter().map(|g| g.y).collect();
+            ys.dedup();
+            ys.iter()
+                .map(|y| geo.iter().filter(|g| g.y == *y).count())
+                .collect::<Vec<_>>()
+        };
+        assert_eq!(rows_of(2), vec![1, 1]);
+        assert_eq!(rows_of(3), vec![2, 1]);
+        assert_eq!(rows_of(5), vec![2, 2, 1]);
+        assert_eq!(rows_of(9), vec![3, 3, 3]);
+        let geo = preset_geo(3, LayoutPreset::Tiled);
+        assert_eq!(geo[2].width, 80, "lone last-row pane takes the full row");
+        let geo = preset_geo(5, LayoutPreset::Tiled);
+        assert_eq!(geo[4].width, 80, "lone third-row pane takes the full row");
+    }
+
+    #[test]
+    fn preset_main_horizontal_top_main_bottom_row() {
+        let geo = preset_geo(4, LayoutPreset::MainHorizontal);
+        assert_eq!((geo[0].y, geo[0].width, geo[0].height), (0, 80, 16));
+        for g in &geo[1..] {
+            assert_eq!((g.y, g.height), (16, 8));
+            assert!((26..=27).contains(&g.width), "width {}", g.width);
+        }
+    }
+
+    #[test]
+    fn preset_main_vertical_left_main_right_column() {
+        let geo = preset_geo(4, LayoutPreset::MainVertical);
+        assert_eq!((geo[0].x, geo[0].width, geo[0].height), (0, 53, 24));
+        for g in &geo[1..] {
+            assert_eq!((g.x, g.width), (53, 27));
+            assert_eq!(g.height, 8);
+        }
+    }
+
+    #[test]
+    fn preset_preserves_minimum_pane_size() {
+        for g in preset_geo(9, LayoutPreset::EvenHorizontal) {
+            assert!(g.width >= 1, "width {}", g.width);
+        }
+    }
+
+    #[test]
+    fn preset_covers_full_extent() {
+        for preset in ALL_PRESETS {
+            for n in 1..=9 {
+                let geo = preset_geo(n, preset);
+                let area: usize = geo.iter().map(|g| g.width * g.height).sum();
+                assert_eq!(area, 80 * 24, "{} n={n}", preset.name());
+                for (i, a) in geo.iter().enumerate() {
+                    assert!(a.x + a.width <= 80 && a.y + a.height <= 24);
+                    for b in &geo[i + 1..] {
+                        let disjoint = a.x + a.width <= b.x
+                            || b.x + b.width <= a.x
+                            || a.y + a.height <= b.y
+                            || b.y + b.height <= a.y;
+                        assert!(disjoint, "{} n={n} overlap {a:?} {b:?}", preset.name());
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn preset_name_parse_round_trip() {
+        for preset in ALL_PRESETS {
+            assert_eq!(LayoutPreset::parse(preset.name()), Some(preset));
+        }
+        assert_eq!(LayoutPreset::parse("bogus"), None);
     }
 }

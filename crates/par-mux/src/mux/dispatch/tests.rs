@@ -3336,3 +3336,73 @@ fn select_layout_saves_state() {
         .unwrap()
         .mutates());
 }
+
+/// A session target narrows to the session's ACTIVE window, a pane
+/// target to the pane's OWNING window — each leaves the other windows
+/// of the tree untouched.
+#[test]
+fn select_layout_narrows_session_and_pane_targets_to_their_window() {
+    let h = Harness::new();
+    let w0 = select_layout_window(&h, 3);
+    let session = h.session_named("main");
+    assert_ok(&h.run(&format!("new-window -t {session}")));
+    let w1 = h.windows_of(session)[1];
+    assert_ok(&h.run(&format!("select-window -t {w1}")));
+    let last = *h.panes_of(w1).last().unwrap();
+    assert_ok(&h.run(&format!("split-window -h -t {last}")));
+    let (rows, cols) = {
+        let guard = h.tree.lock();
+        let window = guard.window(w1).unwrap();
+        (window.rows as usize, window.cols as usize)
+    };
+    let w0_before = select_layout_rects(&h, w0);
+    let before = select_layout_rects(&h, w1);
+    assert!(
+        before.iter().all(|g| g.height == rows),
+        "right-splits are full height: {before:?}"
+    );
+
+    // The session target: w1 is active, so tiled stacks w1 —
+    // and leaves w0 alone.
+    assert_ok(&h.run(&format!("select-layout -t {session} tiled")));
+    let after = select_layout_rects(&h, w1);
+    assert_eq!(after.len(), 2);
+    assert!(
+        after.iter().all(|g| g.height < rows && g.width == cols),
+        "tiled stacked w1's two panes: {after:?}"
+    );
+    assert_eq!(select_layout_rects(&h, w0), w0_before, "w0 untouched");
+
+    // The pane target: w0's first pane narrows to w0.
+    let pane0 = h.panes_of(w0)[0];
+    assert_ok(&h.run(&format!("select-layout -t {pane0} even-vertical")));
+    let stacked = select_layout_rects(&h, w0);
+    assert!(
+        stacked.iter().all(|g| g.width == cols && g.height < rows),
+        "even-vertical stacked w0's three panes: {stacked:?}"
+    );
+    assert_eq!(select_layout_rects(&h, w1), after, "w1 untouched");
+}
+
+/// Two positional preset names are a parse error (the exactly-one rule).
+#[test]
+fn select_layout_two_preset_names_is_a_parse_error() {
+    let err = parse_command("select-layout -t @0 tiled even-vertical").unwrap_err();
+    assert!(err.contains("exactly one layout name"), "{err}");
+}
+
+/// A repeated `-t` keeps the FIRST target (the flag parser's first-match
+/// rule).
+#[test]
+fn duplicate_target_takes_the_first() {
+    let cmd = parse_command("select-layout -t @0 -t @1 tiled").unwrap();
+    match cmd {
+        crate::mux::command::MuxCommand::SelectLayout { target, .. } => {
+            assert_eq!(
+                target,
+                crate::mux::ids::AnyTarget::Window(crate::mux::ids::WindowId(0))
+            );
+        }
+        other => panic!("select-layout parses: {other:?}"),
+    }
+}
