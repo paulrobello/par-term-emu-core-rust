@@ -7,6 +7,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- **mux: `select-layout` command and `prefix M-1..M-5` layout chords** (`crates/par-mux/src/mux/`, `docs/MUX.md`): the new `select-layout [-t <target>] <even-horizontal|even-vertical|main-horizontal|main-vertical|tiled>` verb rearranges a window's panes into a preset (window target required, session/pane targets narrow to their window) through the layout-mutation path, so it unzooms, re-fits the PTYs, broadcasts `%layout-change`, and persists with the structural save set; an unknown preset errors naming the five. Geometry is par-mux's own full-coverage math: `tiled` is a row-major grid of round(sqrt(n)) columns with a lone last-row pane full-width, and `main-*` gives the first pane 2/3 with the minors in a row or column (tmux's optionless default leaves the minors a one-cell strip, so the 2/3 share is deliberate). Attach clients apply the presets with `prefix M-1`..`M-5` in both render and passthrough modes (an unbound Alt chord after the prefix is consumed silently, and Alt keys without the prefix still reach the pane); the chords are rebindable through `[client]` `layout-even-horizontal`, `layout-even-vertical`, `layout-main-horizontal`, `layout-main-vertical`, `layout-tiled`, editable in the settings dialog's keys tab, and listed in help and the palette.
+
 ## [0.73.0] - 2026-10-30
 
 ### Added
