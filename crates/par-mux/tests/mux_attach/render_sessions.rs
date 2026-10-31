@@ -1188,3 +1188,40 @@ fn render_mode_ctrl_d_closing_a_tab_keeps_both_clients_in_the_session() {
     a.killer.kill().ok();
     b.killer.kill().ok();
 }
+
+/// The live pane-clipboard bridge: a pane program's OSC 52 write that
+/// arrives WHILE a render client is attached and viewing the pane must
+/// reach the host stdout as the same wire form the yank writes. Card
+/// 01a1938df1 diagnosis: the composed stack (par-term tab -> attach TUI
+/// -> daemon pane) reported selections and pane copies dying silently,
+/// so the attach's own leg gets a live pin — a break in the composed
+/// stack is then attributable to the outer hops.
+#[cfg(unix)]
+#[ignore = "load-sensitive: PTY/timing suite; run via make test-rust-sensitive or checkall-ci"]
+#[test]
+fn a_live_pane_osc52_write_reaches_the_host_stdout() {
+    let probe_path = std::env::temp_dir().join("par-mux-clip-probe-live.bin");
+    std::fs::write(&probe_path, b"\x1b]52;c;cGFyLW11eC1wcm9iZQ==\x1b\\").expect("write probe");
+    let fixture = MuxFixture::new("clipbridge");
+    let _daemon = common::spawn_daemon(&fixture);
+    wait_listening(fixture.socket());
+    let mut client = par_mux::mux::MuxClient::connect(fixture.socket()).expect("connect");
+    common::send(
+        &mut client,
+        &format!(
+            "new-session -s clip 'sh -c \"sleep 3; cat {}; exec sleep 300\"'",
+            probe_path.display()
+        ),
+    )
+    .expect("session");
+    std::thread::sleep(Duration::from_millis(600));
+
+    let (mut host, _stderr) = spawn_attach_render(&fixture, &[]);
+    let got = wait_for_output(&host, b"cGFyLW11eC1wcm9iZQ==", Duration::from_secs(20));
+    host.killer.kill().ok();
+    assert!(
+        got.windows(20).any(|w| w == b"cGFyLW11eC1wcm9iZQ=="),
+        "the live pane copy must bridge to the host stdout: {:?}",
+        String::from_utf8_lossy(&got)
+    );
+}
