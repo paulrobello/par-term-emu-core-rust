@@ -2237,6 +2237,91 @@ fn tree_with_agent_pane() -> (MuxTree, PaneId) {
     (tree, pane_id)
 }
 
+/// Capture `tree` through an ALIVE process table: the pane's child gets a
+/// shell entry plus a descendant whose argv matches the pane's CLAIMED
+/// agent — the positive-control table for capture-side agent tests (the
+/// resurrect gate under test drops provably dead claims).
+pub(super) fn capture_with_alive_agent(
+    tree: &MuxTree,
+    pane_id: PaneId,
+) -> super::format::PersistState {
+    let child = tree
+        .pane(pane_id)
+        .unwrap()
+        .child_pid()
+        .expect("live pane child");
+    let claimed = tree
+        .pane(pane_id)
+        .unwrap()
+        .metadata()
+        .get("agent")
+        .cloned()
+        .unwrap_or_else(|| "pi".to_string());
+    let table = crate::mux::foreground::ProcessTable::with_fixed_argv(&[
+        (child as i32, 1, Some(vec!["bash".to_string()])),
+        (child as i32 + 100_007, child as i32, Some(vec![claimed])),
+    ]);
+    tree.collect_persist_capture()
+        .capture_with_table(Some(table))
+}
+
+/// Paul's 2026-10-31 report: the restart resumed agents that had already
+/// exited. A hook claim the process table proves dead (`pi` absent from the
+/// pane's tree; the child runs a bare shell) must not ride the save — the
+/// claim drops, so restore respawns the pane's plain start command instead
+/// of resurrecting a finished session.
+#[test]
+#[cfg(unix)]
+fn a_claim_whose_agent_is_provably_dead_does_not_persist_for_resume() {
+    let (tree, pane_id) = tree_with_agent_pane();
+    let child = tree
+        .pane(pane_id)
+        .unwrap()
+        .child_pid()
+        .expect("live pane child");
+    let table = crate::mux::foreground::ProcessTable::with_fixed_argv(&[(
+        child as i32,
+        1,
+        Some(vec!["bash".to_string()]),
+    )]);
+    let state = tree
+        .collect_persist_capture()
+        .capture_with_table(Some(table));
+    let pane = &state.sessions[0].windows[0].panes[0];
+    assert!(
+        pane.agent_session.is_none(),
+        "a provably dead agent's claim must not ride the save"
+    );
+}
+
+/// The gate must not bite a live agent: the claimed agent IS in the pane's
+/// tree, so the claim rides the save.
+#[test]
+#[cfg(unix)]
+fn a_claim_with_a_live_agent_still_persists_for_resume() {
+    let (tree, pane_id) = tree_with_agent_pane();
+    let state = capture_with_alive_agent(&tree, pane_id);
+    let pane = &state.sessions[0].windows[0].panes[0];
+    assert!(
+        pane.agent_session.is_some(),
+        "an alive agent's claim rides the save"
+    );
+}
+
+/// Neither direction may guess when the probe cannot decide: no table
+/// (Windows) keeps the claim — the resume stays best-effort exactly as
+/// before the gate.
+#[test]
+#[cfg(unix)]
+fn a_claim_under_no_process_table_keeps_the_resume_path() {
+    let (tree, _pane_id) = tree_with_agent_pane();
+    let state = tree.collect_persist_capture().capture_with_table(None);
+    let pane = &state.sessions[0].windows[0].panes[0];
+    assert!(
+        pane.agent_session.is_some(),
+        "an unprovable claim keeps the resume path"
+    );
+}
 /// The resume spawn re-lands in the pane's persisted cwd: the agent's
 /// invocation (claude resolves transcripts per cwd) must run where the
 /// session lived, not in the daemon's start directory. Unix only: the
@@ -2253,7 +2338,7 @@ fn a_resume_invocation_spawns_in_the_persisted_cwd() {
         .terminal()
         .write()
         .process(format!("\x1b]7;file://localhost{}\x1b\\", reported.display()).as_bytes());
-    let state = tree.to_persist_state();
+    let state = capture_with_alive_agent(&tree, pane_id);
 
     let factory = crate::mux::pane::test_support::ContextRecordingFactory::default();
     let restored = MuxTree::from_persist_state(&state, Box::new(factory.clone())).unwrap();
@@ -2309,7 +2394,7 @@ fn a_released_pane_restores_through_the_original_command() {
 #[test]
 fn agent_session_identity_round_trips() {
     let (original, pane_id) = tree_with_agent_pane();
-    let state = original.to_persist_state();
+    let state = capture_with_alive_agent(&original, pane_id);
     let persisted = state.sessions[0].windows[0].panes[0]
         .agent_session
         .as_ref()
@@ -2365,7 +2450,7 @@ fn agent_session_identity_round_trips() {
         Some(expected.as_str()),
         "restore spawns the hook-reported invocation, not the original command"
     );
-    let recaptured = restored.to_persist_state();
+    let recaptured = capture_with_alive_agent(&restored, pane_id);
     assert_eq!(
         recaptured.sessions[0].windows[0].panes[0].agent_session,
         state.sessions[0].windows[0].panes[0].agent_session,
@@ -2413,7 +2498,7 @@ fn restored_agent_pane_spawns_with_captured_env_under_session_overrides() {
     original
         .set_session_env(session_id, "AGENT_TEST_VAR", Some("session-wins"))
         .expect("set-environment works");
-    let mut state = original.to_persist_state();
+    let mut state = capture_with_alive_agent(&original, pane_id);
     {
         let persisted = state.sessions[0].windows[0].panes[0]
             .agent_session
@@ -2481,7 +2566,7 @@ fn agent_env_capture_retains_last_known_env_under_the_same_identity() {
         env: env.clone(),
         session: Some("s-1".to_string()),
     });
-    let retained = tree.to_persist_state().sessions[0].windows[0].panes[0]
+    let retained = capture_with_alive_agent(&tree, pane_id).sessions[0].windows[0].panes[0]
         .agent_session
         .as_ref()
         .expect("claimed")
@@ -2500,7 +2585,7 @@ fn agent_env_capture_retains_last_known_env_under_the_same_identity() {
         env,
         session: Some("other-session".to_string()),
     });
-    let dropped = tree.to_persist_state().sessions[0].windows[0].panes[0]
+    let dropped = capture_with_alive_agent(&tree, pane_id).sessions[0].windows[0].panes[0]
         .agent_session
         .as_ref()
         .expect("claimed")
@@ -2707,7 +2792,7 @@ fn pi_shaped_path_only_identity_round_trips() {
         r#"["omp","--resume=/tmp/omp-session.jsonl"]"#,
     );
 
-    let state = tree.to_persist_state();
+    let state = capture_with_alive_agent(&tree, pane_id);
     assert_eq!(
         state.sessions[0].windows[0].panes[0].agent_session,
         Some(PersistAgentSession {
@@ -2752,7 +2837,7 @@ fn pi_shaped_path_only_identity_round_trips() {
 fn restore_spawns_a_table_resume_for_an_agent_without_a_reported_invocation() {
     let (original, pane_id) =
         tree_with_metadata(&[("agent", "claude"), ("agent_session_id", "abc-123")]);
-    let state = original.to_persist_state();
+    let state = capture_with_alive_agent(&original, pane_id);
     let factory = RecordingFactory::default();
     let restored = MuxTree::from_persist_state(&state, Box::new(factory.clone())).unwrap();
     let expected = if cfg!(windows) {
@@ -2785,7 +2870,7 @@ fn restore_spawns_a_table_resume_for_an_agent_without_a_reported_invocation() {
 fn restore_appends_the_agent_append_words_onto_the_resume_argv() {
     let (original, pane_id) =
         tree_with_metadata(&[("agent", "claude"), ("agent_session_id", "abc-123")]);
-    let state = original.to_persist_state();
+    let state = capture_with_alive_agent(&original, pane_id);
     let factory = RecordingFactory::default();
     let table = crate::mux::config::AgentAppend {
         claude: "--continue --dangerously-skip-permissions".into(),
@@ -2864,7 +2949,7 @@ fn an_absent_agent_binary_degrades_inside_the_pane_not_the_restore() {
             r#"["par-mux-test-no-such-binary","--resume","s-1"]"#,
         ),
     ]);
-    let state = original.to_persist_state();
+    let state = capture_with_alive_agent(&original, pane_id);
     let restored = MuxTree::from_persist_state(&state, Box::new(ShellPaneFactory::default()))
         .expect("restore completes — an absent binary is the pane's problem");
     let expected = if cfg!(windows) {
@@ -2906,7 +2991,7 @@ fn a_failed_resume_leaves_a_live_pane_with_its_restored_history() {
         }
         guard.process(b"ON-SCREEN-MARK\r\n");
     }
-    let state = tree.to_persist_state();
+    let state = capture_with_alive_agent(&tree, pane_id);
 
     // Restore through the REAL factory: the pane's process is
     // `sh -c '<missing binary> ... || { ...; exec shell }'`. sh fails
@@ -2963,7 +3048,7 @@ fn a_failed_resume_leaves_a_live_pane_with_its_restored_history() {
 
     // The agent identity survives the next persist — only an explicit
     // kill-pane (or kill-window) removes it.
-    let recaptured = restored.to_persist_state();
+    let recaptured = capture_with_alive_agent(&restored, pane_id);
     let session = recaptured.sessions[0].windows[0].panes[0]
         .agent_session
         .as_ref()
@@ -2996,7 +3081,7 @@ fn a_clean_agent_exit_also_leaves_a_live_pane() {
         let mut guard = terminal.write();
         guard.process(b"PRE-MARK\r\n");
     }
-    let state = tree.to_persist_state();
+    let state = capture_with_alive_agent(&tree, pane_id);
 
     // Restore through the REAL factory: the pane's process is
     // `sh -c ''true''; { ...; exec shell }`. `true` exits 0 almost
@@ -3037,7 +3122,7 @@ fn a_clean_agent_exit_also_leaves_a_live_pane() {
 
     // The agent identity survives the next persist — only an explicit
     // kill-pane (or kill-window) removes it.
-    let recaptured = restored.to_persist_state();
+    let recaptured = capture_with_alive_agent(&restored, pane_id);
     let session = recaptured.sessions[0].windows[0].panes[0]
         .agent_session
         .as_ref()
@@ -3206,7 +3291,7 @@ fn a_flagged_pane_restores_via_its_start_command_with_the_resume_session_id() {
     tree.pane_mut(pane_id)
         .unwrap()
         .set_restore_start_command(true);
-    let mut state = tree.to_persist_state();
+    let mut state = capture_with_alive_agent(&tree, pane_id);
     state.sessions[0].windows[0].panes[0].spawn_command =
         Some("claude-wrapper --model sonnet --plugin-dir /opt/mod".to_string());
 
@@ -3240,7 +3325,7 @@ fn a_flagged_pane_restores_via_its_start_command_with_the_resume_session_id() {
 #[test]
 fn a_restart_passes_the_continuation_prompt_to_a_resumed_claude() {
     let (tree, pane_id) = tree_with_metadata(&[("agent", "claude"), ("agent_session_id", "s-9")]);
-    let state = tree.to_persist_state();
+    let state = capture_with_alive_agent(&tree, pane_id);
 
     let factory = RecordingFactory::default();
     MuxTree::from_persist_state_with_policy(
@@ -3267,7 +3352,7 @@ fn a_restart_passes_the_continuation_prompt_to_a_resumed_claude() {
 #[test]
 fn an_empty_resume_prompt_config_injects_nothing() {
     let (tree, pane_id) = tree_with_metadata(&[("agent", "claude"), ("agent_session_id", "s-9")]);
-    let state = tree.to_persist_state();
+    let state = capture_with_alive_agent(&tree, pane_id);
 
     let factory = RecordingFactory::default();
     MuxTree::from_persist_state_with_policy(
@@ -3298,7 +3383,7 @@ fn a_parked_message_composes_into_the_continuation_prompt() {
         ("agent_session_id", "s-9"),
         ("agent_message", "awaiting 2 background agents"),
     ]);
-    let state = tree.to_persist_state();
+    let state = capture_with_alive_agent(&tree, pane_id);
 
     let factory = RecordingFactory::default();
     MuxTree::from_persist_state_with_policy(
@@ -3322,7 +3407,7 @@ fn a_parked_message_composes_into_the_continuation_prompt() {
 #[test]
 fn agents_without_a_verified_resume_prompt_shape_are_not_injected() {
     let (tree, pane_id) = tree_with_metadata(&[("agent", "codex"), ("agent_session_id", "s-9")]);
-    let state = tree.to_persist_state();
+    let state = capture_with_alive_agent(&tree, pane_id);
 
     let factory = RecordingFactory::default();
     MuxTree::from_persist_state_with_policy(

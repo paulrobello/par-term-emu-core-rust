@@ -6,6 +6,7 @@ use super::format::{
     PersistWindow, PersistWorkspace, PersistWorktreeLink, FORMAT_VERSION,
     MAX_PERSISTED_SCROLLBACK_CELLS,
 };
+use crate::mux::foreground::ProcessTable;
 use crate::mux::ids::{PaneId, SessionId, WindowId, WorkspaceId};
 use crate::mux::layout::LayoutTree;
 use crate::mux::pane::{snapshot_from_parts, PaneSnapshotParts};
@@ -150,7 +151,13 @@ impl PersistCapture {
     /// [`MuxTree::to_persist_state`] produces — sessions in id order so two
     /// captures of an unchanged tree differ only in their timestamps.
     pub fn capture(self) -> PersistState {
-        let table = crate::mux::foreground::ProcessTable::snapshot();
+        self.capture_with_table(crate::mux::foreground::ProcessTable::snapshot())
+    }
+
+    /// [`Self::capture`] with an explicit process table — the test seam
+    /// (the real snapshot reads the host's process table; the gate's
+    /// verdict must be deterministic in tests).
+    pub(crate) fn capture_with_table(self, table: Option<ProcessTable>) -> PersistState {
         let mut workspaces: Vec<PersistWorkspace> = self
             .workspaces
             .into_iter()
@@ -173,59 +180,84 @@ impl PersistCapture {
             })
             .collect();
         workspaces.sort_by_key(|workspace| workspace.id);
-        let mut sessions: Vec<PersistSession> = self
-            .sessions
-            .into_iter()
-            .map(|session| PersistSession {
-                id: session.id.0,
-                name: session.name,
-                active_window_index: session.active,
-                env: session.env,
-                windows: session
-                    .windows
-                    .into_iter()
-                    .map(|window| PersistWindow {
-                        id: window.id.0,
-                        name: window.name,
-                        cols: window.cols,
-                        rows: window.rows,
-                        active_pane: window.active_pane.0,
-                        layout: window.layout,
-                        panes: window
-                            .panes
-                            .into_iter()
-                            .map(|mut pane| {
-                                if let Some(agent) = &mut pane.agent_session {
-                                    resolve_agent_env(
-                                        &table,
-                                        agent,
-                                        pane.child_pid,
-                                        &pane.agent_env,
-                                    );
-                                }
-                                PersistPane {
-                                    id: pane.id.0,
-                                    terminal: cap_persisted_scrollback(snapshot_from_parts(
-                                        &pane.parts,
-                                    )),
-                                    spawn_command: pane.spawn_command,
-                                    user_title: pane.user_title,
-                                    agent_session: pane.agent_session,
-                                    cwd: pane
-                                        .parts
-                                        .cwd()
-                                        .map(|dir| dir.to_string_lossy().into_owned()),
-                                    cwd_host: pane.parts.cwd_host(),
-                                    dead: pane.dead,
-                                    exit_code: pane.exit_code,
-                                    restore_start_command: pane.restore_start_command,
-                                }
-                            })
-                            .collect(),
-                    })
-                    .collect(),
-            })
-            .collect();
+        let mut sessions: Vec<PersistSession> =
+            self.sessions
+                .into_iter()
+                .map(|session| PersistSession {
+                    id: session.id.0,
+                    name: session.name,
+                    active_window_index: session.active,
+                    env: session.env,
+                    windows: session
+                        .windows
+                        .into_iter()
+                        .map(|window| PersistWindow {
+                            id: window.id.0,
+                            name: window.name,
+                            cols: window.cols,
+                            rows: window.rows,
+                            active_pane: window.active_pane.0,
+                            layout: window.layout,
+                            panes: window
+                                .panes
+                                .into_iter()
+                                .map(|mut pane| {
+                                    // The resurrect gate (Paul, 2026-10-31): a
+                                    // hook claim whose agent the process table
+                                    // PROVES gone from the pane's tree must not
+                                    // ride the save — restore would re-launch a
+                                    // finished session. Mismatch only: Unknown
+                                    // (Windows, unreadable argv, mid-exit race)
+                                    // keeps the claim, the resume stays
+                                    // best-effort. A held-dead pane skips the
+                                    // gate: it never resumes (ARC-114), its
+                                    // stale child pid proves nothing, and its
+                                    // claim only carries identity for the
+                                    // roster.
+                                    if let Some(agent) =
+                                        pane.agent_session.as_ref().filter(|_| !pane.dead)
+                                    {
+                                        let alive = table.as_ref().zip(pane.child_pid).map(
+                                            |(table, root)| table.agent_alive(root, &agent.agent),
+                                        );
+                                        if matches!(
+                                            alive,
+                                            Some(crate::mux::foreground::Liveness::Mismatch)
+                                        ) {
+                                            pane.agent_session = None;
+                                        }
+                                    }
+                                    if let Some(agent) = &mut pane.agent_session {
+                                        resolve_agent_env(
+                                            &table,
+                                            agent,
+                                            pane.child_pid,
+                                            &pane.agent_env,
+                                        );
+                                    }
+                                    PersistPane {
+                                        id: pane.id.0,
+                                        terminal: cap_persisted_scrollback(snapshot_from_parts(
+                                            &pane.parts,
+                                        )),
+                                        spawn_command: pane.spawn_command,
+                                        user_title: pane.user_title,
+                                        agent_session: pane.agent_session,
+                                        cwd: pane
+                                            .parts
+                                            .cwd()
+                                            .map(|dir| dir.to_string_lossy().into_owned()),
+                                        cwd_host: pane.parts.cwd_host(),
+                                        dead: pane.dead,
+                                        exit_code: pane.exit_code,
+                                        restore_start_command: pane.restore_start_command,
+                                    }
+                                })
+                                .collect(),
+                        })
+                        .collect(),
+                })
+                .collect();
         sessions.sort_by_key(|session| session.id);
 
         PersistState {

@@ -7,6 +7,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+- **mux: a daemon restart no longer resurrects agents that had already exited** (card 01a1938dc4, Paul-reported; `crates/par-mux/src/mux/persist/save.rs`, `crates/par-mux/src/mux/persist/{tests.rs,serde_tests.rs}`, `crates/par-mux/tests/{mux_agents.rs,mux_restart.rs}`): the save-side D6.3 resume path persisted every hook claim's resume identity, so a restart re-launched agents whose process was long gone (measured 2026-10-31: four panes came back as live Claude sessions whose agents had exited before the restart). The capture now gates the claim on the process table it already snapshots: an agent the table PROVES gone from the pane's tree (every argv readable, none matching) drops the claim — restore respawns the pane's plain start command. `Unknown` (Windows, unreadable argv, a mid-exit race) and held-dead panes keep today's behavior; live agents still resume. Capture-side agent tests pin the gate through an injected process table (`capture_with_alive_agent`); the two integration fixtures that reported synthetic claims now run a real argv0-matching process in the pane. Pinned red-first by `a_claim_whose_agent_is_provably_dead_does_not_persist_for_resume`, the alive/no-table controls, and `a_restart_resumes_the_agent_session_rather_than_starting_fresh`.
+
 ## [0.75.0] - 2026-10-31
 
 ### Changed

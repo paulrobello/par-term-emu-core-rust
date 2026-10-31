@@ -145,11 +145,15 @@ fn the_agent_arc_lives_and_dies_with_the_daemon() {
     let path = fixture.socket();
     let state_path = fixture.state_path();
 
-    // First daemon: a pane, driven by the ported herdr script.
+    // First daemon: a pane, driven by the ported herdr script. The pane's
+    // child wears the claimed agent's argv (`exec -a kimi`): the save-side
+    // resurrect gate persists a hook claim only when the process table
+    // proves the agent alive in the pane's tree, and the save below asserts
+    // the identity travels.
     let mut first = spawn_daemon(&fixture);
     wait_listening(path);
     let mut control = Control::connect(path);
-    control.command("new-session -s agents");
+    control.command("new-session -s agents -- /bin/sh -c 'exec -a kimi sleep 300'");
     let pane = control
         .body_lines("list-panes")
         .first()

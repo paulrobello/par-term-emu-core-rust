@@ -61,7 +61,8 @@ fn non_agent_envelope_carries_no_agent_session_key() {
     pane.set_metadata("agent_state", "working");
     pane.set_metadata("agent_state_source", "hook");
 
-    let json = serde_json::to_string(&tree.to_persist_state()).expect("serializes");
+    let json = serde_json::to_string(&super::tests::capture_with_alive_agent(&tree, pane_id))
+        .expect("serializes");
     let revived: PersistState = serde_json::from_str(&json).expect("deserializes");
     assert_eq!(
         revived.sessions[0].windows[0].panes[0].agent_session,
