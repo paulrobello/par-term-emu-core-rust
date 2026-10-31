@@ -6,6 +6,7 @@
 //! ([`Serving::serve`], which also tears the registry entry down).
 
 use par_mux::mux::config::{self, EffectiveConfig};
+use std::io::IsTerminal;
 
 use super::{effective, update_cli, Cli};
 
@@ -176,7 +177,29 @@ pub(super) fn run_daemon(
     // and a flock lives as long as any fd to that description does), and
     // releases on exit, so the --stop/--restart handoff re-acquires
     // inside the retry window.
-    let _state_lock = par_mux::mux::persist::acquire_state_lock(&launch.state_path)?;
+    let _state_lock = match par_mux::mux::persist::acquire_state_lock(&launch.state_path) {
+        Ok(lock) => lock,
+        Err(err) => {
+            // The autostart agent launches the bundle bare (`--foreground`,
+            // no NAME, no tty; launchd KeepAlive only on nonzero exit):
+            // when a daemon already serves the socket, the refusal must
+            // exit 0 or every relaunch repeats the launcher's TCC probe —
+            // the 2026-10-31 prompt storm. A named start (verb or NAME
+            // form; merge_verb folds both into cli.name) keeps the loud
+            // refusal.
+            let autostart_noop = launch.cli.name.is_none()
+                && launch.cli.foreground
+                && !std::io::stdin().is_terminal();
+            if autostart_noop && par_mux::mux::connect_local_stream(&launch.path).is_ok() {
+                eprintln!(
+                    "par-mux: a daemon is already serving on {}; nothing to start",
+                    launch.path.display()
+                );
+                return Ok(std::process::ExitCode::SUCCESS);
+            }
+            return Err(err);
+        }
+    };
 
     // Nested-daemon guard, on the path that actually serves: a daemon
     // started from inside a pane (PAR_MUX_ENV=1) would shadow the outer

@@ -271,8 +271,9 @@ app:
 		codesign --force --timestamp --options runtime --entitlements crates/par-mux/app/Par-mux.entitlements --sign "$$ID" build/Par-mux.app/Contents/MacOS/Par-mux && \
 		codesign --force --timestamp --options runtime --entitlements crates/par-mux/app/Par-mux.entitlements --sign "$$ID" build/Par-mux.app; \
 	else \
-		echo "WARNING: no Developer ID identity in keychain; leaving bundle ad-hoc signed — TCC grants (screen recording, microphone, local network) reset on every rebuild"; \
-		codesign --force -s - build/Par-mux.app; \
+		echo "ERROR: no Developer ID identity in keychain; refusing to build the bundle ad-hoc" >&2; \
+		echo "(ad-hoc signatures void TCC grants on every rebuild and cannot hold a stored deny)" >&2; \
+		exit 1; \
 	fi
 	plutil -lint build/Par-mux.app/Contents/Info.plist
 

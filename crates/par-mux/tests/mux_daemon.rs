@@ -3077,7 +3077,9 @@ fn a_following_client_reconstructs_the_switched_window_screen() {
 /// state file refuses instead of racing the first's saves. The lock fires
 /// before bind, so even a load-stalled first daemon — whose socket looks
 /// dead to a prober — cannot gain a twin writer; the refusal names the
-/// holder's pid and the first daemon keeps serving.
+/// holder's pid and the first daemon keeps serving. The explicit `start`
+/// shape is what stays loud: the bare autostart/app-launch shape exits 0
+/// quietly (see `bare_headless_start_when_a_daemon_serves_exits_zero`).
 #[ignore = "load-sensitive: PTY/timing suite; run via make test-rust-sensitive or checkall-ci"]
 #[test]
 #[cfg(unix)]
@@ -3090,6 +3092,88 @@ fn second_daemon_refuses_an_occupied_state_file() {
     let state_dir = dir.path().join("state");
     let bin = env!("CARGO_BIN_EXE_par-mux");
     let stderr_path = dir.path().join("refusal.stderr");
+
+    let serve = |args: &[&str], stderr_to: &std::path::Path| {
+        let mut cmd = std::process::Command::new(bin);
+        cmd.args(args)
+            .env_remove("PAR_MUX_ENV")
+            .stderr(std::fs::File::create(stderr_to).expect("stderr file"))
+            .stdout(std::process::Stdio::null());
+        cmd.spawn().expect("the daemon spawns")
+    };
+
+    // The first daemon claims the state and serves.
+    let mut first = serve(
+        &[
+            "--foreground",
+            "--socket",
+            socket.to_str().expect("utf8 socket"),
+            "--state-dir",
+            state_dir.to_str().expect("utf8 state"),
+        ],
+        &dir.path().join("first.stderr"),
+    );
+    wait_listening(&socket);
+    let stream = connect_local_stream(&socket).expect("the first daemon serves");
+    let mut writer = stream.try_clone().expect("clone");
+    let mut reader = BufReader::new(stream);
+    let reply = command(&mut writer, &mut reader, "new-session -s keepalive").join("");
+    assert!(!reply.contains("%error"), "keepalive session: {reply}");
+
+    // The second explicit start on the same state refuses before binding
+    // anything: an operator asking for a daemon by name gets the refusal.
+    let mut second = serve(
+        &[
+            "start",
+            "locked",
+            "--foreground",
+            "--socket",
+            socket.to_str().expect("utf8 socket"),
+            "--state-dir",
+            state_dir.to_str().expect("utf8 state"),
+        ],
+        &stderr_path,
+    );
+    let refusal = second.wait().expect("the refused start exits").code();
+    assert_eq!(refusal, Some(1), "the refusal exits non-zero: {refusal:?}");
+    let refused = std::fs::read_to_string(&stderr_path).expect("refusal stderr");
+    assert!(
+        refused.contains("already served by another daemon"),
+        "the refusal names the situation: {refused}"
+    );
+
+    // The first daemon never noticed: it still serves, and its state file
+    // has had exactly one writer throughout.
+    let reply = command(&mut writer, &mut reader, "list-sessions").join("");
+    assert!(
+        !reply.contains("%error") && reply.contains("keepalive"),
+        "the first daemon keeps serving through the refusal: {reply}"
+    );
+
+    // Teardown: stop the first daemon through its control socket.
+    let reply = command(&mut writer, &mut reader, "kill-server").join("");
+    assert!(!reply.contains("%error"), "kill-server: {reply}");
+    let _ = first.wait();
+}
+
+/// Card 01a1939a: the launchd autostart agent relaunches the bundle bare
+/// (`--foreground`, no tty, KeepAlive only on nonzero exit). When a daemon
+/// already serves, that start must exit 0 — a refusal relaunches the agent
+/// and every cycle repeats the launcher's TCC probe (the 2026-10-31 prompt
+/// storm). The quiet path proves the socket serves and leaves the first
+/// daemon as the only writer.
+#[ignore = "load-sensitive: PTY/timing suite; run via make test-rust-sensitive or checkall-ci"]
+#[test]
+#[cfg(unix)]
+fn bare_headless_start_when_a_daemon_serves_exits_zero() {
+    let dir = tempfile::Builder::new()
+        .prefix("par-mux-autostart-")
+        .tempdir()
+        .expect("tempdir");
+    let socket = dir.path().join("autostart.sock");
+    let state_dir = dir.path().join("state");
+    let bin = env!("CARGO_BIN_EXE_par-mux");
+    let stderr_path = dir.path().join("noop.stderr");
 
     let serve = |stderr_to: &std::path::Path| {
         std::process::Command::new(bin)
@@ -3107,7 +3191,7 @@ fn second_daemon_refuses_an_occupied_state_file() {
             .expect("the daemon spawns")
     };
 
-    // The first daemon claims the state and serves.
+    // The first daemon claims the state and serves a session.
     let mut first = serve(&dir.path().join("first.stderr"));
     wait_listening(&socket);
     let stream = connect_local_stream(&socket).expect("the first daemon serves");
@@ -3116,22 +3200,21 @@ fn second_daemon_refuses_an_occupied_state_file() {
     let reply = command(&mut writer, &mut reader, "new-session -s keepalive").join("");
     assert!(!reply.contains("%error"), "keepalive session: {reply}");
 
-    // The second start on the same state refuses before binding anything.
-    let mut second = serve(&stderr_path);
-    let refusal = second.wait().expect("the refused start exits").code();
-    assert_eq!(refusal, Some(1), "the refusal exits non-zero: {refusal:?}");
-    let refused = std::fs::read_to_string(&stderr_path).expect("refusal stderr");
+    // The bare autostart shape on the same state exits 0 quietly.
+    let mut noop = serve(&stderr_path);
+    let code = noop.wait().expect("the noop start exits").code();
+    assert_eq!(code, Some(0), "the autostart noop exits zero: {code:?}");
+    let noop_stderr = std::fs::read_to_string(&stderr_path).expect("noop stderr");
     assert!(
-        refused.contains("already served by another daemon"),
-        "the refusal names the situation: {refused}"
+        noop_stderr.contains("already serving"),
+        "the noop start says why it exited: {noop_stderr}"
     );
 
-    // The first daemon never noticed: it still serves, and its state file
-    // has had exactly one writer throughout.
+    // The first daemon never noticed: it still serves, one writer throughout.
     let reply = command(&mut writer, &mut reader, "list-sessions").join("");
     assert!(
         !reply.contains("%error") && reply.contains("keepalive"),
-        "the first daemon keeps serving through the refusal: {reply}"
+        "the first daemon keeps serving through the noop: {reply}"
     );
 
     // Teardown: stop the first daemon through its control socket.
