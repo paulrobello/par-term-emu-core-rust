@@ -640,14 +640,27 @@ fn agent_hook_arms(action: &AgentHookAction) -> [(&'static str, Arm); 12] {
         AgentHookAction::Install => [
             ("claude", || {
                 let r = integ::install_claude_hook()?;
+                let mod_note = match &r.mod_path {
+                    Some(path) => format!(
+                        " + mod {} ({})",
+                        path.display(),
+                        if r.mod_settings_changed {
+                            "settings updated"
+                        } else {
+                            "already present"
+                        }
+                    ),
+                    None => String::new(),
+                };
                 Ok(format!(
-                    "{} (settings {})",
+                    "{} (settings {}){}",
                     r.hook_path.display(),
                     if r.settings_changed {
                         "updated"
                     } else {
                         "already present"
-                    }
+                    },
+                    mod_note
                 ))
             }),
             ("codex", || {
@@ -690,7 +703,9 @@ fn agent_hook_arms(action: &AgentHookAction) -> [(&'static str, Arm); 12] {
         AgentHookAction::Uninstall => [
             ("claude", || {
                 let r = integ::uninstall_claude_hook()?;
-                Ok(arm_summary(r.settings_changed || r.hook_removed))
+                Ok(arm_summary(
+                    r.settings_changed || r.hook_removed || r.mod_removed,
+                ))
             }),
             ("codex", || {
                 let r = integ::uninstall_codex_hook()?;

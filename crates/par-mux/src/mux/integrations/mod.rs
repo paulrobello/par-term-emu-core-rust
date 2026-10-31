@@ -38,6 +38,7 @@
 //! compile and are asserted on every platform.
 
 mod claude;
+mod claude_mod;
 mod codex;
 mod config_hooks;
 pub mod extensions;
@@ -53,6 +54,10 @@ pub use claude::{
     claude_settings_path, heal_claude_hook_asset, install_claude_hook, install_claude_hook_into,
     uninstall_claude_hook, uninstall_claude_hook_into, ClaudeHookInstall, ClaudeHookUninstall,
     CLAUDE_HOOK_MARKER,
+};
+pub use claude_mod::{
+    heal_claude_mod, install_claude_mod_into, uninstall_claude_mod_into, ClaudeModUninstall,
+    CLAUDE_MOD_MARKER,
 };
 pub use codex::{
     codex_config_dir, heal_codex_hook_asset, install_codex_hook, install_codex_hook_into,
@@ -82,6 +87,7 @@ pub use muse::{
 /// are ever written — the agents' config files are never touched.
 pub fn heal_hook_assets() {
     claude::heal_claude_hook_asset();
+    claude_mod::heal_claude_mod();
     codex::heal_codex_hook_asset();
     muse::heal_muse_hook_asset();
     for arm in CONFIG_HOOK_ARMS {
@@ -211,6 +217,11 @@ pub fn hook_status() -> Vec<AgentHookStatus> {
             claude::hook_asset_state(),
         ),
         (
+            "claude-mod",
+            claude_mod::claude_mod_installed(),
+            claude_mod::claude_mod_asset_state(),
+        ),
+        (
             "codex",
             codex::codex_hook_installed(),
             codex::hook_asset_state(),
@@ -295,6 +306,7 @@ pub fn update_outdated_integrations() -> (Vec<String>, Vec<String>) {
         skill,
         &mut |name| match name {
             "claude" => claude::install_claude_hook().map(|_| ()),
+            "claude-mod" => claude_mod::install_claude_mod().map(|_| ()),
             "codex" => codex::install_codex_hook().map(|_| ()),
             "grok" => grok::install_grok_hook().map(|_| ()),
             "muse" => muse::install_muse_hook().map(|_| ()),
@@ -926,7 +938,7 @@ fn find_flat_cut_in(
 /// Apply `next_cut` until it finds nothing, one span per pass, each span
 /// computed against the text it is cut from. Returns the cut text and
 /// whether any cut happened.
-fn apply_cuts(
+pub(crate) fn apply_cuts(
     content: &str,
     mut next_cut: impl FnMut(&str) -> io::Result<Option<Range>>,
 ) -> io::Result<(String, bool)> {
@@ -1106,7 +1118,7 @@ fn find_next_empty_container_cut(
 
 /// The cut span for the named property, including one adjacent separator
 /// comma — same rule as element cuts.
-fn property_cut(properties: &[jsonc_parser::ast::ObjectProp<'_>], name: &str) -> Range {
+pub(crate) fn property_cut(properties: &[jsonc_parser::ast::ObjectProp<'_>], name: &str) -> Range {
     let Some(index) = properties
         .iter()
         .position(|property| prop_name_text(&property.name) == Some(name))
@@ -1194,7 +1206,11 @@ fn desired_after_removal(mut value: JsonValue, entries: &[(&str, &str)]) -> Json
     value
 }
 
-fn verify_update(updated: String, settings_path: &Path, desired: &JsonValue) -> io::Result<String> {
+pub(crate) fn verify_update(
+    updated: String,
+    settings_path: &Path,
+    desired: &JsonValue,
+) -> io::Result<String> {
     let actual = parse_serde(&updated, settings_path)?;
     if &actual != desired {
         return Err(io::Error::other(format!(
@@ -1207,7 +1223,7 @@ fn verify_update(updated: String, settings_path: &Path, desired: &JsonValue) -> 
 
 // --- text-splice machinery (ported from herdr's claude integration) ---
 
-fn append_object_property(
+pub(crate) fn append_object_property(
     content: &str,
     object: &AstObject<'_>,
     name: &str,
@@ -1519,7 +1535,7 @@ mod tests {
     /// out-of-date detection alone.
     #[test]
     fn every_bundled_asset_carries_a_parseable_version() {
-        let assets: [(&str, &str); 17] = [
+        let assets: [(&str, &str); 18] = [
             (
                 "droid sh",
                 include_str!("../../../integrations/hooks/par-mux-droid-session-hook.sh"),
@@ -1579,6 +1595,10 @@ mod tests {
             (
                 "pi extension",
                 include_str!("../../../integrations/extensions/par-mux-agent-state.ts"),
+            ),
+            (
+                "agent-state register.tsx",
+                include_str!("../../../integrations/mods/agent-state/hooks/register.tsx"),
             ),
             (
                 "omp extension",

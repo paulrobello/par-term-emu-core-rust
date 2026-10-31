@@ -1,0 +1,10 @@
+{
+  "name": "agent-state",
+  "version": "0.1.0",
+  "description": "Reports question/background-work state to par-mux so the roster shows truth instead of a stale working dot",
+  "types": "./types/index.d.ts",
+  "author": {
+    "name": "Paul Robello",
+    "email": "probello@gmail.com"
+  }
+}

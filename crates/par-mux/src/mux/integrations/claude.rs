@@ -58,6 +58,13 @@ pub struct ClaudeHookInstall {
     /// Whether the settings file changed (false = our entry was already
     /// present; the asset is still refreshed).
     pub settings_changed: bool,
+    /// The agent-state mod folder the install wrote (same install; the
+    /// mod complements the script with live state truth). None only when
+    /// the hook path has no parent chain, which hook_asset_path never
+    /// produces.
+    pub mod_path: Option<PathBuf>,
+    /// Whether the mod install changed the settings (the env merge).
+    pub mod_settings_changed: bool,
 }
 
 /// Outcome of a claude hook uninstall.
@@ -71,6 +78,8 @@ pub struct ClaudeHookUninstall {
     pub settings_changed: bool,
     /// Whether the hook script asset was actually ours to delete.
     pub hook_removed: bool,
+    /// Whether the agent-state mod folder was actually ours to delete.
+    pub mod_removed: bool,
 }
 
 /// Resolve the claude settings path (`$CLAUDE_CONFIG_DIR` honored, else
@@ -179,10 +188,17 @@ pub fn install_claude_hook_into(
         save_settings(settings_path, &current)?;
     }
 
+    // The agent-state mod rides the same install: folder + the settings
+    // env merge, via the shared arm.
+    let mod_dir = super::claude_mod::mod_dir_for(hook_path);
+    let mod_settings_changed = super::claude_mod::install_claude_mod_into(settings_path, &mod_dir)?;
+
     Ok(ClaudeHookInstall {
         settings_path: settings_path.to_path_buf(),
         hook_path: hook_path.to_path_buf(),
         settings_changed,
+        mod_path: Some(mod_dir),
+        mod_settings_changed,
     })
 }
 
@@ -213,11 +229,17 @@ pub fn uninstall_claude_hook_into(
 
     let hook_removed = remove_marked_file(hook_path, CLAUDE_HOOK_MARKER)?;
 
+    let mod_uninstall = super::claude_mod::uninstall_claude_mod_into(
+        settings_path,
+        &super::claude_mod::mod_dir_for(hook_path),
+    )?;
+
     Ok(ClaudeHookUninstall {
         settings_path: settings_path.to_path_buf(),
         hook_path: hook_path.to_path_buf(),
         settings_changed,
         hook_removed,
+        mod_removed: mod_uninstall.mod_removed,
     })
 }
 

@@ -1566,6 +1566,7 @@ fn agent_hooks_status_prints_one_line_per_agent_without_a_daemon() {
     let lines: Vec<&str> = run.stdout.lines().collect();
     let agents = [
         "claude",
+        "claude-mod",
         "codex",
         "grok",
         "muse",
@@ -1972,8 +1973,8 @@ fn machine_relay_builds_the_ssh_invocation() {
 }
 
 /// `--integration-status` covers every bundled asset in one grammar: the
-/// hook lines (4 own-config agents + the 8 registry arms), the two
-/// extension lines, and the skill line, each
+/// hook lines (4 own-config agents + the 8 registry arms + the claude-mod
+/// row), the two extension lines, and the skill line, each
 /// `<kind> <name> installed|absent [currency]`.
 #[ignore = "load-sensitive: PTY/timing suite; run via make test-rust-sensitive or checkall-ci"]
 #[test]
@@ -1982,7 +1983,7 @@ fn integration_status_covers_hooks_extensions_and_skill() {
 
     assert_eq!(run.code, Some(0), "stderr: {}", run.stderr);
     let lines: Vec<&str> = run.stdout.lines().collect();
-    assert_eq!(lines.len(), 15, "one line per asset: {:?}", run.stdout);
+    assert_eq!(lines.len(), 16, "one line per asset: {:?}", run.stdout);
     let kinds: Vec<&str> = lines
         .iter()
         .map(|line| line.split(' ').next().unwrap_or(""))
@@ -1992,9 +1993,10 @@ fn integration_status_covers_hooks_extensions_and_skill() {
         .map(|line| line.split(' ').nth(1).unwrap_or(""))
         .collect();
     assert_eq!(
-        names[..12],
+        names[..13],
         [
             "claude",
+            "claude-mod",
             "codex",
             "grok",
             "muse",
@@ -2013,6 +2015,7 @@ fn integration_status_covers_hooks_extensions_and_skill() {
     assert_eq!(
         kinds,
         [
+            "hook",
             "hook",
             "hook",
             "hook",
