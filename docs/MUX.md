@@ -1351,6 +1351,34 @@ Two mismatching ticks (not interrupted by a proven match) clear the whole claim 
 
 One constraint follows from the argv match: an agent launched through a STAND-IN program whose argv carries no agent-name component — pi's or omp's `-x <program>` runs the named program in the pane instead of the agent CLI — can never match, so its claim is released after the two mismatching ticks however healthy the stand-in is. Name the stand-in after its agent and the sweep holds the claim: `pi -x 'sh -c "exec -a pi <program>"'` sets argv[0] to `pi`, which the label match takes verbatim.
 
+## OpenTelemetry metrics
+
+The daemon can export OTLP metrics to par-obs (kanban 01a18d2606). Off by default at two levels: the `otel` cargo feature must be compiled in (`cargo build -p par-mux --features mux-bin,otel`; the default build carries no OpenTelemetry code or deps — `make mux-otel-check` keeps both true), and the runtime gate must be on (`--otel-enabled` / `PAR_MUX_OTEL_ENABLED`). With the feature built but the gate off, a daemon serves exactly as before — the instruments are the SDK's no-ops.
+
+The five settings ride clap `env =` attributes (flag beats env, like the streamer's set in docs/STREAMING.md):
+
+| Env var | Flag | Meaning |
+|---|---|---|
+| `PAR_MUX_OTEL_ENABLED` | `--otel-enabled` | Export OpenTelemetry metrics over OTLP (default off; zero OTLP calls when off) |
+| `PAR_MUX_OTEL_ENDPOINT` | `--otel-endpoint` | OTLP collector endpoint (default `http://127.0.0.1:4317` for gRPC; with `--otel-protocol http`, the full `/v1/metrics` URL) |
+| `PAR_MUX_OTEL_PROTOCOL` | `--otel-protocol` | OTLP exporter transport: `grpc` (default) or `http` (protobuf POSTed to the full endpoint URL, e.g. a CF-Access-fronted collector) |
+| `PAR_MUX_OTEL_HEADERS` | `--otel-headers` | Newline-separated `Key: Value` headers attached to HTTP OTLP exports (e.g. CF-Access service-token pair + `Authorization: Bearer`); never logged |
+| `PAR_MUX_OTEL_SERVICE_NAME` | `--otel-service-name` | OTel `service.name` resource attribute (default `par-mux`) |
+
+Exported series (prefix `ptec.mux.`, meter `par-mux`): `ptec.mux.sessions`, `ptec.mux.panes`, `ptec.mux.connected_clients` (live counts, folded into the gauges by the cadence worker once a second — restore-proof, so a restarted daemon re-reports its full tree on the first sync), `ptec.mux.daemon_starts` (one per daemon process that starts with metrics enabled), `ptec.mux.client_connections` (control-socket connections accepted), `ptec.mux.client_attaches` (`%client-attached` announcements — clients that registered their view).
+
+Pointing a daemon at par-obs's obs-ingest (the CF-Access-fronted collector):
+
+```
+par-mux --otel-enabled \
+  --otel-protocol http \
+  --otel-endpoint https://obs-ingest.pardev.net/v1/metrics \
+  --otel-headers "$(parvault get obs-ingest-headers)" \
+  --otel-service-name par-mux
+```
+
+Export failures are reported on the daemon's stderr, first consecutive failure and every 30th after; a failed endpoint never affects serving. Provider shutdown flushes the final window after the serve loop returns.
+
 ## Self-Update and Installers
 
 `par-mux update [--channel stable|preview] [--check]` uses the shared checksum-required engine described in [Binary Updates](#binary-updates). Stable selects the latest release, while preview selects the newest prerelease and falls back to stable when none exists. The archive SHA-256 must match the exact filename's entry in the release checksum list before extraction or replacement. The old image is retained as `<executable>.previous`. Restart uses the same-socket stop-and-restore handoff (D3.5), not live PTY transfer (D10). `--check` reports only. Missing assets, missing checksums, and corrupt downloads fail closed. The network uses `curl`, with HTTPS-only redirects, timeouts, and response size limits. `--machine` refuses `update` because updates manage the machine they run on.

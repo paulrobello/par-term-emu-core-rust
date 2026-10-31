@@ -696,6 +696,12 @@ impl MuxTree {
         self.sessions.keys().copied().collect()
     }
 
+    /// How many panes the tree holds, dead panes included (remain-on-exit
+    /// holds and keep-one-tab are pane counts a dashboard wants to see).
+    pub fn pane_count(&self) -> usize {
+        self.panes.len()
+    }
+
     /// Look up a session.
     pub fn session(&self, id: SessionId) -> Option<&MuxSession> {
         self.sessions.get(&id)

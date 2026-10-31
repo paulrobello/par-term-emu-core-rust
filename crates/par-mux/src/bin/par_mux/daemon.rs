@@ -109,6 +109,9 @@ struct Serving {
     path: std::path::PathBuf,
     state_path: std::path::PathBuf,
     registry_base: std::path::PathBuf,
+    /// The OTLP meter provider's guard (kanban 01a18d2606). `None` without
+    /// the `otel` cargo feature or with the runtime gate off.
+    otel_guard: Option<par_mux::mux::metrics::OtelGuard>,
 }
 
 /// The daemon modes: --stop, --restart, and serving the socket — detached
@@ -338,6 +341,33 @@ impl DaemonLaunch {
             state_path,
             ..
         } = self;
+        // Kanban 01a18d2606: install the OTLP meter provider before the tree
+        // restore spawns any pane, so every instrument binds to it. Without
+        // the `otel` cargo feature (or with the runtime gate off) init is
+        // the stub's None and nothing changes. The guard rides Serving so
+        // the final export window is shut down explicitly after the serve
+        // loop returns — the drop path can lose it.
+        let otel_protocol = par_mux::mux::metrics::OtelProtocol::parse(&cli.otel_protocol)
+            .unwrap_or_else(|| {
+                eprintln!(
+                    "par-mux: invalid --otel-protocol '{}' (expected grpc|http); using grpc",
+                    cli.otel_protocol
+                );
+                par_mux::mux::metrics::OtelProtocol::Grpc
+            });
+        let otel_guard = par_mux::mux::metrics::init(
+            cli.otel_enabled,
+            otel_protocol,
+            &cli.otel_endpoint,
+            par_mux::mux::metrics::parse_otlp_headers(&cli.otel_headers),
+            &cli.otel_service_name,
+        );
+        if otel_guard.is_some() {
+            log::info!(
+                "par-mux: OpenTelemetry OTLP metrics enabled ({})",
+                cli.otel_endpoint
+            );
+        }
         // D3.2/D3.3: a corrupt or unknown-version state file is quarantined
         // aside and the daemon starts fresh — unreadable state never blocks
         // startup. A readable state is REBUILT (D3.5): layout and content are
@@ -443,6 +473,7 @@ impl DaemonLaunch {
             path,
             state_path,
             registry_base,
+            otel_guard,
         })
     }
 }
@@ -455,6 +486,7 @@ impl Serving {
             path,
             state_path,
             registry_base,
+            otel_guard,
         } = self;
         // A clean SIGTERM saves on the way out (Task 3.5): the handler requests
         // shutdown with one atomic store (async-signal-safe), the accept loop
@@ -478,6 +510,12 @@ impl Serving {
         // failed unlink must not fail a clean shutdown.
         if let Err(err) = par_mux::mux::discovery::unregister(&registry_base, &path) {
             log::warn!("par-mux: could not remove the registry entry: {err}");
+        }
+        // Flush the final metrics window before the guard drops (the drop
+        // path can lose the race with process teardown — the streamer's
+        // short-lived-smoke report).
+        if let Some(guard) = &otel_guard {
+            guard.shutdown();
         }
         Ok(std::process::ExitCode::SUCCESS)
     }

@@ -30,6 +30,7 @@ pub mod ipc;
 pub mod layout;
 #[cfg(feature = "mux-bin")]
 pub mod machine_config;
+pub mod metrics;
 pub mod pane;
 pub mod pane_stream;
 pub mod persist;

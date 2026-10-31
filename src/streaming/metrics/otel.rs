@@ -158,7 +158,7 @@ impl<E: PushMetricExporter> ReportingExporter<E> {
     /// Whether the n-th consecutive failure (0-based) prints. Exposed for
     /// the rate-limit test.
     fn should_report(n: u64) -> bool {
-        n % 30 == 0
+        n.is_multiple_of(30)
     }
 }
 
@@ -287,10 +287,6 @@ mod tests {
                 fail: false,
                 exports: std::sync::atomic::AtomicU64::new(0),
             }
-        }
-
-        fn exports(&self) -> u64 {
-            self.exports.load(std::sync::atomic::Ordering::SeqCst)
         }
     }
 
@@ -438,18 +434,14 @@ mod tests {
     fn sum_of(metric: &Metric, out: &mut f64) {
         use opentelemetry_sdk::metrics::data::{AggregatedMetrics, MetricData};
         match metric.data() {
-            AggregatedMetrics::I64(m) => {
-                if let MetricData::Sum(sum) = m {
-                    for p in sum.data_points() {
-                        *out += p.value() as f64;
-                    }
+            AggregatedMetrics::I64(MetricData::Sum(sum)) => {
+                for p in sum.data_points() {
+                    *out += p.value() as f64;
                 }
             }
-            AggregatedMetrics::U64(m) => {
-                if let MetricData::Sum(sum) = m {
-                    for p in sum.data_points() {
-                        *out += p.value() as f64;
-                    }
+            AggregatedMetrics::U64(MetricData::Sum(sum)) => {
+                for p in sum.data_points() {
+                    *out += p.value() as f64;
                 }
             }
             _ => {}
@@ -459,18 +451,14 @@ mod tests {
     fn hist_count(metric: &Metric, out: &mut u64) {
         use opentelemetry_sdk::metrics::data::{AggregatedMetrics, MetricData};
         match metric.data() {
-            AggregatedMetrics::F64(m) => {
-                if let MetricData::Histogram(h) = m {
-                    for p in h.data_points() {
-                        *out += p.count();
-                    }
+            AggregatedMetrics::F64(MetricData::Histogram(h)) => {
+                for p in h.data_points() {
+                    *out += p.count();
                 }
             }
-            AggregatedMetrics::U64(m) => {
-                if let MetricData::Histogram(h) = m {
-                    for p in h.data_points() {
-                        *out += p.count();
-                    }
+            AggregatedMetrics::U64(MetricData::Histogram(h)) => {
+                for p in h.data_points() {
+                    *out += p.count();
                 }
             }
             _ => {}

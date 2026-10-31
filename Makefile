@@ -595,6 +595,18 @@ otel-check:
 	if [ "$$dup" != "0" ]; then echo "ERROR: duplicate opentelemetry tree"; exit 1; fi
 	python3 scripts/check_env_docs.py --self-test
 
+# Kanban 01a18d2606: the daemon's OTLP metrics ride the par-mux member's
+# opt-in `otel` feature, which no other gate compiles — keep the feature
+# build green, run the metrics tests through an in-memory exporter, and keep
+# the default member build OTel-free.
+mux-otel-check:
+	cargo check --locked -p par-mux --features mux-bin,otel
+	cargo test --locked -p par-mux --features mux-bin,otel --lib mux::metrics::
+	@count=$$(cargo tree --no-default-features -p par-mux -e normal | grep -ci "^opentelemetry"); \
+	if [ "$$count" != "0" ]; then echo "ERROR: default par-mux build pulls opentelemetry ($$count refs)"; exit 1; fi
+	@dup=$$(cargo tree -d | grep -cE "^opentelemetry"); \
+	if [ "$$dup" != "0" ]; then echo "ERROR: duplicate opentelemetry tree"; exit 1; fi
+
 # ARC-008: the main crate's par-term-emu-derive dependency spec must name
 # derive/Cargo.toml's version (publish strips `path`, so crates.io resolves
 # the spec). Pure python3 stdlib; also runs from release-check.
@@ -727,7 +739,7 @@ audit-deps:
 	uvx --python-preference only-system pip-audit --strict -r $$reqs; \
 	status=$$?; rm -f $$reqs; exit $$status
 
-checkall: extensions-check ffi-header-check ffi-surface-check derive-version-check core-version-check version-train-check doc-hidden-check api-surface-check terminal-fields-check mux-docs-check mux-schema-check completions-check env-docs-check otel-check pinned-tests-check stub-docs-check mux-package-check rustdoc-check doc-links-check test-rust test-rust-streaming lint-check stub-check test-python test-web caps-table-check
+checkall: extensions-check ffi-header-check ffi-surface-check derive-version-check core-version-check version-train-check doc-hidden-check api-surface-check terminal-fields-check mux-docs-check mux-schema-check completions-check env-docs-check otel-check mux-otel-check pinned-tests-check stub-docs-check mux-package-check rustdoc-check doc-links-check test-rust test-rust-streaming lint-check stub-check test-python test-web caps-table-check
 	@echo ""
 	@echo "======================================================================"
 	@echo "  All code quality checks passed!"

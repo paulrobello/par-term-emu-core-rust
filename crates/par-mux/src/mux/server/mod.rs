@@ -660,6 +660,17 @@ fn run_cadence_loop(handles: &CadenceHandles) {
             for notification in crate::mux::scrape::scrape_tick(tree, engine) {
                 record_and_broadcast(tree, clients, &notification);
             }
+            // Kanban 01a18d2606: fold the live counts into the OTLP gauges
+            // on the same one-second leg (a no-op unless the otel feature
+            // is built and enabled — the stub instruments do nothing).
+            {
+                let t = tree.lock();
+                crate::mux::metrics::Metrics::global().sync_gauges(
+                    t.sessions().len() as i64,
+                    t.pane_count() as i64,
+                    clients.lock().len() as i64,
+                );
+            }
             last_scrape = std::time::Instant::now();
         }
         if last_reap.elapsed() >= REAP_INTERVAL {

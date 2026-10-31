@@ -70,6 +70,7 @@ impl Registration {
             return;
         }
         self.announced = true;
+        crate::mux::metrics::Metrics::global().client_attached();
         push_to_clients_except(
             clients,
             client_id,
@@ -105,6 +106,7 @@ pub(super) fn handle_client(
     use interprocess::local_socket::traits::Stream as _;
 
     let client_id = CLIENT_SEQ.fetch_add(1, Ordering::Relaxed);
+    crate::mux::metrics::Metrics::global().client_connected();
     // Bounded per ARC-011: a client that stops draining is evicted by
     // [`push_to_clients`] once its queue fills, rather than buffering every
     // `%output` line forever.

@@ -174,6 +174,35 @@ struct Cli {
     ])]
     no_attach: bool,
 
+    /// Export OpenTelemetry metrics over OTLP (default off; zero OTLP calls
+    /// when off — kanban 01a18d2606). Daemon-only: a --cmd client or attach
+    /// invocation ignores these flags.
+    #[arg(long, default_value = "false", env = "PAR_MUX_OTEL_ENABLED")]
+    otel_enabled: bool,
+
+    /// OTLP collector endpoint for the metrics exporter
+    #[arg(
+        long,
+        default_value = "http://127.0.0.1:4317",
+        env = "PAR_MUX_OTEL_ENDPOINT"
+    )]
+    otel_endpoint: String,
+
+    /// OTLP exporter transport: `grpc` (default) or `http` (protobuf POSTed
+    /// to the full endpoint URL — the transport CF-Access-fronted collectors
+    /// like par-obs's obs-ingest expose)
+    #[arg(long, default_value = "grpc", env = "PAR_MUX_OTEL_PROTOCOL")]
+    otel_protocol: String,
+
+    /// Newline-separated `Key: Value` headers attached to HTTP OTLP exports
+    /// (e.g. CF-Access service-token pairs). Parsed values are never logged.
+    #[arg(long, default_value = "", env = "PAR_MUX_OTEL_HEADERS")]
+    otel_headers: String,
+
+    /// OTel service.name resource attribute for exported metrics
+    #[arg(long, default_value = "par-mux", env = "PAR_MUX_OTEL_SERVICE_NAME")]
+    otel_service_name: String,
+
     /// Client mode: send one control command to the daemon on this socket,
     /// print its reply body to stdout (one line per reply line), and exit.
     /// A `%error` reply prints to stderr and exits non-zero. Never starts a
@@ -1073,6 +1102,21 @@ mod mode_group_tests {
     #[test]
     fn cli_debug_asserts() {
         Cli::command().debug_assert();
+    }
+
+    /// The OTLP flags default off and parse on the daemon Cli (kanban
+    /// 01a18d2606); the env tier (`PAR_MUX_OTEL_*`) rides clap's `env =`
+    /// attributes, so only the flag tier is pinned here.
+    #[test]
+    fn otel_flags_default_off_and_parse() {
+        let cli = Cli::try_parse_from(["par-mux"]).unwrap();
+        assert!(!cli.otel_enabled);
+        assert_eq!(cli.otel_endpoint, "http://127.0.0.1:4317");
+        assert_eq!(cli.otel_protocol, "grpc");
+        assert_eq!(cli.otel_headers, "");
+        assert_eq!(cli.otel_service_name, "par-mux");
+        let cli = Cli::try_parse_from(["par-mux", "--otel-enabled"]).unwrap();
+        assert!(cli.otel_enabled);
     }
 
     #[test]

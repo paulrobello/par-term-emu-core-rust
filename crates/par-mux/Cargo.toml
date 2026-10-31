@@ -66,6 +66,20 @@ toml_edit = { version = "0.25", optional = true }
 # dependency of the root's `streaming` feature, so the lockfile resolves the
 # same version.
 sysinfo = { version = "0.39.3", optional = true }
+# Opt-in OTLP metrics (kanban 01a18d2606): same 0.33 trio and feature set as
+# the root's `otel` feature, so the workspace keeps a single dedup'd
+# opentelemetry tree (`cargo tree -d` must stay empty).
+opentelemetry = { version = "0.33", default-features = false, optional = true }
+opentelemetry_sdk = { version = "0.33", default-features = false, features = [
+    "metrics",
+], optional = true }
+opentelemetry-otlp = { version = "0.33", default-features = false, features = [
+    "metrics",
+    "grpc-tonic",
+    "http-proto",
+    "reqwest-blocking-client",
+    "reqwest-rustls",
+], optional = true }
 
 [target.'cfg(target_os = "linux")'.dependencies]
 # logind inhibitor for the `shutdown-inhibit` feature (MUX_DECISIONS.md D9);
@@ -89,6 +103,10 @@ windows-sys = { version = "0.61", optional = true, features = [
 
 [dev-dependencies]
 tempfile = "3.27"
+# The metrics module's in-memory-exporter test (feature `otel`) — the
+# exporter lives behind the SDK's test-only `testing` feature, mirroring the
+# root crate's dev-dependency.
+opentelemetry_sdk = { version = "0.33", features = ["testing"] }
 # tests/mux_attach.rs drives the attach client through a real PTY.
 portable-pty = "0.9.0"
 # pane.rs unit test: a PNG round-trip through the kitty retention path.
@@ -112,6 +130,14 @@ attach = ["mux-bin", "dep:crossterm", "dep:ratatui", "dep:toml_edit"]
 # tree and the Linux CI budget is tight (D9 in MUX_DECISIONS.md records the trade); a build
 # that wants host-shutdown safety enables it explicitly.
 shutdown-inhibit = ["dep:zbus"]
+# Opt-in OpenTelemetry OTLP metrics for the daemon (kanban 01a18d2606,
+# patterned on the streamer's kanban-01a18331 feature): default off — no
+# other feature enables it, so default builds carry no OpenTelemetry code or
+# deps. A feature-built binary still makes zero OTLP calls unless the
+# operator opts in at runtime (`--otel-enabled` / PAR_MUX_OTEL_ENABLED). The
+# runtime gate and instrument list live in `mux/metrics.rs`; gate:
+# `make mux-otel-check`.
+otel = ["dep:opentelemetry", "dep:opentelemetry_sdk", "dep:opentelemetry-otlp"]
 
 # cargo-fuzz builds with `--cfg fuzzing` (the ENH-046 attach_input entry point).
 [lints.rust]

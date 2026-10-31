@@ -187,6 +187,11 @@ def streaming_doc_names(root: Path) -> set[str]:
     return set(re.findall(r"`(PAR_TERM_[A-Z0-9_]*)`", doc))
 
 
+def mux_doc_names(root: Path) -> set[str]:
+    doc = read(root, "docs/MUX.md")
+    return set(re.findall(r"`(PAR_MUX_[A-Z0-9_]*)`", doc))
+
+
 def expect_failure(root: Path, needle: str, what: str) -> None:
     """Run check(root), require SystemExit, and require `needle` in the report."""
     buf = io.StringIO()
@@ -217,6 +222,7 @@ def check(root: Path) -> None:
     config_rows = config_reference_rows(root)
     mux_rows = mux_pane_env_rows(root)
     stream_names = streaming_doc_names(root)
+    mux_names = mux_doc_names(root)
 
     wildcard = {row for row in config_rows if row.endswith("*")}
     if len(wildcard) > 1:
@@ -240,18 +246,21 @@ def check(root: Path) -> None:
             f"CONFIG_REFERENCE row {row}: nothing in production code reads it"
         )
 
-    # The wildcard row covers exactly the clap set, and STREAMING.md names them.
+    # The wildcard row covers exactly the PAR_TERM_* clap set (the daemon's
+    # PAR_MUX_* clap vars are MUX.md's), and STREAMING.md names them.
     if wildcard_row is not None:
         m = re.search(r"\((\d+) variables\)", read(root, "docs/CONFIG_REFERENCE.md"))
         claimed = int(m.group(1)) if m else -1
-        if claimed != len(clap):
+        term_clap = {name for name in clap if name.startswith("PAR_TERM_")}
+        if claimed != len(term_clap):
             problems.append(
                 f"CONFIG_REFERENCE wildcard row claims {claimed} PAR_TERM_* variables; "
-                f"the clap set has {len(clap)}"
+                f"the PAR_TERM_* clap set has {len(term_clap)}"
             )
-    for name in sorted(clap - stream_names):
+    for name in sorted(clap - stream_names - mux_names):
         problems.append(
             f"streamer env var {name} is not documented in docs/STREAMING.md"
+            " (or docs/MUX.md for the daemon's own set)"
         )
 
     if not clap:
