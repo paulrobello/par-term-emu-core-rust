@@ -103,12 +103,33 @@ impl ProcessTable {
     /// Whether any process in `root`'s descendant tree (root included)
     /// matches the claimed agent `label`.
     pub(crate) fn agent_alive(&self, root: u32, label: &str) -> Liveness {
+        match self.find_agent(root, label) {
+            (Some(_), _) => Liveness::Matches,
+            (None, true) => Liveness::Unknown,
+            (None, false) => Liveness::Mismatch,
+        }
+    }
+
+    /// The pid of the first process in `root`'s descendant tree (root
+    /// included) whose argv matches the claimed agent `label`. Per-process
+    /// introspection targets THIS process: the pane's direct child is
+    /// usually the shell the agent ran under, whose exec env can differ
+    /// from the agent's own.
+    pub(crate) fn agent_pid(&self, root: u32, label: &str) -> Option<i32> {
+        self.find_agent(root, label).0
+    }
+
+    /// The [`Self::agent_alive`] walk, returning the first matching pid
+    /// plus whether the walk hit an unreadable argv (a present-but-
+    /// unreadable descendant cannot be proven absent — the `Unknown`
+    /// verdict).
+    fn find_agent(&self, root: u32, label: &str) -> (Option<i32>, bool) {
         let root = root as i32;
         if !self.metas.iter().any(|meta| meta.pid == root) {
             // The pane's child is not in the table — a race with process
             // exit at worst; the pane's own running flag is the authority
             // for that, so this is Unknown, not a mismatch.
-            return Liveness::Unknown;
+            return (None, true);
         }
         let mut children: std::collections::HashMap<i32, Vec<i32>> =
             std::collections::HashMap::new();
@@ -123,7 +144,9 @@ impl ProcessTable {
                 continue;
             }
             match self.argv_of(pid) {
-                Some(argv) if argv_matches(&argv, label) => return Liveness::Matches,
+                Some(argv) if argv_matches_excluding_shell_payloads(&argv, label) => {
+                    return (Some(pid), true)
+                }
                 Some(_) => {}
                 None => unprovable = true,
             }
@@ -131,11 +154,7 @@ impl ProcessTable {
                 stack.extend(kids.iter().copied());
             }
         }
-        if unprovable {
-            Liveness::Unknown
-        } else {
-            Liveness::Mismatch
-        }
+        (None, unprovable)
     }
 
     /// The pane's foreground command name: the basename of the deepest
@@ -193,7 +212,7 @@ impl ProcessTable {
     }
 }
 
-/// Whether an argv plausibly belongs to the claimed agent's CLI.
+/// Whether an argv element plausibly belongs to the claimed agent's CLI.
 ///
 /// Agents are npm/bun-installed, so the label may appear as the direct
 /// binary (`pi`), a path component (`/…/.bun/bin/pi`), or inside a
@@ -202,21 +221,50 @@ impl ProcessTable {
 /// matching: a stray component like `pi-notes.txt` in some other
 /// command's argv keeps the claim one more tick, which only delays the
 /// clear; failing to match a live agent's CLI would drop its identity.
-pub(crate) fn argv_matches(argv: &[String], label: &str) -> bool {
+fn arg_matches(arg: &str, label: &str) -> bool {
     if label.is_empty() {
         return false;
     }
     let dash = format!("{label}-");
     let underscore = format!("{label}_");
     let dot = format!("{label}.");
-    argv.iter().any(|arg| {
-        arg.split('/').any(|component| {
-            component == label
-                || component.starts_with(&dash)
-                || component.starts_with(&underscore)
-                || component.starts_with(&dot)
-        })
+    arg.split('/').any(|component| {
+        component == label
+            || component.starts_with(&dash)
+            || component.starts_with(&underscore)
+            || component.starts_with(&dot)
     })
+}
+
+/// The walk's match rule: [`arg_matches`] over the argv EXCLUDING a
+/// shell's `-c` script payload. A payload that merely MENTIONS the label
+/// (`zsh -c "tail -f /logs/claude.log"`, whose `claude.log` hits the
+/// `claude.` suffix rule) would pin the claim to the wrapper shell — the
+/// liveness sweep could never clear it and an env capture would read the
+/// shell's env instead of the agent's. The payload is skipped, never the
+/// shell: a real agent behind the wrapper still matches as its own
+/// process (or, under `exec`, as the shell's own replaced argv).
+pub(crate) fn argv_matches_excluding_shell_payloads(argv: &[String], label: &str) -> bool {
+    if label.is_empty() {
+        return false;
+    }
+    let mut skip_next = false;
+    argv.iter().any(|arg| {
+        if skip_next {
+            skip_next = false;
+            return false;
+        }
+        if is_shell_c_flag(arg) {
+            skip_next = true;
+            return false;
+        }
+        arg_matches(arg, label)
+    })
+}
+
+/// A POSIX-shell `-c` flag: a short cluster containing `c` (`-c`, `-lc`).
+fn is_shell_c_flag(arg: &str) -> bool {
+    arg.len() >= 2 && arg.starts_with('-') && !arg.starts_with("--") && arg.contains('c')
 }
 
 // ---- Linux: /proc ----
@@ -393,12 +441,99 @@ fn snapshot_metas() -> Option<Vec<ProcMeta>> {
 /// the args of an exec'ing process).
 #[cfg(target_os = "macos")]
 fn read_argv(pid: i32) -> Option<Vec<String>> {
-    // KERN_PROCARGS2 lays out: native-endian argc, the executable path,
-    // argv[0..argc], envp… — all NUL-separated strings. The exec path is
-    // kept as the first entry (`foreground_command` names it) and all argc
-    // argv strings follow, so the result holds argc + 1 strings: keeping
-    // only argc dropped the last argument — the script path of a
-    // `node …/agent` CLI, or `$0` of an `sh -c … <name>` stand-in.
+    // The exec path rides ahead of the argv strings in the blob and is
+    // kept as the first entry (`foreground_command` names it): argc + 1
+    // strings, so keeping only argc dropped the last argument — the script
+    // path of a `node …/agent` CLI, or `$0` of an `sh -c … <name>`
+    // stand-in.
+    let (path, argv, _) = parse_procargs(&procargs_blob(pid)?)?;
+    if argv.is_empty() {
+        return None;
+    }
+    let mut argv = argv;
+    argv.insert(0, path);
+    Some(argv)
+}
+
+// ---- Other unix / Windows: inert ----
+
+#[cfg(all(not(target_os = "macos"), not(target_os = "linux"), unix))]
+fn snapshot_metas() -> Option<Vec<ProcMeta>> {
+    None
+}
+
+#[cfg(all(not(target_os = "macos"), not(target_os = "linux"), unix))]
+fn read_argv(_pid: i32) -> Option<Vec<String>> {
+    None
+}
+
+// `snapshot()` is `None` on Windows so `argv_of` never runs there, but the
+// module must still compile.
+#[cfg(windows)]
+fn read_argv(_pid: i32) -> Option<Vec<String>> {
+    None
+}
+
+/// A process's exec-time environment as `NAME=VALUE` pairs, or `None` when
+/// unreadable — same availability contract as [`read_argv`].
+#[cfg(target_os = "macos")]
+pub(crate) fn read_env(pid: i32) -> Option<EnvPairs> {
+    Some(parse_procargs(&procargs_blob(pid)?)?.2)
+}
+
+/// Linux twin of the macOS [`read_env`]: `/proc/<pid>/environ` holds the
+/// same exec-time NUL-separated block.
+#[cfg(target_os = "linux")]
+pub(crate) fn read_env(pid: i32) -> Option<EnvPairs> {
+    let bytes = std::fs::read(format!("/proc/{pid}/environ")).ok()?;
+    Some(parse_env_pairs(
+        &bytes
+            .split(|&b| b == 0)
+            .filter(|slice| !slice.is_empty())
+            .collect::<Vec<_>>(),
+    ))
+}
+
+// ---- Other unix / Windows: inert ----
+
+#[cfg(all(not(target_os = "macos"), not(target_os = "linux"), unix))]
+pub(crate) fn read_env(_pid: i32) -> Option<EnvPairs> {
+    None
+}
+
+#[cfg(windows)]
+pub(crate) fn read_env(_pid: i32) -> Option<EnvPairs> {
+    None
+}
+
+/// `NAME=VALUE` byte slices into pairs. Entries without `=` and entries
+/// that are not valid UTF-8 are skipped (the env store downstream is
+/// `String`-keyed); an empty VALUE is a real value and is kept. Real
+/// callers exist only on the platforms whose `read_env` reads a real
+/// process environment — on the inert stubs' targets this compiles for
+/// the shared test suite and is otherwise dead.
+#[cfg_attr(
+    all(not(any(target_os = "macos", target_os = "linux")), not(test)),
+    expect(dead_code)
+)]
+pub(crate) fn parse_env_pairs(parts: &[&[u8]]) -> EnvPairs {
+    parts
+        .iter()
+        .filter_map(|part| {
+            let eq = part.iter().position(|&b| b == b'=')?;
+            let name = std::str::from_utf8(&part[..eq]).ok()?;
+            let value = std::str::from_utf8(&part[eq + 1..]).ok()?;
+            Some((name.to_string(), value.to_string()))
+        })
+        .collect()
+}
+
+/// The KERN_PROCARGS2 blob for `pid`: native-endian `argc`, then the
+/// NUL-separated exec path, argv, and environment. `None` when unreadable
+/// (permissions, zombie, mid-`exec` — the fresh-spawn window where the
+/// kernel cannot yet serve the args of an exec'ing process).
+#[cfg(target_os = "macos")]
+fn procargs_blob(pid: i32) -> Option<Vec<u8>> {
     let mut mib: [libc::c_int; 3] = [libc::CTL_KERN, libc::KERN_PROCARGS2, pid];
     let mut len: libc::size_t = 0;
     // SAFETY: sizing call — `mib` holds the 3 names passed and the buffer is
@@ -433,43 +568,49 @@ fn read_argv(pid: i32) -> Option<Vec<String>> {
         return None;
     }
     buf.truncate(len);
+    Some(buf)
+}
+
+/// The KERN_PROCARGS2 blob parsed positionally into
+/// `(exec_path, argv, env)`.
+///
+/// Positional, never empty-filtered: the `argc` count is what separates
+/// argv from env, so filtering empties before slicing shifts the boundary
+/// whenever an argv element is empty (an empty argument is a real
+/// argument) and both reads then misparse — argv picks up an env entry
+/// and the env read loses entries, or the whole environment, to the
+/// clamped slice.
+#[cfg(target_os = "macos")]
+fn parse_procargs(buf: &[u8]) -> Option<(String, Vec<String>, EnvPairs)> {
     if buf.len() < 4 {
         return None;
     }
     let argc = i32::from_ne_bytes([buf[0], buf[1], buf[2], buf[3]]) as usize;
-    let mut parts: Vec<String> = buf[4..]
-        .split(|&b| b == 0)
-        .filter(|slice| !slice.is_empty())
-        .map(|slice| String::from_utf8_lossy(slice).into_owned())
-        .collect();
-    if parts.len() > argc + 1 {
-        parts.truncate(argc + 1);
+    let body = &buf[4..];
+    let path_end = body.iter().position(|&b| b == 0)?;
+    let path = String::from_utf8_lossy(&body[..path_end]).into_owned();
+    let mut pos = path_end + 1;
+    // The kernel pads the area after the exec path with NULs.
+    while pos < body.len() && body[pos] == 0 {
+        pos += 1;
     }
-    if parts.is_empty() {
-        None
-    } else {
-        Some(parts)
+    let mut argv = Vec::with_capacity(argc);
+    for _ in 0..argc {
+        let end = pos + body[pos..].iter().position(|&b| b == 0)?;
+        argv.push(String::from_utf8_lossy(&body[pos..end]).into_owned());
+        pos = end + 1;
     }
+    let env = parse_env_pairs(
+        &body[pos..]
+            .split(|&b| b == 0)
+            .filter(|slice| !slice.is_empty())
+            .collect::<Vec<_>>(),
+    );
+    Some((path, argv, env))
 }
 
-// ---- Other unix / Windows: inert ----
-
-#[cfg(all(not(target_os = "macos"), not(target_os = "linux"), unix))]
-fn snapshot_metas() -> Option<Vec<ProcMeta>> {
-    None
-}
-
-#[cfg(all(not(target_os = "macos"), not(target_os = "linux"), unix))]
-fn read_argv(_pid: i32) -> Option<Vec<String>> {
-    None
-}
-
-// `snapshot()` is `None` on Windows so `argv_of` never runs there, but the
-// module must still compile.
-#[cfg(windows)]
-fn read_argv(_pid: i32) -> Option<Vec<String>> {
-    None
-}
+/// A process environment as `NAME=VALUE` string pairs.
+pub(crate) type EnvPairs = Vec<(String, String)>;
 
 #[cfg(test)]
 mod tests {
@@ -482,17 +623,17 @@ mod tests {
     #[test]
     fn matcher_accepts_the_direct_cli_shapes() {
         // Direct argv[0], bare and as a resolved path.
-        assert!(argv_matches(
+        assert!(argv_matches_excluding_shell_payloads(
             &argv(&["pi", "--session", "/tmp/x"]).unwrap(),
             "pi"
         ));
-        assert!(argv_matches(
+        assert!(argv_matches_excluding_shell_payloads(
             &argv(&["/usr/local/bin/claude", "--resume", "id"]).unwrap(),
             "claude"
         ));
         // Interpreter-executed package: the label rides a path component
         // of a script the interpreter runs (`node …/claude-cli/cli.js`).
-        assert!(argv_matches(
+        assert!(argv_matches_excluding_shell_payloads(
             &argv(&[
                 "/usr/local/bin/node",
                 "/usr/local/lib/node_modules/@anthropic-ai/claude-cli/cli.js",
@@ -503,7 +644,7 @@ mod tests {
             "claude"
         ));
         // bun-installed script whose file name is `<label>.js`.
-        assert!(argv_matches(
+        assert!(argv_matches_excluding_shell_payloads(
             &argv(&[
                 "/opt/homebrew/bin/bun",
                 "/Users/x/.bun/install/global/node_modules/pi.js"
@@ -516,14 +657,32 @@ mod tests {
     #[test]
     fn matcher_rejects_partial_names_and_foreign_commands() {
         // `piano` is not `pi`: the suffix rules require a separator.
-        assert!(!argv_matches(&argv(&["piano", "--play"]).unwrap(), "pi"));
-        assert!(!argv_matches(&argv(&["/bin/bash", "-l"]).unwrap(), "pi"));
+        assert!(!argv_matches_excluding_shell_payloads(
+            &argv(&["piano", "--play"]).unwrap(),
+            "pi"
+        ));
+        assert!(!argv_matches_excluding_shell_payloads(
+            &argv(&["/bin/bash", "-l"]).unwrap(),
+            "pi"
+        ));
         // A login shell's argv[0] carries the leading dash — the pane's
         // shell must not satisfy any agent's claim.
-        assert!(!argv_matches(&argv(&["-bash"]).unwrap(), "bash"));
-        assert!(!argv_matches(&argv(&["vim", "notes"]).unwrap(), "pi"));
-        assert!(!argv_matches(&argv(&["sleep", "300"]).unwrap(), "pi"));
-        assert!(!argv_matches(&argv(&["sleep"]).unwrap(), ""));
+        assert!(!argv_matches_excluding_shell_payloads(
+            &argv(&["-bash"]).unwrap(),
+            "bash"
+        ));
+        assert!(!argv_matches_excluding_shell_payloads(
+            &argv(&["vim", "notes"]).unwrap(),
+            "pi"
+        ));
+        assert!(!argv_matches_excluding_shell_payloads(
+            &argv(&["sleep", "300"]).unwrap(),
+            "pi"
+        ));
+        assert!(!argv_matches_excluding_shell_payloads(
+            &argv(&["sleep"]).unwrap(),
+            ""
+        ));
     }
 
     #[test]
@@ -531,7 +690,7 @@ mod tests {
         // A `pi-notes.txt` component in some other command's argv keeps the
         // claim — the deliberate toward-matching bias: it only delays the
         // clear, while the opposite error would drop a live claim.
-        assert!(argv_matches(
+        assert!(argv_matches_excluding_shell_payloads(
             &argv(&["vim", "/tmp/pi-notes.txt"]).unwrap(),
             "pi"
         ));
@@ -671,6 +830,176 @@ mod tests {
             argv.last().map(String::as_str),
             Some("last-arg-marker"),
             "{argv:?}"
+        );
+    }
+
+    // ---- KERN_PROCARGS2 blob parsing ----
+
+    /// The blob shape: argc, exec path, NUL padding, argc argv strings,
+    /// then the environment — empty argv elements included as empty
+    /// strings, which is exactly what an empty-filtering split loses.
+    #[cfg(target_os = "macos")]
+    fn blob(argc: usize, path: &str, argv: &[&str], env: &[&str]) -> Vec<u8> {
+        let mut buf = Vec::new();
+        buf.extend_from_slice(&(argc as i32).to_ne_bytes());
+        buf.extend_from_slice(path.as_bytes());
+        buf.push(0);
+        buf.resize(buf.len() + 3, 0); // the kernel's post-path padding
+        for element in argv {
+            buf.extend_from_slice(element.as_bytes());
+            buf.push(0);
+        }
+        for entry in env {
+            buf.extend_from_slice(entry.as_bytes());
+            buf.push(0);
+        }
+        buf
+    }
+
+    /// An empty argv element must not shift the argv/env boundary: the
+    /// environment is complete, and no env entry leaks into argv. (The
+    /// empty-filtering parser this replaced returned an EMPTY env here:
+    /// with the boundary shifted, `parts.len().min(argc + 1)` clamped the
+    /// slice to the filtered list's end.)
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn parse_procargs_keeps_the_env_behind_an_empty_argv_element() {
+        let (_, argv, env) = parse_procargs(&blob(
+            3,
+            "/bin/prog",
+            &["prog", "", "-x"],
+            &["A=1", "B=two words"],
+        ))
+        .expect("parses");
+        assert_eq!(argv, ["prog", "", "-x"]);
+        assert_eq!(
+            env,
+            [
+                ("A".to_string(), "1".to_string()),
+                ("B".to_string(), "two words".to_string())
+            ]
+        );
+    }
+
+    /// Values carry spaces, newlines, and `=` characters intact; entries
+    /// without `=` and non-UTF-8 entries are skipped; empty values stay.
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn parse_procargs_keeps_hostile_values_and_skips_unnamable_entries() {
+        let (_, _, env) = parse_procargs(&blob(
+            1,
+            "/bin/sh",
+            &["sh"],
+            &["V=a b\nc=d=e", "NOEQ", "EMPTY=", "UTF8=ok"],
+        ))
+        .expect("parses");
+        assert_eq!(
+            env,
+            [
+                ("V".to_string(), "a b\nc=d=e".to_string()),
+                ("EMPTY".to_string(), "".to_string()),
+                ("UTF8".to_string(), "ok".to_string()),
+            ]
+        );
+    }
+
+    /// `parse_env_pairs` skips what it cannot name or decode: an entry
+    /// without `=`, a non-UTF-8 entry; an empty value is a value.
+    #[test]
+    fn parse_env_pairs_skips_unnamable_and_undecodable_entries() {
+        assert_eq!(
+            parse_env_pairs(&[
+                b"V=x y".as_slice(),
+                b"NOEQ",
+                &[b'B', b'a', b'd', 0xFF],
+                b"E="
+            ]),
+            [
+                ("V".to_string(), "x y".to_string()),
+                ("E".to_string(), "".to_string()),
+            ]
+        );
+    }
+
+    /// A blob that ends inside the argv region (corrupt or mid-exec) is
+    /// `None`, never a partial guess.
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn parse_procargs_rejects_a_blob_truncated_inside_argv() {
+        let mut buf = blob(3, "/bin/prog", &["prog", "only-two"], &[]);
+        buf.truncate(buf.len() - 1);
+        assert_eq!(parse_procargs(&buf), None);
+    }
+
+    /// The walk answers the AGENT's pid, not the pane child's: the shell
+    /// (root) is skipped and the grandchild that matches the label wins;
+    /// a label matching only the root names the root.
+    #[test]
+    fn agent_pid_resolves_the_descendant_not_the_pane_child_alone() {
+        let table = ProcessTable::with_fixed_argv(&[
+            (100, 1, argv(&["-zsh"])),
+            (2100, 100, argv(&["node", "/x/y/claude-cli/cli.js"])),
+        ]);
+        assert_eq!(table.agent_pid(100, "claude"), Some(2100));
+        let direct = ProcessTable::with_fixed_argv(&[(100, 1, argv(&["pi"]))]);
+        assert_eq!(direct.agent_pid(100, "pi"), Some(100));
+        let no_match = ProcessTable::with_fixed_argv(&[(100, 1, argv(&["-zsh"]))]);
+        assert_eq!(no_match.agent_pid(100, "pi"), None);
+    }
+
+    /// A shell `-c` payload that merely MENTIONS the label does not match:
+    /// `claude.log` inside a tail command hits the dot-suffix rule, and
+    /// without the payload skip the claim would pin to the wrapper shell
+    /// (the sweep could never clear it) and an env capture would read the
+    /// shell's env. A real agent behind the wrapper still matches as its
+    /// own process.
+    #[test]
+    fn the_walk_skips_a_shell_payload_that_merely_mentions_the_label() {
+        let table = ProcessTable::with_fixed_argv(&[
+            (100, 1, argv(&["-zsh"])),
+            (200, 100, argv(&["zsh", "-c", "tail -f /logs/claude.log"])),
+        ]);
+        assert_eq!(table.agent_pid(100, "claude"), None);
+        assert_eq!(
+            table.agent_alive(100, "claude"),
+            Liveness::Mismatch,
+            "the mention is provable absence — the sweep may clear the claim"
+        );
+        let real = ProcessTable::with_fixed_argv(&[
+            (100, 1, argv(&["-zsh"])),
+            (200, 100, argv(&["sh", "-c", "claude --resume x"])),
+            (300, 200, argv(&["claude", "--resume", "x"])),
+        ]);
+        assert_eq!(real.agent_pid(100, "claude"), Some(300));
+    }
+
+    /// The env read runs against a real child process spawned with hostile
+    /// values, end to end through the platform reader (macOS
+    /// KERN_PROCARGS2, Linux /proc/pid/environ): shell-exported config
+    /// that a parent-shell or daemon-env reconstruction would miss.
+    #[cfg(any(target_os = "macos", target_os = "linux"))]
+    #[test]
+    fn the_real_env_read_sees_a_child_process_env() {
+        let mut child = std::process::Command::new("sh")
+            .args(["-c", "sleep 30"])
+            .env("PAR_TEST_ENV", "a b\nc=d=e")
+            .spawn()
+            .expect("sh spawns");
+        let pid = child.id() as i32;
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+        let env = loop {
+            match read_env(pid) {
+                Some(env) if env.iter().any(|(k, _)| k == "PAR_TEST_ENV") => break env,
+                _ if std::time::Instant::now() >= deadline => panic!("env never readable"),
+                _ => std::thread::sleep(std::time::Duration::from_millis(20)),
+            }
+        };
+        let _ = child.kill();
+        let _ = child.wait();
+        assert_eq!(
+            env.iter().find(|(k, _)| *k == "PAR_TEST_ENV"),
+            Some(&("PAR_TEST_ENV".to_string(), "a b\nc=d=e".to_string())),
+            "{env:?}"
         );
     }
 }

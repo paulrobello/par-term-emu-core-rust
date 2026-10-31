@@ -185,6 +185,8 @@ type RecordedResumeIds = Vec<(PaneId, Option<String>)>;
 /// real agent CLI from a unit test, and the recorded value is the
 /// assertion target — exactly what `from_persist_state` handed the
 /// factory.
+type RecordedEnvs = Vec<(PaneId, Option<std::collections::BTreeMap<String, String>>)>;
+
 #[derive(Clone, Default)]
 struct RecordingFactory {
     received: std::sync::Arc<std::sync::Mutex<RecordedCommands>>,
@@ -194,6 +196,9 @@ struct RecordingFactory {
     /// The `PAR_MUX_RESUME_SESSION_ID` each restore handed the factory,
     /// in spawn order — the start-command wrapper's resume hook.
     resume_ids: std::sync::Arc<std::sync::Mutex<RecordedResumeIds>>,
+    /// The session-level env each restore handed the factory, in spawn
+    /// order — the captured agent-env + session-env merge.
+    envs: std::sync::Arc<std::sync::Mutex<RecordedEnvs>>,
 }
 
 impl RecordingFactory {
@@ -227,6 +232,16 @@ impl RecordingFactory {
             .map(|(_, cols, rows)| (*cols, *rows))
             .expect("recorded pane")
     }
+
+    /// The session-level env pane `id` was spawned with.
+    fn env_for(&self, id: PaneId) -> Option<std::collections::BTreeMap<String, String>> {
+        self.envs
+            .lock()
+            .unwrap()
+            .iter()
+            .find(|(pane, _)| *pane == id)
+            .and_then(|(_, env)| env.clone())
+    }
 }
 
 impl PaneFactory for RecordingFactory {
@@ -249,6 +264,7 @@ impl PaneFactory for RecordingFactory {
                 .env
                 .and_then(|env| env.get("PAR_MUX_RESUME_SESSION_ID").cloned()),
         ));
+        self.envs.lock().unwrap().push((id, context.env.cloned()));
         ShellPaneFactory::default().create_pane(id, cols, rows, Some("sleep 60"), context)
     }
 
@@ -2309,6 +2325,7 @@ fn agent_session_identity_round_trips() {
             state: Some("working".to_string()),
             state_source: Some("hook".to_string()),
             message: None,
+            env: None,
         },
         "capture reads identity plus the last-known state"
     );
@@ -2369,13 +2386,127 @@ fn agent_session_identity_round_trips() {
         "start source describes the PREVIOUS process's start — stale after a restart"
     );
     assert!(
-            pane.telemetry.is_none(),
-            "telemetry is display-only and ephemeral — a restored pane serves absent, never a stale sample"
-        );
+        pane.telemetry.is_none(),
+        "telemetry is display-only and ephemeral — a restored pane serves absent, never a stale sample"
+    );
     assert!(
         pane.seq_by_source.is_empty(),
         "sequence stamps are volatile — the restarted agent's first report is never stale"
     );
+}
+
+/// The captured agent env rides a restore: the resumed pane spawns with
+/// the snapshot as its env base, explicit session env entries override it,
+/// and the stale-for-spawn keys (a hand-edited file's socket endpoint, the
+/// old terminal dimensions) never reach the spawn. The restored pane also
+/// carries the env as its agent-env cache seed, so the next save retains
+/// it even if the relaunched process cannot be read yet.
+#[test]
+fn restored_agent_pane_spawns_with_captured_env_under_session_overrides() {
+    use std::collections::BTreeMap;
+    let (mut original, pane_id) = tree_with_agent_pane();
+    let session_id = original
+        .sessions()
+        .first()
+        .copied()
+        .expect("the agent tree has a session");
+    original
+        .set_session_env(session_id, "AGENT_TEST_VAR", Some("session-wins"))
+        .expect("set-environment works");
+    let mut state = original.to_persist_state();
+    {
+        let persisted = state.sessions[0].windows[0].panes[0]
+            .agent_session
+            .as_mut()
+            .expect("the agent pane carries its identity");
+        let mut env = BTreeMap::new();
+        env.insert("AGENT_TEST_VAR".to_string(), "snapshot".to_string());
+        env.insert("AGENT_TEST_ONLY".to_string(), "from-agent".to_string());
+        env.insert(
+            "PAR_MUX_SOCKET".to_string(),
+            "/tmp/old-daemon.sock".to_string(),
+        );
+        env.insert("COLUMNS".to_string(), "999".to_string());
+        persisted.env = Some(env);
+    }
+    let factory = RecordingFactory::default();
+    let restored = MuxTree::from_persist_state(&state, Box::new(factory.clone())).unwrap();
+    let env = factory.env_for(pane_id).expect("the spawn carried an env");
+    assert_eq!(
+        env.get("AGENT_TEST_VAR").map(String::as_str),
+        Some("session-wins"),
+        "an explicit session env entry overrides the snapshot"
+    );
+    assert_eq!(
+        env.get("AGENT_TEST_ONLY").map(String::as_str),
+        Some("from-agent"),
+        "the snapshot values the session does not set ride through"
+    );
+    assert!(
+        !env.contains_key("PAR_MUX_SOCKET"),
+        "the previous daemon's socket endpoint must not reach the spawn"
+    );
+    assert!(
+        !env.contains_key("COLUMNS"),
+        "stale terminal dimensions must not reach the spawn"
+    );
+    let pane = restored.pane(pane_id).expect("restored pane");
+    let seeded = pane.agent_env_snapshot().expect("the env was seeded");
+    assert_eq!(
+        seeded.env.get("AGENT_TEST_ONLY").map(String::as_str),
+        Some("from-agent"),
+        "the restored pane caches the snapshot for the next save's retention"
+    );
+    assert_eq!(
+        seeded.session.as_deref(),
+        Some("s-1"),
+        "the cache is keyed to the session identity (id, else path)"
+    );
+}
+
+/// The save's env read is best-effort with retention: a claimed pane whose
+/// agent process cannot be matched (here: the pane child is a plain sleep,
+/// no agent process in its tree) persists its cached last-known env when
+/// the cache was read under the SAME session identity, and nothing when
+/// the cache belongs to a different session.
+#[test]
+fn agent_env_capture_retains_last_known_env_under_the_same_identity() {
+    use std::collections::BTreeMap;
+    let (mut tree, pane_id) = tree_with_agent_pane();
+    let mut env = BTreeMap::new();
+    env.insert("AGENT_TEST_ONLY".to_string(), "retained".to_string());
+    let pane = tree.pane_mut(pane_id).unwrap();
+    pane.set_agent_env_snapshot(crate::mux::pane::AgentEnvSnapshot {
+        agent: "pi".to_string(),
+        env: env.clone(),
+        session: Some("s-1".to_string()),
+    });
+    let retained = tree.to_persist_state().sessions[0].windows[0].panes[0]
+        .agent_session
+        .as_ref()
+        .expect("claimed")
+        .env
+        .clone()
+        .expect("the last-known env is retained, not dropped");
+    assert_eq!(
+        retained.get("AGENT_TEST_ONLY").map(String::as_str),
+        Some("retained")
+    );
+
+    // A cache captured under a DIFFERENT session identity never transfers.
+    let pane = tree.pane_mut(pane_id).unwrap();
+    pane.set_agent_env_snapshot(crate::mux::pane::AgentEnvSnapshot {
+        agent: "pi".to_string(),
+        env,
+        session: Some("other-session".to_string()),
+    });
+    let dropped = tree.to_persist_state().sessions[0].windows[0].panes[0]
+        .agent_session
+        .as_ref()
+        .expect("claimed")
+        .env
+        .clone();
+    assert_eq!(dropped, None, "another session's env is not inherited");
 }
 
 /// The classifier behind the scrape-tier restore door (its unit
@@ -2588,6 +2719,7 @@ fn pi_shaped_path_only_identity_round_trips() {
             state: None,
             state_source: None,
             message: None,
+            env: None,
         }),
         "a path-only ref is identity enough — the id-OR-path wire contract"
     );
@@ -3339,4 +3471,128 @@ fn restore_policy_and_the_pane_flag_round_trip_through_the_state_file() {
     let state: PersistState = serde_json::from_value(value).unwrap();
     assert_eq!(state.workspaces[0].restore_policy, None);
     assert!(!state.sessions[0].windows[0].panes[0].restore_start_command);
+}
+
+/// Isolate the daemon environment from the test runner and real credentials.
+#[cfg(unix)]
+#[test]
+fn agent_environment_real_stripped_daemon_restore() {
+    if std::env::var_os("MUX_ENV_RESTORE_CHILD").is_none() {
+        let status = std::process::Command::new(std::env::current_exe().unwrap())
+            .args([
+                "--exact",
+                "mux::persist::tests::agent_environment_real_stripped_daemon_restore",
+                "--nocapture",
+            ])
+            .env_clear()
+            .env("PATH", "/usr/bin:/bin")
+            .env("SHELL", "/bin/sh")
+            .env("HOME", std::env::var_os("HOME").unwrap())
+            .env("MUX_ENV_RESTORE_CHILD", "1")
+            .status()
+            .unwrap();
+        assert!(status.success(), "isolated restore subprocess failed");
+        return;
+    }
+    use std::os::unix::fs::PermissionsExt;
+    let dir = tempfile::tempdir().unwrap();
+    let executable = dir.path().join("envagent");
+    let marker = dir.path().join("resumed");
+    let ready = dir.path().join("ready");
+    // Values are synthetic and assertions never dump the captured environment.
+    fs::write(
+        &executable,
+        r#"#!/bin/sh
+if [ "$1" = resume ]; then
+  [ "$AGENT_COMPLEX" = 'two words
+x=y=z' ] || exit 21
+  [ "$AGENT_EMPTY" = '' ] || exit 22
+  [ "$PAR_MUX_CONFIG" = '/custom/config' ] || exit 23
+  [ "$PAR_MUX_SOCKET" = '/new/socket' ] || exit 24
+  [ "$PAR_MUX_SESSION" = 'agents' ] || exit 25
+  [ -z "${CLAUDECODE+x}" ] || exit 26
+  [ -z "${COLUMNS+x}" ] || exit 27
+  printf restored > "$AGENT_MARKER"
+else
+  printf ready > "$AGENT_READY"
+fi
+/bin/sleep 30
+"#,
+    )
+    .unwrap();
+    fs::set_permissions(&executable, fs::Permissions::from_mode(0o700)).unwrap();
+    let command = format!("export PATH='{}:/usr/bin:/bin'; export AGENT_COMPLEX='two words\nx=y=z'; export AGENT_EMPTY=''; export PAR_MUX_CONFIG='/custom/config'; export COLUMNS=999; export CLAUDECODE=1; export AGENT_MARKER='{}'; export AGENT_READY='{}'; envagent", dir.path().display(), marker.display(), ready.display());
+    let mut tree = MuxTree::new(Box::new(ShellPaneFactory {
+        default_command: Some(command),
+        socket_path: Some("/old/socket".to_string()),
+        ..Default::default()
+    }));
+    let session = tree.new_session("agents", 80, 24).unwrap();
+    let window = tree.session(session).unwrap().windows[0];
+    let pane_id = tree.window(window).unwrap().panes()[0];
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+    while !ready.exists() {
+        assert!(
+            std::time::Instant::now() < deadline,
+            "initial agent did not start"
+        );
+        std::thread::sleep(std::time::Duration::from_millis(20));
+    }
+    let pane = tree.pane_mut(pane_id).unwrap();
+    pane.set_metadata("agent", "envagent");
+    pane.set_metadata("agent_session_id", "original-id");
+    pane.set_metadata("agent_resume_argv", r#"["envagent","resume"]"#);
+    let state = tree.collect_persist_capture().capture();
+    let captured = state.sessions[0].windows[0].panes[0]
+        .agent_session
+        .as_ref()
+        .unwrap()
+        .env
+        .as_ref()
+        .expect("actual agent environment captured");
+    assert_eq!(
+        captured.get("AGENT_COMPLEX").map(String::as_str),
+        Some("two words\nx=y=z")
+    );
+    assert!(captured.contains_key("AGENT_EMPTY"));
+    assert_eq!(
+        captured.get("PAR_MUX_CONFIG").map(String::as_str),
+        Some("/custom/config")
+    );
+    assert!(!captured.contains_key("PAR_MUX_SOCKET"));
+    let bytes = serde_json::to_vec(&state).unwrap();
+    drop(tree);
+    let state: PersistState = serde_json::from_slice(&bytes).unwrap();
+    let factory = || {
+        Box::new(ShellPaneFactory {
+            socket_path: Some("/new/socket".to_string()),
+            ..Default::default()
+        })
+    };
+    // Red discriminator: without the overlay the bare binary is not on the
+    // daemon PATH, so the resume cannot produce the marker.
+    let mut without_env = state.clone();
+    without_env.sessions[0].windows[0].panes[0]
+        .agent_session
+        .as_mut()
+        .unwrap()
+        .env = None;
+    let red = MuxTree::from_persist_state(&without_env, factory()).unwrap();
+    std::thread::sleep(std::time::Duration::from_millis(250));
+    assert!(
+        !marker.exists(),
+        "stripped daemon unexpectedly found the bare binary"
+    );
+    drop(red);
+    let restored = MuxTree::from_persist_state(&state, factory()).unwrap();
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+    while !marker.exists() {
+        assert!(
+            std::time::Instant::now() < deadline,
+            "restored agent failed its environment checks"
+        );
+        std::thread::sleep(std::time::Duration::from_millis(20));
+    }
+    assert_eq!(fs::read_to_string(&marker).unwrap(), "restored");
+    drop(restored);
 }

@@ -230,6 +230,7 @@ mod tests {
             state: None,
             state_source: None,
             message: None,
+            env: None,
         }
     }
 

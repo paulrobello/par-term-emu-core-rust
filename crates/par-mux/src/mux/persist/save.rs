@@ -36,11 +36,55 @@ fn agent_session_from_metadata(metadata: &HashMap<String, String>) -> Option<Per
         state: claim.state,
         state_source: claim.state_source,
         message: claim.message,
+        env: None,
     };
     (session.session_id.is_some()
         || session.session_path.is_some()
         || session.resume_argv.is_some())
     .then_some(session)
+}
+
+/// Fill `agent.env` for one captured pane — the OFF-LOCK half of the save
+/// (ARC-032): the process-table snapshot and the per-agent exec-env read
+/// (macOS `KERN_PROCARGS2`, Linux `/proc/<pid>/environ`) run here, after
+/// the tree lock drops. The pid is the descendant walk's match (the pane's
+/// direct child is usually the shell the agent ran under, whose exec env
+/// can differ from the agent's own); the fresh read wins over the pane's
+/// cached last-known env, which covers a read that fails (mid-exec, the
+/// process just gone) and is keyed to the session identity it was read
+/// under, so a relabeled pane never inherits another session's env. A
+/// fresh read lands in the cache as the next save's fallback.
+fn resolve_agent_env(
+    table: &Option<crate::mux::foreground::ProcessTable>,
+    agent: &mut PersistAgentSession,
+    child_pid: Option<u32>,
+    cache: &parking_lot::Mutex<Option<crate::mux::pane::AgentEnvSnapshot>>,
+) {
+    let identity = agent
+        .session_id
+        .clone()
+        .or_else(|| agent.session_path.clone());
+    let fresh = table
+        .as_ref()
+        .zip(child_pid)
+        .and_then(|(table, root)| table.agent_pid(root, &agent.agent))
+        .and_then(crate::mux::foreground::read_env)
+        .map(|env| {
+            let env = super::format::strip_agent_env_for_persistence(env.into_iter().collect());
+            *cache.lock() = Some(crate::mux::pane::AgentEnvSnapshot {
+                env: env.clone(),
+                agent: agent.agent.clone(),
+                session: identity.clone(),
+            });
+            env
+        });
+    agent.env = fresh.or_else(|| {
+        cache
+            .lock()
+            .clone()
+            .filter(|snapshot| snapshot.agent == agent.agent && snapshot.session == identity)
+            .map(|snapshot| snapshot.env)
+    });
 }
 
 /// The collected-under-lock half of a tree save (ARC-032): the structure
@@ -93,6 +137,8 @@ struct PaneCapture {
     spawn_command: Option<String>,
     user_title: Option<String>,
     agent_session: Option<PersistAgentSession>,
+    child_pid: Option<u32>,
+    agent_env: std::sync::Arc<parking_lot::Mutex<Option<crate::mux::pane::AgentEnvSnapshot>>>,
     dead: bool,
     exit_code: Option<i32>,
     restore_start_command: bool,
@@ -104,6 +150,7 @@ impl PersistCapture {
     /// [`MuxTree::to_persist_state`] produces — sessions in id order so two
     /// captures of an unchanged tree differ only in their timestamps.
     pub fn capture(self) -> PersistState {
+        let table = crate::mux::foreground::ProcessTable::snapshot();
         let mut workspaces: Vec<PersistWorkspace> = self
             .workspaces
             .into_iter()
@@ -147,22 +194,32 @@ impl PersistCapture {
                         panes: window
                             .panes
                             .into_iter()
-                            .map(|pane| PersistPane {
-                                id: pane.id.0,
-                                terminal: cap_persisted_scrollback(snapshot_from_parts(
-                                    &pane.parts,
-                                )),
-                                spawn_command: pane.spawn_command,
-                                user_title: pane.user_title,
-                                agent_session: pane.agent_session,
-                                cwd: pane
-                                    .parts
-                                    .cwd()
-                                    .map(|dir| dir.to_string_lossy().into_owned()),
-                                cwd_host: pane.parts.cwd_host(),
-                                dead: pane.dead,
-                                exit_code: pane.exit_code,
-                                restore_start_command: pane.restore_start_command,
+                            .map(|mut pane| {
+                                if let Some(agent) = &mut pane.agent_session {
+                                    resolve_agent_env(
+                                        &table,
+                                        agent,
+                                        pane.child_pid,
+                                        &pane.agent_env,
+                                    );
+                                }
+                                PersistPane {
+                                    id: pane.id.0,
+                                    terminal: cap_persisted_scrollback(snapshot_from_parts(
+                                        &pane.parts,
+                                    )),
+                                    spawn_command: pane.spawn_command,
+                                    user_title: pane.user_title,
+                                    agent_session: pane.agent_session,
+                                    cwd: pane
+                                        .parts
+                                        .cwd()
+                                        .map(|dir| dir.to_string_lossy().into_owned()),
+                                    cwd_host: pane.parts.cwd_host(),
+                                    dead: pane.dead,
+                                    exit_code: pane.exit_code,
+                                    restore_start_command: pane.restore_start_command,
+                                }
                             })
                             .collect(),
                     })
@@ -258,6 +315,8 @@ impl MuxTree {
                         spawn_command: pane.spawn_command().map(str::to_string),
                         user_title: pane.user_title().map(str::to_string),
                         agent_session: agent_session_from_metadata(pane.metadata()),
+                        child_pid: pane.child_pid(),
+                        agent_env: pane.agent_env_capture_handle(),
                         dead: pane.dead(),
                         exit_code: pane.exit_code(),
                         restore_start_command: pane.restore_start_command(),

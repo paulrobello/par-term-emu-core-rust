@@ -6,7 +6,7 @@ use crate::mux::layout::LayoutTree;
 use crate::mux::pane::MuxError;
 use par_term_emu_core::cell::Cell;
 use par_term_emu_core::terminal::replay_snapshot::TerminalSnapshot;
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 use std::path::PathBuf;
 use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -440,4 +440,62 @@ pub struct PersistAgentSession {
         serde(default, skip_serializing_if = "Option::is_none")
     )]
     pub message: Option<String>,
+    /// The agent process's exec-time environment, captured at save time
+    /// (macOS `KERN_PROCARGS2`, Linux `/proc/<pid>/environ`) so a restore
+    /// relaunches the resume invocation with it instead of the daemon's
+    /// launch context. Mux-managed keys (`PAR_MUX_*`, `COLUMNS`, `LINES`)
+    /// are stripped at capture (`agent_env_key_stale_for_spawn`); the
+    /// identity set is re-exported fresh at every spawn. Absent on older
+    /// state files (`serde(default)`), on Windows, and whenever the
+    /// process env was unreadable at every save since the pane's identity
+    /// was claimed. The state file and its recovery copies are written
+    /// `0600`, so the pairs ride the same owner-only posture as the rest
+    /// of the persisted state.
+    #[cfg_attr(
+        feature = "serde",
+        serde(default, skip_serializing_if = "Option::is_none")
+    )]
+    pub env: Option<BTreeMap<String, String>>,
+}
+
+/// Environment keys that never ride an agent-env capture into the state
+/// file or a restore spawn, listed EXPLICITLY rather than by the
+/// `PAR_MUX_*` prefix: the mux contract/identity set (re-exported fresh
+/// by every spawn — a captured socket endpoint belongs to the daemon that
+/// is gone) and the terminal-size pair (stale at restore by definition;
+/// the PTY is sized at spawn and apps read the winsize, not the env), so
+/// a user's mux CONFIG overrides (`PAR_MUX_CONFIG`, `PAR_MUX_CONTROL`)
+/// survive capture and restore like any other environment setting.
+pub(super) fn agent_env_key_stale_for_spawn(name: &str) -> bool {
+    matches!(
+        name,
+        "COLUMNS"
+            | "LINES"
+            | "PAR_MUX_PANE_ID"
+            | "PAR_MUX_SOCKET"
+            | "PAR_MUX_CONTROL_SOCKET"
+            | "PAR_MUX_ENV"
+            | "PAR_MUX_SESSION_ID"
+            | "PAR_MUX_SESSION"
+            | "PAR_MUX_WINDOW_ID"
+            | "PAR_MUX_BIN"
+            | "PAR_MUX_RESUME_SESSION_ID"
+            | "CLAUDECODE"
+            | "CLAUDE_CODE_SESSION_ID"
+            | "CLAUDE_CODE_CHILD_SESSION"
+            | "CLAUDE_CODE_MESSAGING_TOKEN"
+            | "OMPCODE"
+            | "CODEX_THREAD_ID"
+            | "KITTY_PID"
+            | "KITTY_WINDOW_ID"
+    )
+}
+
+/// `env` without the [`agent_env_key_stale_for_spawn`] keys.
+pub(super) fn strip_agent_env_for_persistence(
+    env: BTreeMap<String, String>,
+) -> BTreeMap<String, String> {
+    env.into_iter()
+        .filter(|(name, _)| !agent_env_key_stale_for_spawn(name))
+        .collect()
 }

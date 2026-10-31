@@ -74,9 +74,28 @@ fn non_agent_envelope_carries_no_agent_session_key() {
             state: Some("working".to_string()),
             state_source: Some("hook".to_string()),
             message: None,
+            env: None,
         }),
         "identity and last-known state survive the JSON wire form"
     );
+}
+
+/// A state file written before agent-env capture existed has no `env`
+/// field on `agent_session`: it loads with `None`, so restore falls back to
+/// the legacy session-env-only path. A present snapshot survives serde
+/// with hostile values intact (spaces, newlines, `=`).
+#[test]
+fn agent_env_serde_defaults_when_absent_and_round_trips_when_present() {
+    let old =
+        r#"{"agent":"pi","session_id":"s1","session_path":null,"source":null,"resume_argv":null}"#;
+    let mut agent: PersistAgentSession = serde_json::from_str(old).expect("old state parses");
+    assert_eq!(agent.env, None, "missing field reads absent");
+    let mut env = std::collections::BTreeMap::new();
+    env.insert("V".to_string(), "a b\nc=d=e".to_string());
+    agent.env = Some(env.clone());
+    let json = serde_json::to_string(&agent).unwrap();
+    let revived: PersistAgentSession = serde_json::from_str(&json).unwrap();
+    assert_eq!(revived.env, Some(env));
 }
 
 /// A grid snapshot whose scrollback ring holds `lines` logical lines of

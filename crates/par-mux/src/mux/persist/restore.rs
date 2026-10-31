@@ -334,15 +334,28 @@ fn spawn_restored_pane(
             })
             .and_then(|argv| argv)
     };
-    // The wrapper's resume hook: only the start-command path exports the
-    // id (the resume shapes carry their own ref); the session env
-    // otherwise rides verbatim.
+    // The spawn env: the captured agent exec-env snapshot as the base (a
+    // resumed agent relaunches with the environment it originally ran
+    // with, not the daemon's launch context), explicit session env entries
+    // over it (the newer, deliberate mux-side decisions), and the stale
+    // keys stripped — a hand-edited state file must not smuggle the
+    // previous daemon's socket endpoint into the new process. The factory
+    // re-exports the current `PAR_MUX_*` identity set AFTER the session
+    // env, so the keys the capture stripped come back fresh; the
+    // start-command path adds its resume hook on top of the same base.
+    let mut spawn_env = pane
+        .agent_session
+        .as_ref()
+        .and_then(|agent| agent.env.as_ref())
+        .map(|env| super::format::strip_agent_env_for_persistence(env.clone()))
+        .unwrap_or_default();
+    spawn_env.extend(session.env.clone());
     let resume_env = if via_start_command {
         pane.agent_session
             .as_ref()
             .and_then(|agent| agent.session_id.as_deref())
             .map(|id| {
-                let mut env = session.env.clone();
+                let mut env = spawn_env.clone();
                 env.insert("PAR_MUX_RESUME_SESSION_ID".to_string(), id.to_string());
                 env
             })
@@ -353,7 +366,7 @@ fn spawn_restored_pane(
     let context = SpawnContext {
         session: Some((SessionId(session.id), &session.name)),
         window: Some(WindowId(window_id)),
-        env: Some(resume_env.as_ref().unwrap_or(&session.env)),
+        env: Some(resume_env.as_ref().unwrap_or(&spawn_env)),
         cwd: cwd.as_deref(),
         // No client can connect before the accept loop starts, so restore
         // wires after the tree is built (`MuxServer::bind_with_tree`); the
@@ -502,6 +515,19 @@ fn restore_agent_claim(
         None => {}
     }
     created.set_agent_claim(&claim);
+    // Seed the agent-env cache with what the state file carried, keyed to
+    // the same session identity the save side keys its fallback to — the
+    // next save's env read covers a process that cannot be read then.
+    if let Some(env) = &agent_session.env {
+        created.set_agent_env_snapshot(crate::mux::pane::AgentEnvSnapshot {
+            env: super::format::strip_agent_env_for_persistence(env.clone()),
+            agent: agent_session.agent.clone(),
+            session: agent_session
+                .session_id
+                .clone()
+                .or_else(|| agent_session.session_path.clone()),
+        });
+    }
     if let Some(raw) = raw_argv {
         created.set_metadata("agent_resume_argv", raw);
     }

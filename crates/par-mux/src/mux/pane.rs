@@ -246,6 +246,13 @@ pub struct MuxPane {
     /// handle so a capture started under the tree lock can finish OFF it
     /// (ARC-032).
     snapshot_cache: Arc<Mutex<Option<SnapshotCacheEntry>>>,
+    /// The last env read from the pane's claimed agent process, keyed to
+    /// the session identity it was read under — the save's fallback when
+    /// the read fails (see `capture_agent_env` in `persist/save.rs`), and
+    /// the seed a restore plants so the next save retains what the state
+    /// file carried. Interior-mutable so the save path can refresh it from
+    /// its `&self` capture walk.
+    agent_env: Arc<Mutex<Option<AgentEnvSnapshot>>>,
     /// The pane's own hook-only endpoint (ENH-039), bound by the factory
     /// when the daemon runs with `--pane-endpoints`. `Drop` removes the
     /// endpoint's socket file when the pane is killed or respawned; a crash
@@ -253,6 +260,16 @@ pub struct MuxPane {
     /// `Drop` side effect only — nothing reads the value.
     #[expect(dead_code, reason = "held only for its Drop (endpoint teardown)")]
     pub(crate) pane_endpoint: Option<crate::mux::server::PaneEndpoint>,
+}
+
+/// A cached agent-env snapshot: the pairs plus the session identity
+/// (`session_id`, else `session_path`) they were read under, so a pane
+/// RELABELED to a different session never inherits the old session's env.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct AgentEnvSnapshot {
+    pub(crate) agent: String,
+    pub(crate) env: BTreeMap<String, String>,
+    pub(crate) session: Option<String>,
 }
 
 /// The validity key of a cached snapshot: the pane's PTY generation (bumped
@@ -584,6 +601,26 @@ impl MuxPane {
             self.note_agent_state(Some(value));
         }
         self.metadata.insert(key.to_string(), value.to_string());
+    }
+
+    /// The pane's agent-env cache handle, shared into a persist capture so
+    /// the off-lock half can refresh it (the save path holds only capture
+    /// handles, not the tree — see `resolve_agent_env` in persist/save.rs).
+    pub(crate) fn agent_env_capture_handle(&self) -> Arc<Mutex<Option<AgentEnvSnapshot>>> {
+        Arc::clone(&self.agent_env)
+    }
+
+    /// The pane's cached agent-env snapshot, if one was captured or seeded
+    /// by a restore.
+    #[cfg(test)]
+    pub(crate) fn agent_env_snapshot(&self) -> Option<AgentEnvSnapshot> {
+        self.agent_env.lock().clone()
+    }
+
+    /// Cache `snapshot` as the pane's last-known agent env (the restore
+    /// seed: what the state file carried becomes the next save's fallback).
+    pub(crate) fn set_agent_env_snapshot(&self, snapshot: AgentEnvSnapshot) {
+        *self.agent_env.lock() = Some(snapshot);
     }
 
     /// Bump [`Self::agent_activity`] when the stored state is about to
@@ -1084,6 +1121,7 @@ impl ShellPaneFactory {
             last_client_input_at: 0,
             last_viewed_at: 0,
             snapshot_cache: Arc::new(Mutex::new(None)),
+            agent_env: Arc::new(Mutex::new(None)),
             pane_endpoint,
         }
     }
