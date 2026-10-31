@@ -2994,3 +2994,114 @@ fn keyboard_resize_on_the_right_edge_of_a_left_leaning_row_moves_only_the_bounda
         "exactly the two panes touching the grabbed boundary change, changed {moved:?} of {before:?}"
     );
 }
+
+// --- Paul's 2026-10-31 report: the MIDDLE pane of the same row was not
+// --- pinned by either fix. Both leanings, both resize directions: only
+// --- the two panes touching the pressed-side boundary change.
+
+#[test]
+fn keyboard_resize_of_the_middle_pane_of_a_right_leaning_row_moves_only_the_pressed_boundary() {
+    let mut tree = tree();
+    let session_id = tree.new_session("main", 80, 24).unwrap();
+    let window_id = tree.session(session_id).unwrap().windows[0];
+    let p1 = tree.window(window_id).unwrap().panes()[0];
+    let p2 = tree
+        .split_pane(p1, SplitDirection::Vertical, 0.5, None)
+        .unwrap();
+    tree.split_pane(p2, SplitDirection::Vertical, 0.5, None)
+        .unwrap();
+    // Shape p1|(p2|p3): 40 / 20 / 20; the middle pane sits at x=40.
+    let rects = three_pane_row_rects(&tree, window_id);
+    let middle = crate::mux::ids::PaneId(rects.iter().find(|r| r.0 == 40).expect("pane").2);
+
+    // Right grows through the middle|right divider; the left pane keeps
+    // its extent.
+    tree.resize_pane(middle, ResizeDirection::Right, 1).unwrap();
+    assert_eq!(
+        three_pane_row_rects(&tree, window_id),
+        vec![
+            (0, 40, rects[0].2),
+            (40, 21, middle.0),
+            (61, 19, rects[2].2)
+        ]
+    );
+
+    // Left grows through the root's (middle|left-group) boundary from the
+    // untouched tree; rebuilding keeps the two directions independent.
+    let mut tree2 = MuxTree::new(Box::new(ShellPaneFactory::default()));
+    let session2 = tree2.new_session("main", 80, 24).unwrap();
+    let window2 = tree2.session(session2).unwrap().windows[0];
+    let a = tree2.window(window2).unwrap().panes()[0];
+    let b = tree2
+        .split_pane(a, SplitDirection::Vertical, 0.5, None)
+        .unwrap();
+    tree2
+        .split_pane(b, SplitDirection::Vertical, 0.5, None)
+        .unwrap();
+    let rects2 = three_pane_row_rects(&tree2, window2);
+    let middle2 = crate::mux::ids::PaneId(rects2.iter().find(|r| r.0 == 40).expect("pane").2);
+    tree2
+        .resize_pane(middle2, ResizeDirection::Left, 1)
+        .unwrap();
+    assert_eq!(
+        three_pane_row_rects(&tree2, window2),
+        vec![
+            (0, 39, rects2[0].2),
+            (39, 21, middle2.0),
+            (60, 20, rects2[2].2)
+        ]
+    );
+}
+
+#[test]
+fn keyboard_resize_of_the_middle_pane_of_a_left_leaning_row_moves_only_the_pressed_boundary() {
+    let mut tree = tree();
+    let session_id = tree.new_session("main", 80, 24).unwrap();
+    let window_id = tree.session(session_id).unwrap().windows[0];
+    let p1 = tree.window(window_id).unwrap().panes()[0];
+    tree.split_pane(p1, SplitDirection::Vertical, 0.5, None)
+        .unwrap();
+    tree.split_pane(p1, SplitDirection::Vertical, 0.5, None)
+        .unwrap();
+    // Shape (p1|p3)|p2: 20 / 20 / 40; the middle pane sits at x=20.
+    let rects = three_pane_row_rects(&tree, window_id);
+    let middle = crate::mux::ids::PaneId(rects.iter().find(|r| r.0 == 20).expect("pane").2);
+
+    // Right grows through the root's (left-group|right) boundary; the
+    // inner (p1|p3) divider stays put and the right pane absorbs.
+    tree.resize_pane(middle, ResizeDirection::Right, 1).unwrap();
+    assert_eq!(
+        three_pane_row_rects(&tree, window_id),
+        vec![
+            (0, 20, rects[0].2),
+            (20, 21, middle.0),
+            (41, 39, rects[2].2)
+        ]
+    );
+
+    // Left grows through the inner (p1|p3) divider from the untouched
+    // tree.
+    let mut tree2 = MuxTree::new(Box::new(ShellPaneFactory::default()));
+    let session2 = tree2.new_session("main", 80, 24).unwrap();
+    let window2 = tree2.session(session2).unwrap().windows[0];
+    let a = tree2.window(window2).unwrap().panes()[0];
+    tree2
+        .split_pane(a, SplitDirection::Vertical, 0.5, None)
+        .unwrap();
+    tree2
+        .split_pane(a, SplitDirection::Vertical, 0.5, None)
+        .unwrap();
+    let rects2 = three_pane_row_rects(&tree2, window2);
+    let middle2 = crate::mux::ids::PaneId(rects2.iter().find(|r| r.0 == 20).expect("pane").2);
+    tree2
+        .resize_pane(middle2, ResizeDirection::Left, 1)
+        .unwrap();
+    assert_eq!(
+        three_pane_row_rects(&tree2, window2),
+        vec![
+            (0, 19, rects2[0].2),
+            (19, 21, middle2.0),
+            (40, 40, rects2[2].2)
+        ]
+    );
+}
