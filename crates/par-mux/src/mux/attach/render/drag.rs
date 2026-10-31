@@ -12,20 +12,21 @@ use super::{DividerHit, DragState, WindowSession};
 /// so the drag still lands exactly where it is let go.
 pub(super) const DRAG_SEND_MIN_INTERVAL: std::time::Duration = std::time::Duration::from_millis(80);
 
-/// The relative resize command for one drag step, aimed at the
-/// boundary's left/top pane (the daemon re-divides the neighbor).
+/// The relative resize command for one drag step, in tmux's border-move
+/// grammar: the pointer's direction names the border that moves, and the
+/// command aims at the pane that border belongs to (a rightward drag
+/// moves the LEFT pane's right border right — `-t %a -R`; a leftward
+/// drag moves the RIGHT pane's left border left — `-t %b -L`), so the
+/// grabbed divider tracks the pointer under the daemon's
+/// border-moves-outward grow semantics.
 fn drag_resize_command(divider: &DividerHit, step: i32) -> String {
-    let flag = match (divider.vertical, step > 0) {
-        (true, true) => "-R",
-        (true, false) => "-L",
-        (false, true) => "-D",
-        (false, false) => "-U",
+    let (target, flag) = match (divider.vertical, step > 0) {
+        (true, true) => (divider.a, "-R"),
+        (true, false) => (divider.b, "-L"),
+        (false, true) => (divider.a, "-D"),
+        (false, false) => (divider.b, "-U"),
     };
-    format!(
-        "resize-pane -t %{a} {flag} {n}",
-        a = divider.a,
-        n = step.abs()
-    )
+    format!("resize-pane -t %{target} {flag} {n}", n = step.abs())
 }
 
 impl WindowSession {

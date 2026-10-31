@@ -1517,7 +1517,7 @@ fn join_pane_relayouts_both_windows_and_reaps_an_emptied_session() {
 /// `resize-pane -L`/`-D` shrink a pane's width and grow its height by
 /// the requested cells, bounded by the window.
 #[test]
-fn resize_pane_left_and_down_move_the_split_by_the_requested_cells() {
+fn resize_pane_left_grows_through_the_edge_fallback_and_down_adds_rows() {
     let h = Harness::new();
     assert_ok(&h.run("new-session -s main"));
     let w = h.windows_of(h.session_named("main"))[0];
@@ -1539,10 +1539,13 @@ fn resize_pane_left_and_down_move_the_split_by_the_requested_cells() {
     let (w0, h0) = rect(p0);
     h.drain();
 
+    // tmux border semantics: -L moves p0's LEFT border left = grows — and
+    // p0's left border is the window edge, so the T4.C fallback grows
+    // through the opposite (right) divider instead.
     assert_ok(&h.run(&format!("resize-pane -t {p0} -L 5")));
-    assert_eq!(rect(p0), (w0 - 5, h0), "-L 5 takes five columns");
+    assert_eq!(rect(p0), (w0 + 5, h0), "-L 5 adds five columns");
     assert_ok(&h.run(&format!("resize-pane -t {p0} -D 3")));
-    assert_eq!(rect(p0), (w0 - 5, h0 + 3), "-D 3 adds three rows");
+    assert_eq!(rect(p0), (w0 + 5, h0 + 3), "-D 3 adds three rows");
     let sent = h.drain();
     assert_eq!(
         sent.iter()

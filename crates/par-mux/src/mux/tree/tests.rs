@@ -586,16 +586,16 @@ fn resize_pane_reaches_a_cross_orientation_ancestor() {
     assert_eq!(rect(right_bottom).width, 50);
     assert_eq!(rect(right_top).height, 12);
 
-    // Its own stacked split still handles the height axis: -U 2 shrinks
-    // the top pane (heights 12/12 -> 10/14).
+    // Its own stacked split still handles the height axis: -U 2 grows the
+    // top pane upward (tmux border semantics — 12/12 -> 14/10).
     tree.resize_pane(right_top, ResizeDirection::Up, 2).unwrap();
     let window = tree.window(window_id).unwrap();
     let geo = window
         .layout
         .geometry(0, 0, window.cols as usize, window.rows as usize);
     let rect = |pane| geo.iter().find(|g| g.pane == pane).unwrap();
-    assert_eq!(rect(right_top).height, 10);
-    assert_eq!(rect(right_bottom).height, 14);
+    assert_eq!(rect(right_top).height, 14);
+    assert_eq!(rect(right_bottom).height, 10);
 }
 
 #[test]
@@ -2916,4 +2916,81 @@ fn a_zoomed_pane_reserves_the_chrome_too() {
     let (mut tree, window, first, _second) = zoomed_split();
     tree.set_client_view(1, window, 80, 24, ring());
     assert_eq!(tree.pane(first).unwrap().terminal().read().size(), (78, 22));
+}
+
+// --- Paul's 2026-10-30 report: resizing the RIGHT pane of a 3-vertical-
+// --- pane row moved the left and middle panes instead. The right-leaning
+// --- pins from 2042ba9e cover p1|(p2|p3); these cover the mirrored tree
+// --- and both resize directions on a right-edge pane.
+
+fn three_pane_row_rects(tree: &MuxTree, window_id: WindowId) -> Vec<(usize, usize, u32)> {
+    let window = tree.window(window_id).unwrap();
+    let geo = window
+        .layout
+        .geometry(0, 0, window.cols as usize, window.rows as usize);
+    let mut rows: Vec<(usize, usize, u32)> = geo.iter().map(|g| (g.x, g.width, g.pane.0)).collect();
+    rows.sort();
+    rows
+}
+
+#[test]
+fn keyboard_resize_on_the_right_edge_of_a_right_leaning_row_moves_only_the_boundary() {
+    let mut tree = tree();
+    let session_id = tree.new_session("main", 80, 24).unwrap();
+    let window_id = tree.session(session_id).unwrap().windows[0];
+    let p1 = tree.window(window_id).unwrap().panes()[0];
+    let p2 = tree
+        .split_pane(p1, SplitDirection::Vertical, 0.5, None)
+        .unwrap();
+    let p3 = tree
+        .split_pane(p2, SplitDirection::Vertical, 0.5, None)
+        .unwrap();
+    // Shape p1|(p2|p3): 40 / 20 / 20. Pane ids ride the tree's allocator,
+    // so read them back instead of assuming 1/2/3.
+    let rects = three_pane_row_rects(&tree, window_id);
+    let id_at = |x: usize| rects.iter().find(|r| r.0 == x).expect("pane").2;
+    let p3_id = id_at(60);
+    assert_eq!(
+        rects,
+        vec![(0, 40, id_at(0)), (40, 20, id_at(40)), (60, 20, p3_id)]
+    );
+
+    // Keyboard resize of the RIGHT pane leftward: only the touching
+    // boundary moves — the left pane keeps its extent.
+    tree.resize_pane(p3, ResizeDirection::Left, 1).unwrap();
+    assert_eq!(
+        three_pane_row_rects(&tree, window_id),
+        vec![(0, 40, id_at(0)), (40, 19, id_at(40)), (59, 21, p3_id)]
+    );
+}
+
+#[test]
+fn keyboard_resize_on_the_right_edge_of_a_left_leaning_row_moves_only_the_boundary() {
+    let mut tree = tree();
+    let session_id = tree.new_session("main", 80, 24).unwrap();
+    let window_id = tree.session(session_id).unwrap().windows[0];
+    let p1 = tree.window(window_id).unwrap().panes()[0];
+    tree.split_pane(p1, SplitDirection::Vertical, 0.5, None)
+        .unwrap();
+    tree.split_pane(p1, SplitDirection::Vertical, 0.5, None)
+        .unwrap();
+    // Shape (p3|p1)|p2: 20 / 20 / 40 — the mirrored tree; the right edge
+    // is the pane the root split put last.
+    let before = three_pane_row_rects(&tree, window_id);
+    let right_edge = crate::mux::ids::PaneId(before.last().expect("three panes").2);
+
+    tree.resize_pane(right_edge, ResizeDirection::Left, 1)
+        .unwrap();
+    let after = three_pane_row_rects(&tree, window_id);
+    let moved: Vec<u32> = after
+        .iter()
+        .zip(&before)
+        .filter(|((_, aw, _), (_, bw, _))| aw != bw)
+        .map(|(_, (_, _, p))| *p)
+        .collect();
+    assert_eq!(
+        moved.len(),
+        2,
+        "exactly the two panes touching the grabbed boundary change, changed {moved:?} of {before:?}"
+    );
 }

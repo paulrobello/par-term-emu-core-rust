@@ -458,18 +458,18 @@ impl MuxTree {
         Ok(())
     }
 
-    /// Grow or shrink `pane` by `cells` (tmux's `-L`/`-R`/`-U`/`-D`): the
-    /// divider on the pressed side of the pane moves by `cells`
-    /// (`-R`/`-D` grow, `-L`/`-U` shrink), and the panes touching that
-    /// boundary absorb the whole delta — panes beyond it never move,
-    /// whatever split nesting the boundary's sides carry (the manual-pass
-    /// wrong-divider report: the old nearest-ancestor walk moved a
-    /// different split's divider in right-leaning trees). A pane spanning
-    /// the pressed side grows through its OPPOSITE divider instead (the
-    /// T4.C edge rule); only a pane with no divider at all on the axis
-    /// is an error, not a no-op. Pane terminals are resized to the new
-    /// geometry. The Ok payload is the pane's window — the dispatcher's
-    /// `%layout-change` target.
+    /// Grow `pane` by `cells` through the divider on the pressed side
+    /// (tmux's `-L`/`-R`/`-U`/`-D`: resize left = the pane's LEFT border
+    /// moves left = the pane grows; every direction grows), and the panes
+    /// touching that boundary absorb the whole delta — panes beyond it
+    /// never move, whatever split nesting the boundary's sides carry (the
+    /// manual-pass wrong-divider report: the old nearest-ancestor walk
+    /// moved a different split's divider in right-leaning trees). A pane
+    /// spanning the pressed side grows through its OPPOSITE divider
+    /// instead (the T4.C edge rule); only a pane with no divider at all
+    /// on the axis is an error, not a no-op. Pane terminals are resized
+    /// to the new geometry. The Ok payload is the pane's window — the
+    /// dispatcher's `%layout-change` target.
     pub fn resize_pane(
         &mut self,
         pane: PaneId,
@@ -490,7 +490,7 @@ impl MuxTree {
                 ResizeDirection::Left => (
                     SplitDirection::Vertical,
                     false,
-                    rect.width.saturating_sub(cells as usize).max(1),
+                    (rect.width + cells as usize).min(window.cols as usize),
                     rect.width,
                 ),
                 ResizeDirection::Right => (
@@ -502,7 +502,7 @@ impl MuxTree {
                 ResizeDirection::Up => (
                     SplitDirection::Horizontal,
                     false,
-                    rect.height.saturating_sub(cells as usize).max(1),
+                    (rect.height + cells as usize).min(window.rows as usize),
                     rect.height,
                 ),
                 ResizeDirection::Down => (
