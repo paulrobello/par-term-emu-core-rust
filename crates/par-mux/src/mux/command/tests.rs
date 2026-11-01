@@ -724,7 +724,7 @@ fn list_commands_reply_lists_every_command_exactly_once() {
             "command {name:?} appears {hits} times in the reply"
         );
     }
-    assert!(lines.contains(&"features replay-held-state"));
+    assert!(lines.contains(&"features replay-held-state window-add-replay"));
 }
 
 /// ENH-037/ARC-094b: feature tokens live on the command's own table

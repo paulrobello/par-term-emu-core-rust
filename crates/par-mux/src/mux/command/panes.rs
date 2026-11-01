@@ -246,6 +246,14 @@ pub(super) fn parse_pane_exited_replay(_a: &Args<'_>) -> Result<MuxCommand, Stri
     Ok(MuxCommand::PaneExitedReplay)
 }
 
+pub(super) fn parse_window_add_replay(a: &Args<'_>) -> Result<MuxCommand, String> {
+    Ok(MuxCommand::WindowAddReplay {
+        session: a
+            .session("-t")?
+            .ok_or("window-add-replay requires -t <session>")?,
+    })
+}
+
 pub(super) fn parse_clear_history(a: &Args<'_>) -> Result<MuxCommand, String> {
     Ok(MuxCommand::ClearHistory {
         pane: a.pane("-t")?,

@@ -3,7 +3,8 @@
   "format": "par-mux-command-schema",
   "source": "crates/par-mux/src/mux/command/mod.rs COMMANDS + docs/MUX.md Command Reference",
   "daemon_features": [
-    "replay-held-state"
+    "replay-held-state",
+    "window-add-replay"
   ],
   "commands": [
     {
@@ -640,6 +641,14 @@
         "-t"
       ],
       "synopsis": "-t <pane> (-m TEXT | -r REGEX) [-T ms] [-S start] [-E end]"
+    },
+    {
+      "name": "window-add-replay",
+      "features": [],
+      "flags": [
+        "-t"
+      ],
+      "synopsis": "-t <session>"
     },
     {
       "name": "worktree-create",

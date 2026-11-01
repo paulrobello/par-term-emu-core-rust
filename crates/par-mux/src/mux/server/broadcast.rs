@@ -2,6 +2,7 @@
 //! output wiring, layout/exit replays, and capture ranges.
 
 use super::*;
+use crate::mux::ids::SessionId;
 
 /// Push one line to every connected client, dropping the senders whose
 /// client has gone — the single fan-out every broadcast and sink shares.
@@ -229,6 +230,50 @@ pub(super) fn wire_all_pane_outputs(
 /// `None` when the window is gone.
 pub(super) fn render_layout_change(tree: &MuxTree, window_id: WindowId) -> Option<String> {
     layout_change_notification(tree, window_id).map(|n| emit(&n))
+}
+
+/// The `%window-add` notification for `window_id` against `tree`, its
+/// layout triple formatted exactly as [`broadcast_layout_change`] renders
+/// a `%layout-change` (card 01a0ef3b) — shared by the dispatch spawn
+/// sites and `window-add-replay` so the broadcast and replay forms cannot
+/// drift. `None` when the window is gone.
+pub(crate) fn window_add_notification(
+    tree: &MuxTree,
+    window_id: WindowId,
+) -> Option<TmuxNotification> {
+    let window = tree.window(window_id)?;
+    let layout = window
+        .layout
+        .render(0, 0, window.cols as usize, window.rows as usize);
+    let (visible_layout, raw_flags) = match window.zoomed {
+        Some(pane) => (
+            // The single-pane form render_node produces for a leaf.
+            format!("0000,{}x{},0,0,{}", window.cols, window.rows, pane.0),
+            "Z".to_string(),
+        ),
+        None => (layout.clone(), String::new()),
+    };
+    Some(TmuxNotification::WindowAdd {
+        window_id: window_id.to_string(),
+        window_layout: layout,
+        window_visible_layout: visible_layout,
+        window_raw_flags: raw_flags,
+    })
+}
+
+/// The `%window-add` wire lines for every live window of `session`, in
+/// window-id order — the replay form `window-add-replay` answers with.
+/// Called under the tree lock; each line carries its trailing newline.
+pub(crate) fn replay_window_add_lines(tree: &MuxTree, session: SessionId) -> Vec<String> {
+    let Some(session) = tree.session(session) else {
+        return Vec::new();
+    };
+    let mut windows: Vec<WindowId> = session.windows.clone();
+    windows.sort_unstable();
+    windows
+        .into_iter()
+        .filter_map(|id| window_add_notification(tree, id).map(|n| emit(&n)))
+        .collect()
 }
 
 /// The `%layout-change` notification for `window_id` against `tree` —

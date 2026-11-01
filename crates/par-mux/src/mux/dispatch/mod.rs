@@ -23,7 +23,7 @@ use crate::mux::pane::{MuxError, OutputSink, PaneFactory};
 use crate::mux::persist::{PersistState, SaveOrigin};
 use crate::mux::server::{
     broadcast_layout_change, capture_range, layout_change_notification, pane_output_sink,
-    record_and_broadcast, replay_pane_exited_lines, Clients, OutputEpoch,
+    record_and_broadcast, replay_pane_exited_lines, replay_window_add_lines, Clients, OutputEpoch,
 };
 use crate::mux::tree::{MuxTree, SpawnPlan};
 use base64::Engine as _;
@@ -254,6 +254,7 @@ fn route_command(
         | MuxCommand::PaneTitle { .. }
         | MuxCommand::PaneInfo { .. }
         | MuxCommand::PaneExitedReplay
+        | MuxCommand::WindowAddReplay { .. }
         | MuxCommand::ClearHistory { .. }
         | MuxCommand::ResizePane { .. }
         | MuxCommand::SwapPanes { .. }
@@ -421,31 +422,15 @@ fn spawn_and_wire<P: SpawnPlan>(
 /// between creation and this read degrades to the bare-id form.
 fn window_add_notification(tree: &Arc<Mutex<MuxTree>>, window_id: WindowId) -> TmuxNotification {
     let guard = tree.lock();
-    let Some(window) = guard.window(window_id) else {
-        return TmuxNotification::WindowAdd {
+    crate::mux::server::window_add_notification(&guard, window_id)
+        // A window that vanished between creation and this read degrades
+        // to the bare-id form.
+        .unwrap_or_else(|| TmuxNotification::WindowAdd {
             window_id: window_id.to_string(),
             window_layout: String::new(),
             window_visible_layout: String::new(),
             window_raw_flags: String::new(),
-        };
-    };
-    let layout = window
-        .layout
-        .render(0, 0, window.cols as usize, window.rows as usize);
-    let (visible_layout, raw_flags) = match window.zoomed {
-        Some(pane) => (
-            // The single-pane form render_node produces for a leaf.
-            format!("0000,{}x{},0,0,{}", window.cols, window.rows, pane.0),
-            "Z".to_string(),
-        ),
-        None => (layout.clone(), String::new()),
-    };
-    TmuxNotification::WindowAdd {
-        window_id: window_id.to_string(),
-        window_layout: layout,
-        window_visible_layout: visible_layout,
-        window_raw_flags: raw_flags,
-    }
+        })
 }
 
 /// What [`kill_target`] reports for a kill that landed.

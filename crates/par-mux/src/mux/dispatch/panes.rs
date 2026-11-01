@@ -2,6 +2,7 @@
 //! info, exited-replay, clear-history, resize, swap, break, join, respawn.
 
 use super::*;
+use crate::mux::ids::SessionId;
 
 /// The pane group's router; `route_command` sends only this group's
 /// variants here. `issuer` is for `pane-exited-replay`, which answers on
@@ -35,6 +36,7 @@ pub(super) fn route_pane_command(
         MuxCommand::PaneTitle { pane } => cmd_pane_title(ctx, pane),
         MuxCommand::PaneInfo { pane, mirror } => cmd_pane_info(ctx, pane, mirror),
         MuxCommand::PaneExitedReplay => cmd_pane_exited_replay(ctx, issuer),
+        MuxCommand::WindowAddReplay { session } => cmd_window_add_replay(ctx, session, issuer),
         MuxCommand::ClearHistory { pane } => cmd_clear_history(ctx, pane),
         MuxCommand::ResizePane { pane, adjustment } => cmd_resize_pane(ctx, pane, adjustment),
         MuxCommand::SwapPanes { target, source } => cmd_swap_panes(ctx, target, source),
@@ -536,6 +538,33 @@ pub(super) fn cmd_pane_exited_replay(
     issuer: Option<&SyncSender<String>>,
 ) -> Outcome {
     let lines = replay_pane_exited_lines(&ctx.tree.lock());
+    if let Some(tx) = issuer {
+        for line in lines {
+            if tx.send(line).is_err() {
+                break;
+            }
+        }
+    }
+    Outcome::ok(ctx, "")
+}
+
+/// `window-add-replay -t <session>`: the session's live windows as
+/// `%window-add` lines on the issuing client's push stream (card
+/// 01a1981a — a ring eviction can permanently lose a created session's
+/// `%window-add`, so first-attach adoption must be recoverable from the
+/// tree, not the ring). Sorted by window id; the reply body is empty.
+pub(super) fn cmd_window_add_replay(
+    ctx: &Ctx<'_>,
+    session: Target<SessionId>,
+    issuer: Option<&SyncSender<String>>,
+) -> Outcome {
+    let lines = {
+        let guard = ctx.tree.lock();
+        match guard.resolve_session_target(session) {
+            Ok(id) => replay_window_add_lines(&guard, id),
+            Err(err) => return Outcome::err(ctx, &err.to_string()),
+        }
+    };
     if let Some(tx) = issuer {
         for line in lines {
             if tx.send(line).is_err() {

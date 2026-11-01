@@ -2458,6 +2458,87 @@ fn pane_exited_replay_with_no_held_panes_is_empty() {
     }
 }
 
+/// Card 01a1981a: the loss window-add-replay exists to close. A created
+/// session's `%window-add` is recorded in the ring, but 1024 recorded
+/// events later the ring has evicted it — `events --since 0` can no
+/// longer hand it to a first-attaching client, which is the permanent
+/// loss par-term's adoption starves on. `window-add-replay -t` rebuilds
+/// the same line from the live tree instead, so adoption is deterministic
+/// under eviction.
+#[test]
+fn window_add_replay_recovers_a_session_lost_to_ring_eviction() {
+    use par_term_emu_core::tmux_control::TmuxNotification;
+
+    let fixture = MuxFixture::new("winreplay");
+    let path = fixture.socket();
+    let server = MuxServer::bind(path).expect("bind");
+    let _handle = std::thread::spawn(move || server.run());
+
+    let mut client = par_mux::mux::MuxClient::connect(path).expect("connect");
+    client
+        .send("new-session -s winreplay")
+        .expect("new-session");
+
+    // The created window's id, and the recorded `%window-add` in the ring.
+    let reply = client
+        .send_checked("list-windows -t winreplay")
+        .expect("list-windows");
+    let win = reply.body[0]
+        .split_whitespace()
+        .next()
+        .expect("window id")
+        .to_string();
+    let events = client.send_checked("events --since 0").expect("events");
+    let recorded = events
+        .body
+        .iter()
+        .find(|line| line.contains("%window-add") && line.contains(&win))
+        .expect("the %window-add was recorded with its layout triple")
+        .clone();
+
+    // Churn past the ring capacity: every rename records an event, so
+    // the `%window-add` falls out the back of the 1024-entry ring.
+    for i in 0..1100 {
+        client
+            .send_checked(&format!("rename-window -t {win} w{i}"))
+            .expect("rename");
+    }
+    let events = client.send_checked("events --since 0").expect("events");
+    assert!(
+        !events
+            .body
+            .iter()
+            .any(|line| line.contains("%window-add") && line.contains(&win)),
+        "the %window-add is evicted from the ring — the loss the card demonstrates"
+    );
+
+    // The recovery: the replay rebuilds the same wire line from the tree.
+    let reply = client
+        .send_checked("window-add-replay -t winreplay")
+        .expect("replay");
+    assert!(reply.ok, "window-add-replay succeeds: {:?}", reply.body);
+    let note = next_notification(
+        &mut client,
+        |n| matches!(n, TmuxNotification::WindowAdd { window_id, .. } if window_id == &win),
+    );
+    let TmuxNotification::WindowAdd {
+        window_layout,
+        window_visible_layout,
+        window_raw_flags,
+        ..
+    } = note
+    else {
+        unreachable!("matched");
+    };
+    // The replayed form matches the recorded form's payload (the seq and
+    // timestamp prefix aside) and carries the layout triple like a live
+    // broadcast would.
+    assert!(recorded.contains(&format!("%window-add {win}")));
+    assert!(!window_layout.is_empty(), "layout triple present");
+    assert!(window_visible_layout == window_layout);
+    assert!(window_raw_flags.is_empty());
+}
+
 /// The unique-names rule over a live socket: a second `new-session` with
 /// a taken name is answered `duplicate session: <name>`, renaming onto a
 /// taken name refuses while keeping a session's own name succeeds, and

@@ -143,7 +143,8 @@ mod reap;
 use broadcast::*;
 pub(crate) use broadcast::{
     broadcast_layout_change, broadcast_notification, capture_range, layout_change_notification,
-    pane_output_sink, record_and_broadcast, replay_pane_exited_lines, OutputEpoch,
+    pane_output_sink, record_and_broadcast, replay_pane_exited_lines, replay_window_add_lines,
+    window_add_notification, OutputEpoch,
 };
 use client::*;
 pub use endpoint::sweep_pane_endpoint_remnants;

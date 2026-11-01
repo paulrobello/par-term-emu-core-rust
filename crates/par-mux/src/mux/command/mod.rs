@@ -388,6 +388,16 @@ pub enum MuxCommand {
     /// (ENH-042). The lines go to the issuing client only; the reply body
     /// is empty. Read-only.
     PaneExitedReplay,
+    /// Ask for the live windows of one session as `%window-add` lines on
+    /// demand (card 01a1981a: first-attach event loss — a ring eviction
+    /// can permanently lose a created session's `%window-add`, so a
+    /// client must be able to rebuild adoption from the tree, not the
+    /// ring). The lines go to the issuing client only; the reply body is
+    /// empty. Read-only.
+    WindowAddReplay {
+        /// The session whose live windows to replay.
+        session: Target<SessionId>,
+    },
     /// Clear a pane's scrollback and wipe its visible screen (tmux's
     /// `clear-history`). Structural: the cleared scrollback is what a
     /// restart-restore replays, so a content classification would
@@ -901,6 +911,7 @@ impl MuxCommand {
             | MuxCommand::PaneTitle { .. }
             | MuxCommand::PaneInfo { .. }
             | MuxCommand::PaneExitedReplay
+            | MuxCommand::WindowAddReplay { .. }
             | MuxCommand::ShowBuffer
             | MuxCommand::PasteBuffer { .. }
             | MuxCommand::SetClientColors { .. }
@@ -1667,6 +1678,7 @@ const COMMANDS: &[(&str, CommandParser, &[&str])] = &[
     ("pane-title", parse_pane_title, &[]),
     ("pane-info", parse_pane_info, &["cmd", "viewer-status"]),
     ("pane-exited-replay", parse_pane_exited_replay, &[]),
+    ("window-add-replay", parse_window_add_replay, &[]),
     ("clear-history", parse_clear_history, &[]),
     ("resize-pane", parse_resize_pane, &["zoom", "absolute"]),
     ("swap-pane", parse_swap_pane, &[]),
@@ -1736,7 +1748,7 @@ pub(crate) fn list_commands_body() -> String {
         })
         .collect();
     lines.sort();
-    lines.push("features replay-held-state".to_string());
+    lines.push("features replay-held-state window-add-replay".to_string());
     lines.join("\n")
 }
 
