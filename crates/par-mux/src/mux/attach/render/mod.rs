@@ -605,6 +605,7 @@ fn render_session_inner(
         &path,
         options.target.as_deref(),
         client.chords.session_picker,
+        client.chords.prefer_default_workspace,
     )
     .map_err(|err| err.unwrap_or_else(no_daemon))?;
     let mut conn = crate::mux::attach::conn::AttachConn::connect(&path).map_err(|_| no_daemon())?;
@@ -971,6 +972,9 @@ struct WindowSession {
     /// The config's `session-picker` (launch-only like
     /// `sidebar_on_launch`: the next target-less attach reads it).
     session_picker: bool,
+    /// The config's `prefer-default-workspace` (launch-only: the next
+    /// target-less attach's workspace preference).
+    prefer_default_workspace: bool,
     /// The config's `git-status` (the sidebar badge's render gate and
     /// its idle refresh poll's gate). Live on reload.
     git_status: bool,
@@ -1403,6 +1407,7 @@ impl WindowSession {
             scroll_match_ix: 0,
             sidebar_on_launch: chords.sidebar_on_launch,
             session_picker: chords.session_picker,
+            prefer_default_workspace: chords.prefer_default_workspace,
             git_status: chords.git_status,
             session_strip_mode: SessionStripMode::from_config(&chords.session_strip),
             agent_state_dots: chords.agent_state_dots == "on",

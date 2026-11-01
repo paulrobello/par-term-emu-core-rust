@@ -706,6 +706,7 @@ impl WindowSession {
                 change_cursor_shape: self.cursor.change_cursor_shape,
                 kitty_graphics: self.kitty.enabled,
                 session_picker: self.session_picker,
+                prefer_default_workspace: self.prefer_default_workspace,
                 git_status: self.git_status,
                 git_poll_secs: self.git_poll_secs,
                 border_lines: self.render_opts.glyphs.name().to_string(),

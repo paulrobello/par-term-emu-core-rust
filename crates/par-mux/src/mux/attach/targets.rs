@@ -183,10 +183,18 @@ pub(crate) fn picked_target(
     query: &mut dyn FnMut(&str) -> std::io::Result<crate::mux::client::Reply>,
     target: Option<&str>,
     active: bool,
+    prefer_default: bool,
     choose: &mut dyn FnMut(&[super::picker::PickerRow]) -> Option<usize>,
 ) -> Result<Option<String>, String> {
     if let Some(target) = target {
         return Ok(Some(target.to_string()));
+    }
+    // The workspace preference (config `prefer-default-workspace`): with
+    // several workspaces, the one named `default` — else the first listed
+    // — resolves to its first session, ahead of the picker and the
+    // target-less refusal. One workspace keeps the target-less rule.
+    if let Some(session) = prefer_default_workspace_target(query, prefer_default)? {
+        return Ok(Some(session));
     }
     if !active {
         return Ok(None);
@@ -215,6 +223,52 @@ pub(crate) fn picked_target(
         Some(row) => Ok(Some(row.id.clone())),
         None => Err(multi_session_error(&sessions)),
     }
+}
+
+/// The workspace preference's resolution (config
+/// `prefer-default-workspace`): with two or more workspaces, the one
+/// named `default` — else the first listed — and its first session;
+/// `Ok(None)` when the option is off or a single workspace keeps the
+/// target-less rule.
+pub(crate) fn prefer_default_workspace_target(
+    query: &mut dyn FnMut(&str) -> std::io::Result<crate::mux::client::Reply>,
+    on: bool,
+) -> Result<Option<String>, String> {
+    if !on {
+        return Ok(None);
+    }
+    let workspaces = query("list-workspaces")
+        .map_err(|err| format!("list-workspaces failed: {err}"))?
+        .body;
+    // Rows are `+N <name>` with an optional ` active` tail; the name is
+    // the second whitespace field.
+    let named: Vec<(String, String)> = workspaces
+        .iter()
+        .filter_map(|line| {
+            let mut fields = line.split_whitespace();
+            // The listing's id token prints tmux-style with a trailing
+            // colon (`+4:`); targets take the bare id.
+            let id = fields.next()?.trim_end_matches(':').to_string();
+            let name = fields.next()?.trim_end_matches(':').to_string();
+            Some((id, name))
+        })
+        .collect();
+    if named.len() < 2 {
+        return Ok(None);
+    }
+    let chosen = named
+        .iter()
+        .find(|(_, name)| name == "default")
+        .unwrap_or(&named[0])
+        .0
+        .clone();
+    let sessions = query(&format!("list-sessions -t {chosen}"))
+        .map_err(|err| format!("list-sessions failed: {err}"))?
+        .body;
+    Ok(sessions
+        .iter()
+        .filter_map(|l| parse_session_line(l).map(|(id, _)| id))
+        .next())
 }
 
 /// The owning session id of every window (`list-windows -a` rows are

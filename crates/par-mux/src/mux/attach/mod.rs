@@ -278,12 +278,16 @@ fn run_inner(
     let path = options.socket_path();
     // The session picker runs before the attach connection and the
     // terminal guard exist.
-    let target =
-        picker::picked_target_on_host(&path, options.target.as_deref(), chords.session_picker)
-            .map_err(|err| match err {
-                Some(err) => AttachError::Handshake(std::io::Error::other(err)),
-                None => AttachError::NoDaemon(path.clone()),
-            })?;
+    let target = picker::picked_target_on_host(
+        &path,
+        options.target.as_deref(),
+        chords.session_picker,
+        chords.prefer_default_workspace,
+    )
+    .map_err(|err| match err {
+        Some(err) => AttachError::Handshake(std::io::Error::other(err)),
+        None => AttachError::NoDaemon(path.clone()),
+    })?;
     let conn = conn::AttachConn::connect(&path).map_err(|_| AttachError::NoDaemon(path.clone()))?;
 
     // Client-contract warnings: stamp mismatch (warn-only). Written BEFORE

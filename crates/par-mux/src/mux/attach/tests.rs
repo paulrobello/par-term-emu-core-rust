@@ -3684,6 +3684,7 @@ fn picked_target_hands_several_sessions_to_the_chooser() {
         &mut two_session_query(&mut asked),
         None,
         true,
+        false,
         &mut |rows| {
             seen = rows.to_vec();
             Some(1)
@@ -3709,9 +3710,13 @@ fn picked_target_hands_several_sessions_to_the_chooser() {
 #[test]
 fn picked_target_abort_is_the_refusal() {
     let mut asked = Vec::new();
-    let err = picked_target(&mut two_session_query(&mut asked), None, true, &mut |_| {
-        None
-    })
+    let err = picked_target(
+        &mut two_session_query(&mut asked),
+        None,
+        true,
+        false,
+        &mut |_| None,
+    )
     .expect_err("aborted");
     assert_eq!(
         err,
@@ -3732,7 +3737,13 @@ fn picked_target_stays_out_of_the_way() {
         |_: &[picker::PickerRow]| -> Option<usize> { panic!("the chooser must not run") };
     let mut asked = Vec::new();
     assert_eq!(
-        picked_target(&mut two_session_query(&mut asked), None, false, &mut never),
+        picked_target(
+            &mut two_session_query(&mut asked),
+            None,
+            false,
+            false,
+            &mut never
+        ),
         Ok(None)
     );
     assert_eq!(
@@ -3740,6 +3751,7 @@ fn picked_target_stays_out_of_the_way() {
             &mut two_session_query(&mut asked),
             Some("$0"),
             true,
+            false,
             &mut never
         ),
         Ok(Some("$0".to_string()))
@@ -3751,5 +3763,93 @@ fn picked_target_stays_out_of_the_way() {
             ok: true,
         })
     };
-    assert_eq!(picked_target(&mut single, None, true, &mut never), Ok(None));
+    assert_eq!(
+        picked_target(&mut single, None, true, false, &mut never),
+        Ok(None)
+    );
+}
+
+/// The workspace preference (card 01a1988e3): with several workspaces,
+/// the one named `default` resolves to its first session.
+#[test]
+fn prefer_default_workspace_picks_the_default_workspaces_session() {
+    let mut asked = Vec::new();
+    let picked = picked_target(
+        &mut |command: &str| {
+            asked.push(command.to_string());
+            let body = match command {
+                "list-workspaces" => "+4: default active\n+9: kanban".to_string(),
+                "list-sessions -t +4" => "+4: default: $10: default".to_string(),
+                _ => String::new(),
+            };
+            Ok(crate::mux::client::Reply {
+                body: body.lines().map(str::to_string).collect(),
+                ok: true,
+            })
+        },
+        None,
+        false,
+        true,
+        &mut |_| panic!("the chooser must not run"),
+    )
+    .expect("picked");
+    assert_eq!(picked.as_deref(), Some("$10"));
+    assert_eq!(
+        asked,
+        ["list-workspaces", "list-sessions -t +4"],
+        "reads only"
+    );
+}
+
+/// No `default` workspace: the first listed one resolves instead.
+#[test]
+fn prefer_default_workspace_falls_back_to_the_first_workspace() {
+    let picked = picked_target(
+        &mut |command: &str| {
+            let body = match command {
+                "list-workspaces" => "+9: kanban\n+22: par-rt-db".to_string(),
+                "list-sessions -t +9" => "+9: kanban: $21: kanban".to_string(),
+                _ => String::new(),
+            };
+            Ok(crate::mux::client::Reply {
+                body: body.lines().map(str::to_string).collect(),
+                ok: true,
+            })
+        },
+        None,
+        false,
+        true,
+        &mut |_| panic!("the chooser must not run"),
+    )
+    .expect("picked");
+    assert_eq!(picked.as_deref(), Some("$21"));
+}
+
+/// One workspace (or the option off) keeps the target-less rule: nothing
+/// resolves, the chooser never runs, and nothing is queried.
+#[test]
+fn prefer_default_workspace_keeps_the_single_workspace_rule() {
+    for on in [false, true] {
+        let mut asked = Vec::new();
+        let picked = picked_target(
+            &mut |command: &str| {
+                asked.push(command.to_string());
+                let body = match command {
+                    "list-workspaces" => "+4: default active".to_string(),
+                    _ => String::new(),
+                };
+                Ok(crate::mux::client::Reply {
+                    body: body.lines().map(str::to_string).collect(),
+                    ok: true,
+                })
+            },
+            None,
+            false,
+            on,
+            &mut |_| panic!("the chooser must not run"),
+        )
+        .expect("picked");
+        assert_eq!(picked, None);
+        assert_eq!(asked, if on { vec!["list-workspaces"] } else { vec![] });
+    }
 }

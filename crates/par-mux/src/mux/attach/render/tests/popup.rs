@@ -329,7 +329,7 @@ fn settings_popup_rows_add_edit_and_delete() {
     // included), then the add row — reach it before asserting, the
     // panel scrolls.
     session.route_stdin_bytes(&mut conn, b"\t\t");
-    session.route_stdin_bytes(&mut conn, b"jjjjjjjjjjj");
+    session.route_stdin_bytes(&mut conn, b"jjjjjjjjjjjj");
     let rows = overlay_text(&session);
     assert!(
         rows.iter()

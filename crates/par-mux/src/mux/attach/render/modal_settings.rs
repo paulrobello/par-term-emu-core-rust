@@ -380,6 +380,12 @@ const GENERAL_ROWS: &[SettingSpec] = &[
         |v, _| FieldVal::Bool(v.session_picker),
     ),
     SettingSpec::new(
+        "prefer-default-workspace",
+        "prefer default workspace",
+        SettingKind::Toggle,
+        |v, _| FieldVal::Bool(v.prefer_default_workspace),
+    ),
+    SettingSpec::new(
         "git-status",
         "git status badge",
         SettingKind::Toggle,
@@ -606,6 +612,7 @@ pub(super) struct SettingsValues {
     pub change_cursor_shape: bool,
     pub kitty_graphics: bool,
     pub session_picker: bool,
+    pub prefer_default_workspace: bool,
     pub git_status: bool,
     /// The git badge poll interval in seconds (`[client] git-poll-secs`).
     pub git_poll_secs: u64,
@@ -914,6 +921,7 @@ impl WindowSession {
             change_cursor_shape: self.cursor.change_cursor_shape,
             kitty_graphics: self.kitty.enabled,
             session_picker: self.session_picker,
+            prefer_default_workspace: self.prefer_default_workspace,
             git_status: self.git_status,
             git_poll_secs: self.git_poll_secs,
             resize_step: self.resize_step,
@@ -1356,6 +1364,7 @@ mod tests {
             change_cursor_shape: false,
             kitty_graphics: true,
             session_picker: false,
+            prefer_default_workspace: false,
             git_status: true,
             git_poll_secs: 10,
             resize_step: 1,

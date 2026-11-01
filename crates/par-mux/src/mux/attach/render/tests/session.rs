@@ -6547,7 +6547,7 @@ fn settings_row_toggles_the_git_badge() {
     // The general tab now carries nine fixed rows (the tab-width rows
     // included) and the panel scrolls — reach the git row before
     // asserting on it.
-    session.route_stdin_bytes(&mut conn, b"jjjjjjjjjj");
+    session.route_stdin_bytes(&mut conn, b"jjjjjjjjjjj");
     let rows = overlay_text(&session);
     assert!(
         rows.iter()

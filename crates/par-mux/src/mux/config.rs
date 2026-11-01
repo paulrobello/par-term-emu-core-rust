@@ -451,6 +451,16 @@ pub struct ClientSection {
         skip_serializing_if = "Option::is_none"
     )]
     pub session_picker: Option<bool>,
+    /// A target-less attach against several WORKSPACES lands the
+    /// workspace named `default`, else the first listed one, instead of
+    /// refusing or picking (both modes). One workspace keeps the
+    /// target-less rule. Default off.
+    #[serde(
+        default,
+        rename = "prefer-default-workspace",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub prefer_default_workspace: Option<bool>,
     /// The workspace side panel's git badge (` main ↑2` under the
     /// displayed session's workspace; render mode). Default on.
     #[serde(
@@ -1237,6 +1247,7 @@ pub fn render(eff: &EffectiveConfig) -> String {
             change_cursor_shape: Some(defaults.change_cursor_shape),
             kitty_graphics: Some(defaults.kitty_graphics),
             session_picker: Some(defaults.session_picker),
+            prefer_default_workspace: Some(defaults.prefer_default_workspace),
             git_status: Some(defaults.git_status),
             border_active_color: Some(eff.border_active_color.clone()),
             border_color: Some(eff.border_color.clone()),
@@ -1365,6 +1376,11 @@ pub struct Chords {
     /// The target-less multi-session picker (config `session-picker`).
     /// Default off. Read at launch: a reload changes the next attach.
     pub session_picker: bool,
+    /// The target-less multi-workspace landing (config
+    /// `prefer-default-workspace`): several workspaces resolve to the
+    /// one named `default`, else the first listed. Default off. Read at
+    /// launch, like the picker.
+    pub prefer_default_workspace: bool,
     /// The sidebar's git badge (config `git-status`). Default on. The
     /// daemon reads it to emit the snapshot's `git` row; the client to
     /// render the badge and run its refresh poll.
@@ -1508,6 +1524,7 @@ impl Chords {
             change_cursor_shape: true,
             kitty_graphics: true,
             session_picker: false,
+            prefer_default_workspace: false,
             git_status: true,
             git_poll_secs: 10,
             tab_width_min: 0,
@@ -1819,6 +1836,10 @@ pub fn reload_client_chords(file: &ConfigFile, current: &Chords) -> Result<Chord
         .unwrap_or(current.change_cursor_shape);
     let kitty_graphics = file.client.kitty_graphics.unwrap_or(current.kitty_graphics);
     let session_picker = file.client.session_picker.unwrap_or(current.session_picker);
+    let prefer_default_workspace = file
+        .client
+        .prefer_default_workspace
+        .unwrap_or(current.prefer_default_workspace);
     let git_status = file.client.git_status.unwrap_or(current.git_status);
     // The poll interval clamps instead of erroring: a bad number is the
     // file philosophy's warn-and-default, and 0 would spin the poll.
@@ -1886,6 +1907,7 @@ pub fn reload_client_chords(file: &ConfigFile, current: &Chords) -> Result<Chord
         change_cursor_shape,
         kitty_graphics,
         session_picker,
+        prefer_default_workspace,
         git_status,
         git_poll_secs,
         border_lines,
