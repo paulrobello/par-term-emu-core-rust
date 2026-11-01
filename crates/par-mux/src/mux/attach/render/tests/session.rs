@@ -4323,6 +4323,8 @@ fn roster_entry(pane: u32, agent: &str, state: &str, workspace: Option<&str>) ->
         agent: agent.to_string(),
         state: state.to_string(),
         workspace: workspace.map(str::to_string),
+        session: None,
+        window: None,
         project: None,
         message: None,
     }
@@ -6514,6 +6516,8 @@ fn settings_row_toggles_the_session_picker() {
     session.settings_path = Some(path.clone());
     session.enter_settings();
     session.route_stdin_bytes(&mut conn, b"\t\t");
+    // The general tab scrolls — reach the picker row before asserting.
+    session.route_stdin_bytes(&mut conn, b"jjjjjjjjj");
     let rows = overlay_text(&session);
     assert!(
         rows.iter()
@@ -6521,7 +6525,7 @@ fn settings_row_toggles_the_session_picker() {
         "the row shows the default in force: {rows:#?}"
     );
     assert!(!session.session_picker);
-    session.route_stdin_bytes(&mut conn, b"jjjjjjj\r");
+    session.route_stdin_bytes(&mut conn, b"\r");
     settle(&mut session, &mut conn);
     let written = std::fs::read_to_string(&path).unwrap();
     assert!(written.contains("session-picker = true"), "{written}");
@@ -6543,7 +6547,7 @@ fn settings_row_toggles_the_git_badge() {
     // The general tab now carries nine fixed rows (the tab-width rows
     // included) and the panel scrolls — reach the git row before
     // asserting on it.
-    session.route_stdin_bytes(&mut conn, b"jjjjjjjj");
+    session.route_stdin_bytes(&mut conn, b"jjjjjjjjjj");
     let rows = overlay_text(&session);
     assert!(
         rows.iter()

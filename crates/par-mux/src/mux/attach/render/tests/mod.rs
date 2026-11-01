@@ -24,6 +24,7 @@ mod kitty;
 mod popup;
 mod scrollback_edit;
 mod session;
+mod session_strip;
 
 /// The daemon's actual render output for a 50/50 vertical split of an
 /// 80x24 window (LayoutTree::render's collapsed N-ary form), matching

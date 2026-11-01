@@ -23,6 +23,7 @@
 //! render mode draws them in the side panel's agents section.
 
 use super::conn::AttachConn;
+use super::panels::AgentStatus;
 use super::spell_key;
 use crate::mux::client::Reply;
 use crate::mux::ipc::{AgentRow, GitStatusRow, WindowRow, WorktreeRow};
@@ -92,12 +93,22 @@ pub(crate) fn status_query(
 /// committed whole by [`StatusState::commit`] (ENH-053). `None` fields
 /// keep the state's previous value — the legacy path's per-fact
 /// keep-on-failure rule, applied at commit granularity.
+/// One session row the status state knows: the id, the display name,
+/// and the owning workspace id (`None` on a row without one).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct SessionFact {
+    pub id: String,
+    pub name: String,
+    pub workspace: Option<String>,
+}
+
 #[derive(Debug, Default)]
 struct StatusFacts {
     workspaces: Option<Vec<(String, String, bool)>>,
-    sessions: Option<Vec<(String, String)>>,
+    sessions: Option<Vec<SessionFact>>,
     session_id: Option<String>,
     session_workspace: Option<String>,
+    restored: Option<Option<u64>>,
     windows: Option<Vec<(String, String)>>,
     active_window: Option<String>,
     pane_title: Option<String>,
@@ -126,11 +137,19 @@ impl StatusFacts {
         let workspace = row.workspace().map(str::to_string);
         let project = row.project();
         let message = row.reason();
+        let extra = |name: &str| {
+            row.extras
+                .iter()
+                .find(|(key, _)| key == name)
+                .map(|(_, value)| value.clone())
+        };
         Some(RosterEntry {
             pane: pane_number(&row.pane)?,
             agent: row.agent,
             state: row.state,
             workspace,
+            session: extra("session"),
+            window: extra("win"),
             project,
             message,
         })
@@ -150,7 +169,12 @@ impl StatusFacts {
             sessions: Some(
                 sessions
                     .iter()
-                    .filter_map(|line| super::parse_session_line(line))
+                    .filter_map(|line| crate::mux::ipc::SessionRow::parse(line))
+                    .map(|row| SessionFact {
+                        workspace: row.workspace.map(|(ws_id, _)| ws_id),
+                        id: row.id,
+                        name: row.name,
+                    })
                     .collect(),
             ),
             ..Self::default()
@@ -200,13 +224,17 @@ pub(crate) struct StatusState {
     /// active one — the workspaces segment's source.
     workspaces: Vec<(String, String)>,
     active_workspace: Option<String>,
-    /// Every session as `(id, name)`, in `list-sessions` order.
-    sessions: Vec<(String, String)>,
+    /// Every session as its [`SessionFact`], in `list-sessions` order.
+    sessions: Vec<SessionFact>,
     /// The session this view's window belongs to, `"$N"`.
     pub session_id: Option<String>,
     /// The workspace that session belongs to, `"+W"` — kept after the
     /// session is gone, so the landing can walk up to the workspace.
     pub session_workspace: Option<String>,
+    /// The last snapshot's boot-restore age in seconds, when the daemon
+    /// restored at boot (`restored` row). `None` from a fresh daemon or
+    /// the legacy per-fact path. The restart toast reads it once.
+    pub restored_age: Option<u64>,
     /// The shown session's windows as `(id, name)`, window order.
     windows: Vec<(String, String)>,
     /// The shown session's active window id, `"@N"`.
@@ -239,6 +267,12 @@ pub(crate) struct RosterEntry {
     /// The owning workspace id (`+N`); `None` when unknown (a pre-`ws`
     /// daemon, or a row a patch inserted before a refresh placed it).
     pub workspace: Option<String>,
+    /// The owning session id (`$N`), from the row's `session=` extra;
+    /// `None` on a daemon that does not send it — the session strip's
+    /// dot skips such rows.
+    pub session: Option<String>,
+    /// The owning window id (`@N`), from the row's `win=` extra.
+    pub window: Option<String>,
     /// The pane's project (the host probe's git work-tree basename);
     /// `None` until a probe sweep reached the pane. A state push carries
     /// no project, so a patch keeps the known one.
@@ -364,6 +398,7 @@ impl StatusState {
             sessions,
             session_id,
             session_workspace,
+            restored,
             windows,
             active_window,
             pane_title,
@@ -390,6 +425,9 @@ impl StatusState {
         }
         if let Some(session_workspace) = session_workspace {
             self.session_workspace = Some(session_workspace);
+        }
+        if let Some(restored) = restored {
+            self.restored_age = restored;
         }
         if let Some(windows) = windows {
             self.active_window =
@@ -465,7 +503,14 @@ impl StatusState {
                     facts
                         .sessions
                         .get_or_insert_with(Vec::new)
-                        .push((id.to_string(), name.to_string()));
+                        .push(SessionFact {
+                            id: id.to_string(),
+                            name: name.to_string(),
+                            workspace: Some(ws.to_string()),
+                        });
+                }
+                "restored" => {
+                    facts.restored = Some(rest.trim().parse::<u64>().ok());
                 }
                 "window" => {
                     let Some(row) = WindowRow::parse(rest) else {
@@ -642,6 +687,43 @@ impl StatusState {
         &self.windows
     }
 
+    /// The shown session's workspace's sessions as `(id, name)`, in
+    /// `list-sessions` order — the session strip's entries. A session
+    /// whose row carried no workspace matches a view with an unknown
+    /// workspace, the legacy rows' shared bucket.
+    pub(crate) fn workspace_sessions(&self) -> Vec<(String, String)> {
+        self.sessions
+            .iter()
+            .filter(|fact| fact.workspace.as_deref() == self.session_workspace.as_deref())
+            .map(|fact| (fact.id.clone(), fact.name.clone()))
+            .collect()
+    }
+
+    /// The most urgent agent status among the roster entries living in
+    /// `session`, via the roster's own precedence ([`AgentStatus`]'s
+    /// ordering — the side panel's most-urgent-wins). `None` when no
+    /// known entry lives there (a daemon without the `session=` extras
+    /// reports no dots).
+    pub(crate) fn session_agent_status(&self, session: &str) -> AgentStatus {
+        self.agents
+            .iter()
+            .filter(|entry| entry.session.as_deref() == Some(session))
+            .map(|entry| AgentStatus::from_state(&entry.state))
+            .max()
+            .unwrap_or(AgentStatus::None)
+    }
+
+    /// The most urgent agent status among the roster entries living in
+    /// `window` — the tab strip's per-tab dot.
+    pub(crate) fn window_agent_status(&self, window: &str) -> AgentStatus {
+        self.agents
+            .iter()
+            .filter(|entry| entry.window.as_deref() == Some(window))
+            .map(|entry| AgentStatus::from_state(&entry.state))
+            .max()
+            .unwrap_or(AgentStatus::None)
+    }
+
     /// The agent roster in pane-id order — the side panel's agents
     /// section's source of truth.
     pub(crate) fn agents(&self) -> &[RosterEntry] {
@@ -738,6 +820,8 @@ impl StatusState {
                             agent: agent.to_string(),
                             state: state.to_string(),
                             workspace: (!ws.is_empty()).then(|| ws.to_string()),
+                            session: None,
+                            window: None,
                             project: None,
                             message: (!message.is_empty()).then(|| message.to_string()),
                         },
@@ -833,12 +917,18 @@ impl StatusState {
             if !self.workspaces.is_empty() {
                 push(&mut segments, " | ".to_string(), false, false, false);
             }
-            for (index, (id, name)) in self.sessions.iter().enumerate() {
+            for (index, fact) in self.sessions.iter().enumerate() {
                 if index > 0 {
                     push(&mut segments, " ".to_string(), false, false, false);
                 }
-                let current = self.session_id.as_deref() == Some(id.as_str());
-                push(&mut segments, format!("{id}:{name}"), current, false, false);
+                let current = self.session_id.as_deref() == Some(fact.id.as_str());
+                push(
+                    &mut segments,
+                    format!("{}:{}", fact.id, fact.name),
+                    current,
+                    false,
+                    false,
+                );
             }
         }
         if !self.windows.is_empty() {
@@ -1081,11 +1171,20 @@ mod tests {
             ],
             active_workspace: Some("+0".to_string()),
             sessions: vec![
-                ("$0".to_string(), "work".to_string()),
-                ("$1".to_string(), "play".to_string()),
+                SessionFact {
+                    id: "$0".to_string(),
+                    name: "work".to_string(),
+                    workspace: Some("+0".to_string()),
+                },
+                SessionFact {
+                    id: "$1".to_string(),
+                    name: "play".to_string(),
+                    workspace: Some("+1".to_string()),
+                },
             ],
             session_id: Some("$0".to_string()),
             session_workspace: Some("+0".to_string()),
+            restored_age: None,
             windows: vec![
                 ("@0".to_string(), "main".to_string()),
                 ("@1".to_string(), "vim".to_string()),
@@ -1110,6 +1209,8 @@ mod tests {
             agent: agent.to_string(),
             state: state.to_string(),
             workspace: None,
+            session: None,
+            window: None,
             project: None,
             message: None,
         }
@@ -1173,6 +1274,63 @@ mod tests {
             "agent %1 claude working hook",
             "agent %2 kimi blocked hook reason=d2FpdA==",
         ])
+    }
+
+    /// The `restored` row and the roster rows' `session=`/`win=` extras
+    /// commit: the restart toast's fact, and the dots' scoping keys.
+    #[test]
+    fn snapshot_restored_row_and_agent_scope_extras_commit() {
+        let mut got = StatusState::default();
+        let mut body = snapshot_body();
+        body.insert(3, "restored 7".to_string());
+        body.push("agent %1 claude question hook session=$0 win=@0".to_string());
+        let reply = Reply { ok: true, body };
+        got.apply_snapshot_reply(&reply, 1).expect("applies");
+        assert_eq!(got.restored_age, Some(7));
+        let scoped = got
+            .agents
+            .iter()
+            .find(|e| e.session.is_some())
+            .expect("the scoped row");
+        assert_eq!(scoped.session.as_deref(), Some("$0"));
+        assert_eq!(scoped.window.as_deref(), Some("@0"));
+        // Most-urgent wins within the scope (the roster's own
+        // precedence): the question row outranks the base working row on
+        // the same session, and the sibling session shows no dot.
+        assert_eq!(got.session_agent_status("$0"), AgentStatus::Question);
+        assert_eq!(got.session_agent_status("$1"), AgentStatus::None);
+        assert_eq!(got.window_agent_status("@0"), AgentStatus::Question);
+        assert_eq!(got.window_agent_status("@1"), AgentStatus::None);
+    }
+
+    /// The session strip's entries: the shown workspace's sessions in
+    /// `list-sessions` order, the sibling workspace's session left out.
+    #[test]
+    fn workspace_sessions_lists_the_shown_workspace_only() {
+        let got = state();
+        assert_eq!(
+            got.workspace_sessions(),
+            vec![("$0".to_string(), "work".to_string())]
+        );
+    }
+
+    /// The legacy `list-sessions` rows carry the workspace prefix, so
+    /// the legacy refresh knows each session's workspace too.
+    #[test]
+    fn legacy_session_rows_keep_the_workspace() {
+        let facts = StatusFacts::legacy_from(
+            &[
+                "+1: beta: $1: play".to_string(),
+                "+0: alpha: $0: work".to_string(),
+            ],
+            None,
+            ("$0".to_string(), vec!["@0 * main".to_string()]),
+            None,
+            None,
+        );
+        let sessions = facts.sessions.expect("parsed");
+        assert_eq!(sessions[0].workspace.as_deref(), Some("+1"));
+        assert_eq!(sessions[1].workspace.as_deref(), Some("+0"));
     }
 
     /// A full snapshot body yields the same state the legacy fixture
@@ -1363,6 +1521,8 @@ mod tests {
                     agent: "pi".to_string(),
                     state: "blocked".to_string(),
                     workspace: Some("+1".to_string()),
+                    session: None,
+                    window: None,
                     project: None,
                     message: None,
                 },

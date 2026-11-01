@@ -447,9 +447,9 @@ pub(super) fn roster_rows(guard: &MuxTree) -> Vec<String> {
             let inner: Vec<(PaneId, crate::mux::ipc::AgentRow)> = session
                 .windows
                 .iter()
-                .filter_map(|w| guard.window(*w))
-                .flat_map(|w| w.panes())
-                .filter_map(|p| {
+                .filter_map(|w| guard.window(*w).map(|win| (*w, win)))
+                .flat_map(|(w, win)| win.panes().into_iter().map(move |p| (p, w)))
+                .filter_map(|(p, w)| {
                     let pane = guard.pane(p)?;
                     let state = pane.metadata().get("agent_state")?;
                     let agent = pane.metadata().get("agent")?;
@@ -473,24 +473,28 @@ pub(super) fn roster_rows(guard: &MuxTree) -> Vec<String> {
                     let host = crate::mux::host_probe::fresh_host_telemetry_b64(
                         pane.host_telemetry.as_ref(),
                     );
-                    Some((
+                    let mut row = roster_row(
                         p,
-                        roster_row(
-                            p,
-                            agent,
-                            state,
-                            source,
-                            RosterTokens {
-                                reason,
-                                telemetry,
-                                host_telemetry: host.as_deref(),
-                                activity_at: pane.last_activity_at(),
-                                report_at: pane.last_report_at(),
-                                input_at: pane.last_client_input_at(),
-                            },
-                            ws.clone(),
-                        ),
-                    ))
+                        agent,
+                        state,
+                        source,
+                        RosterTokens {
+                            reason,
+                            telemetry,
+                            host_telemetry: host.as_deref(),
+                            activity_at: pane.last_activity_at(),
+                            report_at: pane.last_report_at(),
+                            input_at: pane.last_client_input_at(),
+                        },
+                        ws.clone(),
+                    );
+                    // The owning session and window (`session=`/`win=`
+                    // extras): the session strip's and the tabs' agent dots
+                    // scope a roster row to its entry. Additive tokens — a
+                    // client that never reads them parses the row fine.
+                    row.extras.push(("session".to_string(), sid.to_string()));
+                    row.extras.push(("win".to_string(), w.to_string()));
+                    Some((p, row))
                 })
                 .collect::<Vec<_>>();
             Some(inner)
@@ -509,6 +513,7 @@ pub(super) fn roster_rows(guard: &MuxTree) -> Vec<String> {
 /// snapshot 1
 /// workspace +W <*|-> <name>
 /// session $N <*|-> +W <name>
+/// restored <secs-since-boot-restore>
 /// window @N <*|-> <name>
 /// pane %N [<title>]
 /// agent %N <agent> <state> <source> [key=value…]
@@ -518,7 +523,9 @@ pub(super) fn roster_rows(guard: &MuxTree) -> Vec<String> {
 ///
 /// `workspace` rows in id order (`*` = the daemon's active workspace);
 /// `session` rows in `list-sessions` order (`*` = the session owning the
-/// window); `window` rows are the owner's windows (`*` = its active
+/// window); a `restored` row names the boot restore's age in seconds and
+/// is present only on a daemon whose tree came from a restart's restore;
+/// `window` rows are the owner's windows (`*` = its active
 /// window); `pane` rows follow `Window::panes()` with every `\r`/`\n` in
 /// the title turned into a space; `agent` rows are exactly the
 /// `list-agents` rows; `worktree` rows are exactly the `list-worktrees`
@@ -565,6 +572,12 @@ pub(super) fn cmd_client_snapshot(ctx: &Ctx<'_>, window: Target<WindowId>) -> Ou
                 session.id, ws.id, session.name
             ));
         }
+    }
+    // The boot-restore marker: present only on a daemon whose tree came
+    // from a restart's restore, carrying its age in seconds. The client
+    // decides freshness; the additive rule keeps older clients parsing.
+    if let Some(age) = guard.restored_age_secs() {
+        lines.push(format!("restored {age}"));
     }
     if let Some(session) = guard.session(owner) {
         lines.extend(

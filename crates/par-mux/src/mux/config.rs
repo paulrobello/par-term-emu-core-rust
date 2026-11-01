@@ -477,6 +477,23 @@ pub struct ClientSection {
         skip_serializing_if = "Option::is_none"
     )]
     pub agents_sort: Option<String>,
+    /// The session strip's visibility (render mode): `auto` (the default
+    /// — shown while the workspace holds two or more sessions), `always`,
+    /// or `off`.
+    #[serde(
+        default,
+        rename = "session-strip",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub session_strip: Option<String>,
+    /// The agent-state dots on the session strip and the window tabs
+    /// (render mode): `off` (the default) or `on`.
+    #[serde(
+        default,
+        rename = "agent-state-dots",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub agent_state_dots: Option<String>,
     /// The focused pane's border/divider highlight, `#rrggbb` hex. Empty
     /// = the built-in accent (bright cyan). Config-file only, like the
     /// other `[client]` display options.
@@ -1169,6 +1186,8 @@ pub fn render(eff: &EffectiveConfig) -> String {
             reload: Some(eff.reload.clone()),
             git_poll_secs: Some(eff.git_poll_secs),
             agents_sort: Some(defaults.agents_sort.clone()),
+            session_strip: Some(defaults.session_strip.clone()),
+            agent_state_dots: Some(defaults.agent_state_dots.clone()),
             split_right: None,
             split_down: None,
             kill_pane: None,
@@ -1361,6 +1380,13 @@ pub struct Chords {
     /// `agent_panel_sort` — `grouped` (workspace groups, status priority
     /// beneath) or `priority` (status first). Default `grouped`.
     pub agents_sort: String,
+    /// The session strip's visibility (config `session-strip`): `auto`
+    /// (shown while the workspace holds two or more sessions), `always`,
+    /// or `off`. Default `auto`.
+    pub session_strip: String,
+    /// The agent-state dots on the session strip and the window tabs
+    /// (config `agent-state-dots`): `off` or `on`. Default `off`.
+    pub agent_state_dots: String,
     /// The workspace side panel's width in columns when shown.
     pub sidebar_width: u16,
     /// Whether the side panel shows when a render client attaches
@@ -1488,6 +1514,8 @@ impl Chords {
             tab_width_max: 0,
             border_lines: "herdr".to_string(),
             agents_sort: "grouped".to_string(),
+            session_strip: "auto".to_string(),
+            agent_state_dots: "off".to_string(),
             sidebar_width: 20,
             sidebar_on_launch: true,
             agent_rows: default_agent_rows(),
@@ -1820,6 +1848,16 @@ pub fn reload_client_chords(file: &ConfigFile, current: &Chords) -> Result<Chord
         Some("grouped") => "grouped".to_string(),
         _ => current.agents_sort.clone(),
     };
+    // The strip settings follow the same warn-and-default rule: an
+    // unknown spelling keeps the current.
+    let session_strip = match file.client.session_strip.as_deref() {
+        Some("auto") | Some("always") | Some("off") => file.client.session_strip.clone().unwrap(),
+        _ => current.session_strip.clone(),
+    };
+    let agent_state_dots = match file.client.agent_state_dots.as_deref() {
+        Some("on") | Some("off") => file.client.agent_state_dots.clone().unwrap(),
+        _ => current.agent_state_dots.clone(),
+    };
     let theme = client
         .theme
         .clone()
@@ -1852,6 +1890,8 @@ pub fn reload_client_chords(file: &ConfigFile, current: &Chords) -> Result<Chord
         git_poll_secs,
         border_lines,
         agents_sort,
+        session_strip,
+        agent_state_dots,
         sidebar_width,
         sidebar_on_launch,
         agent_rows,

@@ -4,7 +4,7 @@
 use super::{Glyphs, Modal, PromptTarget, WindowSession};
 use crate::mux::attach::targets::{
     active_window_row, displayed_session_of, marked_pane, next_in_cycle, next_workspace,
-    parse_session_line,
+    parse_session_line, session_active_window,
 };
 use crate::mux::attach::{layout, status, ManagementKey};
 
@@ -710,6 +710,8 @@ impl WindowSession {
                 git_poll_secs: self.git_poll_secs,
                 border_lines: self.render_opts.glyphs.name().to_string(),
                 agents_sort: self.renderer.agents_sort().config_value().to_string(),
+                session_strip: "auto".to_string(),
+                agent_state_dots: "off".to_string(),
                 sidebar_width: self.render_opts.sidebar_width,
                 // Launch-only: the live panel's visibility stays as it
                 // is; the session keeps the configured value for the
@@ -889,6 +891,33 @@ impl WindowSession {
         window: &str,
     ) {
         Self::land_window_inner(self, conn, window, None);
+    }
+
+    /// A press on a session-strip entry: land the view on that session's
+    /// active window through the same `switch-client` landing every
+    /// switch follows ([`Self::land_window`]). A click on the shown
+    /// session is a no-op, like a tab click.
+    pub(super) fn session_click(
+        &mut self,
+        conn: &mut crate::mux::attach::conn::AttachConn,
+        rx: u16,
+    ) {
+        let Some(index) = self.chrome.session_strip.hit_test(rx) else {
+            return;
+        };
+        let sessions = self.status.workspace_sessions();
+        let Some((id, _)) = sessions.get(index) else {
+            return;
+        };
+        let id = id.clone();
+        if Some(id.as_str()) == self.status.session_id.as_deref() {
+            return; // the shown session: a no-op click
+        }
+        if let Some(window) = session_active_window(conn, &id) {
+            if window != self.window {
+                self.land_window(conn, &window);
+            }
+        }
     }
 
     /// `land_window` for a roster click: the landing carries the clicked

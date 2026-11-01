@@ -506,6 +506,11 @@ pub struct MuxTree {
     /// that changes which workspace a session belongs to — a session is
     /// immutable in this respect for its whole life.
     pub(crate) session_workspace: HashMap<SessionId, WorkspaceId>,
+    /// When this tree was rebuilt from persisted state at boot (a daemon
+    /// restart's restore): the attach client's `restored` snapshot row
+    /// and its "server was restarted" toast read it. `None` on a fresh
+    /// tree. Never persisted — the next boot's restore sets it again.
+    pub(crate) restored_at_boot: Option<std::time::Instant>,
     /// Per-connection sizing state behind the smallest-attached-client
     /// window rule ([`ClientView`]). Never persisted: a reconnecting
     /// client re-reports through the attach handshake.
@@ -557,6 +562,7 @@ impl MuxTree {
             pane_window: HashMap::new(),
             window_session: HashMap::new(),
             session_workspace: HashMap::new(),
+            restored_at_boot: None,
             client_views: HashMap::new(),
             streaming_mirrors: std::collections::HashSet::new(),
             client_focus: HashMap::new(),
@@ -564,6 +570,13 @@ impl MuxTree {
             scrape_engine: None,
             events: crate::mux::events::EventRing::default(),
         }
+    }
+
+    /// Seconds since this tree was rebuilt from persisted state at boot,
+    /// `None` on a fresh tree (a daemon that started empty or whose
+    /// restore failed). The snapshot's `restored` row serves it.
+    pub fn restored_age_secs(&self) -> Option<u64> {
+        self.restored_at_boot.map(|at| at.elapsed().as_secs())
     }
 
     /// Park a resize's or note's observer batch for delivery after the tree lock

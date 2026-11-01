@@ -1340,6 +1340,19 @@ fn window_order_survives_a_persist_round_trip() {
     assert_eq!(restored.session(session_id).unwrap().windows, order);
 }
 
+/// A rebuilt tree stamps the boot-restore marker (the snapshot's
+/// `restored` row serves it); a fresh tree carries none.
+#[test]
+fn restored_tree_stamps_the_boot_restore_marker() {
+    let mut fresh = tree();
+    fresh.new_session("main", 80, 24).unwrap();
+    let state = fresh.to_persist_state();
+    let restored = MuxTree::from_persist_state(&state, Box::new(ShellPaneFactory::default()))
+        .expect("state rebuilds");
+    assert!(restored.restored_age_secs().is_some());
+    assert!(fresh.restored_age_secs().is_none());
+}
+
 /// `respawn-pane`: a live pane refuses without `kill`; a dead pane
 /// restarts in place — same id, window, and layout, the user title
 /// carried to the replacement, a live process again.

@@ -2,7 +2,10 @@
 //! cadence, host resize, the status row, the tab strip, and the
 //! config-driven display setters.
 
-use super::{DragState, FlushSink, Glyphs, Modal, PaneRect, RenderOptions, WindowSession};
+use super::{
+    DragState, FlushSink, Glyphs, Modal, PaneRect, RenderOptions, SessionStripMode, WindowSession,
+    RESTART_TOAST_WINDOW_SECS,
+};
 use crate::mux::attach::status::{Segment, StatusRow};
 use crate::mux::attach::tabs::TabStrip;
 use crate::mux::attach::targets::{active_window_row, cascade_landing, initial_attach_session};
@@ -150,6 +153,7 @@ impl WindowSession {
             cols,
             rows,
             self.chrome.status_bar_on,
+            self.chrome.session_strip_on,
             self.effective_render_opts().sidebar_width,
         );
     }
@@ -292,6 +296,23 @@ impl WindowSession {
                 "priority" => crate::mux::attach::panels::AgentSortMode::Priority,
                 _ => crate::mux::attach::panels::AgentSortMode::Grouped,
             });
+        // The session strip's mode and the agent dots: a change re-paints
+        // both strips (the texts gain/lose the dot column; the mode may
+        // add or remove the row, which draw_strips turns into a refit).
+        let mode = SessionStripMode::from_config(&chords.session_strip);
+        if self.session_strip_mode != mode {
+            self.session_strip_mode = mode;
+            self.chrome.session_strip.invalidate();
+            self.chrome.tab_strip.invalidate();
+            self.draw_strips();
+        }
+        let dots = chords.agent_state_dots == "on";
+        if self.agent_state_dots != dots {
+            self.agent_state_dots = dots;
+            self.chrome.session_strip.invalidate();
+            self.chrome.tab_strip.invalidate();
+            self.draw_strips();
+        }
         // An unknown delivery keeps the default (its warning rides
         // `display_option_warnings`).
         self.notify.delivery = super::notify::NotifyDelivery::parse(&chords.notify_delivery)
@@ -359,8 +380,9 @@ impl WindowSession {
         self.chrome.status_row.palette = palette;
         self.chrome.status_row.invalidate();
         self.draw_status_row();
+        self.chrome.session_strip.invalidate();
         self.chrome.tab_strip.invalidate();
-        self.draw_tab_strip();
+        self.draw_strips();
     }
 
     /// A host background report (the launch probe, or a later OSC 11
@@ -551,8 +573,9 @@ impl WindowSession {
 
         self.chrome.status_row.invalidate();
         self.draw_status_row();
+        self.chrome.session_strip.invalidate();
         self.chrome.tab_strip.invalidate();
-        self.draw_tab_strip();
+        self.draw_strips();
         // First frame: clear + full paint. repaint_all hides the host
         // cursor, so the frame's place_cursor must fire even if the
         // mapped state matches the hidden default.
@@ -682,8 +705,9 @@ impl WindowSession {
         }
         self.chrome.status_row.invalidate();
         self.draw_status_row();
+        self.chrome.session_strip.invalidate();
         self.chrome.tab_strip.invalidate();
-        self.draw_tab_strip();
+        self.draw_strips();
         Ok(true)
     }
 
@@ -775,6 +799,7 @@ impl WindowSession {
                 }
                 // The snapshot carried every pane title: query-free.
                 let _ = self.refresh_pane_titles(conn);
+                self.maybe_restart_toast();
             }
             Err(status::StatusError::SessionGone) => {
                 // The session died mid-seed: the landing contract runs on
@@ -787,7 +812,37 @@ impl WindowSession {
             Err(status::StatusError::TimedOut) => {} // not produced by the reply half
         }
         self.draw_status_row();
-        self.draw_tab_strip();
+        self.draw_strips();
+    }
+
+    /// The restart toast: once per attach, when the seed's status
+    /// snapshot proves the daemon rebuilt its tree from persisted state
+    /// at boot (the `restored` row) within the toast window. A plain
+    /// re-attach — to a long-running daemon, or long after the restart —
+    /// fires nothing: the age has left the window, or the row is absent.
+    pub(super) fn maybe_restart_toast(&mut self) {
+        if self.restart_toast_shown {
+            return;
+        }
+        let Some(age) = self.status.restored_age else {
+            return;
+        };
+        // Seen once, decided once: a later refresh cannot make the
+        // restore fresher, so the window is applied to the first fact.
+        self.restart_toast_shown = true;
+        if age > RESTART_TOAST_WINDOW_SECS {
+            return;
+        }
+        let now = std::time::Instant::now();
+        let status = crate::mux::attach::panels::AgentStatus::None;
+        self.notify.toast_until = Some(now + super::toast::toast_lifetime(status));
+        self.renderer.set_toast(Some(super::toast::Toast {
+            title: "server was restarted".to_string(),
+            body: String::new(),
+            message: None,
+            status,
+            pane: None,
+        }));
     }
 
     /// The re-seed's issue half on a client-snapshot daemon: the same
@@ -858,9 +913,10 @@ impl WindowSession {
         }
         self.chrome.status_row.invalidate();
         self.draw_status_row();
+        self.chrome.session_strip.invalidate();
         self.chrome.tab_strip.invalidate();
         self.chrome.tab_strip.reset_scroll();
-        self.draw_tab_strip();
+        self.draw_strips();
         // A landing (or any reseed) can move the focus onto the freshly
         // seeded layout's marked pane: repaint the side panel's highlight
         // from the cache with it.
@@ -1118,8 +1174,9 @@ impl WindowSession {
         // rows).
         self.chrome.status_row.invalidate();
         self.draw_status_row();
+        self.chrome.session_strip.invalidate();
         self.chrome.tab_strip.invalidate();
-        self.draw_tab_strip();
+        self.draw_strips();
         let stale = self.kitty.invalidate();
         if !stale.is_empty() {
             sink.write_raw(&stale);
@@ -1160,6 +1217,9 @@ impl WindowSession {
                 sink.flush(&diff);
                 flushed = true;
             }
+        }
+        if self.flush_session_strip(sink) {
+            flushed = true;
         }
         if self.flush_tab_strip(sink) {
             flushed = true;
@@ -1225,11 +1285,89 @@ impl WindowSession {
         }
     }
 
+    /// Paint both top strips from the queried state: the session strip
+    /// (the workspace's sessions) above the tab strip (the shown
+    /// session's windows). A visibility flip re-derives the geometry and
+    /// parks a refit — the row count moved — and both strips invalidate
+    /// (the host rows are not known to match), the toggle_status_bar
+    /// contract.
+    pub(super) fn draw_strips(&mut self) {
+        let visible = self.session_strip_visible();
+        if visible != self.chrome.session_strip_on {
+            self.chrome.session_strip_on = visible;
+            self.chrome_geometry_changed();
+            self.pending.grid_refit = true;
+            // Both rows move: the tab strip row becomes/exits host row 1.
+            self.chrome.session_strip.invalidate();
+            self.chrome.tab_strip.invalidate();
+        }
+        if self.chrome.session_strip_on {
+            self.draw_session_strip();
+        }
+        self.draw_tab_strip();
+    }
+
+    /// Whether the session strip row shows: the `session-strip` setting
+    /// (`auto` = while the workspace holds two or more sessions;
+    /// `always` = regardless; `off` = never). A workspace of unknown
+    /// membership counts as one (hidden in `auto`): nothing to list
+    /// before the first status facts land.
+    fn session_strip_visible(&self) -> bool {
+        match self.session_strip_mode {
+            SessionStripMode::Off => false,
+            SessionStripMode::Always => true,
+            SessionStripMode::Auto => self.status.workspace_sessions().len() >= 2,
+        }
+    }
+
+    /// Repaint the session strip alone (the wheel's visible-run move;
+    /// the diff flushes on the next frame).
+    pub(super) fn draw_session_strip_only(&mut self) {
+        if self.chrome.session_strip_on {
+            self.draw_session_strip();
+        }
+    }
+
+    /// Paint the session strip: one entry per session of the shown
+    /// session's workspace, the shown one accented, each prefixed with
+    /// the entry's agent dot when `agent-state-dots` is on.
+    fn draw_session_strip(&mut self) {
+        let cols = self.geometry.host_cols;
+        if self.chrome.session_strip.cols() != cols {
+            let palette = self.chrome.session_strip.palette;
+            self.chrome.session_strip = TabStrip::new(cols);
+            self.chrome.session_strip.palette = palette;
+            self.chrome.session_strip.plus = false;
+        }
+        let dots = self.agent_state_dots;
+        // The design adds no new-session button on this row: the tab
+        // strip's ` + ` stays off it even on the constructor's instance.
+        self.chrome.session_strip.plus = false;
+        let shown = self.status.session_id.clone();
+        let entries: Vec<(String, String)> = self
+            .status
+            .workspace_sessions()
+            .into_iter()
+            .map(|(id, name)| {
+                let text = if dots {
+                    format!("{} {name}", self.status.session_agent_status(&id).glyph())
+                } else {
+                    name
+                };
+                (id, text)
+            })
+            .collect();
+        self.chrome
+            .session_strip
+            .paint(&entries, shown.as_deref(), None);
+    }
+
     /// Paint the tab strip from the queried window state (the same
     /// state the status row composes from): the shown session's windows
     /// in order, the active one accented. With the side panel up the
     /// strip leads with the panel's title (the lead segment the hit-test
     /// offsets through) — the panel itself opens directly with its rows.
+    /// Each tab carries its agent dot when `agent-state-dots` is on.
     pub(super) fn draw_tab_strip(&mut self) {
         let cols = self.geometry.host_cols;
         if self.chrome.tab_strip.cols() != cols {
@@ -1246,26 +1384,55 @@ impl WindowSession {
         };
         let lead = (strip > 0).then_some((title, strip));
         // An open popup's scratch window is not a tab of this view.
+        let dots = self.agent_state_dots;
         let windows: Vec<(String, String)> = self
             .status
             .windows()
             .iter()
             .filter(|(id, _)| Some(id.as_str()) != self.popup_window())
-            .cloned()
+            .map(|(id, name)| {
+                let text = if dots {
+                    format!("{} {name}", self.status.window_agent_status(id).glyph())
+                } else {
+                    name.clone()
+                };
+                (id.clone(), text)
+            })
             .collect();
         self.chrome
             .tab_strip
             .paint(&windows, self.status.active_window.as_deref(), lead);
     }
 
-    /// Flush the tab strip's changed cells to the host's top row.
-    /// Returns whether anything flushed (its per-cell CUPs move the host
-    /// cursor, so the caller must re-place it).
+    /// Flush the session strip's changed cells to host row 0. Returns
+    /// whether anything flushed (its per-cell CUPs move the host cursor,
+    /// so the caller must re-place it).
+    pub(super) fn flush_session_strip(&mut self, sink: &mut dyn FlushSink) -> bool {
+        if !self.chrome.session_strip_on {
+            return false;
+        }
+        let diff = self.chrome.session_strip.diff();
+        if diff.is_empty() {
+            return false;
+        }
+        sink.flush(&diff);
+        true
+    }
+
+    /// Flush the tab strip's changed cells to its host row — host row 0
+    /// alone, one row down while the session strip shows. Returns
+    /// whether anything flushed (its per-cell CUPs move the host cursor,
+    /// so the caller must re-place it).
     pub(super) fn flush_tab_strip(&mut self, sink: &mut dyn FlushSink) -> bool {
         let diff = self.chrome.tab_strip.diff();
         if diff.is_empty() {
             return false;
         }
+        let session_rows = self.geometry.session_strip_rows;
+        let diff = diff
+            .into_iter()
+            .map(|(x, y, cell)| (x, y + session_rows, cell))
+            .collect::<Vec<_>>();
         sink.flush(&diff);
         true
     }

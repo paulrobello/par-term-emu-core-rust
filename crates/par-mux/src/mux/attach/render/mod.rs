@@ -67,6 +67,11 @@ use renderer::{RenderOptions, StdoutSink};
 /// How long a status-row flash stays up.
 const FLASH_LIFETIME: std::time::Duration = std::time::Duration::from_secs(1);
 
+/// How long after a boot restore the "server was restarted" toast still
+/// counts as news: an attach landing within this window of the daemon's
+/// restart shows it once; a later re-attach does not.
+const RESTART_TOAST_WINDOW_SECS: u64 = 120;
+
 /// The glyph set dividers draw with.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Glyphs {
@@ -345,6 +350,39 @@ pub(crate) type Overlay = (&'static str, Vec<HelpRow>, Option<OverlayScroll>);
 /// command menu beside its chip, opening upward); [`OverlayAnchor::Below`]
 /// puts its top ring on `y` (the tab menu under its tab, opening
 /// downward), pulled back up when the rows below cannot hold it.
+/// The session strip's visibility mode (config `session-strip`): `auto`
+/// shows the row while the workspace holds two or more sessions, `always`
+/// and `off` pin it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub(crate) enum SessionStripMode {
+    /// Visible while the current workspace lists two or more sessions.
+    #[default]
+    Auto,
+    Always,
+    Off,
+}
+
+impl SessionStripMode {
+    /// The config spelling for `word`; an unknown word keeps `auto`
+    /// (the resolve path warns about it).
+    pub(crate) fn from_config(word: &str) -> Self {
+        match word {
+            "always" => Self::Always,
+            "off" => Self::Off,
+            _ => Self::Auto,
+        }
+    }
+
+    /// The config word the settings dialog shows.
+    pub(crate) fn config_value(self) -> &'static str {
+        match self {
+            Self::Auto => "auto",
+            Self::Always => "always",
+            Self::Off => "off",
+        }
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum OverlayAnchor {
     Above(u16, u16),
@@ -936,6 +974,16 @@ struct WindowSession {
     /// The config's `git-status` (the sidebar badge's render gate and
     /// its idle refresh poll's gate). Live on reload.
     git_status: bool,
+    /// The session strip's visibility mode (config `session-strip`).
+    /// Live on reload; `auto` hides the row at one workspace session.
+    session_strip_mode: SessionStripMode,
+    /// The agent-state dots on the session strip and the window tabs
+    /// (config `agent-state-dots`). Live on reload.
+    agent_state_dots: bool,
+    /// Whether the restart toast already fired this attach — it reads
+    /// the seed snapshot's restore age once (the toast must not refire
+    /// on later refreshes).
+    restart_toast_shown: bool,
     /// The git badge's snapshot re-query interval
     /// (`[client] git-poll-secs`, live on reload; the clock
     /// `git_poll` runs on). 0 disables the poll.
@@ -1321,7 +1369,7 @@ impl WindowSession {
         // `render_session_inner`. The status bar starts shown and the side
         // panel hidden (the launch config applies its width afterwards).
         let chords = crate::mux::config::Chords::with_defaults();
-        let geometry = geometry::FrameGeometry::new(cols, rows, true, 0);
+        let geometry = geometry::FrameGeometry::new(cols, rows, true, false, 0);
         let (frame_w, frame_h) = geometry.frame_size();
         Self {
             window: String::new(),
@@ -1356,6 +1404,9 @@ impl WindowSession {
             sidebar_on_launch: chords.sidebar_on_launch,
             session_picker: chords.session_picker,
             git_status: chords.git_status,
+            session_strip_mode: SessionStripMode::from_config(&chords.session_strip),
+            agent_state_dots: chords.agent_state_dots == "on",
+            restart_toast_shown: false,
             git_poll_secs: chords.git_poll_secs,
             git_poll: std::time::Instant::now(),
             settings_path: None,
@@ -1653,8 +1704,9 @@ impl WindowSession {
             // A resize wiped the screen; the rows repaint whole.
             self.chrome.status_row.invalidate();
             self.draw_status_row();
+            self.chrome.session_strip.invalidate();
             self.chrome.tab_strip.invalidate();
-            self.draw_tab_strip();
+            self.draw_strips();
             self.fit_popup(conn);
         }
         Ok(std::ops::ControlFlow::Continue(()))
@@ -1788,9 +1840,9 @@ impl WindowSession {
             Err(status::StatusError::Query) => {} // stale state survives; the next mark retries
         }
         self.draw_status_row();
-        // The strip rides the same queried state: window
-        // add/close/rename refreshes it here.
-        self.draw_tab_strip();
+        // The strips ride the same queried state: window and session
+        // add/close/rename refresh them here.
+        self.draw_strips();
         EventOutcome::Continue
     }
 
@@ -1856,7 +1908,7 @@ impl WindowSession {
             Err(status::StatusError::TimedOut) => {} // not produced by the reply half
         }
         self.draw_status_row();
-        self.draw_tab_strip();
+        self.draw_strips();
     }
 
     /// The SessionGone landing both snapshot continuations share (the

@@ -287,6 +287,8 @@ struct RosterRow {
     telemetry: Option<Vec<u8>>,
     host_telemetry: Option<Vec<u8>>,
     ws: Option<String>,
+    session: Option<String>,
+    win: Option<String>,
     last_activity_at: Option<String>,
     last_report_at: Option<String>,
 }
@@ -306,6 +308,8 @@ fn parse_roster_row(row: &str) -> RosterRow {
         telemetry: None,
         host_telemetry: None,
         ws: None,
+        session: None,
+        win: None,
         last_activity_at: None,
         last_report_at: None,
     };
@@ -331,6 +335,24 @@ fn parse_roster_row(row: &str) -> RosterRow {
             } else {
                 fields.last_report_at = Some(value.to_string());
             }
+            continue;
+        }
+        // The owning session and window (`session=`/`win=`): the attach
+        // client's per-session/per-window agent dots scope by them.
+        if key == "session" {
+            assert!(
+                value.starts_with('$') && value[1..].bytes().all(|b| b.is_ascii_digit()),
+                "session token is a $<id> session reference, got {value:?} in {row:?}"
+            );
+            fields.session = Some(value.to_string());
+            continue;
+        }
+        if key == "win" {
+            assert!(
+                value.starts_with('@') && value[1..].bytes().all(|b| b.is_ascii_digit()),
+                "win token is an @<id> window reference, got {value:?} in {row:?}"
+            );
+            fields.win = Some(value.to_string());
             continue;
         }
         let decoded = base64::engine::general_purpose::STANDARD

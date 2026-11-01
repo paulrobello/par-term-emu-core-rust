@@ -356,6 +356,18 @@ const GENERAL_ROWS: &[SettingSpec] = &[
         |v, _| FieldVal::Num(v.tab_width_max as u32),
     ),
     SettingSpec::new(
+        "session-strip",
+        "session strip",
+        SettingKind::Choice(&["auto", "always", "off"]),
+        |v, _| FieldVal::Text(v.session_strip.clone()),
+    ),
+    SettingSpec::new(
+        "agent-state-dots",
+        "agent dots",
+        SettingKind::Choice(&["off", "on"]),
+        |v, _| FieldVal::Text(v.agent_state_dots.clone()),
+    ),
+    SettingSpec::new(
         "kitty-graphics",
         "kitty graphics",
         SettingKind::Toggle,
@@ -602,6 +614,12 @@ pub(super) struct SettingsValues {
     /// 0 = none).
     pub tab_width_min: u16,
     pub tab_width_max: u16,
+    /// The session strip's visibility mode (config `session-strip`) —
+    /// the word in force, `auto`, `always`, or `off`.
+    pub session_strip: String,
+    /// The agent-state dots (config `agent-state-dots`) — the word in
+    /// force, `off` or `on`.
+    pub agent_state_dots: String,
     pub notify_delivery: String,
     pub notify_states: Vec<String>,
     pub sound: crate::mux::config::SoundSettings,
@@ -901,6 +919,8 @@ impl WindowSession {
             resize_step: self.resize_step,
             tab_width_min: self.chrome.tab_strip.bounds.min,
             tab_width_max: self.chrome.tab_strip.bounds.max,
+            session_strip: self.session_strip_mode.config_value().to_string(),
+            agent_state_dots: if self.agent_state_dots { "on" } else { "off" }.to_string(),
             notify_delivery: self.notify.delivery.name().to_string(),
             notify_states: self.notify.states.clone(),
             sound: self.notify.sound.clone(),
@@ -1341,6 +1361,8 @@ mod tests {
             resize_step: 1,
             tab_width_min: 0,
             tab_width_max: 0,
+            session_strip: "auto".to_string(),
+            agent_state_dots: "off".to_string(),
             notify_delivery: "terminal".to_string(),
             notify_states: vec!["blocked".to_string(), "idle".to_string()],
             sound: crate::mux::config::SoundSettings::default(),

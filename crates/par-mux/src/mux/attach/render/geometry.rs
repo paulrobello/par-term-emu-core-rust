@@ -13,7 +13,8 @@
 
 use ratatui::layout::Rect;
 
-/// Rows the tab strip occupies at the top of the host grid.
+/// Rows the tab strip occupies at the top of the host grid (the session
+/// strip adds one more above it while it shows).
 pub(crate) const STRIP_ROWS: u16 = 1;
 
 /// One frame's chrome layout over a host grid.
@@ -23,8 +24,11 @@ pub(crate) struct FrameGeometry {
     pub host_cols: u16,
     /// Host grid height.
     pub host_rows: u16,
-    /// Rows the tab strip takes at the top.
+    /// Rows ALL the top strips take: the tab strip, plus the session
+    /// strip above it when it shows (`session_strip_rows`).
     pub strip_rows: u16,
+    /// Rows the session strip takes above the tab strip (0 hidden).
+    pub session_strip_rows: u16,
     /// Rows the status bar takes at the bottom (0 while hidden).
     pub status_rows: u16,
     /// Columns the side panel takes at the left (the EFFECTIVE width:
@@ -33,25 +37,36 @@ pub(crate) struct FrameGeometry {
 }
 
 impl FrameGeometry {
-    /// The geometry of a `host_cols` x `host_rows` grid with the strip,
-    /// the status bar when `status_bar_on`, and a `sidebar_w`-column side
+    /// The geometry of a `host_cols` x `host_rows` grid with the tab
+    /// strip, the session strip above it when `session_strip_on`, the
+    /// status bar when `status_bar_on`, and a `sidebar_w`-column side
     /// panel.
-    pub fn new(host_cols: u16, host_rows: u16, status_bar_on: bool, sidebar_w: u16) -> Self {
+    pub fn new(
+        host_cols: u16,
+        host_rows: u16,
+        status_bar_on: bool,
+        session_strip_on: bool,
+        sidebar_w: u16,
+    ) -> Self {
+        let session_strip_rows = u16::from(session_strip_on);
         Self {
             host_cols,
             host_rows,
-            strip_rows: STRIP_ROWS,
+            strip_rows: STRIP_ROWS + session_strip_rows,
+            session_strip_rows,
             status_rows: u16::from(status_bar_on),
             sidebar_w,
         }
     }
 
     /// The geometry of a standalone renderer whose buffer is the frame:
-    /// `frame_w` x `frame_h` below the strip, status bar off.
+    /// `frame_w` x `frame_h` below the strip, status bar off, no session
+    /// strip (a standalone view has no workspace to list).
     pub fn standalone(frame_w: u16, frame_h: u16, sidebar_w: u16) -> Self {
         Self::new(
             frame_w,
             frame_h.saturating_add(STRIP_ROWS),
+            false,
             false,
             sidebar_w,
         )
@@ -137,9 +152,29 @@ impl FrameGeometry {
 mod tests {
     use super::*;
 
+    /// The session strip adds one row above the tab strip: content and
+    /// the frame shift down, the tab strip rides at the session strip's
+    /// row count, and the geometry's totals stay consistent.
+    #[test]
+    fn session_strip_adds_a_row_above_the_tab_strip() {
+        let g = FrameGeometry::new(80, 24, true, true, 0);
+        assert_eq!(g.strip_rows, 2);
+        assert_eq!(g.session_strip_rows, 1);
+        assert_eq!(g.frame_size(), (80, 21));
+        assert_eq!(g.content_rect(), Rect::new(0, 2, 80, 21));
+        assert_eq!(g.status_row(), Some(23));
+        assert_eq!(g.host_to_content(0, 0), None, "the session strip row");
+        assert_eq!(g.host_to_content(0, 1), None, "the tab strip row");
+        assert_eq!(g.host_to_content(0, 2), Some((0, 0)));
+        assert_eq!(g.host_to_frame(5, 2), Some((5, 0)));
+        let g = FrameGeometry::new(80, 24, true, false, 0);
+        assert_eq!(g.strip_rows, 1, "hidden strip hands the row back");
+        assert_eq!(g.session_strip_rows, 0);
+    }
+
     #[test]
     fn status_on_sidebar_off_carves_strip_and_status() {
-        let g = FrameGeometry::new(80, 24, true, 0);
+        let g = FrameGeometry::new(80, 24, true, false, 0);
         assert_eq!(g.frame_size(), (80, 22));
         assert_eq!(g.content_rect(), Rect::new(0, 1, 80, 22));
         assert_eq!(g.status_row(), Some(23));
@@ -153,7 +188,7 @@ mod tests {
 
     #[test]
     fn status_off_hands_the_bottom_row_to_the_content() {
-        let g = FrameGeometry::new(80, 24, false, 0);
+        let g = FrameGeometry::new(80, 24, false, false, 0);
         assert_eq!(g.frame_size(), (80, 23));
         assert_eq!(g.content_rect(), Rect::new(0, 1, 80, 23));
         assert_eq!(g.status_row(), None);
@@ -162,7 +197,7 @@ mod tests {
 
     #[test]
     fn sidebar_on_shifts_content_right() {
-        let g = FrameGeometry::new(80, 24, true, 20);
+        let g = FrameGeometry::new(80, 24, true, false, 20);
         assert_eq!(g.frame_size(), (80, 22), "the frame keeps the full width");
         assert_eq!(g.content_rect(), Rect::new(20, 1, 60, 22));
         assert_eq!(g.host_to_content(19, 5), None, "the side panel");
@@ -175,7 +210,7 @@ mod tests {
     #[test]
     fn content_round_trips_through_the_host() {
         for (status, sidebar) in [(true, 0), (false, 0), (true, 20), (false, 20)] {
-            let g = FrameGeometry::new(100, 40, status, sidebar);
+            let g = FrameGeometry::new(100, 40, status, false, sidebar);
             let rect = g.content_rect();
             for (cx, cy) in [(0, 0), (rect.width - 1, rect.height - 1), (7, 3)] {
                 let (hx, hy) = g.content_to_host(cx, cy);
@@ -186,11 +221,11 @@ mod tests {
 
     #[test]
     fn frame_mappings_offset_by_the_panel_and_the_strip() {
-        let g = FrameGeometry::new(80, 24, true, 0);
+        let g = FrameGeometry::new(80, 24, true, false, 0);
         assert_eq!(g.content_to_frame(5, 3), (5, 3));
         assert_eq!(g.host_to_frame(5, 0), None, "the strip row");
         assert_eq!(g.host_to_frame(5, 1), Some((5, 0)));
-        let g = FrameGeometry::new(80, 24, true, 20);
+        let g = FrameGeometry::new(80, 24, true, false, 20);
         assert_eq!(g.content_to_frame(5, 3), (25, 3));
         assert_eq!(g.host_to_frame(25, 4), Some((25, 3)));
         for (cx, cy) in [(0, 0), (7, 3), (59, 21)] {
@@ -202,12 +237,12 @@ mod tests {
 
     #[test]
     fn zero_and_tiny_hosts_never_underflow() {
-        let g = FrameGeometry::new(0, 0, true, 20);
+        let g = FrameGeometry::new(0, 0, true, false, 20);
         assert_eq!(g.frame_size(), (0, 0));
         assert_eq!(g.content_rect(), Rect::new(0, 0, 0, 0));
         assert_eq!(g.status_row(), None);
         assert_eq!(g.host_to_content(0, 0), None);
-        let g = FrameGeometry::new(10, 1, true, 20);
+        let g = FrameGeometry::new(10, 1, true, false, 20);
         assert_eq!(g.frame_size(), (10, 0));
         assert_eq!(g.content_rect().width, 0, "the panel eats a narrow host");
         assert_eq!(g.host_to_content(5, 0), None);

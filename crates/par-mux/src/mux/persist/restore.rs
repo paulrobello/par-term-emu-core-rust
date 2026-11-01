@@ -176,6 +176,10 @@ impl MuxTree {
         for batch in tree.take_observer_batches() {
             batch.deliver();
         }
+        // The boot restore marker: the snapshot's `restored` row (and the
+        // attach client's "server was restarted" toast) reads it. Set on
+        // every successful rebuild, dead-entry pruning included.
+        tree.restored_at_boot = Some(std::time::Instant::now());
         Ok(tree)
     }
 

@@ -272,6 +272,8 @@ fn settings_row_toggles_kitty_graphics_live() {
     session.settings_path = Some(path.clone());
     session.enter_settings();
     session.route_stdin_bytes(&mut conn, b"\t\t");
+    // The general tab scrolls — reach the kitty row before asserting.
+    session.route_stdin_bytes(&mut conn, b"jjjjjjjj");
     let rows = overlay_text(&session);
     assert!(
         rows.iter()
@@ -279,7 +281,7 @@ fn settings_row_toggles_kitty_graphics_live() {
         "the row shows the default in force: {rows:#?}"
     );
     assert!(session.kitty.enabled);
-    session.route_stdin_bytes(&mut conn, b"jjjjjj\r");
+    session.route_stdin_bytes(&mut conn, b"\r");
     settle(&mut session, &mut conn);
     let written = std::fs::read_to_string(&path).unwrap();
     assert!(written.contains("kitty-graphics = false"), "{written}");

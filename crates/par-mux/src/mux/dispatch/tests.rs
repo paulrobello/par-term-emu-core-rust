@@ -1837,6 +1837,60 @@ fn client_snapshot_agent_rows_mirror_list_agents() {
     assert_eq!(body.last(), Some(&format!("agent {}", roster[0])));
 }
 
+/// The roster row names the pane's owning session and window
+/// (`session=`/`win=` extras): the session strip's and the tabs' agent
+/// dots scope an entry's status to its own session and window. Additive
+/// tokens — a client that never reads them parses the row fine.
+#[test]
+fn roster_rows_carry_session_and_window_extras() {
+    let h = Harness::new();
+    assert_ok(&h.run("new-session -s main"));
+    let w = h.windows_of(h.session_named("main"))[0];
+    let p = h.panes_of(w)[0];
+    let sid = h.session_named("main");
+    {
+        let mut guard = h.tree.lock();
+        let pane = guard.pane_mut(p).unwrap();
+        pane.set_metadata("agent", "claude");
+        pane.set_metadata("agent_state", "working");
+    }
+    let roster = assert_ok(&h.run("list-agents"));
+    assert!(
+        roster[0].contains(&format!("session={sid}")) && roster[0].contains(&format!("win={w}")),
+        "{:?}",
+        roster[0]
+    );
+}
+
+/// The `restored` row rides a daemon whose tree came from a restart's
+/// restore (the client's "server was restarted" toast reads it), right
+/// after the session rows; a fresh daemon's snapshot carries none.
+#[test]
+fn client_snapshot_restored_row_rides_a_restored_tree() {
+    let h = Harness::new();
+    assert_ok(&h.run("new-session -s main"));
+    let w = h.windows_of(h.session_named("main"))[0];
+    let body = assert_ok(&h.run(&format!("client-snapshot -t {w}")));
+    assert!(
+        !body.iter().any(|l| l.starts_with("restored ")),
+        "a fresh daemon carries no marker: {body:?}"
+    );
+    {
+        let mut guard = h.tree.lock();
+        guard.restored_at_boot = Some(std::time::Instant::now());
+    }
+    let body = assert_ok(&h.run(&format!("client-snapshot -t {w}")));
+    let at = body
+        .iter()
+        .position(|l| l.starts_with("restored "))
+        .expect("the marker row");
+    assert!(
+        body[..at].iter().any(|l| l.starts_with("session "))
+            && body[at + 1..].iter().any(|l| l.starts_with("window ")),
+        "the marker sits between the session and window rows: {body:?}"
+    );
+}
+
 /// Whether the git binary runs — the repo tests skip (answer nothing)
 /// where it does not.
 fn git_available() -> bool {

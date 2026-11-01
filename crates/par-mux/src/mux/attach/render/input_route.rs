@@ -87,6 +87,10 @@ pub(super) enum Hit {
     TabDrop(u16),
     /// A left press on the tab strip at this raw host column.
     TabPress(u16),
+    /// A left press on the session strip at this raw host column.
+    SessionPress(u16),
+    /// A wheel over an overflowing session strip: shift the visible run.
+    SessionWheel(isize),
     /// A wheel over a pane: scroll the client's scrollback, or forward
     /// when the pane owns the mouse.
     Wheel {
@@ -662,6 +666,11 @@ impl WindowSession {
             Hit::HelpScroll(delta) => self.help_scroll_by(delta),
             Hit::TabMenu { id, anchor } => self.open_tab_menu(id, anchor),
             Hit::TabPress(rx) => self.tab_click(conn, rx),
+            Hit::SessionPress(rx) => self.session_click(conn, rx),
+            Hit::SessionWheel(delta) => {
+                self.chrome.session_strip.wheel(delta);
+                self.draw_session_strip_only();
+            }
             Hit::TabWheel(delta) => {
                 self.chrome.tab_strip.wheel(delta);
                 self.draw_tab_strip();
@@ -989,6 +998,9 @@ impl WindowSession {
             | Modal::Layouts(_)
             | Modal::Resize => {}
         }
+        if y < self.geometry.session_strip_rows {
+            return self.session_strip_hit(mouse, rx);
+        }
         if y < self.geometry.strip_rows {
             return self.tab_strip_hit(mouse, rx);
         }
@@ -1143,6 +1155,28 @@ impl WindowSession {
                 Hit::PickerRow(content)
             }
             _ => Hit::Consumed,
+        }
+    }
+
+    /// The session strip owns host row 0 while it shows: a left press
+    /// hit-tests the entries and switches sessions (the handler resolves
+    /// the entry); a wheel shifts an overflowing run. A RIGHT press hits
+    /// nothing — the tabs' context menu has no session counterpart. `rx`
+    /// is the RAW host column, the layout's own space.
+    fn session_strip_hit(&self, mouse: &SgrMouse, rx: u16) -> Hit {
+        if mouse.is_wheel_up() || mouse.is_wheel_down() {
+            let delta = if mouse.is_wheel_up() { 3 } else { -3 };
+            if self.chrome.session_strip.overflowing() {
+                return Hit::SessionWheel(delta);
+            }
+            return Hit::Consumed;
+        }
+        let is_press =
+            !mouse.release && !mouse.is_motion() && !mouse.is_wheel_up() && !mouse.is_wheel_down();
+        if is_press {
+            Hit::SessionPress(rx)
+        } else {
+            Hit::Consumed
         }
     }
 
