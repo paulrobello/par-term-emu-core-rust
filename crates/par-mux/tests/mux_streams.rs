@@ -469,9 +469,21 @@ fn seed_export_racing_output_stays_ordered() {
         .expect("the seed block opens with %begin");
     let seed: String = reply[begin..].concat();
     let pre_seed: String = reply[..begin].concat();
-    let raced_markers: Vec<&str> = pre_seed
+    // A load-delayed pane delivers its echo in coalesced bursts: one
+    // `%output` payload can carry dozens of markers octal-escaped into a
+    // single whitespace-free word. Split each such word into its
+    // individual markers — a whole-burst `contains` check could never
+    // match the seed, which renders every marker with cursor escapes
+    // between its neighbors. A fragment cut mid-escape (a chunk boundary
+    // inside the separator) is dropped by the RACEH prefix filter rather
+    // than mis-checked.
+    let raced_markers: Vec<String> = pre_seed
         .split_whitespace()
         .filter(|w| w.starts_with("RACEH"))
+        .flat_map(|w| w.split("\\015\\012"))
+        .map(|w| w.split('\\').next().unwrap_or(w))
+        .filter(|w| w.starts_with("RACEH") && w.ends_with("MARKER"))
+        .map(str::to_string)
         .collect();
     // Positive control: the hammer ran before the stream opened, so the
     // export raced real output and its seed reflects it.
@@ -504,10 +516,17 @@ fn seed_export_racing_output_stays_ordered() {
         );
     }
 
-    // The stream stays live: the hammer's last marker streams through
-    // (the hammer joins only after its final reply).
+    // The stream stays live: a marker dispatched AFTER the seed block was
+    // read must arrive as pane output. The hammer's own last marker cannot
+    // anchor this: under load its final echo can land in the grid (and
+    // bash's command-not-found line for it can print) before the stream
+    // opens, so the seed already reflects it and no further %output ever
+    // arrives — the wait then sits silent to its read ceiling, which is
+    // exactly the load-run failures this suite saw.
+    let mut anchor = Conn::connect(fixture.socket());
+    anchor.command("send-keys -t %0 ANCHORMARK STREAMS Enter");
     hammer.join().expect("hammer finished");
-    let tail = observer.until(|l| l.contains("RACEH299"), "the last racing marker");
+    let tail = observer.until(|l| l.contains("ANCHORMARK"), "the post-seed anchor marker");
     assert!(
         tail.iter().any(|l| l.starts_with("%output")),
         "the marker arrives as pane output: {tail:?}"
