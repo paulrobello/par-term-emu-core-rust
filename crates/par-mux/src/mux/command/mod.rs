@@ -514,6 +514,13 @@ pub enum MuxCommand {
         /// `-T MS`: the whole wait's deadline; `None` waits as long as the
         /// agent works.
         timeout_ms: Option<u64>,
+        /// `--mesh`: deliver via a par-mesh message instead of the pane
+        /// PTY — the prompt arrives as an agent turn and the input box is
+        /// never touched (card 01a192b57).
+        mesh: bool,
+        /// `--to ADDR`: the explicit mesh address (`name@host:project`);
+        /// without it the address resolves from the pane cwd's project.
+        mesh_to: Option<String>,
     },
     /// Report how a pane's agent state is detected: hook claim or scrape
     /// rule, with the rule's pattern file (herdr `agent explain`).

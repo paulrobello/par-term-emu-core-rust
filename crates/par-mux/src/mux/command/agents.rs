@@ -87,15 +87,22 @@ pub(super) fn parse_agent_start(a: &Args<'_>) -> Result<MuxCommand, String> {
     })
 }
 
-/// `agent-prompt -t <pane> [-w] [-u state,…] [-T ms] [--] <text>`. The text
-/// is the raw rest of the line, so a prompt needs no quoting; a text that
-/// is exactly one quoted word is unquoted.
+/// `agent-prompt -t <pane> [-w] [-u state,…] [-T ms] [--mesh] [--to ADDR]
+/// [--] <text>`. The text is the raw rest of the line, so a prompt needs no
+/// quoting; a text that is exactly one quoted word is unquoted.
 pub(super) fn parse_agent_prompt(a: &Args<'_>) -> Result<MuxCommand, String> {
     use LeadingFlag::{Bare, Valued};
     let lead = split_leading_flags(
         a.line,
         a.name,
-        &[Valued("-t"), Bare("-w"), Valued("-u"), Valued("-T")],
+        &[
+            Valued("-t"),
+            Bare("-w"),
+            Valued("-u"),
+            Valued("-T"),
+            Bare("--mesh"),
+            Valued("--to"),
+        ],
     )?;
     let pane = pane_flag(a.name, lead.value("-t"))?;
     let wait = lead.has("-w");
@@ -103,6 +110,12 @@ pub(super) fn parse_agent_prompt(a: &Args<'_>) -> Result<MuxCommand, String> {
     if timeout_ms.is_some() && !wait {
         return Err(format!("{}: -T requires -w", a.name));
     }
+    let mesh = lead.has("--mesh");
+    let mesh_to = match lead.value("--to") {
+        None => None,
+        Some(_) if !mesh => return Err(format!("{}: --to requires --mesh", a.name)),
+        Some(addr) => Some(addr.to_string()),
+    };
     let until = match lead.value("-u") {
         None => Vec::new(),
         Some(_) if !wait => return Err(format!("{}: -u requires -w", a.name)),
@@ -132,6 +145,8 @@ pub(super) fn parse_agent_prompt(a: &Args<'_>) -> Result<MuxCommand, String> {
         wait,
         until,
         timeout_ms,
+        mesh,
+        mesh_to,
     })
 }
 

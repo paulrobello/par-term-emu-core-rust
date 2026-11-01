@@ -34,6 +34,19 @@ const PROMPT_SUBMIT_DELAY: Duration = Duration::from_millis(300);
 /// (herdr's `AGENT_PROMPT_EFFECT_TIMEOUT_MS`).
 pub(super) const PROMPT_EFFECT_TIMEOUT: Duration = Duration::from_millis(5_000);
 
+/// How `agent-prompt` hands `text` to the agent (card 01a192b57).
+#[derive(Debug, Clone)]
+pub(super) enum PromptDelivery {
+    /// The default: a bracketed paste when the agent enabled it, then
+    /// Enter, written into the pane PTY.
+    Pty,
+    /// Non-invasive: a par-mesh message to the pane agent's registration —
+    /// the prompt arrives as an agent turn and the input box is never
+    /// touched. `to` names the address explicitly; without it the address
+    /// resolves from the pane cwd's project in the par-mesh registry.
+    Mesh { to: Option<String> },
+}
+
 /// The states `agent-prompt -w` ends on when `-u` names none.
 const DEFAULT_PROMPT_UNTIL: &[&str] = &["idle", "done", "blocked", "question"];
 
@@ -54,7 +67,21 @@ pub(super) fn route_agent_command(ctx: &Ctx<'_>, command: MuxCommand) -> Outcome
             wait,
             until,
             timeout_ms,
-        } => cmd_agent_prompt(ctx, pane, &text, wait, &until, timeout_ms),
+            mesh,
+            mesh_to,
+        } => cmd_agent_prompt(
+            ctx,
+            pane,
+            &text,
+            wait,
+            &until,
+            timeout_ms,
+            if mesh {
+                PromptDelivery::Mesh { to: mesh_to }
+            } else {
+                PromptDelivery::Pty
+            },
+        ),
         MuxCommand::AgentExplain { pane } => cmd_agent_explain(ctx, pane),
         MuxCommand::AdoptPane { pane, kind } => cmd_adopt_pane(ctx, pane, &kind),
         MuxCommand::ReportState {
@@ -415,9 +442,13 @@ fn untag_undetected(tree: &Arc<Mutex<MuxTree>>, pane: PaneId, kind: &str) {
     }
 }
 
-/// `agent-prompt`: submit `text` to the pane's agent (a bracketed paste
-/// when the agent enabled it, then Enter after a short gap), and with
-/// `-w` block until the agent reaches an `until` state. The anti-stall
+/// `agent-prompt`: submit `text` to the pane's agent, and with `-w` block
+/// until the agent reaches an `until` state. The default delivery writes a
+/// bracketed paste (when the agent enabled it) plus Enter to the pane PTY;
+/// `--mesh` hands the same text to the par-mesh CLI as a message for the
+/// pane agent's mesh address instead — the prompt arrives as an agent turn
+/// and the input box is never touched, so a human typing there cannot
+/// collide (card 01a192b57). The anti-stall
 /// gate first requires evidence the prompt landed — an entry into
 /// `working` or `blocked` after submission, or an agent already working —
 /// within [`PROMPT_EFFECT_TIMEOUT`]; a prompt nothing reacted to is
@@ -429,10 +460,15 @@ pub(super) fn cmd_agent_prompt(
     wait: bool,
     until: &[String],
     timeout_ms: Option<u64>,
+    delivery: PromptDelivery,
 ) -> Outcome {
     let started = Instant::now();
     let deadline = timeout_ms.and_then(|ms| started.checked_add(Duration::from_millis(ms)));
-    let (pane, agent, prior_state, activity, input, paste, focus) = {
+    let (mesh, mesh_to) = match delivery {
+        PromptDelivery::Pty => (false, None),
+        PromptDelivery::Mesh { to } => (true, to),
+    };
+    let (pane, agent, prior_state, activity, project, input, paste, focus) = {
         let guard = ctx.tree.lock();
         let id = match guard.resolve_pane_target(pane) {
             Ok(id) => id,
@@ -468,44 +504,67 @@ pub(super) fn cmd_agent_prompt(
             }
             _ => {}
         }
-        let input = match target.input_handle() {
-            Ok(input) => input,
-            Err(err) => return Outcome::err(ctx, &format!("agent-prompt: {err}")),
-        };
-        let terminal = target.terminal();
-        let term = terminal.read();
-        // Copilot ignores a synthetic Enter after a focus loss until it
-        // sees focus gained (herdr's submit quirk).
-        let focus = if agent == "copilot" {
-            term.report_focus_in()
+        let project = target
+            .persistence_cwd()
+            .and_then(|cwd| cwd.file_name().map(|n| n.to_string_lossy().into_owned()));
+        // Mesh delivery never touches the PTY; the input handle is only
+        // taken for the default PTY write.
+        let input = if mesh {
+            None
         } else {
-            Vec::new()
+            Some(match target.input_handle() {
+                Ok(input) => input,
+                Err(err) => return Outcome::err(ctx, &format!("agent-prompt: {err}")),
+            })
+        };
+        let (paste, focus) = if mesh {
+            (false, Vec::new())
+        } else {
+            let terminal = target.terminal();
+            let term = terminal.read();
+            // Copilot ignores a synthetic Enter after a focus loss until it
+            // sees focus gained (herdr's submit quirk).
+            let focus = if agent == "copilot" {
+                term.report_focus_in()
+            } else {
+                Vec::new()
+            };
+            (term.bracketed_paste(), focus)
         };
         (
             id,
             agent,
             state,
             target.agent_activity,
+            project,
             input,
-            term.bracketed_paste(),
+            paste,
             focus,
         )
     };
-    let mut body = focus;
-    if paste {
-        // The paste end marker inside the text would end the paste early
-        // and let the rest arrive as typed keys.
-        body.extend_from_slice(b"\x1b[200~");
-        body.extend_from_slice(text.replace("\x1b[201~", "").as_bytes());
-        body.extend_from_slice(b"\x1b[201~");
+    let delivery = if mesh {
+        mesh_deliver(&mesh_bin(), &agent, &project, mesh_to.as_deref(), text)
     } else {
-        body.extend_from_slice(text.as_bytes());
-    }
-    let written = input.write(&body).and_then(|()| {
-        std::thread::sleep(PROMPT_SUBMIT_DELAY);
-        input.write(b"\r")
-    });
-    if let Err(err) = written {
+        let Some(input) = input else {
+            return Outcome::err(ctx, "agent-prompt: internal: no PTY input for PTY delivery");
+        };
+        let mut body = focus;
+        if paste {
+            // The paste end marker inside the text would end the paste early
+            // and let the rest arrive as typed keys.
+            body.extend_from_slice(b"\x1b[200~");
+            body.extend_from_slice(text.replace("\x1b[201~", "").as_bytes());
+            body.extend_from_slice(b"\x1b[201~");
+        } else {
+            body.extend_from_slice(text.as_bytes());
+        }
+        let written = input.write(&body).and_then(|()| {
+            std::thread::sleep(PROMPT_SUBMIT_DELAY);
+            input.write(b"\r")
+        });
+        written.map_err(|err| err.to_string())
+    };
+    if let Err(err) = delivery {
         return Outcome::err(ctx, &format!("agent-prompt: {err}"));
     }
     if !wait {
@@ -582,6 +641,103 @@ pub(super) fn cmd_agent_prompt(
         });
         std::thread::sleep(park);
     }
+}
+
+/// The par-mesh CLI used by `agent-prompt --mesh`: `PAR_MUX_MESH_BIN` for
+/// tests and nonstandard installs, then the bun link (`~/.bun/bin/par-mesh`
+/// — the launchd daemon's PATH carries homebrew but not `~/.bun/bin`),
+/// then PATH.
+fn mesh_bin() -> String {
+    if let Ok(bin) = std::env::var("PAR_MUX_MESH_BIN") {
+        if !bin.is_empty() {
+            return bin;
+        }
+    }
+    if let Ok(home) = std::env::var("HOME") {
+        let linked = std::path::Path::new(&home).join(".bun/bin/par-mesh");
+        if linked.is_file() {
+            return linked.to_string_lossy().into_owned();
+        }
+    }
+    "par-mesh".to_string()
+}
+
+/// Pick the pane agent's mesh address out of `par-mesh list` output: a
+/// registry line's first field is `name@host:project` and its `project=`
+/// field scopes the registry. Zero matches refuses (naming the `--to`
+/// escape hatch); several matches refuse listing them, since delivering to
+/// the wrong agent is worse than delivering to none.
+fn resolve_mesh_addr(list_output: &str, project: &str) -> Result<String, String> {
+    let mut matches: Vec<String> = Vec::new();
+    for line in list_output.lines() {
+        let mut fields = line.split_whitespace();
+        let Some(addr) = fields.next() else {
+            continue;
+        };
+        let Some(proj) = fields.find_map(|f| f.strip_prefix("project=")) else {
+            continue;
+        };
+        if proj == project && !matches.iter().any(|m| m == addr) {
+            matches.push(addr.to_string());
+        }
+    }
+    match matches.as_slice() {
+        [] => Err(format!(
+            "no par-mesh agent registered for project {project:?} (pass --to name@host:project to name one)"
+        )),
+        [one] => Ok(one.clone()),
+        many => Err(format!(
+            "several par-mesh agents registered for project {project:?}: {}; pass --to name@host:project to name one",
+            many.join(", ")
+        )),
+    }
+}
+
+/// Deliver `text` as a par-mesh message: resolve the address unless
+/// `mesh_to` names one, then run `par-mesh send` to completion (send is
+/// fire-and-forget unless the caller passes --wait upstream of the daemon).
+/// `bin` is injected so tests never mutate process env (QA-196).
+fn mesh_deliver(
+    bin: &str,
+    agent: &str,
+    project: &Option<String>,
+    mesh_to: Option<&str>,
+    text: &str,
+) -> Result<(), String> {
+    let addr = match mesh_to {
+        Some(addr) => addr.to_string(),
+        None => {
+            let Some(project) = project.as_deref() else {
+                return Err(format!(
+                    "{agent} on this pane has no cwd to scope a project from; pass --to name@host:project"
+                ));
+            };
+            let list = std::process::Command::new(bin)
+                .arg("list")
+                .stdin(std::process::Stdio::null())
+                .output()
+                .map_err(|err| format!("par-mesh list failed: {err}"))?;
+            if !list.status.success() {
+                return Err(format!(
+                    "par-mesh list failed: {}",
+                    String::from_utf8_lossy(&list.stderr).trim()
+                ));
+            }
+            resolve_mesh_addr(&String::from_utf8_lossy(&list.stdout), project)?
+        }
+    };
+    let sent = std::process::Command::new(bin)
+        .args(["send", &addr, text])
+        .stdin(std::process::Stdio::null())
+        .output()
+        .map_err(|err| format!("par-mesh send to {addr} failed: {err}"))?;
+    if !sent.status.success() {
+        return Err(format!(
+            "par-mesh send to {addr} failed: {}",
+            String::from_utf8_lossy(&sent.stderr).trim()
+        ));
+    }
+    Ok(())
 }
 
 /// `agent-explain`: how the pane's agent state is detected — `key value`

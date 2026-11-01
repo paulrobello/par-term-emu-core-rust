@@ -112,6 +112,7 @@ FOREIGN_FLAGS: dict[str, str] = {
     "enter": "send-keys --enter (wire command flag: append the Enter byte)",
     "base": "worktree-create --base (wire command flag: the start point, D7)",
     "since": "events --since (wire command flag: the replay watermark)",
+    "mesh": "agent-prompt --mesh (wire command flag: deliver via par-mesh, card 01a192b57)",
     "restore": "new-session --restore start-command (wire command flag: the pane keeps its start command across restarts)",
     "session-name": "new-workspace --session-name (wire command flag: the first session's exact name)",
     "model": "claude --model (agent CLI argv, restore start-command example)",

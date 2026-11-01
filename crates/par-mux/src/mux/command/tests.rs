@@ -2638,6 +2638,8 @@ fn parses_agent_prompt() {
             wait: true,
             until: vec!["idle".to_string(), "done".to_string()],
             timeout_ms: Some(60000),
+            mesh: false,
+            mesh_to: None,
         }
     );
     // The raw rest of the line is the text; one quoted word is unquoted.
@@ -2649,6 +2651,8 @@ fn parses_agent_prompt() {
             wait: false,
             until: Vec::new(),
             timeout_ms: None,
+            mesh: false,
+            mesh_to: None,
         }
     );
     assert_eq!(
@@ -2659,15 +2663,47 @@ fn parses_agent_prompt() {
             wait: false,
             until: Vec::new(),
             timeout_ms: None,
+            mesh: false,
+            mesh_to: None,
         }
     );
     assert!(!parse_command("agent-prompt -t %1 hi").unwrap().mutates());
+    // Mesh delivery: the flag pair parses, --to names an explicit address,
+    // and --to without --mesh refuses.
+    assert_eq!(
+        parse_command("agent-prompt --mesh -t %1 hi there").unwrap(),
+        MuxCommand::AgentPrompt {
+            pane: Target::Id(PaneId(1)),
+            text: "hi there".to_string(),
+            wait: false,
+            until: Vec::new(),
+            timeout_ms: None,
+            mesh: true,
+            mesh_to: None,
+        }
+    );
+    assert_eq!(
+        parse_command("agent-prompt --mesh --to agent@h:p -t %1 hi").unwrap(),
+        MuxCommand::AgentPrompt {
+            pane: Target::Id(PaneId(1)),
+            text: "hi".to_string(),
+            wait: false,
+            until: Vec::new(),
+            timeout_ms: None,
+            mesh: true,
+            mesh_to: Some("agent@h:p".to_string()),
+        }
+    );
     for (line, needle) in [
         ("agent-prompt -t %1", "requires prompt text"),
         ("agent-prompt hi", "requires -t"),
         ("agent-prompt -t %1 -T 5 hi", "-T requires -w"),
         ("agent-prompt -t %1 -u idle hi", "-u requires -w"),
         ("agent-prompt -t %1 -w -u sleeping hi", "invalid -u state"),
+        (
+            "agent-prompt --to agent@h:p -t %1 hi",
+            "--to requires --mesh",
+        ),
     ] {
         let err = parse_command(line).expect_err(line);
         assert!(err.contains(needle), "{line}: {err}");

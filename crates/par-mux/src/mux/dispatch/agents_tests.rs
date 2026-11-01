@@ -1024,3 +1024,112 @@ fn report_state_self_authority_is_not_scraped() {
     assert_eq!(f.metadata("agent_state").as_deref(), Some("working"));
     assert_eq!(f.metadata("agent_state_source").as_deref(), Some("self"));
 }
+
+/// A registry line's `project=` field scopes the resolution; zero matches
+/// refuse naming the --to escape, several refuse listing the candidates.
+#[test]
+fn resolve_mesh_addr_scopes_by_project() {
+    let registry = "\
+claude-b177@macdaddy:proj harness=claude delivery=channel project=proj
+codex-e13f@macdaddy:other harness=codex delivery=poll project=other
+claude-5364@macdaddy:proj2 harness=claude delivery=channel project=proj2
+";
+    assert_eq!(
+        super::resolve_mesh_addr(registry, "proj").unwrap(),
+        "claude-b177@macdaddy:proj"
+    );
+    let err = super::resolve_mesh_addr(registry, "missing").unwrap_err();
+    assert!(err.contains("--to"), "{err}");
+}
+
+/// Two live agents in the pane's project refuse with the candidate list.
+#[test]
+fn resolve_mesh_addr_refuses_an_ambiguous_project() {
+    let registry = "\
+a-one@macdaddy:proj harness=claude project=proj
+a-two@macdaddy:proj harness=claude project=proj
+";
+    let err = super::resolve_mesh_addr(registry, "proj").unwrap_err();
+    assert!(err.contains("a-one@macdaddy:proj"), "{err}");
+    assert!(err.contains("a-two@macdaddy:proj"), "{err}");
+}
+
+/// The fake par-mesh the delivery tests run against: `send` appends its
+/// target and body to the log path baked into the script, and exits 1 for
+/// an address containing "fail" so the failure shape needs no second
+/// script.
+fn write_fake_mesh(dir: &std::path::Path, log: &std::path::Path) -> std::path::PathBuf {
+    let script = dir.join("fake-par-mesh.sh");
+    let log = log.to_string_lossy().replace('\\', "\\\\");
+    std::fs::write(
+        &script,
+        format!(
+            "#!/bin/bash\ncase \"$1\" in\n  send)\n    if [[ \"$2\" == *fail* ]]; then echo boom >&2; exit 1; fi\n    printf '%s|%s\\n' \"$2\" \"$3\" >> '{log}'\n    ;;\nesac\n"
+        ),
+    )
+    .unwrap();
+    use std::os::unix::fs::PermissionsExt;
+    std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o755)).unwrap();
+    script
+}
+
+/// `mesh_deliver` with an explicit address spawns `par-mesh send ADDR TEXT`
+/// and records it; a failing CLI surfaces its stderr.
+#[test]
+fn mesh_deliver_sends_the_text_to_the_named_address() {
+    let dir = tempfile::tempdir().unwrap();
+    let log = dir.path().join("sent.log");
+    let fake = write_fake_mesh(dir.path(), &log);
+    super::mesh_deliver(
+        fake.to_str().unwrap(),
+        "testagent",
+        &None,
+        Some("mesh-agent@localhost:proj"),
+        "hello",
+    )
+    .unwrap();
+    assert_eq!(
+        std::fs::read_to_string(&log).unwrap(),
+        "mesh-agent@localhost:proj|hello\n"
+    );
+    let err = super::mesh_deliver(
+        fake.to_str().unwrap(),
+        "testagent",
+        &None,
+        Some("fail@localhost:proj"),
+        "hello",
+    )
+    .unwrap_err();
+    assert!(err.contains("boom"), "{err}");
+}
+
+/// The dispatch end-to-end: `--mesh` without `--to` runs the full path —
+/// agent refusals, the pane's project scope, the real par-mesh `list` —
+/// and this fixture's project (the crate dir, `par-mux`) has no registry
+/// entry, so the command refuses without sending or typing anything. A
+/// checkout directory literally named with a registered project would
+/// break this assumption; the failure is a loud mismatch, not a send.
+#[test]
+fn agent_prompt_mesh_refuses_when_no_registry_entry_matches() {
+    let f = Fixture::new();
+    f.wait_for_shell();
+    f.report("testagent", "idle", 1);
+    let (lines, ok) = body(&f.run("agent-prompt --mesh -t %0 hello from the mesh"));
+    assert!(!ok, "{lines:?}");
+    assert!(
+        lines
+            .iter()
+            .any(|l| l.contains("no par-mesh agent registered")),
+        "{lines:?}"
+    );
+    std::thread::sleep(Duration::from_millis(400));
+    let pane_text = {
+        let guard = f.tree.lock();
+        let pane = guard.pane(PANE).expect("pane alive");
+        pane.terminal().read().content()
+    };
+    assert!(
+        !pane_text.contains("hello from the mesh"),
+        "prompt text must not reach the PTY: {pane_text:?}"
+    );
+}

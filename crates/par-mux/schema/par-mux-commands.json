@@ -29,12 +29,14 @@
         "until"
       ],
       "flags": [
+        "--mesh",
         "-T",
         "-t",
+        "--to",
         "-u",
         "-w"
       ],
-      "synopsis": "-t <pane> [-w] [-u state,…] [-T ms] [--] <text>"
+      "synopsis": "-t <pane> [-w] [-u state,…] [-T ms] [--mesh] [--to ADDR] [--] <text>"
     },
     {
       "name": "agent-start",
