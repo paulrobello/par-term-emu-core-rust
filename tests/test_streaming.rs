@@ -50,6 +50,72 @@ mod streaming_tests {
         );
     }
 
+    /// The par-mux tree snapshot round-trips JSON and protobuf with the
+    /// whole hierarchy intact — ids, active markers, the layout string and
+    /// the pre-parsed pane rectangles; the empty snapshot and the
+    /// `mux_tree_request` do the same.
+    #[test]
+    fn mux_tree_round_trip_json_and_protobuf() {
+        use par_term_emu_core_rust::streaming::protocol::{
+            MuxTreePane, MuxTreeSession, MuxTreeWindow, MuxTreeWorkspace,
+        };
+        let message = ServerMessage::MuxTreeSnapshot {
+            workspaces: vec![MuxTreeWorkspace {
+                id: "+1".into(),
+                name: "main".into(),
+                active: true,
+                sessions: vec![MuxTreeSession {
+                    id: "$0".into(),
+                    name: "work".into(),
+                    active: true,
+                    windows: vec![MuxTreeWindow {
+                        id: "@0".into(),
+                        name: "editor".into(),
+                        active: true,
+                        layout: "0000,81x24,0,0{40x24,0,0,0,40x24,41,0,1}".into(),
+                        panes: vec![
+                            MuxTreePane {
+                                id: "%0".into(),
+                                title: "shell".into(),
+                                active: true,
+                                cols: 40,
+                                rows: 24,
+                                x: 0,
+                                y: 0,
+                            },
+                            MuxTreePane {
+                                id: "%1".into(),
+                                title: String::new(),
+                                active: false,
+                                cols: 40,
+                                rows: 24,
+                                x: 41,
+                                y: 0,
+                            },
+                        ],
+                    }],
+                }],
+            }],
+        };
+        let json = serde_json::to_value(&message).unwrap();
+        let from_json: ServerMessage = serde_json::from_value(json.clone()).unwrap();
+        let wire = encode_server_message(&from_json).unwrap();
+        let decoded = decode_server_message(&wire).unwrap();
+        assert_eq!(serde_json::to_value(decoded).unwrap(), json);
+
+        let empty = ServerMessage::MuxTreeSnapshot { workspaces: vec![] };
+        let wire = encode_server_message(&empty).unwrap();
+        assert!(
+            matches!(decode_server_message(&wire).unwrap(), ServerMessage::MuxTreeSnapshot { workspaces } if workspaces.is_empty())
+        );
+
+        let wire = encode_client_message(&ClientMessage::MuxTreeRequest).unwrap();
+        assert!(matches!(
+            decode_client_message(&wire).unwrap(),
+            ClientMessage::MuxTreeRequest
+        ));
+    }
+
     /// Inline-image frames round-trip JSON and protobuf with bytes intact;
     /// the 8 MiB payload cap is enforced on the encode boundary.
     #[test]

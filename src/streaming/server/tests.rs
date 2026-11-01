@@ -201,6 +201,7 @@ async fn max_clients_reached_rejects_before_session_spawn() {
         session_id: "fresh-session".to_string(),
         readonly: false,
         preset: None,
+        metadata: false,
     };
     let (_session, _g, _s, _ro) = server
         .prepare_ws_session(&params, GlobalClientGuard { server: &server })

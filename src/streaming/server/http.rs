@@ -418,7 +418,15 @@ pub(super) async fn sessions_handler(
         return (StatusCode::FORBIDDEN, "Origin not allowed").into_response();
     }
 
-    let sessions = server.sessions.list_sessions();
+    // The `?metadata=1` listener state is a routing shell, not a pane
+    // session: the reserved registry id `metadata` never appears in the
+    // listing. (Do not name a mirror session `metadata` — it is reserved.)
+    let sessions: Vec<_> = server
+        .sessions
+        .list_sessions()
+        .into_iter()
+        .filter(|s| s.id != "metadata")
+        .collect();
     let max = server.config.max_sessions;
     let available = max.saturating_sub(sessions.len());
     axum::Json(serde_json::json!({

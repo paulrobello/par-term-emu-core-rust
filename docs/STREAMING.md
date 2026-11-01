@@ -900,6 +900,7 @@ The protocol is defined in `proto/terminal.proto`. Messages use Protocol Buffers
 | `screen_cleared` | `include_scrollback: bool` | Screen cleared (ED 2J or ED 3J) |
 | `agent_roster` | `agents: AgentEntry[]` | Full agent roster snapshot (pane-id ascending), pushed once per client connect in mux-backed sessions |
 | `agent_state_changed` | `agent?: AgentEntry`, `released: bool` | Roster delta: upsert `agent`, or remove it when `released` is `true` |
+| `mux_tree_snapshot` | `workspaces: MuxTreeWorkspace[]` | Full par-mux tree snapshot (every workspace, session, window and pane). Pushed on connect and after every structural change in mux-backed servers; also the reply to `mux_tree_request`. See [Mux tree metadata](#mux-tree-metadata) |
 | `pointer_shape_changed` | `shape?: string` | Pointer shape changed (OSC 22); absent = the client's own pointer applies |
 | `inline_image` | `image_id: uint64`, `pane_id?: uint32`, `format: string`, `width: uint32`, `height: uint32`, `data: bytes`, `col: uint32`, `row: uint32`, `pane?: string` | One image frame a pane app placed (OSC 1337, Sixel, or Kitty), placed at its stored cell; subscription-gated under the Graphics event. See [Inline Images](#inline-images) |
 | `upload_started` | `upload_id: uint64` | A client upload began staging daemon-side; `upload_id` keys the matching `upload_finished` |
@@ -938,6 +939,7 @@ The connect handshake's replay is bounded: NEWEST graphics seed first — the on
 | `upload_chunk` | `data: bytes` | One chunk (≤ `MAX_UPLOAD_CHUNK_BYTES`, 64 KiB); a rejected chunk aborts the upload daemon-side |
 | `upload_commit` | (none) | Seal the staged file and bracket-paste its PATH into the pane; replies `upload_finished` with the path |
 | `upload_abort` | (none) | Abandon the staged upload (spool file deleted); replies `upload_finished` with `error: "aborted"` |
+| `mux_tree_request` | (none) | Request the current par-mux tree snapshot; answered from the server's cache (no daemon round trip) with `mux_tree_snapshot` |
 
 > **Note: protobuf names vs serde-JSON tags.** The tables above use the
 > protobuf field/message names. The Rust types in `src/streaming/protocol.rs`
@@ -1727,6 +1729,24 @@ The bundled web frontend handles the size policy per viewer; the pane itself kee
 | Any viewer | A server-sent `resize` is applied without being echoed back, so it cannot undo a newer resize from another client. |
 
 Phones apply the same deliberate-only rule to plain (non-mux) sessions: they open at the server's current size instead of resizing the PTY to the phone.
+
+#### Mux tree metadata
+
+A mux-backed server also exposes the daemon's whole tree — every workspace, session, window and pane, including inactive and non-agent ones — as read-only metadata. Terminal content streaming is unchanged; this surface carries structure only, and it never touches the daemon's selection or pane sizing: the fetch runs only `list-*` queries (`list-workspaces`, `list-sessions -F`, `list-windows -a -F`, `list-panes -F`), never `select-*` or resize commands.
+
+`mux_tree_snapshot` is a full replacement, nested `workspaces > sessions > windows > panes` (the nesting is the parent link), in daemon tree order. Every node carries its verbatim par-mux id (`+N`, `$N`, `@N`, `%N` — stable for the node's lifetime), `name`, and an `active` marker at its own level: workspace = the daemon's active workspace, session = its workspace's active session, window = its session's current window, pane = its window's active pane. A window additionally carries `layout`, the full (unzoomed) tmux layout string, and its panes carry the same geometry pre-parsed as `cols`/`rows`/`x`/`y` rectangles, so a client can compose the window without a layout-string parser. Pane `title` is the effective title (empty when none).
+
+Delivery is reconciliation by full snapshot, never deltas:
+
+- On connect (after the roster push) every client receives the current snapshot from the watcher's cache.
+- The server keeps one daemon control connection (the tree watcher, mirroring the roster watcher): the daemon's structural notifications (`%workspaces-changed`, `%sessions-changed`, window add/close/rename and their unlinked twins, `%session-renamed`, `%client-session-changed`, `%session-window-changed`, `%window-pane-changed`, `%layout-change`, `%pane-title-changed`) each trigger a refetch, and the fresh full snapshot is broadcast to every client. A notification burst folds into one refetch.
+- A client may request the snapshot at any time with `mux_tree_request`; the reply is served from the watcher's cache with no daemon round trip.
+
+Races and reconnects: the cache is updated before the matching broadcast, so a request that races a change reads either the pre-change or the post-change state and the change's own push corrects a stale read — applying every push (each one a whole replacement) converges on the daemon's state with no merge logic. A watcher reconnect (daemon restart, dropped connection) always fetches and broadcasts a fresh snapshot before anything else, so no window or pane from before the restart survives as a ghost; a reconnecting client resyncs the same way, through its own connect push and, on a broadcast overflow (lagged receiver), an immediate fresh snapshot resync.
+
+#### Metadata-only connections (`?metadata=1`)
+
+A browser that only wants the tree — no pane content, no mirror session, no size contribution — connects to `/ws?metadata=1` (same auth and origin enforcement as any other connection; `ConnectionParams::metadata` from Rust). The connection creates no pane session: it rides a factory-free routing state under the reserved registry id `metadata` (never listed by `/sessions`; do not name a mirror session `metadata`), the connection is forced read-only (every write path refuses), and it receives the normal connect pushes (`mux_tree_snapshot`, and the roster when a watcher is attached) plus every subsequent tree broadcast. `mux_tree_request` works as on any connection. The routing state exists only while a metadata client is connected and disappears with its last client.
 
 ### File Transfer Events
 

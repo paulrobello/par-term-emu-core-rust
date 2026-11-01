@@ -11,7 +11,9 @@
 
 use super::*;
 use crate::streaming::protocol::{
-    CpuStats, DiskStats, InlineImageFrame, LoadAverage, MemoryStats, NetworkInterfaceStats,
+    CpuStats, DiskStats, InlineImageFrame, LoadAverage, MemoryStats, MuxTreePane as AppMuxTreePane,
+    MuxTreeSession as AppMuxTreeSession, MuxTreeWindow as AppMuxTreeWindow,
+    MuxTreeWorkspace as AppMuxTreeWorkspace, NetworkInterfaceStats,
 };
 use std::fmt::Write as _;
 
@@ -48,6 +50,37 @@ fn agent(pane_id: u32) -> AppAgentEntry {
 
 /// A roster row carrying every v0.72 activity/presence stat, so the
 /// golden pins the wire encoding of the non-zero additive fields.
+/// A tree window with a two-pane split, so the golden pins the nested
+/// pane geometry encoding.
+fn tree_window() -> AppMuxTreeWindow {
+    AppMuxTreeWindow {
+        id: "@0".into(),
+        name: "editor".into(),
+        active: true,
+        layout: "0000,81x24,0,0{40x24,0,0,0,40x24,41,0,1}".into(),
+        panes: vec![
+            AppMuxTreePane {
+                id: "%0".into(),
+                title: "shell".into(),
+                active: true,
+                cols: 40,
+                rows: 24,
+                x: 0,
+                y: 0,
+            },
+            AppMuxTreePane {
+                id: "%1".into(),
+                title: String::new(),
+                active: false,
+                cols: 40,
+                rows: 24,
+                x: 41,
+                y: 0,
+            },
+        ],
+    }
+}
+
 fn agent_stats() -> AppAgentEntry {
     AppAgentEntry {
         last_activity_at: 1_700_000_000_000,
@@ -415,6 +448,20 @@ fn server_fixtures() -> Vec<AppServerMessage> {
             row: 0,
             pane: None,
         },
+        S::MuxTreeSnapshot {
+            workspaces: vec![AppMuxTreeWorkspace {
+                id: "+1".into(),
+                name: "main".into(),
+                active: true,
+                sessions: vec![AppMuxTreeSession {
+                    id: "$0".into(),
+                    name: "work".into(),
+                    active: true,
+                    windows: vec![tree_window()],
+                }],
+            }],
+        },
+        S::MuxTreeSnapshot { workspaces: vec![] },
     ]
 }
 
@@ -471,6 +518,7 @@ fn client_fixtures() -> Vec<AppClientMessage> {
             scope: "full".into(),
             max_commands: Some(9),
         },
+        C::MuxTreeRequest,
     ]
 }
 
@@ -805,9 +853,10 @@ fn proto_golden_fixtures_cover_every_variant() {
             S::InlineImage { .. } => "InlineImage",
             S::UploadStarted { .. } => "UploadStarted",
             S::UploadFinished { .. } => "UploadFinished",
+            S::MuxTreeSnapshot { .. } => "MuxTreeSnapshot",
         });
     }
-    assert_eq!(seen.len(), 45, "server fixtures miss a variant");
+    assert_eq!(seen.len(), 46, "server fixtures miss a variant");
     let mut seen = std::collections::BTreeSet::new();
     for msg in client_fixtures() {
         seen.insert(match msg {
@@ -827,7 +876,8 @@ fn proto_golden_fixtures_cover_every_variant() {
             C::UploadChunk { .. } => "UploadChunk",
             C::UploadCommit => "UploadCommit",
             C::UploadAbort => "UploadAbort",
+            C::MuxTreeRequest => "MuxTreeRequest",
         });
     }
-    assert_eq!(seen.len(), 16, "client fixtures miss a variant");
+    assert_eq!(seen.len(), 17, "client fixtures miss a variant");
 }

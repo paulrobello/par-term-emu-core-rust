@@ -104,6 +104,7 @@ message ServerMessage {
     InlineImage inline_image = 43;
     UploadStarted upload_started = 44;
     UploadFinished upload_finished = 45;
+    MuxTreeSnapshot mux_tree_snapshot = 46;
   }
 }
 
@@ -446,8 +447,63 @@ message ClientMessage {
     UploadChunk upload_chunk = 14;
     UploadCommit upload_commit = 15;
     UploadAbort upload_abort = 16;
+    MuxTreeRequest mux_tree_request = 17;
   }
 }
+
+// The par-mux tree: every workspace, session, window and pane (including
+// inactive and non-agent ones), as one full-replacement snapshot. The
+// hierarchy is the parent link: sessions nest in their workspace, windows
+// in their session, panes in their window, in tree order.
+message MuxTreeSnapshot {
+  repeated MuxTreeWorkspace workspaces = 1;
+}
+
+// One workspace: `+N` id, the daemon's active-workspace marker.
+message MuxTreeWorkspace {
+  string id = 1;
+  string name = 2;
+  bool active = 3;                // the daemon's active workspace
+  repeated MuxTreeSession sessions = 4;
+}
+
+// One session: `$N` id, its workspace's active-session marker.
+message MuxTreeSession {
+  string id = 1;
+  string name = 2;
+  bool active = 3;                // its workspace's active session
+  repeated MuxTreeWindow windows = 4;
+}
+
+// One window: `@N` id, its session's active-window marker, plus the split
+// geometry. `layout` is the full (unzoomed) tmux layout string — the
+// authoritative geometry a client can parse; `panes` carry the same
+// geometry pre-parsed into per-pane rectangles so a client needs no
+// layout-string parser.
+message MuxTreeWindow {
+  string id = 1;
+  string name = 2;
+  bool active = 3;                // its session's current window
+  string layout = 4;              // full unzoomed tmux layout string
+  repeated MuxTreePane panes = 5;
+}
+
+// One pane: `%N` id, its window's active-pane marker, plus the rectangle
+// the window layout gives it (cols/rows/x/y; the full layout rect).
+message MuxTreePane {
+  string id = 1;
+  string title = 2;               // effective pane title ("" when none)
+  bool active = 3;                // its window's active pane
+  uint32 cols = 4;
+  uint32 rows = 5;
+  uint32 x = 6;
+  uint32 y = 7;
+}
+
+// Request the current par-mux tree snapshot. Served from the streaming
+// server's cached snapshot (no daemon round trip); structural changes
+// arrive afterwards as fresh full-replacement MuxTreeSnapshot pushes.
+message MuxTreeRequest {}
 
 // Declare web/mobile presence kind. Defaults to web until declared.
 message ViewerIdentity {

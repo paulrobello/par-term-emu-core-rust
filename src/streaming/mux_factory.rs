@@ -96,7 +96,7 @@ pub struct MuxSessionFactory {
 /// in `tests` takes (one source of truth across the mux test suites).
 #[cfg(test)]
 #[path = "../../crates/par-mux/src/mux/test_wait.rs"]
-mod test_wait;
+pub(crate) mod test_wait;
 
 #[cfg(test)]
 mod tests;

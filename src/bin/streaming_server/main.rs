@@ -105,7 +105,9 @@ async fn run_mux_mode(
     theme: Theme,
     args: &Args,
 ) -> anyhow::Result<()> {
-    use par_term_emu_core_rust::streaming::{MuxPaneSelector, MuxSessionFactory, RosterWatcher};
+    use par_term_emu_core_rust::streaming::{
+        MuxPaneSelector, MuxSessionFactory, RosterWatcher, TreeWatcher,
+    };
     let factory = Arc::new(
         MuxSessionFactory::new(&socket, MuxPaneSelector::FromSessionId)
             .with_scrollback(args.scrollback),
@@ -121,6 +123,15 @@ async fn run_mux_mode(
     {
         let weak = Arc::downgrade(&server);
         server.set_roster_watcher(Arc::new(RosterWatcher::spawn(
+            socket.clone(),
+            Arc::new(move |msg| {
+                if let Some(server) = weak.upgrade() {
+                    server.broadcast_all(msg);
+                }
+            }),
+        )));
+        let weak = Arc::downgrade(&server);
+        server.set_tree_watcher(Arc::new(TreeWatcher::spawn(
             socket.clone(),
             Arc::new(move |msg| {
                 if let Some(server) = weak.upgrade() {

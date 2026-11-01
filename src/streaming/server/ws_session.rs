@@ -57,13 +57,61 @@ impl StreamingServer {
         SessionClientGuard,
         bool,
     )> {
-        let read_only = params.readonly || self.config.default_read_only;
-        let session = self.resolve_session_off_runtime(params).await?;
+        let read_only = params.readonly || params.metadata || self.config.default_read_only;
+        let session = if params.metadata {
+            self.metadata_session_off_runtime().await?
+        } else {
+            self.resolve_session_off_runtime(params).await?
+        };
         let session_guard = SessionClientGuard {
             session: Arc::clone(&session),
             server: Arc::clone(self),
         };
         Ok((session, global_guard, session_guard, read_only))
+    }
+
+    /// The `?metadata=1` connection state: a factory-free session under
+    /// the reserved registry id `metadata` — no pane mirror is created
+    /// (and none of the daemon's sizing involves this connection). It
+    /// exists only to route the metadata broadcasts (`mux_tree_snapshot`,
+    /// the roster) to the client and to give the shared dispatch loop a
+    /// write-refusing target; the write paths are refused by the forced
+    /// read-only flag, and the tree reply reads the watcher cache
+    /// directly. The state disappears with its last client
+    /// (`close_on_last_disconnect`), so `/sessions` lists it only while a
+    /// metadata listener is actually connected.
+    async fn metadata_session_off_runtime(self: &Arc<Self>) -> Result<Arc<StreamSessionState>> {
+        let this = Arc::clone(self);
+        tokio::task::spawn_blocking(move || {
+            let _lifecycle = this.session_lifecycle.lock();
+            let session = match this.sessions.get("metadata") {
+                Some(session) => session,
+                None => {
+                    // A fresh in-memory terminal: nothing mirrors a pane,
+                    // no PTY writer exists, and the idle/dead reapers
+                    // treat the state like any other client-less session.
+                    let terminal = Arc::new(RwLock::new(Terminal::new(80, 24)));
+                    let session = Arc::new(StreamSessionState::new(
+                        "metadata".to_string(),
+                        terminal,
+                        None,
+                        false,
+                    ));
+                    let _ = this
+                        .sessions
+                        .insert("metadata".to_string(), Arc::clone(&session));
+                    session
+                }
+            };
+            // Same admission accounting the factory path does: the
+            // SessionClientGuard's drop pairs with it.
+            if !session.try_add_client(this.config.max_clients_per_session) {
+                return Err(StreamingError::MaxClientsReached);
+            }
+            Ok(session)
+        })
+        .await
+        .map_err(|e| StreamingError::ServerError(format!("metadata session failed: {e}")))?
     }
 
     /// The one session loop for every WebSocket transport (tungstenite
@@ -144,6 +192,14 @@ impl StreamingServer {
             client.send(roster).await?;
         }
 
+        // Tree snapshot, same ordering argument as the roster: the
+        // subscription precedes the read, the watcher updates its cache
+        // before it broadcasts, and every push is a whole replacement —
+        // so a missed or replayed push converges on the same state.
+        if let Some(tree) = self.tree_snapshot() {
+            client.send(tree).await?;
+        }
+
         // Setup keepalive timer
         let keepalive_interval = if self.config.keepalive_interval > 0 {
             Some(Duration::from_secs(self.config.keepalive_interval))
@@ -211,9 +267,17 @@ impl StreamingServer {
                                 client.send(status).await?;
                             }
                             client.send(session.viewer_presence()).await?;
-                            // Dropped messages may include roster deltas: resync.
-                            match self.roster_snapshot() {
-                                Some(roster) => roster,
+                            // Dropped messages may include roster deltas or
+                            // tree pushes: resync both. Every snapshot is a
+                            // whole replacement, so send-then-overwrite
+                            // converges on the current state.
+                            if let Some(roster) = self.roster_snapshot() {
+                                if client.send(roster).await.is_err() {
+                                    break;
+                                }
+                            }
+                            match self.tree_snapshot() {
+                                Some(tree) => tree,
                                 None => continue,
                             }
                         }

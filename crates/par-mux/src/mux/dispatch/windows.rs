@@ -279,6 +279,10 @@ pub(super) fn cmd_list_windows(
                                     "0"
                                 },
                             ),
+                            (
+                                "window_layout",
+                                &w.layout.render(0, 0, w.cols as usize, w.rows as usize),
+                            ),
                         ],
                     )),
                     None => lines.push(format!("{}: {}", w.id, w.name)),
@@ -335,6 +339,12 @@ fn session_window_lines(
                         (
                             "window_active",
                             if index == session.active { "1" } else { "0" },
+                        ),
+                        (
+                            "window_layout",
+                            &window
+                                .layout
+                                .render(0, 0, window.cols as usize, window.rows as usize),
                         ),
                     ],
                 ),

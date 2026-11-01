@@ -66,6 +66,26 @@ impl StreamingServer {
         }
     }
 
+    /// Attach the par-mux tree watcher whose snapshot every connecting
+    /// client receives (and whose fresh snapshots follow every structural
+    /// change). First call wins.
+    #[cfg(feature = "mux")]
+    pub fn set_tree_watcher(&self, watcher: Arc<crate::streaming::TreeWatcher>) {
+        let _ = self.tree.set(watcher);
+    }
+
+    /// The current tree snapshot, if a tree watcher is attached.
+    pub(super) fn tree_snapshot(&self) -> Option<ServerMessage> {
+        #[cfg(feature = "mux")]
+        {
+            self.tree.get().map(|w| w.snapshot())
+        }
+        #[cfg(not(feature = "mux"))]
+        {
+            None
+        }
+    }
+
     /// Send a message to a specific session
     pub fn send_to_session(&self, session_id: &str, msg: ServerMessage) {
         if let Some(session) = self.sessions.get(session_id) {

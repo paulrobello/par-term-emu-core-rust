@@ -202,6 +202,13 @@ pub struct ConnectionParams {
     pub readonly: bool,
     /// Preset name to use for session creation
     pub preset: Option<String>,
+    /// Metadata-only connect (`?metadata=1`): browse the par-mux tree
+    /// without creating a pane session — no mirror, no size contribution.
+    /// The connection rides a factory-free `metadata` state and only the
+    /// metadata messages flow (`mux_tree_snapshot` pushes and the
+    /// `mux_tree_request` reply, plus the roster); every write path is
+    /// refused via the forced read-only flag.
+    pub metadata: bool,
 }
 
 /// Session ids must match `[A-Za-z0-9_-]{1,64}` (SEC-011): they are used as
@@ -247,6 +254,10 @@ impl ConnectionParams {
             session_id,
             readonly,
             preset,
+            metadata: params
+                .get("metadata")
+                .map(|v| v == "true" || v == "1")
+                .unwrap_or(false),
         }
     }
 
@@ -487,6 +498,10 @@ pub struct StreamingServer {
     /// par-mux roster watcher; when set, every client receives the roster on connect
     #[cfg(feature = "mux")]
     roster: std::sync::OnceLock<Arc<crate::streaming::RosterWatcher>>,
+    /// par-mux tree watcher; when set, every client receives the workspace
+    /// tree on connect and on every structural change
+    #[cfg(feature = "mux")]
+    tree: std::sync::OnceLock<Arc<crate::streaming::TreeWatcher>>,
 }
 
 impl StreamingServer {
@@ -528,6 +543,8 @@ impl StreamingServer {
             client_count: AtomicUsize::new(0),
             #[cfg(feature = "mux")]
             roster: std::sync::OnceLock::new(),
+            #[cfg(feature = "mux")]
+            tree: std::sync::OnceLock::new(),
             addr,
             config,
             sessions,
@@ -551,6 +568,8 @@ impl StreamingServer {
             client_count: AtomicUsize::new(0),
             #[cfg(feature = "mux")]
             roster: std::sync::OnceLock::new(),
+            #[cfg(feature = "mux")]
+            tree: std::sync::OnceLock::new(),
             addr,
             config,
             sessions,
@@ -708,6 +727,7 @@ fn should_send(
         | ServerMessage::AgentStateChanged { .. }
         | ServerMessage::UploadStarted { .. }
         | ServerMessage::UploadFinished { .. }
+        | ServerMessage::MuxTreeSnapshot { .. }
         | ServerMessage::Pong => true,
     }
 }

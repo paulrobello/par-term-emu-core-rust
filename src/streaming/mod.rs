@@ -77,6 +77,9 @@ mod roster;
 #[cfg(all(feature = "streaming", feature = "mux"))]
 mod roster_watcher;
 
+#[cfg(all(feature = "streaming", feature = "mux"))]
+mod tree_watcher;
+
 #[cfg(feature = "streaming")]
 pub mod auth_hash;
 
@@ -122,6 +125,9 @@ pub use mux_factory::{MuxPaneSelector, MuxSessionFactory, ACTIVE_WORKSPACE_SESSI
 
 #[cfg(all(feature = "streaming", feature = "mux"))]
 pub use roster_watcher::{OnMessage, RosterWatcher};
+
+#[cfg(all(feature = "streaming", feature = "mux"))]
+pub use tree_watcher::{OnTreeMessage, TreeWatcher};
 
 #[cfg(feature = "streaming")]
 pub use roster::{parse_agents_output, translate_notification, RosterDelta};

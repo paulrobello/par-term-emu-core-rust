@@ -1165,6 +1165,31 @@ pub enum ServerMessage {
         #[serde(skip_serializing_if = "Option::is_none")]
         error: Option<String>,
     },
+
+    /// Full par-mux tree snapshot: every workspace, session, window and
+    /// pane (including inactive and non-agent ones). Pushed on connect and
+    /// again after every structural change; the reply to
+    /// `ClientMessage::MuxTreeRequest`; served from the watcher's cache.
+    #[serde(rename = "mux_tree_snapshot")]
+    #[cfg_attr(
+        all(
+            any(feature = "python", feature = "python-test"),
+            feature = "streaming"
+        ),
+        pydict(from = "crate::streaming::py_convert::mux_tree_snapshot_from")
+    )]
+    MuxTreeSnapshot {
+        /// Every workspace, in workspace-id order
+        #[serde(skip_serializing_if = "Vec::is_empty")]
+        #[cfg_attr(
+            all(
+                any(feature = "python", feature = "python-test"),
+                feature = "streaming"
+            ),
+            pydict(nested(keep_empty))
+        )]
+        workspaces: Vec<MuxTreeWorkspace>,
+    },
 }
 
 /// One replayed inline-image frame: the payload of `Connected.graphics`, a
@@ -1305,6 +1330,141 @@ pub struct AgentEntry {
     /// `working` with no activity for the daemon's stall window, from
     /// `stalled=1`
     pub stalled: bool,
+}
+
+/// One pane in a [`ServerMessage::MuxTreeSnapshot`]: `%N` id, its window's
+/// active-pane marker, and the rectangle the window layout gives it.
+#[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[cfg_attr(
+    all(
+        any(feature = "python", feature = "python-test"),
+        feature = "streaming"
+    ),
+    derive(par_term_emu_derive::PyDictConvert)
+)]
+#[cfg_attr(feature = "streaming", derive(par_term_emu_derive::ProtoConvert))]
+#[cfg_attr(
+    feature = "streaming",
+    proto(wire = "crate::streaming::proto::pb::MuxTreePane")
+)]
+pub struct MuxTreePane {
+    /// par-mux pane id (`%N`)
+    pub id: String,
+    /// Effective pane title, empty when none
+    pub title: String,
+    /// The window's active pane
+    pub active: bool,
+    /// Layout-rect columns
+    pub cols: u32,
+    /// Layout-rect rows
+    pub rows: u32,
+    /// Layout-rect column origin
+    pub x: u32,
+    /// Layout-rect row origin
+    pub y: u32,
+}
+
+/// One window in a [`ServerMessage::MuxTreeSnapshot`]: `@N` id, its
+/// session's active-window marker, and the split geometry. `layout` is the
+/// full (unzoomed) tmux layout string — the authoritative geometry — and
+/// `panes` carry the same geometry pre-parsed into per-pane rectangles.
+#[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[cfg_attr(
+    all(
+        any(feature = "python", feature = "python-test"),
+        feature = "streaming"
+    ),
+    derive(par_term_emu_derive::PyDictConvert)
+)]
+#[cfg_attr(feature = "streaming", derive(par_term_emu_derive::ProtoConvert))]
+#[cfg_attr(
+    feature = "streaming",
+    proto(wire = "crate::streaming::proto::pb::MuxTreeWindow")
+)]
+pub struct MuxTreeWindow {
+    /// par-mux window id (`@N`)
+    pub id: String,
+    /// Window name
+    pub name: String,
+    /// Its session's current window
+    pub active: bool,
+    /// Full unzoomed tmux layout string
+    pub layout: String,
+    /// The window's panes in layout leaf order
+    #[cfg_attr(
+        all(
+            any(feature = "python", feature = "python-test"),
+            feature = "streaming"
+        ),
+        pydict(nested(keep_empty))
+    )]
+    pub panes: Vec<MuxTreePane>,
+}
+
+/// One session in a [`ServerMessage::MuxTreeSnapshot`]: `$N` id, its
+/// workspace's active-session marker.
+#[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[cfg_attr(
+    all(
+        any(feature = "python", feature = "python-test"),
+        feature = "streaming"
+    ),
+    derive(par_term_emu_derive::PyDictConvert)
+)]
+#[cfg_attr(feature = "streaming", derive(par_term_emu_derive::ProtoConvert))]
+#[cfg_attr(
+    feature = "streaming",
+    proto(wire = "crate::streaming::proto::pb::MuxTreeSession")
+)]
+pub struct MuxTreeSession {
+    /// par-mux session id (`$N`)
+    pub id: String,
+    /// Session name
+    pub name: String,
+    /// Its workspace's active session
+    pub active: bool,
+    /// The session's windows in window order
+    #[cfg_attr(
+        all(
+            any(feature = "python", feature = "python-test"),
+            feature = "streaming"
+        ),
+        pydict(nested(keep_empty))
+    )]
+    pub windows: Vec<MuxTreeWindow>,
+}
+
+/// One workspace in a [`ServerMessage::MuxTreeSnapshot`]: `+N` id, the
+/// daemon's active-workspace marker.
+#[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[cfg_attr(
+    all(
+        any(feature = "python", feature = "python-test"),
+        feature = "streaming"
+    ),
+    derive(par_term_emu_derive::PyDictConvert)
+)]
+#[cfg_attr(feature = "streaming", derive(par_term_emu_derive::ProtoConvert))]
+#[cfg_attr(
+    feature = "streaming",
+    proto(wire = "crate::streaming::proto::pb::MuxTreeWorkspace")
+)]
+pub struct MuxTreeWorkspace {
+    /// par-mux workspace id (`+N`)
+    pub id: String,
+    /// Workspace name
+    pub name: String,
+    /// The daemon's active workspace
+    pub active: bool,
+    /// The workspace's sessions in session order
+    #[cfg_attr(
+        all(
+            any(feature = "python", feature = "python-test"),
+            feature = "streaming"
+        ),
+        pydict(nested(keep_empty))
+    )]
+    pub sessions: Vec<MuxTreeSession>,
 }
 
 /// Messages sent from client to server
@@ -1524,6 +1684,12 @@ pub enum ClientMessage {
     /// deleted daemon-side.
     #[serde(rename = "upload_abort")]
     UploadAbort,
+
+    /// Request the current par-mux tree snapshot. Served from the
+    /// streaming server's cache (no daemon round trip); structural changes
+    /// arrive afterwards as fresh `mux_tree_snapshot` pushes.
+    #[serde(rename = "mux_tree_request")]
+    MuxTreeRequest,
 }
 
 /// The kind of a [`ClientMessage::Mouse`] event.

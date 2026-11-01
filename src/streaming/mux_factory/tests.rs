@@ -118,6 +118,7 @@ fn mirror(server: &Arc<StreamingServer>, pane: &str) -> Arc<StreamSessionState> 
         session_id: format!("pane-{}", pane.trim_start_matches('%')),
         readonly: false,
         preset: None,
+        metadata: false,
     };
     server.resolve_session(&params).expect("mux-backed session")
 }
@@ -189,6 +190,7 @@ fn mirror_session(server: &Arc<StreamingServer>, session_id: &str) -> Arc<Stream
         session_id: session_id.to_string(),
         readonly: false,
         preset: None,
+        metadata: false,
     };
     server.resolve_session(&params).expect("mux-backed session")
 }

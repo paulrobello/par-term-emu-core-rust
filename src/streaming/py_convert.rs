@@ -181,6 +181,12 @@ pub fn agent_state_changed_from(_kwargs: Option<&Bound<'_, PyDict>>) -> PyResult
     })
 }
 
+/// Whole-variant encode for `ServerMessage::MuxTreeSnapshot`: tree snapshots
+/// are server-generated, so the Python encode API emits the empty snapshot.
+pub fn mux_tree_snapshot_from(_kwargs: Option<&Bound<'_, PyDict>>) -> PyResult<ServerMessage> {
+    Ok(ServerMessage::MuxTreeSnapshot { workspaces: vec![] })
+}
+
 #[cfg(test)]
 mod system_stats_dict {
     use super::super::protocol::*;

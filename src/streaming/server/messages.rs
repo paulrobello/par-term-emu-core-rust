@@ -244,6 +244,19 @@ impl StreamingServer {
             crate::streaming::protocol::ClientMessage::UploadAbort => {
                 self.handle_upload_abort(session, read_only, &mut replies);
             }
+            crate::streaming::protocol::ClientMessage::MuxTreeRequest => {
+                // Read-only by construction: the reply reads the tree
+                // watcher's cache — no daemon command, no selection or
+                // sizing touched. Without a watcher there is no tree
+                // source, and the requester is told so instead of waiting.
+                match self.tree_snapshot() {
+                    Some(tree) => replies.push(tree),
+                    None => replies.push(ServerMessage::Error {
+                        message: "mux tree unavailable (no daemon attached)".to_string(),
+                        code: Some("mux_tree_unavailable".to_string()),
+                    }),
+                }
+            }
         }
         replies
     }

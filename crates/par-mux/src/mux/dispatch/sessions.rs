@@ -315,6 +315,14 @@ pub(super) fn cmd_list_sessions(
                         ("workspace_name", ws.name.as_str()),
                         ("session_id", session.id.to_string().as_str()),
                         ("session_name", session.name.as_str()),
+                        (
+                            "session_active",
+                            if ws.sessions.get(ws.active) == Some(session_id) {
+                                "1"
+                            } else {
+                                "0"
+                            },
+                        ),
                     ],
                 )),
                 None => lines.push(

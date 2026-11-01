@@ -2456,6 +2456,43 @@ fn list_format_flags_expand_variables() {
     assert_eq!(panes, vec!["%0 ".to_string()], "{panes:?}");
 }
 
+/// The tree-snapshot tokens: `#{session_active}` marks each workspace's
+/// active session on `list-sessions -F`, and `#{window_layout}` carries
+/// the full layout string on both `list-windows -F` forms — the fields
+/// the streaming server's tree fetch binds.
+#[test]
+fn tree_snapshot_format_tokens_expand() {
+    let h = Harness::new();
+    assert_ok(&h.run("new-session -s work"));
+    // The newest session is its workspace's active one.
+    assert_ok(&h.run("new-session -s build"));
+    let sessions =
+        assert_ok(&h.run("list-sessions -F '#{workspace_id} #{session_active} #{session_id}'"));
+    assert_eq!(
+        sessions,
+        vec!["+0 0 $0".to_string(), "+0 1 $1".to_string()],
+        "{sessions:?}"
+    );
+    assert_ok(&h.run("switch-client -t $0"));
+    let sessions =
+        assert_ok(&h.run("list-sessions -F '#{workspace_id} #{session_active} #{session_id}'"));
+    assert_eq!(
+        sessions,
+        vec!["+0 1 $0".to_string(), "+0 0 $1".to_string()],
+        "{sessions:?}"
+    );
+    let layout = assert_ok(&h.run("list-windows -t $0 -F '#{window_id} #{window_layout}'"));
+    assert_eq!(layout.len(), 1, "{layout:?}");
+    let (id, layout) = layout[0].split_once(' ').expect("id and layout");
+    assert_eq!(id, "@0");
+    assert!(
+        layout.split(',').nth(1).expect("extent").contains("x"),
+        "the layout string carries the geometry: {layout:?}"
+    );
+    let all = assert_ok(&h.run("list-windows -a -F '#{session_id} #{window_layout}'"));
+    assert_eq!(all.len(), 2, "both sessions' windows ride the -a form");
+}
+
 /// `#{pane_title}` rides the -F expansion on both the bare global form
 /// and the targeted form: the effective title (the user title when set,
 /// else the OSC title). Control characters are already stripped by the

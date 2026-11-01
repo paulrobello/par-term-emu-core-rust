@@ -108,6 +108,10 @@ S da0219080710031a03706e6720800528e0033204010203ff380c4022
   = Ok(InlineImage { image_id: 7, pane_id: Some(3), format: "png", width: 640, height: 480, data: [1, 2, 3, 255], col: 12, row: 34, pane: None })
 S da0200
   = Ok(InlineImage { image_id: 0, pane_id: None, format: "", width: 0, height: 0, data: [], col: 0, row: 0, pane: None })
+S f202750a730a022b3112046d61696e180122650a0224301204776f726b180122570a0240301206656469746f7218012228303030302c38317832342c302c307b34307832342c302c302c302c34307832342c34312c302c317d2a110a02253012057368656c6c1801202828182a0a0a022531202828183029
+  = Ok(MuxTreeSnapshot { workspaces: [MuxTreeWorkspace { id: "+1", name: "main", active: true, sessions: [MuxTreeSession { id: "$0", name: "work", active: true, windows: [MuxTreeWindow { id: "@0", name: "editor", active: true, layout: "0000,81x24,0,0{40x24,0,0,0,40x24,41,0,1}", panes: [MuxTreePane { id: "%0", title: "shell", active: true, cols: 40, rows: 24, x: 0, y: 0 }, MuxTreePane { id: "%1", title: "", active: false, cols: 40, rows: 24, x: 41, y: 0 }] }] }] }] })
+S f20200
+  = Ok(MuxTreeSnapshot { workspaces: [] })
 C 0a050a03696e03
   = Ok(Input { data: "in\u{3}" })
 C 1204085a1021
@@ -140,6 +144,8 @@ C 52080a03676574120178
   = Ok(ClipboardRequest { operation: "get", content: Some("x"), target: None })
 C 5a080a0466756c6c1009
   = Ok(SnapshotRequest { scope: "full", max_commands: Some(9) })
+C 8a0100
+  = Ok(MuxTreeRequest)
 LS empty server oneof
   = Err(InvalidMessage("Empty server message"))
 LS output invalid utf8
