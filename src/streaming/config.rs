@@ -396,6 +396,10 @@ pub struct StreamingConfig {
     /// server creates (SEC-101): `TempOnly` (default) allows only the spec's
     /// gated `t=t` form, `All` also permits `t=f`, `Off` refuses both.
     pub kitty_file_media: crate::graphics::kitty::FileMediaMode,
+    /// Allow writable clients to create real panes on the backing mux
+    /// daemon (`PaneCreateRequest` → `new-window`, default shell only).
+    /// Fail-closed: `false` (default) refuses with `pane_create_disabled`.
+    pub allow_pane_create: bool,
 }
 
 /// Redacting `Debug` (SEC-009): mirrors the derived output field-for-field
@@ -433,6 +437,7 @@ impl std::fmt::Debug for StreamingConfig {
             .field("allow_api_key_in_query", &self.allow_api_key_in_query)
             .field("allowed_origins", &self.allowed_origins)
             .field("kitty_file_media", &self.kitty_file_media)
+            .field("allow_pane_create", &self.allow_pane_create)
             .finish()
     }
 }
@@ -461,6 +466,7 @@ impl Default for StreamingConfig {
             allow_api_key_in_query: false,
             allowed_origins: None,
             kitty_file_media: crate::graphics::kitty::FileMediaMode::default(),
+            allow_pane_create: false,
         }
     }
 }

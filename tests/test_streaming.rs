@@ -182,6 +182,34 @@ mod streaming_tests {
         );
     }
 
+    /// The pane-create request and its reply round-trip JSON and protobuf
+    /// equivalently, with the correlation id carried field-for-field (the
+    /// client-chosen echo a late reply is matched by).
+    #[test]
+    fn pane_create_round_trip() {
+        let request = ClientMessage::PaneCreateRequest {
+            correlation_id: "create-7".into(),
+            session_id: "$0".into(),
+        };
+        let json = serde_json::to_value(&request).unwrap();
+        let from_json: ClientMessage = serde_json::from_value(json.clone()).unwrap();
+        let wire = encode_client_message(&from_json).unwrap();
+        let decoded = decode_client_message(&wire).unwrap();
+        assert_eq!(serde_json::to_value(decoded).unwrap(), json);
+
+        let reply = ServerMessage::PaneCreated {
+            correlation_id: "create-7".into(),
+            session_id: "$0".into(),
+            window_id: "@3".into(),
+            pane_id: "%6".into(),
+        };
+        let json = serde_json::to_value(&reply).unwrap();
+        let from_json: ServerMessage = serde_json::from_value(json.clone()).unwrap();
+        let wire = encode_server_message(&from_json).unwrap();
+        let decoded = decode_server_message(&wire).unwrap();
+        assert_eq!(serde_json::to_value(decoded).unwrap(), json);
+    }
+
     /// Inline-image frames round-trip JSON and protobuf with bytes intact;
     /// the 8 MiB payload cap is enforced on the encode boundary.
     #[test]
@@ -710,6 +738,7 @@ mod streaming_tests {
                 allow_api_key_in_query: false,
                 allowed_origins: None,
                 kitty_file_media: par_term_emu_core_rust::graphics::kitty::FileMediaMode::default(),
+                allow_pane_create: false,
             };
 
             assert_eq!(config.max_clients, 50);

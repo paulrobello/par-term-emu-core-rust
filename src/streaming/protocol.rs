@@ -1214,6 +1214,28 @@ pub enum ServerMessage {
         #[serde(skip_serializing_if = "Option::is_none")]
         exit_code: Option<i32>,
     },
+
+    /// A requested pane was created daemon-side: one new default-shell
+    /// window in the daemon session the request named. Echoes the
+    /// request's `correlation_id` so a client can match a reply that
+    /// arrives late — a drop between the daemon create and this reply
+    /// leaves the pane existing, so a client that saw neither this reply
+    /// nor an error must re-query the mux tree rather than retry blind.
+    /// Opt-in server-side (`allow-pane-create`); refusals arrive as the
+    /// error message with codes `pane_create_disabled`,
+    /// `pane_create_read_only`, `pane_create_no_daemon`, or
+    /// `pane_create_failed`.
+    #[serde(rename = "pane_created")]
+    PaneCreated {
+        /// The request's correlation id, echoed
+        correlation_id: String,
+        /// The daemon session the window was created in (echoed)
+        session_id: String,
+        /// The new window (`@N`)
+        window_id: String,
+        /// The window's single pane (`%N`, default shell)
+        pane_id: String,
+    },
 }
 
 /// One replayed inline-image frame: the payload of `Connected.graphics`, a
@@ -1722,6 +1744,23 @@ pub enum ClientMessage {
     /// arrive afterwards as fresh `mux_tree_snapshot` pushes.
     #[serde(rename = "mux_tree_request")]
     MuxTreeRequest,
+
+    /// Create one new default-shell window (a single new pane) in the
+    /// daemon session named by `session_id` (`$N` or name). Opt-in
+    /// server-side (`allow-pane-create`, default off); read-only
+    /// connections are refused regardless of the flag; non-mux sessions
+    /// are refused with `pane_create_no_daemon`. `correlation_id` is
+    /// client-chosen and echoed in the `pane_created` reply, so a client
+    /// can match a reply that arrives late: a drop between the daemon
+    /// create and the reply leaves the pane existing — re-query the mux
+    /// tree rather than retrying blind.
+    #[serde(rename = "pane_create_request")]
+    PaneCreateRequest {
+        /// Client-chosen id echoed in the `pane_created` reply
+        correlation_id: String,
+        /// Daemon session (`$N` or name) to create the window in
+        session_id: String,
+    },
 }
 
 /// The kind of a [`ClientMessage::Mouse`] event.

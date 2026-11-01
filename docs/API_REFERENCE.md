@@ -2224,6 +2224,7 @@ StreamingConfig(
     allow_api_key_in_query: bool = False,
     allowed_origins: list[str] | None = None,
     kitty_file_media: str = "temp_only",
+    allow_pane_create: bool = False,
 )
 ```
 
@@ -2247,6 +2248,7 @@ StreamingConfig(
 - `enable_system_stats: bool` - Enable system resource statistics collection
 - `system_stats_interval_secs: int` - System stats collection interval in seconds
 - `kitty_file_media: str` - Kitty graphics file-media mode applied to every session terminal (SEC-101): `"temp_only"` (default) allows only a spec-named temp file, `"all"` also permits `t=f` reads of arbitrary paths, `"off"` refuses both. PTY output is untrusted
+- `allow_pane_create: bool` - Let writable clients create real panes on the backing mux daemon (`pane_create_request`, default False; fail-closed)
 - `tls_enabled: bool` - Check if TLS is configured (read-only)
 
 ### TLS Methods

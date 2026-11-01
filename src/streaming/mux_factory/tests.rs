@@ -1482,6 +1482,49 @@ fn dead_upstream_closes_the_mirror_off_the_runtime() {
     });
 }
 
+/// PaneCreateRequest's daemon leg: `pane_create` runs `new-window -t` on
+/// the daemon and resolves the new window's single pane. The window and
+/// pane exist in the target session afterwards, verified through a
+/// control client — the same surface a mux tree snapshot would show.
+#[test]
+fn pane_create_opens_a_default_shell_window_on_the_daemon() {
+    let (_dir, socket, _serving, mut control, _pane) = daemon();
+    let factory =
+        MuxSessionFactory::new(&socket, MuxPaneSelector::FromSessionId).with_reply_timeout(CEILING);
+
+    let (window, pane) = factory
+        .pane_create("stream")
+        .expect("pane_create must answer the new window and pane");
+    assert!(window.starts_with('@'), "window id {window:?}");
+    assert!(pane.starts_with('%'), "pane id {pane:?}");
+
+    // The new window is listed in the `stream` session.
+    let windows = control
+        .send("list-windows -t stream")
+        .expect("list-windows");
+    assert!(
+        windows
+            .iter()
+            .any(|line| line.split_whitespace().next() == Some(window.as_str())),
+        "window {window} must be listed in session `stream`: {windows:?}"
+    );
+
+    // The window holds exactly the one pane the reply named (the
+    // default-shell window carries no extra panes).
+    let panes = control
+        .send(&format!("list-panes -t {window}"))
+        .expect("list-panes");
+    let pane_ids: Vec<&str> = panes
+        .iter()
+        .map(|line| line.split_whitespace().next().unwrap_or(""))
+        .collect();
+    assert_eq!(
+        pane_ids,
+        vec![pane.as_str()],
+        "the new window must hold exactly its one pane"
+    );
+}
+
 /// A daemon that accepts and never replies must fail `create_session`
 /// by its reply deadline instead of blocking the caller forever.
 #[test]

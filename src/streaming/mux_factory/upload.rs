@@ -260,7 +260,7 @@ impl MuxUploadPipe {
 /// One shell-quoted word for a control line (the bounded quoting grammar
 /// the daemon parses: single quotes with the close-escape-reopen idiom),
 /// so a filename with spaces survives the wire.
-fn quote_upload_word(text: &str) -> String {
+pub(super) fn quote_upload_word(text: &str) -> String {
     format!("'{}'", text.replace('\'', "'\\''"))
 }
 

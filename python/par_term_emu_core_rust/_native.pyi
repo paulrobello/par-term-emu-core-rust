@@ -1805,10 +1805,12 @@ class PtyTerminal:
             True
         """
     def get_dropped_sixel_graphics(self) -> Any:
-        """Get count of Sixel graphics dropped due to limits
+        """Get count of graphics dropped due to limits
 
         Returns:
-            Number of Sixel graphics that have been dropped because of size or count limits
+            Number of graphics that have been dropped because of size or count
+            limits. Sixel and Kitty graphics share one store and this counter,
+            so it includes Kitty graphics evicted by the memory budget.
         """
     def get_fg_color(self, col: Any, row: Any) -> Any:
         """Get a cell's foreground color at the specified position
@@ -3885,6 +3887,7 @@ class StreamingConfig:
         allow_api_key_in_query: Any = False,
         allowed_origins: Any = None,
         kitty_file_media: Any = "temp_only",
+        allow_pane_create: Any = False,
     ) -> None: ...
     @property
     def allow_api_key_in_query(self) -> Any:
@@ -3903,6 +3906,23 @@ class StreamingConfig:
         """
     @allow_api_key_in_query.setter
     def allow_api_key_in_query(self, value: Any) -> None: ...
+    @property
+    def allow_pane_create(self) -> Any:
+        """Get whether clients may create panes on the backing mux daemon
+
+        Returns:
+            bool: True if writable clients may create panes (default False)
+
+        Example:
+            >>> config = StreamingConfig()
+            >>> config.allow_pane_create
+            False
+            >>> config.allow_pane_create = True
+            >>> config.allow_pane_create
+            True
+        """
+    @allow_pane_create.setter
+    def allow_pane_create(self, value: Any) -> None: ...
     @property
     def allowed_origins(self) -> Any:
         """Get the allowed browser origins allowlist (None = local/non-browser only).
@@ -6182,10 +6202,12 @@ class Terminal:
             list[int]: Sorted 0-indexed dirty row numbers
         """
     def get_dropped_sixel_graphics(self) -> Any:
-        """Get count of Sixel graphics dropped due to limits
+        """Get count of graphics dropped due to limits
 
         Returns:
-            Number of Sixel graphics that have been dropped because of size or count limits
+            Number of graphics that have been dropped because of size or count
+            limits. Sixel and Kitty graphics share one store and this counter,
+            so it includes Kitty graphics evicted by the memory budget.
         """
     def get_fg_color(self, col: Any, row: Any) -> Any:
         """Get a cell's foreground color at the specified position

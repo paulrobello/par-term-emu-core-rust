@@ -322,6 +322,7 @@ par-term-streamer --enable-http
 | `PAR_TERM_ENABLE_SYSTEM_STATS` | `--enable-system-stats` | Enable system stats collection |
 | `PAR_TERM_SYSTEM_STATS_INTERVAL` | `--system-stats-interval` | Stats collection interval (seconds) |
 | `PAR_TERM_ALLOW_API_KEY_IN_QUERY` | `--allow-api-key-in-query` | Allow API key in URL query param (not recommended) |
+| `PAR_TERM_ALLOW_PANE_CREATE` | `--allow-pane-create` | Let writable clients create panes on the mux daemon (`pane_create_request`; default off, fail-closed; read-only connections always refused) |
 | `PAR_TERM_MAX_CLIENTS_PER_SESSION` | `--max-clients-per-session` | Maximum clients per session (0=unlimited) |
 | `PAR_TERM_INPUT_RATE_LIMIT` | `--input-rate-limit` | Per-client input rate limit (bytes/sec; default 1048576 = 1 MiB/s, 0=unlimited) |
 | `PAR_TERM_KITTY_FILE_MEDIA` | `--kitty-file-media` | Kitty graphics file media: `off` \| `temp_only` (default) \| `all` — see [SECURITY.md](SECURITY.md#kitty-graphics-protocol-file-transmission) |
@@ -902,6 +903,7 @@ The protocol is defined in `proto/terminal.proto`. Messages use Protocol Buffers
 | `agent_state_changed` | `agent?: AgentEntry`, `released: bool` | Roster delta: upsert `agent`, or remove it when `released` is `true` |
 | `mux_tree_snapshot` | `workspaces: MuxTreeWorkspace[]` | Full par-mux tree snapshot (every workspace, session, window and pane). Pushed on connect and after every structural change in mux-backed servers; also the reply to `mux_tree_request`. See [Mux tree metadata](#mux-tree-metadata) |
 | `pane_process_state` | `pane_id: string`, `state: string`, `exit_code?: int` | A mirrored pane's process lifecycle transition: `state` is `running` \| `exited`, `exit_code` rides only with `exited` when the daemon read the status. Sent to the pane's session viewers on the transition and to every connecting viewer as the current state. See [Pane process lifecycle](#pane-process-lifecycle) |
+| `pane_created` | `correlation_id: string`, `session_id: string`, `window_id: string`, `pane_id: string` | Reply to `pane_create_request` on success: the new default-shell window and its single pane, with the request's correlation id echoed. Opt-in server-side (`--allow-pane-create`, default off); daemon refusals arrive as the error message with codes `pane_create_disabled` / `pane_create_read_only` / `pane_create_no_daemon` / `pane_create_failed`. See [Mux tree metadata](#mux-tree-metadata) |
 | `pointer_shape_changed` | `shape?: string` | Pointer shape changed (OSC 22); absent = the client's own pointer applies |
 | `inline_image` | `image_id: uint64`, `pane_id?: uint32`, `format: string`, `width: uint32`, `height: uint32`, `data: bytes`, `col: uint32`, `row: uint32`, `pane?: string` | One image frame a pane app placed (OSC 1337, Sixel, or Kitty), placed at its stored cell; subscription-gated under the Graphics event. See [Inline Images](#inline-images) |
 | `upload_started` | `upload_id: uint64` | A client upload began staging daemon-side; `upload_id` keys the matching `upload_finished` |
@@ -941,6 +943,7 @@ The connect handshake's replay is bounded: NEWEST graphics seed first — the on
 | `upload_commit` | (none) | Seal the staged file and bracket-paste its PATH into the pane; replies `upload_finished` with the path |
 | `upload_abort` | (none) | Abandon the staged upload (spool file deleted); replies `upload_finished` with `error: "aborted"` |
 | `mux_tree_request` | (none) | Request the current par-mux tree snapshot; answered from the server's cache (no daemon round trip) with `mux_tree_snapshot` |
+| `pane_create_request` | `correlation_id: string`, `session_id: string` | Create one new default-shell window (a single new pane) in the daemon session named by `session_id` (`$N` or name). Opt-in server-side (`--allow-pane-create`, default off); read-only connections are refused regardless of the flag. See [Mux tree metadata](#mux-tree-metadata) |
 
 > **Note: protobuf names vs serde-JSON tags.** The tables above use the
 > protobuf field/message names. The Rust types in `src/streaming/protocol.rs`

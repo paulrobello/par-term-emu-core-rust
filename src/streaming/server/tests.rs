@@ -673,4 +673,113 @@ async fn snapshot_request_replies_with_semantic_snapshot() {
     assert!(message.contains("visible"));
 }
 
+/// `PaneCreateRequest` against a default-configured server is refused
+/// identically whether the connection is writable or read-only: the
+/// feature is off (`allow_pane_create` defaults to false), and the
+/// disabled gate is the least-revealing answer, so it fires before
+/// anything else is probed.
+#[tokio::test]
+async fn pane_create_is_refused_when_the_flag_is_off() {
+    use crate::streaming::protocol::ClientMessage;
+
+    let terminal = Arc::new(RwLock::new(Terminal::new(80, 24)));
+    let server = Arc::new(StreamingServer::new(terminal, "127.0.0.1:0".to_string()));
+    let session = server.get_session("default").expect("default session");
+
+    let dispatch = |read_only: bool, msg: ClientMessage| {
+        server.handle_client_message(
+            &session,
+            super::ConnCtx {
+                transport_label: "ws-test",
+                client_id: uuid::Uuid::new_v4(),
+                read_only,
+            },
+            &mut None,
+            &mut None,
+            msg,
+        )
+    };
+    let request = || ClientMessage::PaneCreateRequest {
+        correlation_id: "corr-1".to_string(),
+        session_id: "$0".to_string(),
+    };
+
+    for read_only in [false, true] {
+        match dispatch(read_only, request()).as_slice() {
+            [ServerMessage::Error { message, code }] => {
+                assert_eq!(
+                    message, "pane creation is disabled on this server",
+                    "default-off refusal message must be exact (read_only={read_only})"
+                );
+                assert_eq!(
+                    code.as_deref(),
+                    Some("pane_create_disabled"),
+                    "default-off refusal code must be exact (read_only={read_only})"
+                );
+            }
+            other => panic!("expected one pane_create_disabled refusal, got {other:?}"),
+        }
+    }
+}
+
+/// With `allow_pane_create` on, the gate still holds where creation must
+/// not happen: a read-only connection is refused `pane_create_read_only`
+/// regardless of the flag, and a writable connection with no mux-backed
+/// factory is refused `pane_create_no_daemon`.
+#[tokio::test]
+async fn pane_create_is_refused_read_only_and_without_a_daemon_when_enabled() {
+    use crate::streaming::protocol::ClientMessage;
+
+    let terminal = Arc::new(RwLock::new(Terminal::new(80, 24)));
+    let server = Arc::new(StreamingServer::with_config(
+        terminal,
+        "127.0.0.1:0".to_string(),
+        crate::streaming::StreamingConfig {
+            allow_pane_create: true,
+            ..Default::default()
+        },
+    ));
+    let session = server.get_session("default").expect("default session");
+
+    let dispatch = |read_only: bool, msg: ClientMessage| {
+        server.handle_client_message(
+            &session,
+            super::ConnCtx {
+                transport_label: "ws-test",
+                client_id: uuid::Uuid::new_v4(),
+                read_only,
+            },
+            &mut None,
+            &mut None,
+            msg,
+        )
+    };
+    let request = || ClientMessage::PaneCreateRequest {
+        correlation_id: "corr-2".to_string(),
+        session_id: "$0".to_string(),
+    };
+
+    match dispatch(true, request()).as_slice() {
+        [ServerMessage::Error { code, .. }] => {
+            assert_eq!(
+                code.as_deref(),
+                Some("pane_create_read_only"),
+                "read-only refusal regardless of the flag"
+            );
+        }
+        other => panic!("expected the pane_create_read_only refusal, got {other:?}"),
+    }
+
+    match dispatch(false, request()).as_slice() {
+        [ServerMessage::Error { code, .. }] => {
+            assert_eq!(
+                code.as_deref(),
+                Some("pane_create_no_daemon"),
+                "no mux factory behind the session"
+            );
+        }
+        other => panic!("expected the pane_create_no_daemon refusal, got {other:?}"),
+    }
+}
+
 // ─── InputRateLimiter tests ─────────────────────────────────────────────

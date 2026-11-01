@@ -8,7 +8,7 @@ use super::mirror::{
     split_graphics_seed, MirrorLink, Sink,
 };
 use super::stream::{spawn_drain, SendKeysWriter};
-use super::upload::MuxUploadPipe;
+use super::upload::{quote_upload_word, MuxUploadPipe};
 use super::{MuxPaneSelector, MuxSessionFactory, ACTIVE_WORKSPACE_SESSION_ID, MUX_REPLY_TIMEOUT};
 use crate::mux::{connect_local_stream, LocalStream};
 use crate::streaming::error::StreamingError;
@@ -361,6 +361,45 @@ impl SessionFactory for MuxSessionFactory {
             .get(session_id)
             .cloned()
             .map(|pipe| pipe as std::sync::Arc<dyn UploadForwarder>)
+    }
+
+    fn pane_create(&self, mux_session: &str) -> io::Result<(String, String)> {
+        // One verb on its own short-lived daemon control connection (the
+        // upload verbs' shape): a mirror link's connection is read solely
+        // by its drain thread, so a request/reply verb cannot share one.
+        // The window's single pane is resolved with `list-panes -t` right
+        // after the create, on the same connection.
+        let stream = connect_local_stream(&self.socket).inspect_err(|_| {
+            crate::streaming::metrics::Metrics::global().mux_socket_error("pane-create-connect");
+        })?;
+        let mut writer = stream.try_clone()?;
+        let reader = MuxLines::spawn(stream)?;
+        let window = command(
+            &mut writer,
+            &reader,
+            &format!("new-window -t {}", quote_upload_word(mux_session)),
+            self.reply_timeout,
+        )?;
+        let window_id = window
+            .first()
+            .map(|line| line.trim().to_string())
+            .filter(|id| id.starts_with('@'))
+            .ok_or_else(|| {
+                io::Error::other(format!("new-window reply carried no window id: {window:?}"))
+            })?;
+        let panes = command(
+            &mut writer,
+            &reader,
+            &format!("list-panes -t {window_id}"),
+            self.reply_timeout,
+        )?;
+        let pane_id = panes
+            .first()
+            .and_then(|line| line.split_whitespace().next())
+            .filter(|id| id.starts_with('%'))
+            .map(str::to_string)
+            .ok_or_else(|| io::Error::other(format!("the new window {window_id} has no panes")))?;
+        Ok((window_id, pane_id))
     }
 
     fn is_session_alive(&self, session_id: &str) -> bool {

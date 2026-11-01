@@ -420,6 +420,28 @@ SERVER_CASES = [
     ("upload_finished", {}, {"upload_id": 0, "path": None, "error": None}),
     ("screen_cleared", {"include_scrollback": True}, {"include_scrollback": True}),
     ("screen_cleared", {}, {"include_scrollback": False}),
+    # Pane creation (opt-in server-side; the reply echoes the client's
+    # correlation id so a late reply can be matched).
+    (
+        "pane_created",
+        {
+            "correlation_id": "c1",
+            "session_id": "$0",
+            "window_id": "@3",
+            "pane_id": "%6",
+        },
+        {
+            "correlation_id": "c1",
+            "session_id": "$0",
+            "window_id": "@3",
+            "pane_id": "%6",
+        },
+    ),
+    (
+        "pane_created",
+        {},
+        {"correlation_id": "", "session_id": "", "window_id": "", "pane_id": ""},
+    ),
 ]
 
 CLIENT_CASES = [
@@ -512,6 +534,12 @@ CLIENT_CASES = [
     ("upload_chunk", {}, {"data": b""}),
     ("upload_commit", {}, {}),
     ("upload_abort", {}, {}),
+    (
+        "pane_create_request",
+        {"correlation_id": "c1", "session_id": "$0"},
+        {"correlation_id": "c1", "session_id": "$0"},
+    ),
+    ("pane_create_request", {}, {"correlation_id": "", "session_id": ""}),
 ]
 
 

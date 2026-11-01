@@ -485,6 +485,21 @@ fn server_fixtures() -> Vec<AppServerMessage> {
             state: "running".into(),
             exit_code: None,
         },
+        // The pane-create reply: every field populated, and the echo of a
+        // request whose correlation id is the client-chosen "" (empty
+        // strings are present on the wire, not omitted).
+        S::PaneCreated {
+            correlation_id: "create-7".into(),
+            session_id: "$0".into(),
+            window_id: "@3".into(),
+            pane_id: "%6".into(),
+        },
+        S::PaneCreated {
+            correlation_id: String::new(),
+            session_id: String::new(),
+            window_id: String::new(),
+            pane_id: String::new(),
+        },
     ]
 }
 
@@ -542,6 +557,10 @@ fn client_fixtures() -> Vec<AppClientMessage> {
             max_commands: Some(9),
         },
         C::MuxTreeRequest,
+        C::PaneCreateRequest {
+            correlation_id: "create-7".into(),
+            session_id: "$0".into(),
+        },
     ]
 }
 
@@ -878,9 +897,10 @@ fn proto_golden_fixtures_cover_every_variant() {
             S::UploadFinished { .. } => "UploadFinished",
             S::MuxTreeSnapshot { .. } => "MuxTreeSnapshot",
             S::PaneProcessState { .. } => "PaneProcessState",
+            S::PaneCreated { .. } => "PaneCreated",
         });
     }
-    assert_eq!(seen.len(), 47, "server fixtures miss a variant");
+    assert_eq!(seen.len(), 48, "server fixtures miss a variant");
     let mut seen = std::collections::BTreeSet::new();
     for msg in client_fixtures() {
         seen.insert(match msg {
@@ -901,7 +921,8 @@ fn proto_golden_fixtures_cover_every_variant() {
             C::UploadCommit => "UploadCommit",
             C::UploadAbort => "UploadAbort",
             C::MuxTreeRequest => "MuxTreeRequest",
+            C::PaneCreateRequest { .. } => "PaneCreateRequest",
         });
     }
-    assert_eq!(seen.len(), 17, "client fixtures miss a variant");
+    assert_eq!(seen.len(), 18, "client fixtures miss a variant");
 }

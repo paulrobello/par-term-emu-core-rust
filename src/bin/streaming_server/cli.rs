@@ -173,6 +173,13 @@ pub struct Args {
     #[arg(long, env = "PAR_TERM_ALLOW_API_KEY_IN_QUERY")]
     pub allow_api_key_in_query: bool,
 
+    /// Allow writable clients to create real panes on the backing mux
+    /// daemon (pane_create_request → new-window, default shell only).
+    /// Fail-closed: refused with pane_create_disabled when off (default);
+    /// read-only connections are always refused.
+    #[arg(long, env = "PAR_TERM_ALLOW_PANE_CREATE")]
+    pub allow_pane_create: bool,
+
     /// Allowed browser origins for WebSocket and CORS (SEC-005).
     /// Repeatable, e.g. --allowed-origins https://app.example.com.
     /// When omitted, only non-browser clients and local (loopback) browser

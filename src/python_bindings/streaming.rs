@@ -33,7 +33,7 @@ impl Clone for PyStreamingConfig {
 #[pymethods]
 impl PyStreamingConfig {
     #[new]
-    #[pyo3(signature = (max_clients=1000, send_initial_screen=true, keepalive_interval=30, default_read_only=false, initial_cols=0, initial_rows=0, enable_http=false, web_root="./web_term", max_clients_per_session=0, input_rate_limit_bytes_per_sec=0, enable_system_stats=false, system_stats_interval_secs=5, api_key=None, allow_api_key_in_query=false, allowed_origins=None, kitty_file_media="temp_only"))]
+    #[pyo3(signature = (max_clients=1000, send_initial_screen=true, keepalive_interval=30, default_read_only=false, initial_cols=0, initial_rows=0, enable_http=false, web_root="./web_term", max_clients_per_session=0, input_rate_limit_bytes_per_sec=0, enable_system_stats=false, system_stats_interval_secs=5, api_key=None, allow_api_key_in_query=false, allowed_origins=None, kitty_file_media="temp_only", allow_pane_create=false))]
     #[allow(
         clippy::too_many_arguments,
         reason = "Python keyword arguments, one per StreamingConfig field; a struct would change the Python API"
@@ -55,6 +55,7 @@ impl PyStreamingConfig {
         allow_api_key_in_query: bool,
         allowed_origins: Option<Vec<String>>,
         kitty_file_media: &str,
+        allow_pane_create: bool,
     ) -> PyResult<Self> {
         let kitty_file_media = crate::graphics::kitty::FileMediaMode::from_name(kitty_file_media)
             .ok_or_else(|| {
@@ -86,6 +87,7 @@ impl PyStreamingConfig {
                 allow_api_key_in_query,
                 allowed_origins,
                 kitty_file_media,
+                allow_pane_create,
             },
         })
     }
@@ -166,6 +168,32 @@ impl PyStreamingConfig {
     #[setter]
     fn set_keepalive_interval(&mut self, keepalive_interval: u64) {
         self.inner.keepalive_interval = keepalive_interval;
+    }
+
+    /// Get whether clients may create panes on the backing mux daemon
+    ///
+    /// Returns:
+    ///     bool: True if writable clients may create panes (default False)
+    ///
+    /// Example:
+    ///     >>> config = StreamingConfig()
+    ///     >>> config.allow_pane_create
+    ///     False
+    ///     >>> config.allow_pane_create = True
+    ///     >>> config.allow_pane_create
+    ///     True
+    #[getter]
+    fn allow_pane_create(&self) -> bool {
+        self.inner.allow_pane_create
+    }
+
+    /// Set whether clients may create panes on the backing mux daemon
+    ///
+    /// Args:
+    ///     allow_pane_create: True to let writable clients create panes
+    #[setter]
+    fn set_allow_pane_create(&mut self, allow_pane_create: bool) {
+        self.inner.allow_pane_create = allow_pane_create;
     }
 
     /// Get default read-only mode

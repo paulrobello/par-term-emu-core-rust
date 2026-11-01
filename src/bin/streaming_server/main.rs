@@ -539,6 +539,7 @@ fn build_config(
         allow_api_key_in_query: args.allow_api_key_in_query,
         allowed_origins: args.allowed_origins.clone(),
         kitty_file_media: args.kitty_file_media,
+        allow_pane_create: args.allow_pane_create,
     }
 }
 

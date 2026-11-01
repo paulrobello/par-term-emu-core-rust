@@ -257,6 +257,20 @@ impl StreamingServer {
                     }),
                 }
             }
+            crate::streaming::protocol::ClientMessage::PaneCreateRequest {
+                correlation_id,
+                session_id,
+            } => {
+                self.handle_pane_create(
+                    session,
+                    transport_label,
+                    client_id,
+                    read_only,
+                    &correlation_id,
+                    &session_id,
+                    &mut replies,
+                );
+            }
         }
         replies
     }
@@ -469,6 +483,105 @@ impl StreamingServer {
     /// tracking) or counts bytes for a PTY nobody will read.
     pub(super) fn session_has_writer(session: &Arc<StreamSessionState>) -> bool {
         session.pty_writer.read().is_some()
+    }
+
+    /// The sync pane-create refusal reply: nothing was created, so the
+    /// named code carries the reason (`pane_create_disabled`,
+    /// `pane_create_read_only`, `pane_create_no_daemon`,
+    /// `pane_create_failed`).
+    fn pane_create_refusal(code: &str, reason: String) -> ServerMessage {
+        ServerMessage::Error {
+            message: reason,
+            code: Some(code.to_string()),
+        }
+    }
+
+    /// `PaneCreateRequest`: create one default-shell window (a single new
+    /// pane) on the session factory's mux daemon, gated by the opt-in
+    /// `allow_pane_create` config flag. Default-shell only — no command
+    /// passthrough, no split-window. The verb blocks on daemon I/O,
+    /// bounded by the reply deadline, stalling this one connection's loop
+    /// and never other sessions (the upload verbs' shape).
+    ///
+    /// The refusal ladder is ordered least-revealing first: a disabled
+    /// server always answers `pane_create_disabled` (even to read-only
+    /// connections), a read-only connection on an enabled server answers
+    /// `pane_create_read_only`, and only then is the daemon path probed.
+    ///
+    /// Uncertain-response rule: the daemon verb is not transactional with
+    /// the reply — a drop between `new-window` and the reply leaves the
+    /// pane existing. A client that sees neither `pane_created` nor an
+    /// error must re-query the topology (mux tree snapshot) rather than
+    /// retry blind; `correlation_id` exists so a late reply can still be
+    /// matched to its request.
+    #[allow(clippy::too_many_arguments)]
+    fn handle_pane_create(
+        self: &Arc<Self>,
+        session: &Arc<StreamSessionState>,
+        transport_label: &str,
+        client_id: uuid::Uuid,
+        read_only: bool,
+        correlation_id: &str,
+        mux_session: &str,
+        replies: &mut Vec<ServerMessage>,
+    ) {
+        if !self.config.allow_pane_create {
+            replies.push(Self::pane_create_refusal(
+                "pane_create_disabled",
+                "pane creation is disabled on this server".to_string(),
+            ));
+            return;
+        }
+        if read_only {
+            crate::debug_error!(
+                "STREAMING",
+                "PaneCreateRequest from {} {} refused: read-only connection",
+                transport_label,
+                client_id
+            );
+            replies.push(Self::pane_create_refusal(
+                "pane_create_read_only",
+                "read-only connections cannot create panes".to_string(),
+            ));
+            return;
+        }
+        let Some(factory) = self.session_factory.as_ref() else {
+            crate::debug_error!(
+                "STREAMING",
+                "PaneCreateRequest from {} {} refused: session {} has no mux factory",
+                transport_label,
+                client_id,
+                session.id
+            );
+            replies.push(Self::pane_create_refusal(
+                "pane_create_no_daemon",
+                "pane creation requires a mux-backed session".to_string(),
+            ));
+            return;
+        };
+        match factory.pane_create(mux_session) {
+            Ok((window_id, pane_id)) => {
+                replies.push(ServerMessage::PaneCreated {
+                    correlation_id: correlation_id.to_string(),
+                    session_id: mux_session.to_string(),
+                    window_id,
+                    pane_id,
+                });
+            }
+            Err(err) => {
+                crate::debug_error!(
+                    "STREAMING",
+                    "PaneCreateRequest from {} {} failed: {}",
+                    transport_label,
+                    client_id,
+                    err
+                );
+                replies.push(Self::pane_create_refusal(
+                    "pane_create_failed",
+                    err.to_string(),
+                ));
+            }
+        }
     }
 
     /// The one client→PTY write path (QA-110), shared by every

@@ -106,6 +106,7 @@ message ServerMessage {
     UploadFinished upload_finished = 45;
     MuxTreeSnapshot mux_tree_snapshot = 46;
     PaneProcessState pane_process_state = 47;
+    PaneCreated pane_created = 48;
   }
 }
 
@@ -449,6 +450,7 @@ message ClientMessage {
     UploadCommit upload_commit = 15;
     UploadAbort upload_abort = 16;
     MuxTreeRequest mux_tree_request = 17;
+    PaneCreateRequest pane_create_request = 18;
   }
 }
 
@@ -525,6 +527,28 @@ message PaneProcessState {
 // server's cached snapshot (no daemon round trip); structural changes
 // arrive afterwards as fresh full-replacement MuxTreeSnapshot pushes.
 message MuxTreeRequest {}
+
+// Request one new default-shell window (a single new pane) in the named
+// daemon session. Opt-in server-side (`allow-pane-create`, default false);
+// read-only connections are always refused. `correlation_id` is
+// client-chosen and echoed in the pane_created reply, so a client can
+// match a reply that arrives late: a drop between the daemon create and
+// the reply leaves the pane EXISTING — re-query the mux tree (mux tree
+// snapshot) rather than retrying blind.
+message PaneCreateRequest {
+  string correlation_id = 1;  // client-chosen; echoed in pane_created
+  string session_id = 2;      // daemon session ($N or name) to create in
+}
+
+// Reply to PaneCreateRequest on success: the new window and its single
+// default-shell pane. Daemon refusal arrives as the error message with
+// code `pane_create_failed` instead.
+message PaneCreated {
+  string correlation_id = 1;  // echoes the request
+  string session_id = 2;      // echoes the request
+  string window_id = 3;       // the new window (`@N`)
+  string pane_id = 4;         // its single pane (`%N`, default shell)
+}
 
 // Declare web/mobile presence kind. Defaults to web until declared.
 message ViewerIdentity {
