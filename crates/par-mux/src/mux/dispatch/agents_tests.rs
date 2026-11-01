@@ -1104,13 +1104,24 @@ fn mesh_deliver_sends_the_text_to_the_named_address() {
 }
 
 /// The dispatch end-to-end: `--mesh` without `--to` runs the full path —
-/// agent refusals, the pane's project scope, the real par-mesh `list` —
-/// and this fixture's project (the crate dir, `par-mux`) has no registry
-/// entry, so the command refuses without sending or typing anything. A
-/// checkout directory literally named with a registered project would
-/// break this assumption; the failure is a loud mismatch, not a send.
+/// agent refusals, the pane's project scope, the par-mesh `list` through an
+/// injected fake — and the fake's registry names a different project, so
+/// the command refuses without sending or typing anything. Hermetic: no
+/// dependence on a real par-mesh install or this host's registry.
 #[test]
 fn agent_prompt_mesh_refuses_when_no_registry_entry_matches() {
+    let dir = tempfile::tempdir().unwrap();
+    let script = dir.path().join("fake-par-mesh-list.sh");
+    std::fs::write(
+        &script,
+        "#!/bin/bash\ncase \"$1\" in\n  list)\n    printf 'someone@localhost:other-project harness=claude project=other-project\\n' ;;\nesac\n",
+    )
+    .unwrap();
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o755)).unwrap();
+    }
+    *super::test_mesh_bin_state().lock() = Some(script.to_string_lossy().into_owned());
     let f = Fixture::new();
     f.wait_for_shell();
     f.report("testagent", "idle", 1);
@@ -1122,6 +1133,7 @@ fn agent_prompt_mesh_refuses_when_no_registry_entry_matches() {
             .any(|l| l.contains("no par-mesh agent registered")),
         "{lines:?}"
     );
+    *super::test_mesh_bin_state().lock() = None;
     std::thread::sleep(Duration::from_millis(400));
     let pane_text = {
         let guard = f.tree.lock();

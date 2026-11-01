@@ -648,6 +648,10 @@ pub(super) fn cmd_agent_prompt(
 /// — the launchd daemon's PATH carries homebrew but not `~/.bun/bin`),
 /// then PATH.
 fn mesh_bin() -> String {
+    #[cfg(test)]
+    if let Some(bin) = test_mesh_bin_override() {
+        return bin;
+    }
     if let Ok(bin) = std::env::var("PAR_MUX_MESH_BIN") {
         if !bin.is_empty() {
             return bin;
@@ -660,6 +664,19 @@ fn mesh_bin() -> String {
         }
     }
     "par-mesh".to_string()
+}
+
+/// Tests inject the fake CLI here instead of mutating process env (QA-196:
+/// process env is shared by parallel tests). Compiled only for tests.
+#[cfg(test)]
+fn test_mesh_bin_override() -> Option<String> {
+    test_mesh_bin_state().lock().clone()
+}
+
+#[cfg(test)]
+fn test_mesh_bin_state() -> &'static parking_lot::Mutex<Option<String>> {
+    static OVERRIDE: parking_lot::Mutex<Option<String>> = parking_lot::Mutex::new(None);
+    &OVERRIDE
 }
 
 /// Pick the pane agent's mesh address out of `par-mesh list` output: a
