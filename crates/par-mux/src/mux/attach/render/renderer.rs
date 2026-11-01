@@ -594,8 +594,14 @@ impl PaneRenderer {
         self.dirty = true;
     }
 
-    /// Feed one pane's `%output` (or replay) bytes. A pane the layout does
-    /// not contain is dropped — its output is not on screen.
+    /// Feed one pane's `%output` (or replay) bytes. A pane the layout
+    /// does not contain is dropped — its output is not on screen, and
+    /// nothing is lost that the seed will not re-fetch: when the pane
+    /// joins (a new pane, a window switch), the install/seed replays it
+    /// from the daemon, and the daemon guarantees the captured grid
+    /// strictly contains every chunk it broadcast (the PTY reader
+    /// invokes the output sink under the terminal write lock —
+    /// `MuxPane::detach_output`'s contract, mux/pane.rs).
     pub fn feed_output(&mut self, pane: u32, bytes: &[u8]) {
         if let Some(emulator) = self.emulators.get_mut(&pane) {
             emulator.feed(bytes);

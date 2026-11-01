@@ -22,6 +22,7 @@ use std::io::BufRead as _;
 mod chords;
 mod kitty;
 mod popup;
+mod replay_retry;
 mod scrollback_edit;
 mod session;
 mod session_strip;

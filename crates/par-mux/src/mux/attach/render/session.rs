@@ -654,7 +654,15 @@ impl WindowSession {
         // Replay every visible pane's state into its emulator: grid,
         // scrollback, cursor, and input modes ride the screen-restore
         // byte stream, the same stream passthrough writes to the host.
-        self.replay_all_panes(conn);
+        // A pane whose replay failed even after its retry would sit
+        // stale behind an otherwise-complete seed. A persistent refusal
+        // or transport failure is not survivable at this point (a
+        // broken transport ends the session anyway; a daemon refusing
+        // refresh-client for a live pane is abnormal), so the seed
+        // fails loudly rather than showing a silently stale window.
+        if !self.replay_all_panes(conn) {
+            return Err("seed replay failed for one or more panes after retry".to_string());
+        }
         // The status bar seeds with the view. On a client-snapshot
         // daemon the seed rides the pump's continuation machinery (the
         // async status path): the snapshot is written without waiting —
@@ -928,12 +936,24 @@ impl WindowSession {
     /// re-announces held panes, which must not flash), pane output is
     /// covered by the seed's replay, and a `%layout-change` drained ahead
     /// of the size report predates it — those three are not deferred.
+    ///
+    /// The output-coverage claim is a daemon contract, not a hope: the
+    /// PTY reader invokes the output sink while holding the terminal
+    /// write lock (`MuxPane::detach_output`'s no-in-flight contract,
+    /// mux/pane.rs), so a chunk in the client's queue is already in the
+    /// grid any later `refresh-client` replay captures. Traced so the
+    /// discarded byte counts stay observable.
     fn defer_seed_events(&mut self, events: Vec<TmuxNotification>) {
         for event in events {
             match event {
-                TmuxNotification::Output { .. }
-                | TmuxNotification::ExtendedOutput { .. }
-                | TmuxNotification::LayoutChange { .. } => {}
+                TmuxNotification::Output { pane_id, data }
+                | TmuxNotification::ExtendedOutput { pane_id, data, .. } => {
+                    super::trace_input(format_args!(
+                        "seed discards {} output bytes for pane {pane_id} (covered by the replay that follows)",
+                        data.len()
+                    ));
+                }
+                TmuxNotification::LayoutChange { .. } => {}
                 TmuxNotification::PaneExited { pane_id, exit_code } => {
                     if let Some(pane) = pane_id.strip_prefix('%').and_then(|p| p.parse().ok()) {
                         self.held.insert(pane, exit_code);
@@ -952,9 +972,15 @@ impl WindowSession {
     }
 
     /// Replay every visible pane's state into its emulator (the seed).
-    pub(super) fn replay_all_panes(&mut self, conn: &mut crate::mux::attach::conn::AttachConn) {
+    /// False when any pane's replay failed even after its retry — the
+    /// seed escalates that to its landing ladder instead of showing a
+    /// silently stale window.
+    pub(super) fn replay_all_panes(
+        &mut self,
+        conn: &mut crate::mux::attach::conn::AttachConn,
+    ) -> bool {
         let all: Vec<u32> = self.renderer.layout().iter().map(|r| r.pane).collect();
-        self.replay_panes(conn, &all);
+        self.replay_panes(conn, &all)
     }
 
     /// Replay `panes`' state into their emulators (the seed, and the
@@ -970,16 +996,40 @@ impl WindowSession {
         &mut self,
         conn: &mut crate::mux::attach::conn::AttachConn,
         panes: &[u32],
-    ) {
+    ) -> bool {
         super::trace_input(format_args!("replay panes {panes:?}"));
+        let mut all_ok = true;
         for &id in panes {
-            if let Ok(reply) = conn.send_checked(&format!("refresh-client -t %{id}")) {
-                if reply.ok {
-                    let bytes = reply.body.join("\n").into_bytes();
-                    self.renderer.feed_replay(id, &bytes);
+            let mut replayed = false;
+            for attempt in 0..2 {
+                match conn.send_checked(&format!("refresh-client -t %{id}")) {
+                    Ok(reply) if reply.ok => {
+                        let bytes = reply.body.join("\n").into_bytes();
+                        self.renderer.feed_replay(id, &bytes);
+                        replayed = true;
+                        break;
+                    }
+                    Ok(reply) => {
+                        super::trace_input(format_args!(
+                            "replay pane %{id}: refused ({}), attempt {attempt}",
+                            reply.body.join(" ")
+                        ));
+                    }
+                    Err(err) => {
+                        super::trace_input(format_args!(
+                            "replay pane %{id}: failed ({err}), attempt {attempt}"
+                        ));
+                    }
                 }
             }
+            if !replayed {
+                all_ok = false;
+                super::trace_input(format_args!(
+                    "replay pane %{id}: still stale after retry — the pane shows its pre-replay state until its next full repaint"
+                ));
+            }
         }
+        all_ok
     }
 
     /// The zoom state's effective layout — the daemon's zoom re-lays the
