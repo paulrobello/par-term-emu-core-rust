@@ -641,8 +641,15 @@ fn render_mode_new_window_in_another_client_reaches_this_client() {
             b_all.extend_from_slice(&bytes);
         }
         let (grid, _) = reconstructed_screen(&b_all, 24, 80);
-        followed =
-            grid[0].contains(" 1 ") && grid[0].contains(" 2 ") && !shows_multi(&grid.join("\n"));
+        // The session strip owns row 0 in a multi-session workspace and the
+        // tab strip sits one row down (row 0 again when the strip
+        // auto-hides at one session) — so the tabs are located by row, not
+        // pinned to row 0.
+        followed = grid
+            .iter()
+            .take(2)
+            .any(|r| r.contains(" 1 ") && r.contains(" 2 "))
+            && !shows_multi(&grid.join("\n"));
     }
     let (grid, _) = reconstructed_screen(&b_all, 24, 80);
     assert!(
