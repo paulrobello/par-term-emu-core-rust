@@ -340,7 +340,12 @@ fn spawn_daemon_on(
         .arg(socket)
         .arg("--state-dir")
         .arg(state_dir)
-        .arg("--foreground");
+        .arg("--foreground")
+        // The suite's kill-proof belt (card 01a198178efc): a gate run
+        // cancelled mid-flight orphans this child, and an orphaned daemon
+        // holds its panes' PTYs. The daemon's watchdog exits it cleanly
+        // once its spawner is gone.
+        .env("PAR_MUX_DIE_WITH_PARENT", "1");
     if let Some(config) = config {
         command.env("PAR_MUX_CONFIG", config);
     } else {

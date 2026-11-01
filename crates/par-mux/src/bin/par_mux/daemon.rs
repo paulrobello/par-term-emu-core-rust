@@ -525,6 +525,28 @@ impl Serving {
             install_signal_handlers()?;
         }
 
+        // Die-with-parent for programmatic spawners that ask for it (the
+        // test harness sets PAR_MUX_DIE_WITH_PARENT at its single spawn
+        // site): an interrupted gate run kills the test process but not
+        // this foreground child, and an orphaned daemon holds its panes'
+        // PTYs — measured 2026-11-01, 55 orphans exhausted the host's
+        // pty supply. Poll getppid(): a reparent to 1 means the spawner
+        // died; request the same clean shutdown the SIGTERM path uses
+        // (final save, registry out). Panes die via PTY-master close, so
+        // exiting frees their ttys without a per-pane sweep.
+        #[cfg(unix)]
+        if std::env::var_os("PAR_MUX_DIE_WITH_PARENT").is_some() {
+            let shutdown = server.shutdown_handle();
+            std::thread::spawn(move || loop {
+                std::thread::sleep(std::time::Duration::from_millis(500));
+                // SAFETY: getppid is a trivially safe syscall wrapper.
+                if unsafe { libc::getppid() } == 1 {
+                    shutdown.store(true, std::sync::atomic::Ordering::Release);
+                    return;
+                }
+            });
+        }
+
         update_cli::start_auto_update(&path);
         server.run_persisting(state_path);
         // Registry entry out only AFTER the serve loop returns (the final save
