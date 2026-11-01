@@ -4,7 +4,8 @@
 
 use super::control::MuxLines;
 use super::mirror::{
-    apply_viewer_status, follow_active_workspace, query_viewer_status, MirrorLink, Sink,
+    apply_viewer_status, follow_active_workspace, publish_process_state, query_viewer_status,
+    reseed_after_respawn, MirrorLink, Sink,
 };
 use super::MUX_REPLY_TIMEOUT;
 use crate::mux::LocalStream;
@@ -297,6 +298,31 @@ pub(super) fn spawn_drain(
                     }
                     TmuxNotification::WindowClose { window_id } if window_id == link.window() => {
                         link.alive.store(false, Ordering::Relaxed);
+                    }
+                    // Held-pane process lifecycle: the daemon names the
+                    // pane (and the status when it read one) as the
+                    // process exits under remain-on-exit; the pane, its
+                    // window and this mirror stream all stay open. The
+                    // pane filter reads the link live, so a retarget that
+                    // happened mid-batch drops the old pane's exit.
+                    TmuxNotification::PaneExited { pane_id, exit_code }
+                        if pane_id == format!("%{}", link.pane()) =>
+                    {
+                        publish_process_state(&link, &pane_id, true, exit_code);
+                    }
+                    // respawn-pane: same pane id, fresh terminal. The
+                    // re-seed clears the frozen screen AND the exited
+                    // state on this same stream, no reconnect.
+                    TmuxNotification::PaneRespawned { pane_id }
+                        if pane_id == format!("%{}", link.pane()) =>
+                    {
+                        reseed_after_respawn(
+                            &link,
+                            &session_id,
+                            &socket,
+                            MUX_REPLY_TIMEOUT,
+                            &server,
+                        );
                     }
                     TmuxNotification::Exit => {
                         link.alive.store(false, Ordering::Relaxed);

@@ -4,13 +4,15 @@
 
 use super::control::{command, parse_pane_info, MuxLines};
 use super::mirror::{
-    ingest_graphics_seed, parse_viewer_status, seed_reply, split_graphics_seed, MirrorLink, Sink,
+    ingest_graphics_seed, parse_pane_exited_token, parse_viewer_status, seed_reply,
+    split_graphics_seed, MirrorLink, Sink,
 };
 use super::stream::{spawn_drain, SendKeysWriter};
 use super::upload::MuxUploadPipe;
 use super::{MuxPaneSelector, MuxSessionFactory, ACTIVE_WORKSPACE_SESSION_ID, MUX_REPLY_TIMEOUT};
 use crate::mux::{connect_local_stream, LocalStream};
 use crate::streaming::error::StreamingError;
+use crate::streaming::protocol::ServerMessage;
 use crate::streaming::server::{
     SessionFactory, SessionFactoryResult, StreamingServer, UploadForwarder,
 };
@@ -220,6 +222,24 @@ impl SessionFactory for MuxSessionFactory {
             sent_images: Mutex::new(HashSet::new()),
             graphics_panes: Arc::clone(&graphics_panes),
             status: Mutex::new(info.first().and_then(|line| parse_viewer_status(line))),
+            // The pane-info row just fetched is the lifecycle evidence:
+            // the attached viewer reads the pane's current process state,
+            // including a state the pane reached before this attach.
+            process: Mutex::new({
+                let (exited, code) =
+                    parse_pane_exited_token(info.first().map(String::as_str).unwrap_or(""))
+                        .unwrap_or((false, None));
+                let state = ServerMessage::PaneProcessState {
+                    pane_id: format!("%{pane}"),
+                    state: if exited { "exited" } else { "running" }.to_string(),
+                    exit_code: exited.then_some(code).flatten(),
+                };
+                if exited {
+                    Some(state)
+                } else {
+                    None
+                }
+            }),
             session: RwLock::new(None),
         });
         spawn_drain(
@@ -269,6 +289,9 @@ impl SessionFactory for MuxSessionFactory {
             if let Some((size, viewers)) = &*status {
                 session.update_mux_status(size.clone(), viewers.clone());
             }
+        }
+        if let Some(process) = link.process.lock().clone() {
+            session.update_pane_process(process);
         }
         let sender = session.get_output_sender();
         {

@@ -149,6 +149,11 @@ pub struct StreamSessionState {
     viewers: parking_lot::Mutex<std::collections::BTreeMap<uuid::Uuid, String>>,
     mux_viewers: parking_lot::Mutex<Vec<String>>,
     pane_size_status: parking_lot::RwLock<Option<ServerMessage>>,
+    /// The mirrored pane's process lifecycle (`pane_process_state`), kept
+    /// current by the mux mirror so a connecting viewer reads the state
+    /// without waiting for the next transition. `None` for direct-PTY
+    /// sessions and pre-transition mirrors.
+    pane_process_status: parking_lot::RwLock<Option<ServerMessage>>,
     /// When the last client disconnected (for idle timeout)
     pub(crate) last_client_disconnect: parking_lot::RwLock<Option<tokio::time::Instant>>,
     /// When this session was created (Unix epoch seconds)
@@ -208,6 +213,7 @@ impl StreamSessionState {
             viewers: parking_lot::Mutex::new(std::collections::BTreeMap::new()),
             mux_viewers: parking_lot::Mutex::new(Vec::new()),
             pane_size_status: parking_lot::RwLock::new(None),
+            pane_process_status: parking_lot::RwLock::new(None),
             last_client_disconnect: parking_lot::RwLock::new(None),
             created_at,
             shutdown: Arc::new(tokio::sync::Notify::new()),
@@ -275,6 +281,42 @@ impl StreamSessionState {
 
     pub(crate) fn pane_size_status(&self) -> Option<ServerMessage> {
         self.pane_size_status.read().clone()
+    }
+
+    /// Record the pane's process lifecycle and broadcast it to the
+    /// session's viewers when it changed. A `pane_id` change alone (a
+    /// workspace-active retarget landing on a same-state pane) counts as
+    /// a change, so a retargeted viewer's stored state names the pane
+    /// being mirrored now.
+    #[cfg_attr(not(feature = "mux"), allow(dead_code))]
+    pub(crate) fn update_pane_process(&self, msg: ServerMessage) {
+        let mut status = self.pane_process_status.write();
+        let unchanged = matches!(
+            (status.as_ref(), &msg),
+            (
+                Some(ServerMessage::PaneProcessState {
+                    pane_id: a,
+                    state: b,
+                    exit_code: c,
+                }),
+                ServerMessage::PaneProcessState {
+                    pane_id,
+                    state,
+                    exit_code,
+                }
+            ) if a == pane_id && b == state && c == exit_code
+        );
+        if !unchanged {
+            *status = Some(msg.clone());
+            let _ = self.broadcast_tx.send(msg);
+        }
+    }
+
+    /// The current pane process lifecycle for the connect handshake's
+    /// initial burst.
+    #[cfg_attr(not(feature = "mux"), allow(dead_code))]
+    pub(crate) fn pane_process_status(&self) -> Option<ServerMessage> {
+        self.pane_process_status.read().clone()
     }
 
     /// Try to add a client to this session. Returns true if successful.

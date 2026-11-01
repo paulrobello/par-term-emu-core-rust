@@ -6,13 +6,15 @@
 //! callback, exactly the [`super::RosterWatcher`] shape: every (re)connect
 //! fetches the whole tree with four existing read-only queries
 //! (`list-workspaces`, `list-sessions -F`, `list-panes -F`, and
-//! `list-windows -a -F` — the daemon renders `#{session_active}` and
-//! `#{window_layout}` for those), replaces the cache and broadcasts the
-//! fresh [`ServerMessage::MuxTreeSnapshot`]. The daemon's structural
+//! `list-windows -a -F` — the daemon renders `#{session_active}`,
+//! `#{window_layout}`, `#{pane_dead}` and `#{pane_exit_code}` for
+//! those), replaces the cache and broadcasts the fresh
+//! [`ServerMessage::MuxTreeSnapshot`]. The daemon's structural
 //! notifications (`%workspaces-changed`, `%sessions-changed`,
 //! `%window-add`/`%window-close`/`%window-renamed` and their unlinked
 //! twins, `%session-renamed`, `%session-window-changed`,
-//! `%window-pane-changed`, `%layout-change`, `%pane-title-changed`) each
+//! `%window-pane-changed`, `%layout-change`, `%pane-title-changed`,
+//! `%pane-exited`, `%pane-respawned`) each
 //! trigger one refetch: the updates ARE fresh full snapshots, never
 //! deltas — a burst folds into one refetch through a channel drain, so a
 //! resize storm costs one round of four small queries. Loss of the
@@ -62,7 +64,8 @@ const QUERY_SESSIONS: &str =
     "list-sessions -F '#{workspace_id} #{session_active} #{session_id} #{session_name}'";
 const QUERY_WINDOWS: &str =
     "list-windows -a -F '#{session_id} #{window_active} #{window_id} #{window_layout} #{window_name}'";
-const QUERY_PANES: &str = "list-panes -F '#{window_id} #{pane_active} #{pane_id} #{pane_title}'";
+const QUERY_PANES: &str =
+    "list-panes -F '#{window_id} #{pane_active} #{pane_id} #{pane_dead} #{pane_exit_code} #{pane_title}'";
 
 /// Callback receiving every tree message the watcher produces.
 pub type OnTreeMessage = Arc<dyn Fn(ServerMessage) + Send + Sync>;
@@ -208,12 +211,20 @@ fn fetch_tree(client: &mut MuxClient) -> io::Result<Vec<MuxTreeWorkspace>> {
     }
     let mut panes: HashMap<String, Vec<MuxTreePane>> = HashMap::new();
     for line in query(client, QUERY_PANES)? {
-        let mut fields = line.splitn(4, ' ');
-        let (Some(window_id), Some(active), Some(id), Some(title)) =
-            (fields.next(), fields.next(), fields.next(), fields.next())
-        else {
+        let mut fields = line.splitn(6, ' ');
+        let (Some(window_id), Some(active), Some(id), Some(dead), Some(code), Some(title)) = (
+            fields.next(),
+            fields.next(),
+            fields.next(),
+            fields.next(),
+            fields.next(),
+            fields.next(),
+        ) else {
             continue;
         };
+        // `pane_exit_code` is `-` when the pane is alive or the daemon
+        // had no status to read; only dead-with-a-code carries digits.
+        let (dead, code) = (dead == "1", code.parse::<i32>().ok());
         panes
             .entry(window_id.to_string())
             .or_default()
@@ -225,6 +236,8 @@ fn fetch_tree(client: &mut MuxClient) -> io::Result<Vec<MuxTreeWorkspace>> {
                 rows: 0,
                 x: 0,
                 y: 0,
+                process_state: if dead { "exited" } else { "running" }.to_string(),
+                exit_code: dead.then_some(code).flatten(),
             });
     }
     // Geometry: each window's layout string gives its panes their
@@ -309,9 +322,9 @@ fn layout_panes(layout: &str) -> Vec<(u32, u32, u32, u32, u32)> {
 }
 
 /// Whether a notification can change any part of the tree snapshot:
-/// structural membership, naming, active markers, split geometry, or pane
-/// titles. Agent state is the roster watcher's domain; pane liveness and
-/// modes are not tree metadata.
+/// structural membership, naming, active markers, split geometry, pane
+/// titles, or the panes' process lifecycle state. Agent state is the
+/// roster watcher's domain.
 fn is_structural(notification: &TmuxNotification) -> bool {
     matches!(
         notification,
@@ -330,6 +343,8 @@ fn is_structural(notification: &TmuxNotification) -> bool {
             | TmuxNotification::WindowPaneChanged { .. }
             | TmuxNotification::LayoutChange { .. }
             | TmuxNotification::PaneTitleChanged { .. }
+            | TmuxNotification::PaneExited { .. }
+            | TmuxNotification::PaneRespawned { .. }
     )
 }
 
@@ -502,7 +517,7 @@ mod tests {
     const SESS: &str = "+1 1 $0 work\n+1 0 $1 build\n+2 1 $2 side-sess\n";
     const WINS: &str =
         "$0 1 @0 b25d,80x24,0,0{40x24,0,0,0,40x24,41,0,1} editor\n$0 0 @1 0000,80x24,0,0,2 logs\n$2 1 @2 0000,80x24,0,0,3 term\n";
-    const PANES: &str = "@0 1 %0 shell\n@0 0 %1 vim\n@1 0 %2 logs\n@2 1 %3 zsh\n";
+    const PANES: &str = "@0 1 %0 0 - shell\n@0 0 %1 0 - vim\n@1 0 %2 1 7 logs\n@2 1 %3 0 - zsh\n";
 
     #[test]
     fn snapshot_assembles_the_full_tree_from_the_queries() {
@@ -544,7 +559,10 @@ mod tests {
         assert_eq!((right.cols, right.rows, right.x, right.y), (40, 24, 41, 0));
         // The inactive window of the inactive... still fully carried.
         assert!(!work.windows[1].active);
-        assert_eq!(work.windows[1].panes[0].id, "%2");
+        let logs = &work.windows[1].panes[0];
+        assert_eq!(logs.id, "%2");
+        assert_eq!(logs.process_state, "exited", "the fixture's dead pane");
+        assert_eq!(logs.exit_code, Some(7));
         // The other workspace and its non-active session.
         let side = &tree[1];
         assert!(!side.active);
@@ -874,6 +892,92 @@ mod tests {
         // The redial resync is covered by
         // reconnect_resyncs_with_a_fresh_snapshot against the double;
         // this test pins convergence for create/rename/select/layout.
+    }
+
+    /// The pane lifecycle rides the tree surface too: `%pane-exited`,
+    /// `%pane-respawned` and `kill-pane` each converge in a fresh
+    /// snapshot — exited-with-status, running, then gone — so tree
+    /// browsers (including `?metadata=1` clients) read the same truth
+    /// the pane sessions' `pane_process_state` events carry.
+    #[test]
+    fn live_daemon_pane_lifecycle_converges_in_the_snapshots() {
+        let (socket, _guard, mut control) = daemon();
+        control
+            .send("set-option remain-on-exit on")
+            .expect("set-option");
+        let (on_message, rx) = collect();
+        let watcher = TreeWatcher::spawn(socket.clone(), on_message);
+        wait_tree(
+            &rx,
+            |tree| {
+                tree.iter()
+                    .any(|ws| ws.sessions.iter().any(|s| s.id == "$0"))
+            },
+            || format!("{:?}", watcher.snapshot()),
+        );
+
+        // Exit with a status: the shell is replaced by a command that
+        // dies with 7; the daemon holds the pane and announces it.
+        control
+            .send("respawn-pane -k -t %0 sh -c 'exit 7'")
+            .expect("respawn to a dying command");
+        wait_tree(
+            &rx,
+            |tree| {
+                tree.iter().any(|ws| {
+                    ws.sessions.iter().any(|s| {
+                        s.windows.iter().any(|w| {
+                            w.panes.iter().any(|p| {
+                                p.id == "%0"
+                                    && p.process_state == "exited"
+                                    && p.exit_code == Some(7)
+                            })
+                        })
+                    })
+                })
+            },
+            || format!("{:?}", watcher.snapshot()),
+        );
+
+        // Respawn back to the default shell: the exited state clears.
+        control
+            .send("respawn-pane -k -t %0")
+            .expect("respawn shell");
+        wait_tree(
+            &rx,
+            |tree| {
+                tree.iter().any(|ws| {
+                    ws.sessions.iter().any(|s| {
+                        s.windows.iter().any(|w| {
+                            w.panes.iter().any(|p| {
+                                p.id == "%0"
+                                    && p.process_state == "running"
+                                    && p.exit_code.is_none()
+                            })
+                        })
+                    })
+                })
+            },
+            || format!("{:?}", watcher.snapshot()),
+        );
+
+        // Deletion: kill-pane removes the pane (its emptied session with
+        // it); the tree converges without it — no lifecycle field claims
+        // a pane that no longer exists.
+        control.send("kill-pane -t %0").expect("kill");
+        wait_tree(
+            &rx,
+            |tree| {
+                tree.iter().all(|ws| {
+                    ws.sessions.iter().all(|s| {
+                        s.windows
+                            .iter()
+                            .all(|w| !w.panes.iter().any(|p| p.id == "%0"))
+                    })
+                })
+            },
+            || format!("{:?}", watcher.snapshot()),
+        );
     }
 
     /// A `?metadata=1` connection browses the tree without creating a

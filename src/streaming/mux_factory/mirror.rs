@@ -54,6 +54,11 @@ pub(super) struct MirrorLink {
     /// replaces the entries of the frames it replaces.
     pub(super) graphics_panes: Arc<Mutex<HashMap<u64, String>>>,
     pub(super) status: Mutex<Option<(ServerMessage, Vec<String>)>>,
+    /// The pane's process lifecycle (`pane_process_state`), seeded from
+    /// the pane-info row at attach and kept current by the drain loop, so
+    /// a session created after a transition still connects with the
+    /// pane's current state.
+    pub(super) process: Mutex<Option<ServerMessage>>,
     pub(super) session: RwLock<Option<std::sync::Weak<StreamSessionState>>>,
 }
 
@@ -133,6 +138,42 @@ pub(super) fn apply_viewer_status(link: &MirrorLink, line: &str) {
         {
             session.update_mux_status(size, viewers);
         }
+    }
+}
+
+/// The pane-info row's `exited=<code|?>` token: `Some((true, code))` for
+/// a held-dead pane (code `None` when the daemon had no status to read),
+/// `None` when the pane is running — the token rides only on a dead pane,
+/// so absence is the daemon's own running verdict, not an inference.
+pub(super) fn parse_pane_exited_token(line: &str) -> Option<(bool, Option<i32>)> {
+    line.split_whitespace()
+        .find_map(|field| field.strip_prefix("exited="))
+        .map(|value| (true, value.parse::<i32>().ok()))
+}
+
+/// Record the pane's process lifecycle on the link and push it to the
+/// session's viewers (`update_pane_process` broadcasts only on change).
+/// The link's copy serves the next session created for this pane, so a
+/// viewer connecting after a transition still reads the current state.
+pub(super) fn publish_process_state(
+    link: &MirrorLink,
+    pane_id: &str,
+    exited: bool,
+    exit_code: Option<i32>,
+) {
+    let message = ServerMessage::PaneProcessState {
+        pane_id: pane_id.to_string(),
+        state: if exited { "exited" } else { "running" }.to_string(),
+        exit_code: exited.then_some(exit_code).flatten(),
+    };
+    *link.process.lock() = Some(message.clone());
+    if let Some(session) = link
+        .session
+        .read()
+        .as_ref()
+        .and_then(std::sync::Weak::upgrade)
+    {
+        session.update_pane_process(message);
     }
 }
 
@@ -389,7 +430,11 @@ fn apply_workspace_target(
     if link.closed.load(Ordering::Relaxed) {
         return;
     }
-    debug_log_active_workspace(&target.session, target.pane);
+    // The respawn path reuses this apply with an unnamed target; only a
+    // workspace retarget logs the active-workspace resolution.
+    if !target.session.is_empty() {
+        debug_log_active_workspace(&target.session, target.pane);
+    }
     link.set_target(target.pane, target.window.clone());
     let mut batches = Vec::new();
     let mut resized = false;
@@ -422,6 +467,12 @@ fn apply_workspace_target(
     if !target.status_line.is_empty() {
         apply_viewer_status(link, &target.status_line);
     }
+    // The re-seed lands on whatever state the pane is in now — a retarget
+    // follows the daemon's active pane, a respawn restarts it — and the
+    // pane-info row is the evidence, so viewers of the OLD pane state
+    // converge without a reconnect.
+    let (exited, code) = parse_pane_exited_token(&target.status_line).unwrap_or((false, None));
+    publish_process_state(link, &format!("%{}", link.pane()), exited, code);
     let restore = link.terminal.read().export_screen_restore_sequence();
     if resized {
         if let Some(server) = server.as_ref().and_then(std::sync::Weak::upgrade) {
@@ -432,4 +483,61 @@ fn apply_workspace_target(
         }
     }
     forward(link, restore.as_bytes());
+}
+
+/// Re-seed the mirror in place after `%pane-respawned`: the daemon gave
+/// the pane a fresh terminal, so the held pane's frozen screen is stale
+/// and incremental output would paint over it. The seed runs over a
+/// short-lived connection (the mirror's own reader cannot absorb a reply
+/// block mid-drain), then the same in-place apply a retarget uses resets
+/// the mirror and pushes the fresh screen to the viewers. The pane-info
+/// row fetched here also re-derives the process state — `running` — so
+/// the exited state clears on the same connection, no reconnect.
+pub(super) fn reseed_after_respawn(
+    link: &Arc<MirrorLink>,
+    session_id: &str,
+    socket: &std::path::Path,
+    timeout: Duration,
+    server: &Option<std::sync::Weak<StreamingServer>>,
+) {
+    if link.closed.load(Ordering::Relaxed) {
+        return;
+    }
+    let pane = link.pane();
+    let result = (|| -> io::Result<WorkspaceTarget> {
+        let stream = connect_local_stream(socket)?;
+        let mut writer = stream.try_clone()?;
+        let reader = MuxLines::spawn(stream)?;
+        let info = command(
+            &mut writer,
+            &reader,
+            &format!("pane-info -t %{pane} -M"),
+            timeout,
+        )?;
+        let (window, cols, rows) = info
+            .first()
+            .and_then(|l| parse_pane_info(l))
+            .ok_or_else(|| io::Error::other(format!("bad pane-info reply {info:?}")))?;
+        let status_line = info.first().cloned().unwrap_or_default();
+        let seed = seed_reply(&mut writer, &reader, pane, timeout)?;
+        let (screen, graphics) = split_graphics_seed(&seed);
+        Ok(WorkspaceTarget {
+            session: String::new(),
+            pane,
+            window,
+            cols,
+            rows,
+            status_line,
+            screen,
+            graphics,
+        })
+    })();
+    match result {
+        Ok(target) => apply_workspace_target(link, session_id, server, target),
+        Err(err) => {
+            // The state still clears: the notification is the evidence.
+            publish_process_state(link, &format!("%{pane}"), false, None);
+            crate::debug_error!("STREAMING", "respawn re-seed failed: {err}")
+        }
+    }
 }

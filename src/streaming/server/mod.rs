@@ -728,6 +728,7 @@ fn should_send(
         | ServerMessage::UploadStarted { .. }
         | ServerMessage::UploadFinished { .. }
         | ServerMessage::MuxTreeSnapshot { .. }
+        | ServerMessage::PaneProcessState { .. }
         | ServerMessage::Pong => true,
     }
 }

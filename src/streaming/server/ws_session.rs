@@ -180,6 +180,13 @@ impl StreamingServer {
         if let Some(status) = session.pane_size_status() {
             client.send(status).await?;
         }
+        // The mirrored pane's process lifecycle, same stored-snapshot
+        // ordering argument as the size status: the mirror updates its
+        // state before it broadcasts a transition, so a transition this
+        // send races is queued on the subscription above and corrects it.
+        if let Some(process) = session.pane_process_status() {
+            client.send(process).await?;
+        }
         client.send(session.viewer_presence()).await?;
 
         // Roster snapshot. Ordering: the subscription above precedes the

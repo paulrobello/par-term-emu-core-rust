@@ -105,6 +105,7 @@ message ServerMessage {
     UploadStarted upload_started = 44;
     UploadFinished upload_finished = 45;
     MuxTreeSnapshot mux_tree_snapshot = 46;
+    PaneProcessState pane_process_state = 47;
   }
 }
 
@@ -490,6 +491,9 @@ message MuxTreeWindow {
 
 // One pane: `%N` id, its window's active-pane marker, plus the rectangle
 // the window layout gives it (cols/rows/x/y; the full layout rect).
+// `process_state`/`exit_code` carry the held-pane process lifecycle: the
+// same vocabulary the pane_process_state event uses ("running"/"exited";
+// "" from a pre-lifecycle producer reads as running).
 message MuxTreePane {
   string id = 1;
   string title = 2;               // effective pane title ("" when none)
@@ -498,6 +502,23 @@ message MuxTreePane {
   uint32 rows = 5;
   uint32 x = 6;
   uint32 y = 7;
+  string process_state = 8;       // "running" | "exited" ("" = legacy producer)
+  optional int32 exit_code = 9;   // the captured status while exited
+}
+
+// A mirrored pane's process lifecycle transition, pushed to the pane
+// session's viewers: `state` is "running" | "exited". "exited" is the
+// daemon's held-pane (remain-on-exit) state — the pane, its window and
+// its frozen screen stay in the tree; "running" clears it on
+// `respawn-pane`, without a reconnect. `exit_code` rides only with
+// "exited" when the daemon read the status (absent otherwise — also when
+// the daemon had no status to read). The current state also rides each
+// pane-info-derived snapshot for late joiners, so a viewer connecting
+// after a transition is never left to infer it from output silence.
+message PaneProcessState {
+  string pane_id = 1;             // par-mux pane id (`%N`)
+  string state = 2;               // "running" | "exited"
+  optional int32 exit_code = 3;   // only with "exited", when known
 }
 
 // Request the current par-mux tree snapshot. Served from the streaming

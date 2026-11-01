@@ -901,6 +901,7 @@ The protocol is defined in `proto/terminal.proto`. Messages use Protocol Buffers
 | `agent_roster` | `agents: AgentEntry[]` | Full agent roster snapshot (pane-id ascending), pushed once per client connect in mux-backed sessions |
 | `agent_state_changed` | `agent?: AgentEntry`, `released: bool` | Roster delta: upsert `agent`, or remove it when `released` is `true` |
 | `mux_tree_snapshot` | `workspaces: MuxTreeWorkspace[]` | Full par-mux tree snapshot (every workspace, session, window and pane). Pushed on connect and after every structural change in mux-backed servers; also the reply to `mux_tree_request`. See [Mux tree metadata](#mux-tree-metadata) |
+| `pane_process_state` | `pane_id: string`, `state: string`, `exit_code?: int` | A mirrored pane's process lifecycle transition: `state` is `running` \| `exited`, `exit_code` rides only with `exited` when the daemon read the status. Sent to the pane's session viewers on the transition and to every connecting viewer as the current state. See [Pane process lifecycle](#pane-process-lifecycle) |
 | `pointer_shape_changed` | `shape?: string` | Pointer shape changed (OSC 22); absent = the client's own pointer applies |
 | `inline_image` | `image_id: uint64`, `pane_id?: uint32`, `format: string`, `width: uint32`, `height: uint32`, `data: bytes`, `col: uint32`, `row: uint32`, `pane?: string` | One image frame a pane app placed (OSC 1337, Sixel, or Kitty), placed at its stored cell; subscription-gated under the Graphics event. See [Inline Images](#inline-images) |
 | `upload_started` | `upload_id: uint64` | A client upload began staging daemon-side; `upload_id` keys the matching `upload_finished` |
@@ -1705,7 +1706,7 @@ The session id selects the pane: `pane-N` mirrors pane `%N`; `workspace-active` 
 | Several viewers | Each streaming session has its own daemon connection; two viewers of one pane both stay live. When the last websocket viewing a session disconnects, the mirror connection closes and withdraws its size contribution immediately, without waiting for the idle timeout. Remaining daemon viewers determine the pane's size. Reconnecting creates a fresh mirror at that size. |
 | Workspace follows | A `workspace-active` mirror re-resolves the daemon's active workspace's active pane on every `%workspaces-changed` broadcast and re-seeds the attached viewers in place — reset + fresh screen replay on the SAME streaming session, no reconnect; input and size contributions follow the new pane. `pane-N` and fixed-pane sessions never follow. |
 | Pane closes | A pane killed (`kill-pane`, `kill-window`, `kill-session`) or missing from its window's new layout (moved away by `break-pane`/`join-pane`), a closed window, or a daemon shutdown ends the session. Closing a streaming session never kills the pane. |
-| Process exits | The pane is held (remain-on-exit): the session stays open on the frozen screen, and viewers get no exit cue. `respawn-pane` restarts the process in the same pane, and its output reaches the same session. |
+| Process exits | The pane is held (remain-on-exit): the session stays open on the frozen screen and viewers get `pane_process_state` (`exited`, with the status when known) naming the pane. `respawn-pane` pushes `running` on the same stream and the fresh screen is re-seeded in place. See [Pane process lifecycle](#pane-process-lifecycle). |
 | Not applicable | `--shell`, `--command`, `--preset`, and shell restart: the daemon owns the process. |
 
 #### Pane size status and viewer presence
@@ -1730,16 +1731,37 @@ The bundled web frontend handles the size policy per viewer; the pane itself kee
 
 Phones apply the same deliberate-only rule to plain (non-mux) sessions: they open at the server's current size instead of resizing the PTY to the phone.
 
+#### Pane process lifecycle
+
+A mirrored pane's process lifecycle is explicit protocol state, never an inference from output silence, the agent roster, or a re-seed. It is carried by two surfaces that state the same fact one way:
+
+- `pane_process_state` events, sent to the pane session's viewers: `{pane_id, state, exit_code?}` with `state` ∈ `running` \| `exited`. `exited` is the daemon's held-pane (remain-on-exit) state — the pane, its window, and its frozen screen stay in the tree, and the stream stays open. The event names the pane (`%N`) and carries the status the daemon read; a death whose status the daemon could not read arrives as `exited` with `exit_code` absent. `running` clears the exited state in place, without a reconnect.
+- The tree surface: every `MuxTreePane` in `mux_tree_snapshot` carries `process_state` (same vocabulary, plus `""` from a pre-lifecycle producer, which reads as running) and `exit_code`. `%pane-exited`/`%pane-respawned` are structural for the tree watcher, so tree browsers — including `?metadata=1` clients, which never receive the per-pane event — see the transition in the next full snapshot.
+
+Late joiners and reconnects: the attach's `pane-info` row carries the pane's current `exited=` token, so a viewer connecting after an exit reads `exited` (with the status) at connect, and after a respawn reads no exited state. The same holds after a `workspace-active` retarget: the re-seed's own pane-info row is the evidence, so a mirror that lands on a held-dead pane publishes THAT pane's state, and landing back on a live pane republishes `running` under the new pane id. The daemon contract is that `exited=` rides only on a held-dead pane, so absence of the token is the daemon's own running verdict, not an inference.
+
+Three terminal conditions stay distinct, and a client can rely on the difference:
+
+| Condition | Wire evidence | What the viewer sees |
+|-----------|---------------|----------------------|
+| Process exit (held) | `pane_process_state` `exited` (+ `exit_code` when known) | Stream stays open; frozen screen; respawn clears it in place |
+| Pane deletion (`kill-pane`, window/session cascade, moved away) | No lifecycle event; `window_close` / tree snapshot without the pane; the pane's session closes | Stream ends for that pane |
+| Daemon disconnect (daemon gone, connection lost) | No lifecycle event; the stream closes (`shutdown`/`error`) | Stream ends; the watcher re-syncs the tree on redial |
+
+Deletion and disconnect are never reported as lifecycle transitions; the real-daemon suite pins the distinctions in `pane_deletion_and_daemon_disconnect_are_not_lifecycle_transitions`. Badge and auto-respawn behavior are client decisions — the server never restarts a process.
+
+Respawn detail: the daemon gives the pane a fresh terminal, so on `%pane-respawned` the mirror re-seeds in place over a short-lived daemon connection (the same shape the retarget uses) and pushes the fresh screen through a screen-restore frame, then publishes `running` — the exited state clears on the same stream, no reconnect.
+
 #### Mux tree metadata
 
 A mux-backed server also exposes the daemon's whole tree — every workspace, session, window and pane, including inactive and non-agent ones — as read-only metadata. Terminal content streaming is unchanged; this surface carries structure only, and it never touches the daemon's selection or pane sizing: the fetch runs only `list-*` queries (`list-workspaces`, `list-sessions -F`, `list-windows -a -F`, `list-panes -F`), never `select-*` or resize commands.
 
-`mux_tree_snapshot` is a full replacement, nested `workspaces > sessions > windows > panes` (the nesting is the parent link), in daemon tree order. Every node carries its verbatim par-mux id (`+N`, `$N`, `@N`, `%N` — stable for the node's lifetime), `name`, and an `active` marker at its own level: workspace = the daemon's active workspace, session = its workspace's active session, window = its session's current window, pane = its window's active pane. A window additionally carries `layout`, the full (unzoomed) tmux layout string, and its panes carry the same geometry pre-parsed as `cols`/`rows`/`x`/`y` rectangles, so a client can compose the window without a layout-string parser. Pane `title` is the effective title (empty when none).
+`mux_tree_snapshot` is a full replacement, nested `workspaces > sessions > windows > panes` (the nesting is the parent link), in daemon tree order. Every node carries its verbatim par-mux id (`+N`, `$N`, `@N`, `%N` — stable for the node's lifetime), `name`, and an `active` marker at its own level: workspace = the daemon's active workspace, session = its workspace's active session, window = its session's current window, pane = its window's active pane. A window additionally carries `layout`, the full (unzoomed) tmux layout string, and its panes carry the same geometry pre-parsed as `cols`/`rows`/`x`/`y` rectangles, so a client can compose the window without a layout-string parser. Pane `title` is the effective title (empty when none). Every pane also carries the process lifecycle — `process_state` (`running` \| `exited`, `""` from a pre-lifecycle producer reads as running) and `exit_code` — from the daemon's `#{pane_dead}`/`#{pane_exit_code}` tokens; see [Pane process lifecycle](#pane-process-lifecycle).
 
 Delivery is reconciliation by full snapshot, never deltas:
 
 - On connect (after the roster push) every client receives the current snapshot from the watcher's cache.
-- The server keeps one daemon control connection (the tree watcher, mirroring the roster watcher): the daemon's structural notifications (`%workspaces-changed`, `%sessions-changed`, window add/close/rename and their unlinked twins, `%session-renamed`, `%client-session-changed`, `%session-window-changed`, `%window-pane-changed`, `%layout-change`, `%pane-title-changed`) each trigger a refetch, and the fresh full snapshot is broadcast to every client. A notification burst folds into one refetch.
+- The server keeps one daemon control connection (the tree watcher, mirroring the roster watcher): the daemon's structural notifications (`%workspaces-changed`, `%sessions-changed`, window add/close/rename and their unlinked twins, `%session-renamed`, `%client-session-changed`, `%session-window-changed`, `%window-pane-changed`, `%layout-change`, `%pane-title-changed`, `%pane-exited`, `%pane-respawned`) each trigger a refetch, and the fresh full snapshot is broadcast to every client. A notification burst folds into one refetch.
 - A client may request the snapshot at any time with `mux_tree_request`; the reply is served from the watcher's cache with no daemon round trip.
 
 Races and reconnects: the cache is updated before the matching broadcast, so a request that races a change reads either the pre-change or the post-change state and the change's own push corrects a stale read — applying every push (each one a whole replacement) converges on the daemon's state with no merge logic. A watcher reconnect (daemon restart, dropped connection) always fetches and broadcasts a fresh snapshot before anything else, so no window or pane from before the restart survives as a ghost; a reconnecting client resyncs the same way, through its own connect push and, on a broadcast overflow (lagged receiver), an immediate fresh snapshot resync.

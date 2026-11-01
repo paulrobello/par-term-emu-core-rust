@@ -82,6 +82,8 @@ mod streaming_tests {
                                 rows: 24,
                                 x: 0,
                                 y: 0,
+                                process_state: "exited".into(),
+                                exit_code: Some(7),
                             },
                             MuxTreePane {
                                 id: "%1".into(),
@@ -91,6 +93,7 @@ mod streaming_tests {
                                 rows: 24,
                                 x: 41,
                                 y: 0,
+                                ..Default::default()
                             },
                         ],
                     }],
@@ -114,6 +117,69 @@ mod streaming_tests {
             decode_client_message(&wire).unwrap(),
             ClientMessage::MuxTreeRequest
         ));
+    }
+
+    /// The held-pane process lifecycle event round-trips JSON and
+    /// protobuf equivalently, with backward-compatible decoding: the exit
+    /// code is optional in both encodings, so a producer that omits it
+    /// (running state, or a daemon that had no status to read) decodes to
+    /// `None`, and a JSON/protobuf pane row without the lifecycle fields
+    /// decodes as running.
+    #[test]
+    fn pane_process_state_round_trip_and_backward_compatible_decode() {
+        let exited = ServerMessage::PaneProcessState {
+            pane_id: "%5".into(),
+            state: "exited".into(),
+            exit_code: Some(9),
+        };
+        let running = ServerMessage::PaneProcessState {
+            pane_id: "%5".into(),
+            state: "running".into(),
+            exit_code: None,
+        };
+        for message in [exited, running] {
+            let json = serde_json::to_value(&message).unwrap();
+            let from_json: ServerMessage = serde_json::from_value(json.clone()).unwrap();
+            let wire = encode_server_message(&from_json).unwrap();
+            let decoded = decode_server_message(&wire).unwrap();
+            assert_eq!(serde_json::to_value(decoded).unwrap(), json);
+        }
+
+        // Backward-compatible decoding: a JSON object without the
+        // optional exit code (and a tree pane without either lifecycle
+        // field) decodes cleanly — an older producer's payload is valid
+        // input for the new reader.
+        let legacy_json = serde_json::json!({
+            "type": "pane_process_state",
+            "pane_id": "%5",
+            "state": "exited"
+        });
+        let legacy: ServerMessage = serde_json::from_value(legacy_json).unwrap();
+        assert!(matches!(
+            legacy,
+            ServerMessage::PaneProcessState { state, exit_code: None, .. } if state == "exited"
+        ));
+
+        // Protobuf: the exit-code field is absent (not zero) in the
+        // running encoding — the wire bytes carry no field 3, and a
+        // decode of such bytes reads `None`, not `Some(0)`.
+        let wire = encode_server_message(&ServerMessage::PaneProcessState {
+            pane_id: "%5".into(),
+            state: "running".into(),
+            exit_code: None,
+        })
+        .unwrap();
+        assert!(matches!(
+            decode_server_message(&wire).unwrap(),
+            ServerMessage::PaneProcessState {
+                exit_code: None,
+                ..
+            }
+        ));
+        assert!(
+            !wire.contains(&0x18),
+            "no field-3 (exit_code) tag byte rides the running encoding: {wire:?}"
+        );
     }
 
     /// Inline-image frames round-trip JSON and protobuf with bytes intact;

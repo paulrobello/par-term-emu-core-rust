@@ -55,6 +55,32 @@ pub(super) fn route_pane_command(
     }
 }
 
+/// The `list-panes -F` lifecycle tokens for one pane: `(pane_title,
+/// pane_dead, pane_exit_code)`. `pane_dead` is `1` while the pane's
+/// process is dead and the pane is held (remain-on-exit), `0` otherwise.
+/// `pane_exit_code` rides the stored exit status as digits only for a
+/// held-dead pane whose status was readable; every other pane reads `-`
+/// (alive, or the daemon had no status to read — the same `?`/absent rule
+/// `pane-info`'s `exited=` token follows).
+fn pane_lifecycle_vars(guard: &MuxTree, pane: PaneId) -> (String, String, String) {
+    let Some(target) = guard.pane(pane) else {
+        return (String::new(), "0".to_string(), "-".to_string());
+    };
+    let title = target.effective_title().replace(['\r', '\n'], " ");
+    let code = match target.dead() {
+        true => target
+            .exit_code()
+            .map(|c| c.to_string())
+            .unwrap_or_else(|| "-".to_string()),
+        false => "-".to_string(),
+    };
+    (
+        title,
+        if target.dead() { "1" } else { "0" }.to_string(),
+        code,
+    )
+}
+
 pub(super) fn cmd_list_panes(
     ctx: &Ctx<'_>,
     target: Option<AnyTarget>,
@@ -90,10 +116,7 @@ pub(super) fn cmd_list_panes(
             {
                 let active = w.active;
                 for (leaf, pane) in w.panes().into_iter().enumerate() {
-                    let pane_title = guard
-                        .pane(pane)
-                        .map(|p| p.effective_title().replace(['\r', '\n'], " "))
-                        .unwrap_or_default();
+                    let (pane_title, pane_dead, pane_exit_code) = pane_lifecycle_vars(&guard, pane);
                     match &format {
                         Some(format) => lines.push(super::format_expansion(
                             format,
@@ -105,6 +128,8 @@ pub(super) fn cmd_list_panes(
                                 ("pane_id", pane.to_string().as_str()),
                                 ("pane_active", if pane == active { "1" } else { "0" }),
                                 ("pane_leaf", leaf.to_string().as_str()),
+                                ("pane_dead", pane_dead.as_str()),
+                                ("pane_exit_code", pane_exit_code.as_str()),
                                 ("pane_title", pane_title.as_str()),
                             ],
                         )),
@@ -143,10 +168,7 @@ pub(super) fn cmd_list_panes(
                     let window_id = window.id.to_string();
                     let pane_id = pane.to_string();
                     let pane_leaf = leaf.to_string();
-                    let pane_title = guard
-                        .pane(pane)
-                        .map(|p| p.effective_title().replace(['\r', '\n'], " "))
-                        .unwrap_or_default();
+                    let (pane_title, pane_dead, pane_exit_code) = pane_lifecycle_vars(&guard, pane);
                     let mut vars: Vec<(&str, &str)> = Vec::new();
                     if let Some((sid, sname)) = &session_vars {
                         vars.push(("session_id", sid.as_str()));
@@ -157,6 +179,8 @@ pub(super) fn cmd_list_panes(
                     vars.push(("pane_id", pane_id.as_str()));
                     vars.push(("pane_active", if pane == window.active { "1" } else { "0" }));
                     vars.push(("pane_leaf", pane_leaf.as_str()));
+                    vars.push(("pane_dead", pane_dead.as_str()));
+                    vars.push(("pane_exit_code", pane_exit_code.as_str()));
                     vars.push(("pane_title", pane_title.as_str()));
                     super::format_expansion(format, &vars)
                 }

@@ -1190,6 +1190,30 @@ pub enum ServerMessage {
         )]
         workspaces: Vec<MuxTreeWorkspace>,
     },
+
+    /// A mirrored pane's process lifecycle transition. `exited` is the
+    /// daemon's held-pane (remain-on-exit) state: the pane, its window
+    /// and its frozen screen stay in the tree, and the stream stays open
+    /// — this event names the pane and carries the status when known.
+    /// `running` clears the exited state on `respawn-pane`, on the same
+    /// connection. Late joiners receive the current state from the
+    /// pane-info-derived snapshot at connect, never inferred from output
+    /// silence. Pane deletion and daemon disconnect are DIFFERENT
+    /// terminal conditions: deletion tears the pane out of the tree (the
+    /// mirror session closes, `window_close` follows), a daemon
+    /// disconnect closes the stream with `error`/`shutdown` — neither is
+    /// ever reported as this event.
+    #[serde(rename = "pane_process_state")]
+    PaneProcessState {
+        /// par-mux pane id (`%N`)
+        pane_id: String,
+        /// `"running"` | `"exited"`
+        state: String,
+        /// The captured exit status while `"exited"`; absent while
+        /// running and when the daemon had no status to read
+        #[serde(skip_serializing_if = "Option::is_none")]
+        exit_code: Option<i32>,
+    },
 }
 
 /// One replayed inline-image frame: the payload of `Connected.graphics`, a
@@ -1362,6 +1386,14 @@ pub struct MuxTreePane {
     pub x: u32,
     /// Layout-rect row origin
     pub y: u32,
+    /// The pane's process lifecycle state: `"running"` | `"exited"`.
+    /// An empty string comes from a producer that predates the field and
+    /// reads as running.
+    pub process_state: String,
+    /// The captured exit status while `"exited"`; `None` while running
+    /// and when the daemon had no status to read
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub exit_code: Option<i32>,
 }
 
 /// One window in a [`ServerMessage::MuxTreeSnapshot`]: `@N` id, its

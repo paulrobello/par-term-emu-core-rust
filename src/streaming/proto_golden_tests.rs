@@ -67,6 +67,10 @@ fn tree_window() -> AppMuxTreeWindow {
                 rows: 24,
                 x: 0,
                 y: 0,
+                // The non-zero lifecycle fields, so the golden pins their
+                // wire encoding too.
+                process_state: "exited".into(),
+                exit_code: Some(7),
             },
             AppMuxTreePane {
                 id: "%1".into(),
@@ -76,6 +80,7 @@ fn tree_window() -> AppMuxTreeWindow {
                 rows: 24,
                 x: 41,
                 y: 0,
+                ..Default::default()
             },
         ],
     }
@@ -462,6 +467,24 @@ fn server_fixtures() -> Vec<AppServerMessage> {
             }],
         },
         S::MuxTreeSnapshot { workspaces: vec![] },
+        // The held-pane lifecycle event: with a captured status, and
+        // running with the status absent (both spellings the drain loop
+        // and the seed paths emit).
+        S::PaneProcessState {
+            pane_id: "%9".into(),
+            state: "exited".into(),
+            exit_code: Some(13),
+        },
+        S::PaneProcessState {
+            pane_id: "%9".into(),
+            state: "exited".into(),
+            exit_code: None,
+        },
+        S::PaneProcessState {
+            pane_id: "%2".into(),
+            state: "running".into(),
+            exit_code: None,
+        },
     ]
 }
 
@@ -854,9 +877,10 @@ fn proto_golden_fixtures_cover_every_variant() {
             S::UploadStarted { .. } => "UploadStarted",
             S::UploadFinished { .. } => "UploadFinished",
             S::MuxTreeSnapshot { .. } => "MuxTreeSnapshot",
+            S::PaneProcessState { .. } => "PaneProcessState",
         });
     }
-    assert_eq!(seen.len(), 46, "server fixtures miss a variant");
+    assert_eq!(seen.len(), 47, "server fixtures miss a variant");
     let mut seen = std::collections::BTreeSet::new();
     for msg in client_fixtures() {
         seen.insert(match msg {

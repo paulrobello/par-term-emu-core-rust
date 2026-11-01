@@ -2493,6 +2493,53 @@ fn tree_snapshot_format_tokens_expand() {
     assert_eq!(all.len(), 2, "both sessions' windows ride the -a form");
 }
 
+/// `#{pane_dead}` / `#{pane_exit_code}` carry the held-pane process state
+/// on both `list-panes -F` forms: a held-dead pane reads `1` plus its
+/// captured status — `-` when the daemon had no code to read, the same
+/// spelling `pane-info`'s `exited=` token uses. The streaming tree
+/// fetch's pane query binds these two tokens.
+#[test]
+fn pane_lifecycle_format_tokens_expand() {
+    let h = Harness::new();
+    assert_ok(&h.run("new-session -s work"));
+    let fmt = "'#{pane_id} #{pane_dead} #{pane_exit_code}'";
+    let panes = assert_ok(&h.run(&format!("list-panes -F {fmt}")));
+    assert_eq!(panes, vec!["%0 1 0".to_string()], "{panes:?}");
+    let panes = assert_ok(&h.run(&format!("list-panes -t work -F {fmt}")));
+    assert_eq!(panes, vec!["%0 1 0".to_string()], "{panes:?}");
+
+    // A pane whose death the daemon observed without a readable status:
+    // the code token reads `-`.
+    struct UnknownCodeFactory;
+    impl PaneFactory for UnknownCodeFactory {
+        fn create_pane(
+            &self,
+            id: PaneId,
+            cols: u16,
+            rows: u16,
+            command: Option<&str>,
+            _context: &SpawnContext<'_>,
+        ) -> Result<MuxPane, MuxError> {
+            DeadPaneFactory.create_dead_pane(id, cols, rows, command, None)
+        }
+
+        fn create_dead_pane(
+            &self,
+            id: PaneId,
+            cols: u16,
+            rows: u16,
+            command: Option<&str>,
+            _exit_code: Option<i32>,
+        ) -> Result<MuxPane, MuxError> {
+            DeadPaneFactory.create_dead_pane(id, cols, rows, command, None)
+        }
+    }
+    let u = Harness::with_factory(Box::new(UnknownCodeFactory));
+    assert_ok(&u.run("new-session -s work"));
+    let panes = assert_ok(&u.run(&format!("list-panes -F {fmt}")));
+    assert_eq!(panes, vec!["%0 1 -".to_string()], "{panes:?}");
+}
+
 /// `#{pane_title}` rides the -F expansion on both the bare global form
 /// and the targeted form: the effective title (the user title when set,
 /// else the OSC title). Control characters are already stripped by the

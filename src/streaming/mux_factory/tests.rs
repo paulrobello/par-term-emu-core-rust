@@ -1520,3 +1520,317 @@ fn create_session_times_out_against_a_silent_daemon() {
         "create_session returned after {elapsed:?}, deadline {timeout:?}"
     );
 }
+
+// --- Held-pane process lifecycle (card 01a1957a) --------------------
+
+/// The next `pane_process_state` on the session broadcast, skipping the
+/// interleaved presence/status/tree broadcasts, or `None` at the ceiling.
+/// The ceiling is the hang detector, not a latency bound.
+fn recv_process_event(
+    rx: &mut tokio::sync::broadcast::Receiver<ServerMessage>,
+) -> Option<ServerMessage> {
+    let end = Instant::now() + CEILING;
+    loop {
+        match rx.try_recv() {
+            Ok(msg @ ServerMessage::PaneProcessState { .. }) => return Some(msg),
+            Ok(_) => {}
+            Err(tokio::sync::broadcast::error::TryRecvError::Empty) => {}
+            Err(tokio::sync::broadcast::error::TryRecvError::Lagged(_)) => {}
+            Err(tokio::sync::broadcast::error::TryRecvError::Closed) => return None,
+        }
+        if Instant::now() >= end {
+            return None;
+        }
+        std::thread::sleep(Duration::from_millis(25));
+    }
+}
+
+/// The daemon's verdict on the pane's held-dead state, read the way the
+/// mirror does: the `exited=` token of `pane-info -M`.
+fn daemon_exited(control: &mut MuxClient, pane: &str) -> Option<Option<i32>> {
+    let info = control
+        .send(&format!("pane-info -t {pane} -M"))
+        .expect("pane-info");
+    let line = info.first()?;
+    let token = line
+        .split_whitespace()
+        .find_map(|field| field.strip_prefix("exited="))?;
+    Some(token.parse::<i32>().ok())
+}
+
+/// Card 01a1957a criterion 1+3: a held pane's process exit reaches the
+/// pane's viewers as `pane_process_state` (pane id plus the exit status
+/// when the daemon read one) while the stream stays open, and
+/// `respawn-pane` clears the exited state on the SAME stream — no
+/// reconnect — re-seeding the fresh screen in place.
+#[test]
+fn held_pane_exit_and_respawn_keep_one_stream_open() {
+    let rt = runtime();
+    let _entered = rt.enter();
+    let (_dir, socket, _serving, mut control, pane) = daemon();
+    control
+        .send("set-option remain-on-exit on")
+        .expect("set-option");
+
+    let server = streaming(&socket);
+    let session_id = format!("pane-{}", pane.trim_start_matches('%'));
+    let session = mirror(&server, &pane);
+    let mut rx = session.broadcast_tx.subscribe();
+
+    // The process exits with a known status; remain-on-exit holds the
+    // pane, and the daemon's `%pane-exited %N 7` is the evidence.
+    type_line(&session, "exit 7");
+    let event = recv_process_event(&mut rx).expect("exited event within the ceiling");
+    assert!(
+        matches!(
+            &event,
+            ServerMessage::PaneProcessState { pane_id, state, exit_code }
+                if pane_id == &pane && state == "exited" && *exit_code == Some(7)
+        ),
+        "{event:?}"
+    );
+
+    // Criterion 1's preserved stream: the SAME session object, still
+    // registered — the exit was never a stream end.
+    let after_exit = server
+        .get_session(&session_id)
+        .expect("session survives the exit");
+    assert!(Arc::ptr_eq(&session, &after_exit));
+
+    // respawn-pane: same pane id, fresh terminal. The replacement echoes
+    // a marker so the re-seed's screen is observable, then stays up.
+    control
+        .send(&format!(
+            "respawn-pane -k -t {pane} sh -c 'echo RESPAWN-MARKER; exec sh'"
+        ))
+        .expect("respawn");
+    let event = recv_process_event(&mut rx).expect("running event within the ceiling");
+    assert!(
+        matches!(
+            &event,
+            ServerMessage::PaneProcessState { pane_id, state, exit_code }
+                if pane_id == &pane && state == "running" && exit_code.is_none()
+        ),
+        "{event:?}"
+    );
+    wait_mirror(&session, "RESPAWN-MARKER");
+    let after_respawn = server
+        .get_session(&session_id)
+        .expect("session survives the respawn");
+    assert!(Arc::ptr_eq(&session, &after_respawn));
+}
+
+/// Card 01a1957a criterion 2: a viewer joining after a transition reads
+/// the current state at connect — `exited` with the status after an
+/// exit, nothing stale after a respawn — because the attach's pane-info
+/// row is the evidence, never output silence.
+#[test]
+fn late_joiner_connects_with_the_current_process_state() {
+    let rt = runtime();
+    let _entered = rt.enter();
+    let (_dir, socket, _serving, mut control, pane) = daemon();
+    control
+        .send("set-option remain-on-exit on")
+        .expect("set-option");
+
+    // The process dies BEFORE any mirror exists: the shell runs `exit 5`
+    // and the daemon holds the pane with the status.
+    control
+        .send(&format!("send-keys -t {pane} 'exit 5' Enter"))
+        .expect("send-keys");
+    wait(
+        "the daemon reads the held pane's exit",
+        || match daemon_exited(&mut control, &pane) {
+            Some(Some(5)) => None,
+            state => Some(format!("{state:?}")),
+        },
+    );
+
+    // The late joiner: the attach's pane-info row carries exited=5, so
+    // the session connects already knowing.
+    let server = streaming(&socket);
+    let session = mirror(&server, &pane);
+    assert!(
+        matches!(
+            session.pane_process_status(),
+            Some(ServerMessage::PaneProcessState { state, exit_code: Some(5), .. })
+                if state == "exited"
+        ),
+        "{:?}",
+        session.pane_process_status()
+    );
+
+    // Respawn, then a second late joiner on a torn-down session: the
+    // fresh attach reads a running pane and holds NO exited state.
+    control
+        .send(&format!(
+            "respawn-pane -k -t {pane} sh -c 'echo BACK; exec sh'"
+        ))
+        .expect("respawn");
+    server.close_session(
+        &format!("pane-{}", pane.trim_start_matches('%')),
+        "test".to_string(),
+    );
+    let rejoined = mirror(&server, &pane);
+    assert!(
+        rejoined.pane_process_status().is_none(),
+        "a respawned pane connects with no exited state: {:?}",
+        rejoined.pane_process_status()
+    );
+    wait_mirror(&rejoined, "BACK");
+}
+
+/// Card 01a1957a criterion 2, retargeting: a `workspace-active` mirror
+/// that lands on a held-dead pane publishes THAT pane's state (id plus
+/// status) from the resolution's pane-info row; switching back to a live
+/// pane republishes running under the new pane id.
+#[test]
+fn workspace_retarget_carries_the_new_pane_lifecycle() {
+    let rt = runtime();
+    let _entered = rt.enter();
+    let (_dir, socket, _serving, mut control, pane0) = daemon();
+    control
+        .send("set-option remain-on-exit on")
+        .expect("set-option");
+
+    // A second workspace; `new-workspace` selects it, so switch back to
+    // `main` before the viewer attaches.
+    control
+        .send("new-workspace -n second")
+        .expect("new-workspace");
+    let pane1 = format!(
+        "%{}",
+        control
+            .send("list-panes -F '#{pane_id} #{session_name}'")
+            .expect("list-panes")
+            .into_iter()
+            .find(|l| l.trim().ends_with("second"))
+            .and_then(|l| l
+                .split_whitespace()
+                .next()
+                .and_then(|p| p.trim_start_matches('%').parse::<u32>().ok()))
+            .expect("the second workspace's pane")
+    );
+    control.send("select-workspace -t main").expect("back");
+
+    // Kill the second workspace's pane process (held), seed a marker on
+    // the live main pane, then attach the following mirror.
+    control
+        .send(&format!("send-keys -t {pane1} 'exit 3' Enter"))
+        .expect("send-keys");
+    wait("the second pane held dead", || {
+        match daemon_exited(&mut control, &pane1) {
+            Some(Some(3)) => None,
+            state => Some(format!("{state:?}")),
+        }
+    });
+    control
+        .send(&format!("send-keys -t {pane0} 'echo MAIN-MARKER' Enter"))
+        .expect("send-keys");
+    wait_pane(&mut control, &pane0, "MAIN-MARKER");
+
+    let server = streaming(&socket);
+    let session = mirror_session(&server, ACTIVE_WORKSPACE_SESSION_ID);
+    // The attach lands on main's live pane: running, nothing stored.
+    assert!(session.pane_process_status().is_none());
+
+    // Switch to `second`: the retarget lands on the HELD pane and the
+    // resolution's pane-info row carries its state.
+    control.send("select-workspace -t second").expect("switch");
+    wait("retargeted state names the held pane", || {
+        match session.pane_process_status() {
+            Some(ServerMessage::PaneProcessState {
+                pane_id,
+                ref state,
+                exit_code,
+            }) if pane_id == pane1 && state == "exited" && exit_code == Some(3) => None,
+            other => Some(format!("{other:?}")),
+        }
+    });
+    // And the screen followed: the re-seed reset the mirror onto the new
+    // pane, so main's marker is gone from the replayed frozen screen.
+    let dead_screen = session.terminal.read().content();
+    assert!(
+        !has_line(&dead_screen, "MAIN-MARKER"),
+        "the re-seed reset the mirror onto the new pane:\n{dead_screen}"
+    );
+
+    // Switch back: the live pane republishes running under its own id.
+    control
+        .send("select-workspace -t main")
+        .expect("switch back");
+    wait("retargeted state names the live pane", || {
+        match session.pane_process_status() {
+            Some(ServerMessage::PaneProcessState {
+                pane_id,
+                ref state,
+                exit_code: None,
+            }) if pane_id == pane0 && state == "running" => None,
+            other => Some(format!("{other:?}")),
+        }
+    });
+    wait_mirror(&session, "MAIN-MARKER");
+}
+
+/// Card 01a1957a criterion 3, the distinctions: `kill-pane` (deletion)
+/// and a daemon disconnect both END the stream with the session closed —
+/// neither ever rides a `pane_process_state` event, so a client can tell
+/// "process exited, screen held" from "pane gone" from "daemon gone".
+#[test]
+fn pane_deletion_and_daemon_disconnect_are_not_lifecycle_transitions() {
+    let rt = runtime();
+    let _entered = rt.enter();
+    let (_dir, socket, mut serving, mut control, pane) = daemon();
+    control
+        .send("set-option remain-on-exit on")
+        .expect("set-option");
+
+    // Deletion: kill-pane closes the session WITHOUT a lifecycle event.
+    let server = streaming(&socket);
+    let session_id = format!("pane-{}", pane.trim_start_matches('%'));
+    let session = mirror(&server, &pane);
+    // Subscribed before the kill, so any lifecycle event a broken
+    // implementation might broadcast is captured for the drain below.
+    let mut rx = session.broadcast_tx.subscribe();
+    control.send(&format!("kill-pane -t {pane}")).expect("kill");
+    wait("the deletion closed the session", || {
+        server
+            .get_session(&session_id)
+            .is_some()
+            .then(|| "still registered".to_string())
+    });
+    // Drain whatever rode the broadcast; no pane_process_state may exist.
+    let mut events = Vec::new();
+    while let Ok(msg) = rx.try_recv() {
+        if matches!(msg, ServerMessage::PaneProcessState { .. }) {
+            events.push(msg);
+        }
+    }
+    assert!(
+        events.is_empty(),
+        "a deletion must never ride a lifecycle event: {events:?}"
+    );
+
+    // Disconnect: dropping the daemon ends every mirror the same way. A
+    // second pane in a FRESH session mirrors, so the first kill's
+    // session teardown cannot shadow this leg.
+    control.send("new-session -s second").expect("new-session");
+    let pane2 = control
+        .send("list-panes")
+        .expect("list-panes")
+        .into_iter()
+        .map(|l| l.trim().to_string())
+        .find(|l| l.starts_with('%') && l.as_str() != pane)
+        .expect("a second pane");
+    let _session2 = mirror(&server, &pane2);
+    let session_id2 = format!("pane-{}", pane2.trim_start_matches('%'));
+    serving.shutdown.store(true, Ordering::Relaxed);
+    let serving_handle = serving.serving.take().expect("serving handle");
+    let _ = serving_handle.join();
+    wait("the disconnect closed the session", || {
+        server
+            .get_session(&session_id2)
+            .is_some()
+            .then(|| "still registered".to_string())
+    });
+}
