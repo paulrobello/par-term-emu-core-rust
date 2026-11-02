@@ -739,6 +739,7 @@ mod streaming_tests {
                 allowed_origins: None,
                 kitty_file_media: par_term_emu_core_rust::graphics::kitty::FileMediaMode::default(),
                 allow_pane_create: false,
+                allow_blob_connect_src: false,
             };
 
             assert_eq!(config.max_clients, 50);

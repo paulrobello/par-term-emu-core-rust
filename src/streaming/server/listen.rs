@@ -38,11 +38,14 @@ impl StreamingServer {
         };
 
         // Merge API routes with unprotected static file serving
+        let allow_blob_connect_src = self.config.allow_blob_connect_src;
         api_routes
             .fallback_service(ServeDir::new(&self.config.web_root))
             .with_state(self.clone())
             .layer(build_cors_layer(&self.config.allowed_origins))
-            .layer(axum::middleware::from_fn(add_security_headers))
+            .layer(axum::middleware::from_fn(move |req, next| {
+                add_security_headers(req, next, allow_blob_connect_src)
+            }))
     }
 
     /// Start server with HTTP static file serving using Axum

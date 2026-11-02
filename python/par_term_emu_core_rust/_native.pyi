@@ -3888,6 +3888,7 @@ class StreamingConfig:
         allowed_origins: Any = None,
         kitty_file_media: Any = "temp_only",
         allow_pane_create: Any = False,
+        allow_blob_connect_src: Any = False,
     ) -> None: ...
     @property
     def allow_api_key_in_query(self) -> Any:
@@ -3906,6 +3907,27 @@ class StreamingConfig:
         """
     @allow_api_key_in_query.setter
     def allow_api_key_in_query(self, value: Any) -> None: ...
+    @property
+    def allow_blob_connect_src(self) -> Any:
+        """Get whether the CSP's connect-src permits blob URLs
+
+        Intended for custom web roots serving owned blob assets (GLTF
+        embedded textures, Troika workers). Default False keeps the
+        ENH-059 policy byte-identical.
+
+        Returns:
+            bool: True if connect-src permits blob URLs (default False)
+
+        Example:
+            >>> config = StreamingConfig()
+            >>> config.allow_blob_connect_src
+            False
+            >>> config.allow_blob_connect_src = True
+            >>> config.allow_blob_connect_src
+            True
+        """
+    @allow_blob_connect_src.setter
+    def allow_blob_connect_src(self, value: Any) -> None: ...
     @property
     def allow_pane_create(self) -> Any:
         """Get whether clients may create panes on the backing mux daemon

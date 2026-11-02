@@ -400,6 +400,13 @@ pub struct StreamingConfig {
     /// daemon (`PaneCreateRequest` → `new-window`, default shell only).
     /// Fail-closed: `false` (default) refuses with `pane_create_disabled`.
     pub allow_pane_create: bool,
+    /// Permit `blob:` in the Content-Security-Policy's `connect-src` so a
+    /// custom web root's own assets can `fetch()` blob URLs (GLTF embedded
+    /// textures, Troika workers). Intended for custom web roots serving
+    /// owned assets; `false` (default) keeps the policy byte-identical to
+    /// the ENH-059 baseline. Security review: Paul, 2026-11-01
+    /// (card 01a19895bd).
+    pub allow_blob_connect_src: bool,
 }
 
 /// Redacting `Debug` (SEC-009): mirrors the derived output field-for-field
@@ -438,6 +445,7 @@ impl std::fmt::Debug for StreamingConfig {
             .field("allowed_origins", &self.allowed_origins)
             .field("kitty_file_media", &self.kitty_file_media)
             .field("allow_pane_create", &self.allow_pane_create)
+            .field("allow_blob_connect_src", &self.allow_blob_connect_src)
             .finish()
     }
 }
@@ -467,6 +475,7 @@ impl Default for StreamingConfig {
             allowed_origins: None,
             kitty_file_media: crate::graphics::kitty::FileMediaMode::default(),
             allow_pane_create: false,
+            allow_blob_connect_src: false,
         }
     }
 }

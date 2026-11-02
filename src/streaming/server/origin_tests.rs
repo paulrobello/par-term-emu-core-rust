@@ -1,4 +1,4 @@
-use super::http::CONTENT_SECURITY_POLICY;
+use super::http::{CONTENT_SECURITY_POLICY, CONTENT_SECURITY_POLICY_BLOB_CONNECT};
 use super::{
     build_cors_layer, check_ws_origin, is_local_origin, sessions_handler, StreamingConfig,
     StreamingServer,
@@ -340,6 +340,109 @@ async fn http_app_csp_restricts_scripts_connections_and_objects() {
     assert!(
         !csp.contains("'unsafe-eval'"),
         "plain 'unsafe-eval' must not appear (the WASM carve-out is scoped): {csp}"
+    );
+}
+
+/// Card 01a19895bd: the opt-in blob-connect capability. With
+/// `allow_blob_connect_src` off (default) the CSP is byte-identical to
+/// the ENH-059 baseline on static and API responses alike; with it on,
+/// `connect-src` also permits `blob:` so a custom web root's own assets
+/// can `fetch()` blob URLs (GLTF embedded textures, Troika workers),
+/// with the anti-framing guarantee intact.
+#[tokio::test]
+async fn blob_connect_is_opt_in_and_the_default_policy_stays_byte_identical() {
+    let web_root = tempfile::Builder::new()
+        .prefix("par-term-webroot-blob-")
+        .tempdir()
+        .expect("create temp dir for web root fixture");
+    std::fs::write(web_root.path().join("index.html"), "<html></html>").unwrap();
+
+    // Default: byte-identical baseline, static and API alike.
+    let terminal = Arc::new(RwLock::new(Terminal::new(80, 24)));
+    let server = Arc::new(StreamingServer::with_config(
+        terminal,
+        "127.0.0.1:0".to_string(),
+        StreamingConfig::default(),
+    ));
+    let app = server.build_http_app();
+    for path in ["/", "/sessions"] {
+        let res = app
+            .clone()
+            .oneshot(origin_request("GET", path, None))
+            .await
+            .unwrap();
+        assert_eq!(res.status(), 200);
+        assert_eq!(
+            res.headers()
+                .get("content-security-policy")
+                .and_then(|v| v.to_str().ok()),
+            Some(CONTENT_SECURITY_POLICY),
+            "{path}: the default policy stays byte-identical"
+        );
+        assert!(
+            !res.headers()
+                .get("content-security-policy")
+                .and_then(|v| v.to_str().ok())
+                .is_some_and(|csp| csp.contains("wss: blob:")),
+            "{path}: blob is not in the default connect-src"
+        );
+    }
+
+    // Opted in: connect-src gains `blob:`, everything else is unchanged,
+    // and the anti-framing guarantee survives.
+    let terminal = Arc::new(RwLock::new(Terminal::new(80, 24)));
+    let server = Arc::new(StreamingServer::with_config(
+        terminal,
+        "127.0.0.1:0".to_string(),
+        StreamingConfig {
+            allow_blob_connect_src: true,
+            ..StreamingConfig::default()
+        },
+    ));
+    let app = server.build_http_app();
+    for path in ["/", "/sessions"] {
+        let res = app
+            .clone()
+            .oneshot(origin_request("GET", path, None))
+            .await
+            .unwrap();
+        assert_eq!(res.status(), 200);
+        assert_eq!(
+            res.headers()
+                .get("content-security-policy")
+                .and_then(|v| v.to_str().ok()),
+            Some(CONTENT_SECURITY_POLICY_BLOB_CONNECT),
+            "{path}: the opted-in policy is the blob-connect variant"
+        );
+        let csp = res
+            .headers()
+            .get("content-security-policy")
+            .and_then(|v| v.to_str().ok())
+            .expect("the CSP header");
+        assert!(
+            csp.contains("connect-src 'self' ws: wss: blob:"),
+            "fetch(blob) is permitted: {csp}"
+        );
+        assert!(
+            csp.contains("frame-ancestors 'none'"),
+            "the anti-framing guarantee survives the variant: {csp}"
+        );
+    }
+}
+
+/// Drift guard: the blob-connect variant differs from the baseline ONLY
+/// in connect-src's `blob:` addition — any other edit to either constant
+/// must land in both, so the default policy can never silently change
+/// relative to the opted-in one.
+#[test]
+fn the_blob_connect_variant_differs_from_the_baseline_only_in_connect_src() {
+    assert_eq!(
+        CONTENT_SECURITY_POLICY_BLOB_CONNECT,
+        CONTENT_SECURITY_POLICY.replace(
+            "connect-src 'self' ws: wss:;",
+            "connect-src 'self' ws: wss: blob:;"
+        ),
+        "the variant is the baseline plus exactly the connect-src blob: addition"
     );
 }
 

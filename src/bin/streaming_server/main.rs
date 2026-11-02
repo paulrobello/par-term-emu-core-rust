@@ -540,6 +540,7 @@ fn build_config(
         allowed_origins: args.allowed_origins.clone(),
         kitty_file_media: args.kitty_file_media,
         allow_pane_create: args.allow_pane_create,
+        allow_blob_connect_src: args.csp_allow_blob_connect,
     }
 }
 

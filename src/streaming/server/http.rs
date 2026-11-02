@@ -276,6 +276,21 @@ pub(super) const CONTENT_SECURITY_POLICY: &str = "default-src 'self'; \
     object-src 'none'; base-uri 'self'; form-action 'self'; \
     frame-ancestors 'none'";
 
+/// The opt-in variant (card 01a19895bd): identical to
+/// [`CONTENT_SECURITY_POLICY`] except `connect-src` also permits `blob:`,
+/// so a custom web root's own assets can `fetch()` blob URLs (GLTF
+/// embedded textures, Troika workers). Gated behind
+/// `allow_blob_connect_src` (default off, byte-identical baseline);
+/// a test pins the two strings' relationship so they cannot drift.
+pub(super) const CONTENT_SECURITY_POLICY_BLOB_CONNECT: &str = "default-src 'self'; \
+    script-src 'self' 'unsafe-inline' 'wasm-unsafe-eval'; \
+    style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; \
+    font-src 'self' data: https://fonts.gstatic.com https://cdn.jsdelivr.net; \
+    img-src 'self' data: blob:; \
+    connect-src 'self' ws: wss: blob:; \
+    object-src 'none'; base-uri 'self'; form-action 'self'; \
+    frame-ancestors 'none'";
+
 /// Anti-framing headers on every response (SEC-010), with the full CSP
 /// (ENH-059). The served web frontend drives a live shell; without
 /// `X-Frame-Options: DENY` and a `frame-ancestors 'none'` CSP, a
@@ -285,6 +300,7 @@ pub(super) const CONTENT_SECURITY_POLICY: &str = "default-src 'self'; \
 pub(super) async fn add_security_headers(
     req: axum::http::Request<axum::body::Body>,
     next: axum::middleware::Next,
+    allow_blob_connect_src: bool,
 ) -> axum::response::Response {
     use axum::http::{HeaderName, HeaderValue};
     let mut res = next.run(req).await;
@@ -293,9 +309,14 @@ pub(super) async fn add_security_headers(
         HeaderName::from_static("x-frame-options"),
         HeaderValue::from_static("DENY"),
     );
+    let csp = if allow_blob_connect_src {
+        CONTENT_SECURITY_POLICY_BLOB_CONNECT
+    } else {
+        CONTENT_SECURITY_POLICY
+    };
     headers.insert(
         HeaderName::from_static("content-security-policy"),
-        HeaderValue::from_static(CONTENT_SECURITY_POLICY),
+        HeaderValue::from_static(csp),
     );
     res
 }
