@@ -24,6 +24,9 @@ mod common;
 mod render_agents;
 #[path = "mux_attach/render_input.rs"]
 mod render_input;
+#[cfg(unix)]
+#[path = "mux_attach/render_latency.rs"]
+mod render_latency;
 #[path = "mux_attach/render_layout.rs"]
 mod render_layout;
 // Every test in this suite is unix-only.
@@ -55,7 +58,9 @@ struct AttachHost {
 
 /// Spawn `par-mux attach --socket <path> [-t target]` under a fresh PTY and
 /// hand back the master side: a writer (the client's stdin) and a reader
-/// channel (the client's stdout). stderr goes to a buffer for diagnostics.
+/// channel (the client's stdout). The second tuple slot is an unwired
+/// diagnostics buffer (the child's stderr is inherited, or goes to a file
+/// when the caller passes `stderr_file` through [`spawn_attach_host`]).
 ///
 /// The reader thread doubles as the stand-in host terminal: modern Windows
 /// ConPTY sends `CSI 6n` (cursor position report) during its init handshake
@@ -119,7 +124,7 @@ fn spawn_attach_with_env(
     client_config: &str,
     env: &[(&str, &str)],
 ) -> (AttachHost, std::sync::Arc<std::sync::Mutex<String>>) {
-    spawn_attach_host(fixture, extra, mode, client_config, env, false)
+    spawn_attach_host(fixture, extra, mode, client_config, env, false, None)
 }
 
 /// The kitty graphics support query the render client's launch probe
@@ -138,6 +143,7 @@ fn spawn_attach_host(
     client_config: &str,
     env: &[(&str, &str)],
     kitty_host: bool,
+    stderr_file: Option<&std::path::Path>,
 ) -> (AttachHost, std::sync::Arc<std::sync::Mutex<String>>) {
     std::fs::write(fixture.client_config_path(), client_config).expect("write client config");
     let pty_system = native_pty_system();
@@ -149,15 +155,39 @@ fn spawn_attach_host(
             pixel_height: 0,
         })
         .expect("openpty");
-    let mut cmd = CommandBuilder::new(env!("CARGO_BIN_EXE_par-mux"));
-    cmd.arg("attach");
-    cmd.arg("--socket");
-    cmd.arg(fixture.socket());
     // The suite's byte-shape assertions are passthrough's contract; the
     // product default is render, so both modes pin explicitly.
-    cmd.arg("--mode");
-    cmd.arg(mode);
-    cmd.args(extra);
+    let mut argv: Vec<String> = vec![
+        env!("CARGO_BIN_EXE_par-mux").to_string(),
+        "attach".to_string(),
+        "--socket".to_string(),
+        fixture.socket().display().to_string(),
+        "--mode".to_string(),
+        mode.to_string(),
+    ];
+    argv.extend(extra.iter().map(|s| s.to_string()));
+    let mut cmd = match stderr_file {
+        // CommandBuilder has no stdio redirect, so a client whose stderr the
+        // test parses (PAR_MUX_INPUT_TRACE diagnostics) rides a /bin/sh -c
+        // wrap that sends stderr to a file; the env additions below still
+        // reach the exec'd client through the shell.
+        Some(file) => {
+            let quote = |s: &str| format!("'{}'", s.replace('\'', "'\\''"));
+            let cmdline = argv.iter().map(|a| quote(a)).collect::<Vec<_>>().join(" ");
+            let path = quote(file.to_str().expect("stderr path is utf-8"));
+            let mut cmd = CommandBuilder::new("/bin/sh");
+            cmd.arg("-c");
+            cmd.arg(format!("exec {cmdline} 2>{path}"));
+            cmd
+        }
+        None => {
+            let mut cmd = CommandBuilder::new(&argv[0]);
+            for arg in &argv[1..] {
+                cmd.arg(arg);
+            }
+            cmd
+        }
+    };
     cmd.env("PAR_MUX_CONFIG", fixture.client_config_path());
     for (key, value) in env {
         cmd.env(key, value);

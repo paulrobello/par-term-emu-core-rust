@@ -2509,6 +2509,7 @@ fn render_mode_kitty_graphics_reach_a_kitty_host_positioned() {
         KITTY_CLIENT_CONFIG,
         &[],
         true,
+        None,
     );
     let placement: &[u8] = b"\x1b[5;6H\x1b_Ga=p,i=10000,p=1,c=2,r=2,C=1,q=2,w=20,h=40;\x1b\\";
     let mut out = cat_into_pane(
@@ -2572,6 +2573,7 @@ fn render_mode_kitty_graphics_stay_off_a_silent_host() {
         KITTY_CLIENT_CONFIG,
         &[],
         false,
+        None,
     );
     let mut seen = cat_into_pane(
         &mut client,
@@ -2608,7 +2610,7 @@ fn render_mode_kitty_graphics_config_off_sends_nothing() {
     let script = kitty_image_script(dir.path());
     let config = format!("{KITTY_CLIENT_CONFIG}kitty-graphics = false\n");
     let (mut host, _stderr) =
-        spawn_attach_host(&fixture, &["-t", &pane], "render", &config, &[], true);
+        spawn_attach_host(&fixture, &["-t", &pane], "render", &config, &[], true, None);
     let mut seen = cat_into_pane(
         &mut client,
         &host,
