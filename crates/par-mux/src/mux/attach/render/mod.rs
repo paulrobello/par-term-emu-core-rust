@@ -1074,6 +1074,14 @@ struct WindowSession {
     pending_cmds: pending_cmd::PendingCommands,
     /// Generation of the latest user navigation: see [`WindowSession::begin_nav`].
     nav_gen: u64,
+    /// The window a deliberate `switch-client` landing is in flight
+    /// toward, `None` when none is. The pump's shared-selection follows
+    /// skip a re-seed aimed at the same window: the landing's own
+    /// `%client-session-changed`/`%session-window-changed` broadcast
+    /// parks a follow that must not beat its reply (which would re-seed
+    /// the window's first pane and nav-veto the clicked-pane landing —
+    /// the cross-workspace roster report).
+    nav_landing: Option<String>,
     /// The literal prefix byte to forward when the user types prefix
     /// prefix (rebindable, so it is state, not the C_B constant).
     literal: u8,
@@ -1432,6 +1440,7 @@ impl WindowSession {
             stdin_backlog: Vec::new(),
             pending_cmds: pending_cmd::PendingCommands::default(),
             nav_gen: 0,
+            nav_landing: None,
             literal: chords.prefix,
             cursor: CursorState::new(std::time::Instant::now()),
             pointer: pointer::PointerState::default(),
@@ -1764,13 +1773,13 @@ impl WindowSession {
             }
         }
         if let Some(window) = self.pending.follow_window.take() {
-            if window != self.window {
+            if window != self.window && self.nav_landing.as_deref() != Some(&window) {
                 self.reseed_window(conn, &window);
             }
         }
         if let Some(session) = self.pending.follow_session.take() {
             if let Some(window) = session_active_window(conn, &session) {
-                if window != self.window {
+                if window != self.window && self.nav_landing.as_deref() != Some(&window) {
                     self.reseed_window(conn, &window);
                 }
             }

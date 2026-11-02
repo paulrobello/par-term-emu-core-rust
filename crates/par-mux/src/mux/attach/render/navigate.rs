@@ -14,6 +14,10 @@ impl WindowSession {
     /// (or a follow reseed) moved the view since it was issued, so a slow
     /// reply never pulls the view back.
     pub(super) fn begin_nav(&mut self) -> u64 {
+        // A newer navigation supersedes any landing still marked in
+        // flight — including one whose continuation a failed write
+        // dropped (a follow aimed at that window must follow again).
+        self.nav_landing = None;
         self.nav_gen += 1;
         self.nav_gen
     }
@@ -27,6 +31,9 @@ impl WindowSession {
     /// notification channel).
     pub(super) fn flash_if_busy(&mut self, err: &std::io::Error) {
         if err.kind() == std::io::ErrorKind::TimedOut {
+            // The timed-out command's continuation was dropped, so an
+            // in-flight landing marker would suppress follows forever.
+            self.nav_landing = None;
             self.chrome.flash("daemon busy".to_string());
             self.draw_status_row();
         }
@@ -944,10 +951,17 @@ impl WindowSession {
         let gen = self.begin_nav();
         let expected = self.window.clone();
         let target = window.to_string();
+        // Mark the landing in flight: its own switch broadcasts park a
+        // shared-selection follow, and a follow consumed before this
+        // reply would re-seed the window's first pane and veto the
+        // landing here (the cross-workspace roster report). Cleared when
+        // the reply dispatches, whatever it answers.
+        self.nav_landing = Some(target.clone());
         self.send_then(
             conn,
             &format!("switch-client -t {window}"),
             move |s, c, reply| {
+                s.nav_landing = None;
                 if !s.nav_current(gen, &expected) {
                     return;
                 }

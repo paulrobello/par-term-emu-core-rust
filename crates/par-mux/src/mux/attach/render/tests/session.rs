@@ -6242,6 +6242,178 @@ fn focus_pane_on_another_window_lands_focused_on_the_clicked_pane() {
     );
 }
 
+/// The roster-click follow race (card 01a1989b5): the
+/// `%session-window-changed` the landing's own `switch-client`
+/// broadcasts parks a shared-selection follow; when the pump's
+/// `apply_pending` consumes it BEFORE the `switch-client` reply is
+/// dispatched (the event beats the reply to the client under load —
+/// the daemon emits broadcasts before the reply), the follow re-seed
+/// lands the window's FIRST pane (`focused_pane_or_first`, focus=None)
+/// and the reply's clicked-pane landing is then nav-vetoed
+/// (`self.window` already moved). The in-flight landing suppresses the
+/// follow aimed at its own window, so the reply's landing carries the
+/// clicked pane through.
+#[test]
+fn roster_click_landing_survives_the_parked_session_window_follow() {
+    let layout = "0000,80x23,0,0{40x23,0,0,5,40x23,40,0,6}";
+    let mut notify = std::collections::HashMap::new();
+    // The target window's `%layout-change`: the follow re-seed's size
+    // report seeds it at %5, the landing's at %6 (whichever re-seed runs).
+    notify.insert(
+        "refresh-client -t %5 -C 80x23".to_string(),
+        format!("%layout-change @1 {layout} {layout} *"),
+    );
+    notify.insert(
+        "refresh-client -t %6 -C 80x23".to_string(),
+        format!("%layout-change @1 {layout} {layout} *"),
+    );
+    let mut replies = std::collections::HashMap::new();
+    replies.insert("pane-info -t %6".to_string(), "%6 @1 40x23".to_string());
+    reseed_replies(&mut replies, "@0 main\n@1 * other", "@1", "%5\n%6");
+    let (rx, mut conn, mut session) = two_pane_session(
+        "roster-follow-race",
+        FakeScript {
+            replies,
+            notify,
+            // The reply lags its line by one pump beat, the way a loaded
+            // daemon's broadcast beats its reply to the client: the test
+            // can park the follow while the landing is genuinely in
+            // flight, deterministically.
+            delays: [(
+                "switch-client -t @1".to_string(),
+                std::time::Duration::from_millis(300),
+            )]
+            .into_iter()
+            .collect(),
+            ..FakeScript::default()
+        },
+    );
+    session.focus_pane(&mut conn, 6);
+    // The pane-info reply starts the landing (`switch-client` on the
+    // wire). Dispatch while waiting for the line, and park the broadcast
+    // the MOMENT it appears — the delayed reply cannot have been
+    // dispatched yet. Every line the fake records lands in `wire`.
+    let mut wire: Vec<String> = Vec::new();
+    let started = std::time::Instant::now();
+    loop {
+        session.dispatch_replies(&mut conn);
+        wire.extend(drained(&rx));
+        if wire.iter().any(|line| line.starts_with("switch-client")) {
+            break;
+        }
+        assert!(
+            started.elapsed() < std::time::Duration::from_secs(5),
+            "the landing never started"
+        );
+        std::thread::sleep(std::time::Duration::from_millis(2));
+    }
+    // The broadcast the daemon queues while executing the landing's own
+    // `switch-client`, BEFORE its reply is written.
+    session.handle_event(TmuxNotification::SessionWindowChanged {
+        session_id: "$0".to_string(),
+        window_id: "@1".to_string(),
+    });
+    // The pump order that loses the race: parked work (the follow)
+    // applies before the next reply dispatch.
+    let mut sink = RecordingSink::default();
+    let _ = session.apply_pending(&mut conn, &mut sink);
+    // The reply (delayed one pump beat) and the landing it drives.
+    settle(&mut session, &mut conn);
+    assert_eq!(session.window, "@1", "the view still lands on the window");
+    assert_eq!(
+        session.renderer.focused(),
+        Some(6),
+        "the landing focuses the clicked pane even when its own \
+         broadcast parked a follow first"
+    );
+    // The suppressed follow left no follow re-seed on the wire: the only
+    // size report is the landing's own, on the clicked pane (%6), not the
+    // follow's first-pane seed (%5).
+    wire.extend(drained(&rx));
+    assert_eq!(
+        wire.iter()
+            .filter(|line| line.starts_with("refresh-client -t %") && line.contains(" -C "))
+            .map(|line| line.split_whitespace().nth(2).unwrap().to_string())
+            .collect::<Vec<_>>(),
+        vec!["%6".to_string()],
+        "one re-seed, on the clicked pane: {wire:?}"
+    );
+}
+
+/// The same race through the cross-session flavor: the
+/// `%client-session-changed` a cross-workspace click's `switch-client`
+/// broadcasts parks `follow_session`; consumed before the reply, it
+/// re-seeds the followed session's active window with no pane and
+/// vetoes the clicked-pane landing.
+#[test]
+fn roster_click_landing_survives_the_parked_client_session_follow() {
+    let layout = "0000,80x23,0,0{40x23,0,0,5,40x23,40,0,6}";
+    let mut notify = std::collections::HashMap::new();
+    // The target window's `%layout-change`, riding either re-seed's size
+    // report (see the sibling test).
+    notify.insert(
+        "refresh-client -t %5 -C 80x23".to_string(),
+        format!("%layout-change @1 {layout} {layout} *"),
+    );
+    notify.insert(
+        "refresh-client -t %6 -C 80x23".to_string(),
+        format!("%layout-change @1 {layout} {layout} *"),
+    );
+    let mut replies = std::collections::HashMap::new();
+    replies.insert("pane-info -t %6".to_string(), "%6 @1 40x23".to_string());
+    // The follow's resolution: the followed session's active window.
+    replies.insert("list-windows -t $1".to_string(), "@1 * other".to_string());
+    reseed_replies(&mut replies, "@0 main\n@1 * other", "@1", "%5\n%6");
+    let (rx, mut conn, mut session) = two_pane_session(
+        "roster-follow-race-ws",
+        FakeScript {
+            replies,
+            notify,
+            // The same one-pump-beat reply lag (see the sibling test).
+            delays: [(
+                "switch-client -t @1".to_string(),
+                std::time::Duration::from_millis(300),
+            )]
+            .into_iter()
+            .collect(),
+            ..FakeScript::default()
+        },
+    );
+    session.focus_pane(&mut conn, 6);
+    // The pane-info reply starts the landing (see the sibling test).
+    let started = std::time::Instant::now();
+    loop {
+        session.dispatch_replies(&mut conn);
+        if drained(&rx)
+            .iter()
+            .any(|line| line.starts_with("switch-client"))
+        {
+            break;
+        }
+        assert!(
+            started.elapsed() < std::time::Duration::from_secs(5),
+            "the landing never started"
+        );
+        std::thread::sleep(std::time::Duration::from_millis(2));
+    }
+    session.handle_event(TmuxNotification::ClientSessionChanged {
+        client: String::new(),
+        session_id: "$1".to_string(),
+        name: String::new(),
+    });
+    let mut sink = RecordingSink::default();
+    let _ = session.apply_pending(&mut conn, &mut sink);
+    // The reply (delayed one pump beat) and the landing it drives.
+    settle(&mut session, &mut conn);
+    assert_eq!(session.window, "@1", "the view still lands on the window");
+    assert_eq!(
+        session.renderer.focused(),
+        Some(6),
+        "the landing focuses the clicked pane even when its own \
+         broadcast parked a follow first"
+    );
+}
+
 /// Same-window click: select + lookup only, no landing; the status is
 /// marked so the throttled refresh repaints the highlight (QA-245).
 #[test]

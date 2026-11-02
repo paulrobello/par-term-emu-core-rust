@@ -1083,3 +1083,238 @@ fn render_mode_settings_keys_tab_lists_the_respawn_chord() {
     );
     host.killer.kill().ok();
 }
+
+/// Card 01a1989b5: a roster click on an agent in ANOTHER workspace must
+/// land the clicked agent's pane, not the target window's first pane —
+/// through the real daemon, the real client, and the wire ordering the
+/// race rides (the landing's own `%client-session-changed` broadcast can
+/// beat its `switch-client` reply; the scripted twin in
+/// render/tests/session.rs pins that ordering deterministically).
+/// Alternating clicks across the two workspaces give the race several
+/// windows per run; every landing is read back through a keystroke probe
+/// (the bytes a click routes the focused pane to receive).
+#[cfg(unix)]
+#[ignore = "load-sensitive: PTY/timing suite; run via make test-rust-sensitive or checkall-ci"]
+#[test]
+fn render_mode_cross_workspace_roster_click_lands_the_clicked_agents_pane() {
+    let (fixture, _daemon, mut client) = fixture_with_session("rostercross");
+    client.send("new-workspace -n lab").expect("new-workspace");
+    client
+        .send("new-session -s work -t lab")
+        .expect("session in lab");
+    std::thread::sleep(Duration::from_millis(300));
+    let pane_main = session_first_pane(&mut client, "$0");
+    // The lab session's window: its first pane, then a split whose fresh
+    // pane is the click target (the window's second pane).
+    let lab_window = common::send(&mut client, "list-windows -t $2")
+        .expect("list-windows")
+        .iter()
+        .filter_map(|l| l.split_whitespace().next())
+        .find(|t| t.starts_with('@'))
+        .expect("the lab window")
+        .to_string();
+    let pane_lab_first = common::send(&mut client, &format!("list-panes -t {lab_window}"))
+        .expect("list-panes")
+        .join("")
+        .split_whitespace()
+        .next()
+        .expect("the lab pane")
+        .to_string();
+    let pane_lab_agent = common::send(&mut client, &format!("split-window -h -t {pane_lab_first}"))
+        .expect("split")
+        .join("")
+        .trim()
+        .to_string();
+    assert!(
+        pane_lab_agent.starts_with('%') && pane_lab_agent != pane_lab_first,
+        "the split returned a second pane: {pane_lab_agent:?}"
+    );
+
+    // Distinct content per pane: the landing barrier and the focus probe
+    // discriminate panes and windows by what they show and receive.
+    let mut seed = |pane: &str, text: &str| {
+        client
+            .send(&format!("send-keys -t {pane} \"echo {text}\" Enter"))
+            .expect("send-keys");
+    };
+    seed(&pane_main, "MAIN_PANE_TEXT");
+    seed(&pane_lab_first, "LAB_PANE_ONE");
+    seed(&pane_lab_agent, "LAB_PANE_TWO");
+    // Background output on the target window keeps daemon broadcasts and
+    // client pump iterations flowing during the later landings (the
+    // loaded shape the race rides).
+    client
+        .send(&format!(
+            "send-keys -t {pane_lab_first} \"while true; do echo A_TRAFFIC; sleep 0.4; done\" Enter"
+        ))
+        .expect("traffic");
+
+    // Both rosters: the cross-workspace agent on the lab pane, the
+    // shown-workspace agent on the main pane.
+    let claim = |pane: &str, agent: &str| {
+        let reply = hook_report(
+            fixture.socket(),
+            &format!(
+                r#"{{"id":1,"method":"pane.report_agent","params":{{"pane_id":"{pane}","agent":"{agent}","state":"working","seq":1,"source":"par-mux:test"}}}}"#
+            ),
+        );
+        assert!(reply.contains(r#""result":"ok""#), "claim {agent}: {reply}");
+    };
+    claim(&pane_lab_agent, "crossagent");
+    claim(&pane_main, "maingent");
+
+    // No PAR_MUX_INPUT_TRACE here: the harness's PTY carries the child's
+    // stderr, so trace lines would land in the frame stream the screen
+    // reconstruction (and the click coordinates) read.
+    let (mut host, stderr) = spawn_attach_with_config(
+        &fixture,
+        &["-t", &pane_main],
+        "render",
+        "[client]\nsidebar-on-launch = true\n",
+    );
+    expect_output(
+        &host,
+        b"\x1b[?1002h",
+        Duration::from_secs(10),
+        "render client up with the side panel",
+    );
+    let mut all: Vec<u8> = host.output_rx.try_iter().flatten().collect();
+    assert!(
+        panel_ever_contains(&host, &mut all, 19, "crossagent", Duration::from_secs(10)),
+        "the roster never showed the cross-workspace agent; stderr: {}",
+        stderr.lock().unwrap()
+    );
+    assert!(
+        panel_ever_contains(&host, &mut all, 19, "maingent", Duration::from_secs(10)),
+        "the roster never showed the main agent; stderr: {}",
+        stderr.lock().unwrap()
+    );
+
+    // Both agents painted: let the panel's layout settle before reading
+    // click coordinates off it.
+    screen_stable(
+        &host,
+        &mut all,
+        Duration::from_millis(500),
+        Duration::from_secs(10),
+    );
+
+    // The 0-based `(row, col)` of `needle` inside the side panel's
+    // current paint, for a press at the text's own cell. Drains the host
+    // stream first: the probes below read the daemon, not the host, so
+    // `all` lags the panel's repaints otherwise.
+    let roster_row_of =
+        |host: &AttachHost, all: &mut Vec<u8>, needle: &str| -> Option<(usize, usize)> {
+            // Polls the FINAL screen (not the snapshot history): a test
+            // claim the liveness sweep released leaves the row only in
+            // `ever`, and a click aimed there lands on nothing.
+            let end = Instant::now() + Duration::from_secs(10);
+            loop {
+                for bytes in host.output_rx.try_iter() {
+                    all.extend_from_slice(&bytes);
+                }
+                let (final_screen, _) = reconstructed_screen(all, 24, 80);
+                for (row, cells) in final_screen.iter().enumerate() {
+                    let left: String = cells.chars().take(19).collect();
+                    if let Some(col) = left.find(needle) {
+                        return Some((row, col));
+                    }
+                }
+                if Instant::now() >= end {
+                    return None;
+                }
+                std::thread::sleep(Duration::from_millis(20));
+            }
+        };
+    // The probe: keystrokes routed by the CLIENT's focus must reach the
+    // clicked pane and nothing else. Polls the capture through the
+    // control client until the tag shows up (then the negative check).
+    let mut probe_focused = |host: &mut AttachHost, tag: &str, target: &str, others: &[&str]| {
+        host.to_child
+            .write_all(format!("echo PROBE_{tag}\r").as_bytes())
+            .expect("probe keys");
+        host.to_child.flush().ok();
+        let end = Instant::now() + common::CEILING;
+        loop {
+            let got =
+                common::send(&mut client, &format!("capture-pane -t {target}")).unwrap_or_default();
+            if got.iter().any(|l| l.contains(&format!("PROBE_{tag}"))) {
+                break;
+            }
+            assert!(
+                Instant::now() < end,
+                "PROBE_{tag} never reached {target}; stderr: {}",
+                stderr.lock().unwrap()
+            );
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        for other in others {
+            let got =
+                common::send(&mut client, &format!("capture-pane -t {other}")).unwrap_or_default();
+            assert!(
+                !got.iter().any(|l| l.contains(&format!("PROBE_{tag}"))),
+                "PROBE_{tag} leaked into {other}: the focus did not land on the clicked pane"
+            );
+        }
+    };
+    // One roster click on `agent`'s row, then the landing barrier: the
+    // target window's pane text must paint. Returns the wall clock the
+    // landing took (input byte -> action visible).
+    let mut timings: Vec<String> = Vec::new();
+    let click_and_land = |host: &mut AttachHost,
+                          all: &mut Vec<u8>,
+                          agent: &str,
+                          landed_marker: &str,
+                          what: &str|
+     -> Duration {
+        let Some((row, col)) = roster_row_of(host, all, agent) else {
+            panic!("{what}: the {agent} row is not painted; screen: {:?}", {
+                let (screen, _) = reconstructed_screen(all, 24, 80);
+                screen
+            });
+        };
+        let t0 = Instant::now();
+        host.to_child
+            .write_all(format!("\x1b[<0;{};{}M", col + 3, row + 1).as_bytes())
+            .expect("roster click");
+        host.to_child.flush().ok();
+        expect_screen(
+            host,
+            all,
+            |s| s.iter().any(|r| r.contains(landed_marker)),
+            what,
+        );
+        t0.elapsed()
+    };
+
+    // The inbound cross-workspace landing, probe-verified: the clicked
+    // pane (the window's SECOND pane) receives the keystrokes, the first
+    // pane and the left-behind main pane receive nothing. One leg only:
+    // the hook-report test claims are released by the agent liveness
+    // sweep within seconds, so a return leg would race the roster rows
+    // rather than the landing.
+    let took = click_and_land(
+        &mut host,
+        &mut all,
+        "crossagent",
+        "LAB_PANE_TWO",
+        "the lab window landed",
+    );
+    timings.push(format!("cross-workspace landing: {took:?}"));
+    screen_stable(
+        &host,
+        &mut all,
+        Duration::from_millis(300),
+        Duration::from_secs(10),
+    );
+    probe_focused(
+        &mut host,
+        "cross",
+        &pane_lab_agent,
+        &[&pane_lab_first, &pane_main],
+    );
+    for line in &timings {
+        eprintln!("{line}");
+    }
+    host.killer.kill().ok();
+}
