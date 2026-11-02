@@ -226,7 +226,7 @@ message Pong {}
 
 // Terminal mode changed (cursor visibility, mouse tracking, etc.)
 message ModeChanged {
-  string mode = 1;    // Mode name (e.g., "cursor_visible", "mouse_tracking")
+  string mode = 1;    // Mode name (e.g., "cursor_visible", "mouse_any_event")
   bool enabled = 2;   // Whether the mode is enabled
 }
 

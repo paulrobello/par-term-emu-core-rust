@@ -909,7 +909,7 @@ export const PongSchema: GenMessage<Pong> = /*@__PURE__*/
  */
 export type ModeChanged = Message<"terminal.ModeChanged"> & {
   /**
-   * Mode name (e.g., "cursor_visible", "mouse_tracking")
+   * Mode name (e.g., "cursor_visible", "mouse_any_event")
    *
    * @generated from field: string mode = 1;
    */

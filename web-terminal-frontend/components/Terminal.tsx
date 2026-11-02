@@ -153,6 +153,16 @@ const sharedDecoder = new TextDecoder();
 // Maximum snapshot size (1MB) to prevent UI freeze from large payloads
 const MAX_SNAPSHOT_SIZE = 1024 * 1024;
 
+// The server's mouse tracking modes, by their exact modeChanged names (see
+// docs/STREAMING.md "Mouse, Focus, and Paste"). Tracking is on while any of
+// them is enabled; there is no generic "mouse_tracking" name.
+const MOUSE_TRACKING_MODES: readonly string[] = [
+  'mouse_x10',
+  'mouse_normal',
+  'mouse_button_event',
+  'mouse_any_event',
+];
+
 export default function Terminal({ wsUrl, fontSize, onStatusChange, onThemeChange, onRefit, onFocus, onRetryingChange, onConnectControl, onSendInput, onHyperlinkAdded, onUserVarChanged, onSelectionChanged, onPointerShapeChanged }: TerminalProps) {
   const terminalRef = useRef<HTMLDivElement>(null);
   const containerRef = useRef<HTMLDivElement>(null);
@@ -194,6 +204,7 @@ export default function Terminal({ wsUrl, fontSize, onStatusChange, onThemeChang
   const applyingServerSizeRef = useRef<boolean>(false);
 
   // Terminal mode tracking (from server modeChanged messages)
+  const mouseModesRef = useRef<Set<string>>(new Set());
   const mouseTrackingRef = useRef<boolean>(false);
   const focusTrackingRef = useRef<boolean>(false);
   const bracketedPasteRef = useRef<boolean>(false);
@@ -826,7 +837,7 @@ export default function Terminal({ wsUrl, fontSize, onStatusChange, onThemeChang
       if (!mouseTrackingRef.current || !connectionRef.current?.isOpen()) return;
       const coords = getCellCoords(e);
       if (!coords) return;
-      const button = e.deltaY < 0 ? 4 : 5; // 4=scroll_up, 5=scroll_down
+      const button = e.deltaY < 0 ? 64 : 65; // raw SGR wheel: 64=up, 65=down
       connectionRef.current.send(createMouseMessage(
         coords.col, coords.row, button, 'scroll', e.shiftKey, e.ctrlKey, e.altKey,
       ));
@@ -1006,6 +1017,7 @@ export default function Terminal({ wsUrl, fontSize, onStatusChange, onThemeChang
           // Clear any pending local echo from previous session
           pendingEchoRef.current = [];
           // Reset mode tracking for new session
+          mouseModesRef.current = new Set();
           mouseTrackingRef.current = false;
           focusTrackingRef.current = false;
           bracketedPasteRef.current = false;
@@ -1107,8 +1119,13 @@ export default function Terminal({ wsUrl, fontSize, onStatusChange, onThemeChang
           if (!xtermRef.current) return;
           debugLog(`Mode changed: ${mode} = ${enabled}`);
           // Track mode state for mouse/focus/paste handling
-          if (mode === 'mouse_tracking') {
-            mouseTrackingRef.current = enabled;
+          if (MOUSE_TRACKING_MODES.includes(mode)) {
+            if (enabled) {
+              mouseModesRef.current.add(mode);
+            } else {
+              mouseModesRef.current.delete(mode);
+            }
+            mouseTrackingRef.current = mouseModesRef.current.size > 0;
           } else if (mode === 'focus_tracking') {
             focusTrackingRef.current = enabled;
           } else if (mode === 'bracketed_paste') {
