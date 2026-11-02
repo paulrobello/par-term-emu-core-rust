@@ -362,6 +362,10 @@ impl MuxClient {
     }
 
     /// Pushed notifications (`%output` and friends), already parsed.
+    ///
+    /// The receiver type is [`crate::mux::crossbeam_channel`] (re-exported
+    /// from the `mux` module so embedders need no crossbeam-channel
+    /// manifest entry).
     pub fn notifications(&self) -> &crossbeam_channel::Receiver<TmuxNotification> {
         &self.notifications_rx
     }
@@ -715,6 +719,16 @@ mod tests {
     /// binary cost the full `SPAWN_CONNECT_DEADLINE` (10s); anything near a
     /// second means the retry loop was entered anyway.
     const FAST_FAIL_BUDGET: Duration = Duration::from_millis(1000);
+
+    /// `notifications()` hands embedders a crossbeam receiver (card 01a19d78);
+    /// the re-export under `mux` is the only way they can handle that type
+    /// without declaring crossbeam-channel in their own manifests.
+    #[test]
+    fn crossbeam_channel_is_reexported_for_embedders() {
+        let (tx, rx) = crate::mux::crossbeam_channel::unbounded::<u8>();
+        tx.send(1).expect("send");
+        assert_eq!(rx.try_recv(), Ok(1));
+    }
 
     /// A socket path that no other test run can ever name, cleaned up even
     /// when the test panics.

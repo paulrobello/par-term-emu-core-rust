@@ -7,6 +7,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+- **mux: `crossbeam_channel` is re-exported from the `mux` module** (`crates/par-mux/src/mux/{mod.rs,client.rs}`): 0.77.0's card 01a19d78 moved `MuxClient`'s daemon-push channel to crossbeam, so the public `notifications()` accessor started handing embedders a `&crossbeam_channel::Receiver` — par-term-mux drains it with `try_recv` without naming crossbeam, and compiled against an undeclared dependency (par-term flagged the phantom dep when updating to 0.77.0). The type is now part of the `mux` API via `pub use`, so embedders need neither the dependency entry nor any code change.
+
 ## [0.77.0] - 2026-11-02
 
 ### Fixed
