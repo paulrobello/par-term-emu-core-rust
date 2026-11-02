@@ -507,13 +507,17 @@ impl WindowSession {
     }
 
     /// Focus an agent's pane from a side-panel agent-row click: move the
-    /// daemon's shared selection with `select-pane` + `pane-info` lookup,
-    /// then land the view on the pane's window when it is not already
-    /// shown (the select+resync contract every switch follows).
-    /// Same-window clicks just move focus; the throttled status refresh
-    /// repaints the panel highlight. A refused `select-pane` (the pane is
-    /// gone) stops there: no `pane-info`, no landing. A timed-out one
-    /// flashes "daemon busy" and stops the same way (ARC-137).
+    /// daemon's shared selection with `select-pane`, then let ONE
+    /// `switch-client -t %pane` round trip do the landing decision — the
+    /// daemon resolves the pane's window and replies it (the body
+    /// contract select-window and switch-client carry), so a cross-window
+    /// pane lands straight into the re-seed. The old chain's pane-info
+    /// leg and the landing's own switch-client leg are gone: the click's
+    /// serialized waits drop from two to one (card 01a1995a6). Same-window
+    /// clicks just move focus; the throttled status refresh repaints the
+    /// panel highlight. A refused switch (the pane is gone) stops there:
+    /// no landing. A timed-out one flashes "daemon busy" and stops the
+    /// same way (ARC-137).
     pub(super) fn focus_pane(
         &mut self,
         conn: &mut crate::mux::attach::conn::AttachConn,
@@ -541,31 +545,31 @@ impl WindowSession {
         self.rebuild_agent_section();
         let gen = self.begin_nav();
         let expected = self.window.clone();
-        self.send_then(
+        let token = self.send_then_tracking(
             conn,
-            &format!("pane-info -t %{pane}"),
+            &format!("switch-client -t %{pane}"),
             move |s, c, reply| {
                 // A landing that completed since the click moved the view;
                 // this one must not pull it back.
-                if !s.nav_current(gen, &expected) {
+                if !reply.ok || !s.nav_current(gen, &expected) {
                     return;
                 }
-                let window = reply
-                    .ok
-                    .then(|| {
-                        reply
-                            .body
-                            .first()
-                            .and_then(|l| crate::mux::ipc::PaneInfoRow::parse(l))
-                    })
-                    .flatten()
-                    .map(|row| row.window);
-                match window {
-                    Some(window) if window != s.window => s.land_window_focused(c, &window, pane),
+                let landed = reply
+                    .body
+                    .first()
+                    .map(|l| l.trim().to_string())
+                    .filter(|l| l.starts_with('@'));
+                match landed {
+                    Some(window) if window != s.window => {
+                        s.reseed_window_focused(c, &window, Some(pane));
+                    }
                     _ => s.status_dirty = true,
                 }
             },
         );
+        // Park the reply token while the landing is in flight (cleared by
+        // the first apply_pending after the reply dispatches).
+        self.click_landing = token;
     }
 
     /// Land the view on `ws_id`: the session `select-workspace` resumed
@@ -928,20 +932,12 @@ impl WindowSession {
         }
     }
 
-    /// `land_window` for a roster click: the landing carries the clicked
-    /// pane, so the re-seed focuses it instead of the window's first pane
-    /// (the second-click-required roster report). The daemon-side select
-    /// already happened in `focus_pane`, so `switch-client` lands on a
-    /// window whose active pane is the clicked one.
-    pub(super) fn land_window_focused(
-        &mut self,
-        conn: &mut crate::mux::attach::conn::AttachConn,
-        window: &str,
-        pane: u32,
-    ) {
-        Self::land_window_inner(self, conn, window, Some(pane));
-    }
-
+    /// Land the view on a window the daemon already points the client at:
+    /// switch, then re-seed — focusing `focus` instead of the window's
+    /// first pane when a roster click carried one (the
+    /// second-click-required roster report). The roster-click caller is
+    /// gone since the merged switch-client round trip (card 01a1995a6);
+    /// the generic path keeps its focus plumbing for the other landings.
     fn land_window_inner(
         &mut self,
         conn: &mut crate::mux::attach::conn::AttachConn,

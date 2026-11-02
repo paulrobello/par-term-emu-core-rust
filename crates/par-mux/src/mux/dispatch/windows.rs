@@ -147,7 +147,10 @@ pub(super) fn cmd_select_window(ctx: &Ctx<'_>, window: Target<WindowId>) -> Outc
             resized,
         )
     };
-    let mut result = Outcome::ok(ctx, "");
+    // The body names the landed window: the render client's roster-click
+    // landing reads it (one round trip replaces the pane-info + landing
+    // switch chain, card 01a1995a6). Body consumers beyond `.ok` are none.
+    let mut result = Outcome::ok(ctx, &window.to_string());
     if selection_moved {
         if let Some(session_id) = session_id {
             result = result.notifying(TmuxNotification::SessionWindowChanged {

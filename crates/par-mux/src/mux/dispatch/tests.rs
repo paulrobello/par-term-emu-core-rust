@@ -1681,7 +1681,27 @@ fn switch_client_queries_and_moves_the_displayed_session() {
 
     // A window target selects the window too and lands on its session.
     let b_window = h.windows_of(b)[0];
-    assert_ok(&h.run(&format!("switch-client -t {b_window}")));
+    assert_eq!(
+        assert_ok(&h.run(&format!("switch-client -t {b_window}"))),
+        vec![b_window.to_string()],
+        "the targeted form replies the landed window (card 01a1995a6)"
+    );
+    assert_eq!(h.tree.lock().active_session(), Some(b));
+    h.drain();
+
+    // A pane target is the roster click's ONE round trip: the pane's
+    // window resolves, the displayed session moves if it must, and the
+    // reply names the landed window.
+    let pane = assert_ok(&h.run(&format!("list-panes -t {b_window}")))[0]
+        .split_whitespace()
+        .next()
+        .expect("the window's pane")
+        .to_string();
+    assert_eq!(
+        assert_ok(&h.run(&format!("switch-client -t {pane}"))),
+        vec![b_window.to_string()],
+        "a pane target replies the landed window too"
+    );
     assert_eq!(h.tree.lock().active_session(), Some(b));
     h.drain();
 
@@ -1701,7 +1721,11 @@ fn switch_client_queries_and_moves_the_displayed_session() {
         .trim()
         .to_string();
     h.drain();
-    assert_ok(&h.run(&format!("switch-client -t {second}")));
+    assert_eq!(
+        assert_ok(&h.run(&format!("switch-client -t {second}"))),
+        vec![second.to_string()],
+        "a same-session window target replies its window"
+    );
     let sent = h.drain();
     assert!(
         sent.iter()

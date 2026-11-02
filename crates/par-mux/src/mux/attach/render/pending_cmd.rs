@@ -25,6 +25,11 @@ impl PendingCommands {
     pub(super) fn is_empty(&self) -> bool {
         self.by_token.is_empty()
     }
+
+    /// Whether the reply for `token` is still owed.
+    pub(super) fn contains(&self, token: u64) -> bool {
+        self.by_token.contains_key(&token)
+    }
 }
 
 impl WindowSession {
@@ -39,11 +44,29 @@ impl WindowSession {
         command: &str,
         then: impl FnOnce(&mut Self, &mut AttachConn, Reply) + 'static,
     ) {
+        self.send_then_tracking(conn, command, then);
+    }
+
+    /// [`send_then`] that also reports the reply token, so the caller can
+    /// suppress work that must not jump ahead of this reply (the roster
+    /// click's landing versus its own broadcasts — the follow race the
+    /// old nav_landing field covered). `None` on a write failure, where
+    /// no reply will ever come.
+    pub(super) fn send_then_tracking(
+        &mut self,
+        conn: &mut AttachConn,
+        command: &str,
+        then: impl FnOnce(&mut Self, &mut AttachConn, Reply) + 'static,
+    ) -> Option<u64> {
         match conn.send_nowait(command) {
             Ok(token) => {
                 self.pending_cmds.by_token.insert(token, Box::new(then));
+                Some(token)
             }
-            Err(err) => self.flash_if_busy(&err),
+            Err(err) => {
+                self.flash_if_busy(&err);
+                None
+            }
         }
     }
 

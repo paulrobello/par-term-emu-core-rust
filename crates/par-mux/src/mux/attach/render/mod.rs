@@ -1082,6 +1082,15 @@ struct WindowSession {
     /// the window's first pane and nav-veto the clicked-pane landing —
     /// the cross-workspace roster report).
     nav_landing: Option<String>,
+    /// The roster click's in-flight landing: its `switch-client -t %pane`
+    /// reply token. While the reply is owed, `apply_pending` defers
+    /// consuming parked follows — the click's own broadcasts park follows
+    /// aimed at the landing's target, and one consumed early would re-seed
+    /// the window's first pane and veto the clicked-pane landing (the
+    /// race `nav_landing` covered; card 01a1995a6). Cleared the first
+    /// `apply_pending` after the reply dispatches (the token leaves the
+    /// table), so it cannot outlive the landing.
+    click_landing: Option<u64>,
     /// The literal prefix byte to forward when the user types prefix
     /// prefix (rebindable, so it is state, not the C_B constant).
     literal: u8,
@@ -1441,6 +1450,7 @@ impl WindowSession {
             pending_cmds: pending_cmd::PendingCommands::default(),
             nav_gen: 0,
             nav_landing: None,
+            click_landing: None,
             literal: chords.prefix,
             cursor: CursorState::new(std::time::Instant::now()),
             pointer: pointer::PointerState::default(),
@@ -1772,15 +1782,29 @@ impl WindowSession {
                 self.renderer.focus(p);
             }
         }
-        if let Some(window) = self.pending.follow_window.take() {
-            if window != self.window && self.nav_landing.as_deref() != Some(&window) {
-                self.reseed_window(conn, &window);
+        // A roster click's landing is in flight: its own switch broadcasts
+        // park follows aimed at the landing's own target, and one consumed
+        // before the reply would re-seed the window's first pane and veto
+        // the clicked-pane landing (the follow race; card 01a1995a6).
+        // Deferred consumption, keyed on the reply token: once the reply
+        // dispatches, the token leaves the table and this clears itself.
+        if let Some(token) = self.click_landing {
+            if !self.pending_cmds.contains(token) {
+                self.click_landing = None;
             }
         }
-        if let Some(session) = self.pending.follow_session.take() {
-            if let Some(window) = session_active_window(conn, &session) {
+        let landing_in_flight = self.click_landing.is_some();
+        if !landing_in_flight {
+            if let Some(window) = self.pending.follow_window.take() {
                 if window != self.window && self.nav_landing.as_deref() != Some(&window) {
                     self.reseed_window(conn, &window);
+                }
+            }
+            if let Some(session) = self.pending.follow_session.take() {
+                if let Some(window) = session_active_window(conn, &session) {
+                    if window != self.window && self.nav_landing.as_deref() != Some(&window) {
+                        self.reseed_window(conn, &window);
+                    }
                 }
             }
         }

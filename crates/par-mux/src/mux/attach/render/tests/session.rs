@@ -4207,8 +4207,8 @@ fn slow_switch_returns_at_once_and_keeps_replies_aligned() {
     assert_eq!(reply.body, vec!["%1 @0 40x24".to_string()]);
 }
 
-/// ENH-049: `focus_pane` writes the select and the lookup back to back; a
-/// slow select delays neither the call nor the lookup's write.
+/// ENH-049: `focus_pane` writes the select and the merged switch back to
+/// back; a slow select delays neither the call nor the switch's write.
 #[test]
 fn focus_pane_returns_before_a_slow_select_answers() {
     let mut script = FakeScript::default();
@@ -4228,7 +4228,7 @@ fn focus_pane_returns_before_a_slow_select_answers() {
     settle(&mut session, &mut conn);
     assert_eq!(
         drained(&rx),
-        vec!["select-pane -t %7", "pane-info -t %7"],
+        vec!["select-pane -t %7", "switch-client -t %7"],
         "pipelined in order"
     );
     assert_eq!(session.chrome.flash_text(), None);
@@ -6159,9 +6159,10 @@ fn exit_drained_in_a_resize_parks_pending_end() {
     );
 }
 
-/// A `pane:N` agent-row click on a pane in ANOTHER window: select the
-/// pane, look up its window, then land there (switch-client) and
-/// re-seed onto it (QA-245).
+/// A `pane:N` agent-row click on a pane in ANOTHER window: one merged
+/// round trip — `switch-client -t %pane` resolves the pane's window,
+/// switches, and replies the landed window, which drives the re-seed
+/// straight from the reply (QA-245, card 01a1995a6).
 #[test]
 fn focus_pane_on_another_window_selects_looks_up_and_lands() {
     let layout = "0000,80x23,0,0{40x23,0,0,5,40x23,40,0,6}";
@@ -6171,7 +6172,7 @@ fn focus_pane_on_another_window_selects_looks_up_and_lands() {
         format!("%layout-change @1 {layout} {layout} *"),
     );
     let mut replies = std::collections::HashMap::new();
-    replies.insert("pane-info -t %5".to_string(), "%5 @1 40x23".to_string());
+    replies.insert("switch-client -t %5".to_string(), "@1".to_string());
     reseed_replies(&mut replies, "@0 main\n@1 * other", "@1", "%5\n%6");
     let (rx, mut conn, mut session) = two_pane_session(
         "qa245-otherwin",
@@ -6185,12 +6186,8 @@ fn focus_pane_on_another_window_selects_looks_up_and_lands() {
     settle(&mut session, &mut conn);
     let lines = drained(&rx);
     assert_eq!(
-        &lines[..3],
-        &[
-            "select-pane -t %5",
-            "pane-info -t %5",
-            "switch-client -t @1"
-        ],
+        &lines[..2],
+        &["select-pane -t %5", "switch-client -t %5"],
         "wire: {lines:?}"
     );
     assert_eq!(session.window, "@1", "the view landed on the pane's window");
@@ -6212,7 +6209,7 @@ fn focus_pane_on_another_window_lands_focused_on_the_clicked_pane() {
         format!("%layout-change @1 {layout} {layout} *"),
     );
     let mut replies = std::collections::HashMap::new();
-    replies.insert("pane-info -t %6".to_string(), "%6 @1 40x23".to_string());
+    replies.insert("switch-client -t %6".to_string(), "@1".to_string());
     reseed_replies(&mut replies, "@0 main\n@1 * other", "@1", "%5\n%6");
     let (rx, mut conn, mut session) = two_pane_session(
         "roster-second-pane",
@@ -6226,12 +6223,8 @@ fn focus_pane_on_another_window_lands_focused_on_the_clicked_pane() {
     settle(&mut session, &mut conn);
     let lines = drained(&rx);
     assert_eq!(
-        &lines[..3],
-        &[
-            "select-pane -t %6",
-            "pane-info -t %6",
-            "switch-client -t @1"
-        ],
+        &lines[..2],
+        &["select-pane -t %6", "switch-client -t %6"],
         "wire: {lines:?}"
     );
     assert_eq!(session.window, "@1", "the view landed on the pane's window");
@@ -6268,7 +6261,7 @@ fn roster_click_landing_survives_the_parked_session_window_follow() {
         format!("%layout-change @1 {layout} {layout} *"),
     );
     let mut replies = std::collections::HashMap::new();
-    replies.insert("pane-info -t %6".to_string(), "%6 @1 40x23".to_string());
+    replies.insert("switch-client -t %6".to_string(), "@1".to_string());
     reseed_replies(&mut replies, "@0 main\n@1 * other", "@1", "%5\n%6");
     let (rx, mut conn, mut session) = two_pane_session(
         "roster-follow-race",
@@ -6280,7 +6273,7 @@ fn roster_click_landing_survives_the_parked_session_window_follow() {
             // can park the follow while the landing is genuinely in
             // flight, deterministically.
             delays: [(
-                "switch-client -t @1".to_string(),
+                "switch-client -t %6".to_string(),
                 std::time::Duration::from_millis(300),
             )]
             .into_iter()
@@ -6360,7 +6353,7 @@ fn roster_click_landing_survives_the_parked_client_session_follow() {
         format!("%layout-change @1 {layout} {layout} *"),
     );
     let mut replies = std::collections::HashMap::new();
-    replies.insert("pane-info -t %6".to_string(), "%6 @1 40x23".to_string());
+    replies.insert("switch-client -t %6".to_string(), "@1".to_string());
     // The follow's resolution: the followed session's active window.
     replies.insert("list-windows -t $1".to_string(), "@1 * other".to_string());
     reseed_replies(&mut replies, "@0 main\n@1 * other", "@1", "%5\n%6");
@@ -6371,7 +6364,7 @@ fn roster_click_landing_survives_the_parked_client_session_follow() {
             notify,
             // The same one-pump-beat reply lag (see the sibling test).
             delays: [(
-                "switch-client -t @1".to_string(),
+                "switch-client -t %6".to_string(),
                 std::time::Duration::from_millis(300),
             )]
             .into_iter()
@@ -6419,7 +6412,7 @@ fn roster_click_landing_survives_the_parked_client_session_follow() {
 #[test]
 fn focus_pane_on_the_shown_window_does_not_land() {
     let mut replies = std::collections::HashMap::new();
-    replies.insert("pane-info -t %2".to_string(), "%2 @0 40x23".to_string());
+    replies.insert("switch-client -t %2".to_string(), "@0".to_string());
     let (rx, mut conn, mut session) = two_pane_session(
         "qa245-samewin",
         FakeScript {
@@ -6431,7 +6424,7 @@ fn focus_pane_on_the_shown_window_does_not_land() {
     session.focus_pane(&mut conn, 2);
     settle(&mut session, &mut conn);
     let lines = drained(&rx);
-    assert_eq!(lines, vec!["select-pane -t %2", "pane-info -t %2"]);
+    assert_eq!(lines, vec!["select-pane -t %2", "switch-client -t %2"]);
     assert_eq!(session.window, "@0");
     assert!(session.status_dirty, "the highlight repaint is scheduled");
 }
@@ -6447,7 +6440,7 @@ fn focus_pane_on_the_shown_window_does_not_land() {
 fn focus_pane_landing_focus_survives_a_lagging_layout_event() {
     let layout = "0000,80x23,0,0{40x23,0,0,5,40x23,40,0,6}";
     let mut replies = std::collections::HashMap::new();
-    replies.insert("pane-info -t %6".to_string(), "%6 @1 40x23".to_string());
+    replies.insert("switch-client -t %6".to_string(), "@1".to_string());
     reseed_replies(&mut replies, "@0 main\n@1 * other", "@1", "%5\n%6");
     // No `notify`: the %layout-change lags the landing, riding the pump
     // stream after the re-seed has already set `window`.
@@ -6517,13 +6510,14 @@ fn split_focus_survives_a_lagging_layout_event() {
     );
 }
 
-/// A refused `select-pane` (the pane is gone) ends the click silently:
-/// no `pane-info`, no landing, no busy flash (ARC-141's early return;
-/// the timed-out case is `focus_pane_chain_stops_at_the_first_timeout`).
+/// A refused merged switch (the pane is gone) ends the click silently:
+/// no landing, no busy flash (the select-pane fire-and-forget leg cannot
+/// refuse visibly; the timed-out case is
+/// `focus_pane_chain_stops_at_the_first_timeout`).
 #[test]
 fn focus_pane_stops_when_select_pane_fails() {
     let mut failing = std::collections::HashSet::new();
-    failing.insert("select-pane -t %9".to_string());
+    failing.insert("switch-client -t %9".to_string());
     let (rx, mut conn, mut session) = two_pane_session(
         "qa245-gone",
         FakeScript {
@@ -6533,9 +6527,11 @@ fn focus_pane_stops_when_select_pane_fails() {
     );
     session.focus_pane(&mut conn, 9);
     settle(&mut session, &mut conn);
-    // Pipelined: the pane-info rides behind the select without waiting for
-    // its refusal; the refused select leaves no pane-info row to land on.
-    assert_eq!(drained(&rx), vec!["select-pane -t %9", "pane-info -t %9"]);
+    // Pipelined: the select rides the wire before the refusal comes back.
+    assert_eq!(
+        drained(&rx),
+        vec!["select-pane -t %9", "switch-client -t %9"]
+    );
     assert_eq!(session.window, "@0", "the view stays put");
     assert_eq!(
         session.chrome.flash_text(),
@@ -6557,7 +6553,7 @@ fn slow_daemon_does_not_block_key_forwarding() {
     );
     script
         .replies
-        .insert("pane-info -t %2".to_string(), "%2 @0 40x23".to_string());
+        .insert("switch-client -t %2".to_string(), "@0".to_string());
     let (rx, mut conn, mut session) = two_pane_session("enh049-slow", script);
     show_sidebar(&mut session);
     session
@@ -6586,7 +6582,7 @@ fn slow_daemon_does_not_block_key_forwarding() {
             .unwrap_or_else(|| panic!("no {needle} line: {lines:?}"))
     };
     let select = position("select-pane -t %2");
-    let info = position("pane-info -t %2");
+    let info = position("switch-client -t %2");
     let keys = lines
         .iter()
         .position(|l| l.starts_with("send-keys -t ") && l.ends_with("-H 61 62 63"))
@@ -6608,16 +6604,15 @@ fn focus_pane_chain_pipelines_and_ignores_a_stale_landing() {
         );
     }
     let mut replies = std::collections::HashMap::new();
-    replies.insert("pane-info -t %5".to_string(), "%5 @2 40x23".to_string());
+    replies.insert("switch-client -t %5".to_string(), "@2".to_string());
     reseed_replies(&mut replies, "@0 * main\n@3 - other", "@3", "%9 @3 * z");
-    replies.insert("list-panes -t @2".to_string(), "%5 @2 * y".to_string());
     let mut script = FakeScript {
         replies,
         notify,
         ..FakeScript::default()
     };
     script.delays.insert(
-        "pane-info -t %5".to_string(),
+        "switch-client -t %5".to_string(),
         std::time::Duration::from_millis(300),
     );
     let (rx, mut conn, mut session) = two_pane_session("enh049-stale", script);

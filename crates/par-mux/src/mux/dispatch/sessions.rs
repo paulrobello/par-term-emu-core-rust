@@ -587,10 +587,15 @@ pub(super) fn cmd_switch_client(ctx: &Ctx<'_>, target: Option<AnyTarget>) -> Out
             workspace != previous_workspace,
             resized,
             pane_changed,
+            shown,
         )
     };
-    let (session, name, workspace, moved, workspace_moved, resized, pane_changed) = switched;
-    let mut result = Outcome::ok(ctx, "");
+    let (session, name, workspace, moved, workspace_moved, resized, pane_changed, shown) = switched;
+    // The body names the landed window, the same contract select-window
+    // just gained: the render client's roster-click landing reads it (one
+    // round trip replaces the pane-info + landing switch chain, card
+    // 01a1995a6).
+    let mut result = Outcome::ok(ctx, &shown.map(|w| w.to_string()).unwrap_or_default());
     for window_id in resized {
         result = result.with_layout(window_id);
     }
