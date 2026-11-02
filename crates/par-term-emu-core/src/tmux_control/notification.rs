@@ -46,6 +46,27 @@ pub enum TmuxNotification {
         data: Vec<u8>,
     },
 
+    /// Pane output damage (par-mux extension — real tmux never emits this).
+    /// Emitted immediately after the [`TmuxNotification::Output`] line it
+    /// describes, on the same connection, in order: the two lines are one
+    /// fan-out write, so a consumer never sees another pane's line between
+    /// them. Rows are 0-based, inclusive, viewport-relative, ascending.
+    /// Arguments: pane_id, generation, then `start-end` tokens
+    /// (generation/ranges absent = the consumer full-scans).
+    OutputDamage {
+        /// Pane id (e.g. `%1`) — the pane whose adjacent `%output` this
+        /// describes.
+        pane_id: String,
+        /// The pane terminal's damage generation after those bytes applied.
+        /// Monotonic per pane: its presence (vs the previous damage line's)
+        /// proves the row set is fresh.
+        generation: u64,
+        /// Inclusive viewport row ranges the adjacent output changed,
+        /// ascending and non-overlapping. Empty means the chunk changed no
+        /// viewport row (e.g. a pure cursor move) — never "unknown".
+        ranges: Vec<(u32, u32)>,
+    },
+
     /// Pane mode changed
     /// Arguments: pane_id
     PaneModeChanged {
@@ -383,6 +404,7 @@ impl TmuxNotification {
             Self::End { .. } => "end",
             Self::Error { .. } => "error",
             Self::Output { .. } => "output",
+            Self::OutputDamage { .. } => "pane-damage",
             Self::PaneModeChanged { .. } => "pane-mode-changed",
             Self::WindowPaneChanged { .. } => "window-pane-changed",
             Self::WindowClose { .. } => "window-close",

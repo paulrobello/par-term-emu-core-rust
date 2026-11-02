@@ -12,9 +12,11 @@ use crate::mux::LocalStream;
 use crate::streaming::inline_image_frame_struct;
 use crate::streaming::protocol::ServerMessage;
 use crate::streaming::server::StreamingServer;
+use crate::streaming::session::OutputChunk;
 use crate::terminal::TerminalEvent;
 use crate::tmux_control::{TmuxControlParser, TmuxNotification};
 use parking_lot::Mutex;
+use std::collections::VecDeque;
 use std::io::{self, Write};
 use std::path::PathBuf;
 use std::sync::atomic::Ordering;
@@ -151,7 +153,7 @@ pub(super) fn spawn_drain(
                 }
                 next_status = Instant::now() + Duration::from_secs(1);
             }
-            let line = match reader
+            let first = match reader
                 .rx
                 .recv_timeout(next_status.saturating_duration_since(Instant::now()))
             {
@@ -162,172 +164,210 @@ pub(super) fn spawn_drain(
             if link.closed.load(Ordering::Relaxed) {
                 break;
             }
-            // Reply blocks (input and resize acks) carry nothing to mirror,
-            // but an %error-terminated one means the daemon rejected a
-            // command this mirror sent (bad send-keys payload, unknown
-            // pane): without this log the rejection is invisible on both
-            // sides of the socket — no PTY_WRITE, no log — and looks
-            // identical to input lost inside the streamer.
-            if line.starts_with("%begin") {
-                in_reply = true;
-                reply_body.clear();
-                continue;
-            }
-            if in_reply {
-                if line.starts_with("%end") {
-                    in_reply = false;
-                } else if line.starts_with("%error") {
-                    in_reply = false;
-                    crate::debug_error!(
-                        "STREAMING",
-                        "mux daemon rejected a command for pane %{}: {}",
-                        link.pane(),
-                        reply_body.join(" | ")
-                    );
-                } else {
-                    if line.starts_with(&format!("{pane_id} ")) {
-                        apply_viewer_status(&link, &line);
-                    }
-                    reply_body.push(line);
+            // Batch every line the socket already delivered (card
+            // 01a19ca4): the daemon writes a pane's `%output` and its
+            // `%pane-damage` as ONE fan-out write, so batching what has
+            // arrived keeps the pair adjacent for the Output arm below. A
+            // missed pairing only costs the hint - output whose damage
+            // fields are absent decodes as "unknown, full scan" - never
+            // correctness.
+            let mut queue: VecDeque<String> = VecDeque::new();
+            queue.push_back(first);
+            while let Ok(more) = reader.rx.try_recv() {
+                match more {
+                    Ok(line) => queue.push_back(line),
+                    Err(_) => break,
                 }
-                continue;
             }
-            let mut framed = line.into_bytes();
-            framed.push(b'\n');
-            for notification in parser.parse(&framed) {
-                match notification {
-                    // The pane filter reads the link live, not the pass's
-                    // snapshot: a batch can carry `%workspaces-changed`
-                    // followed by more `%output`, and lines for the OLD
-                    // pane must not survive the retarget that happened
-                    // mid-batch.
-                    TmuxNotification::Output { pane_id: id, data }
-                        if id == format!("%{}", link.pane()) =>
-                    {
-                        let (dispatch_batch, events) = {
-                            let mut term = link.terminal.write();
-                            let batch = term.process_deferred(&data);
-                            term.drain_responses();
-                            // The events the batch raised drain under the same
-                            // lock: a GraphicsAdded fetches its pixels here,
-                            // once, never per subscriber.
-                            (batch, term.poll_events())
-                        };
-                        dispatch_batch.deliver();
-                        forward(&link, &data);
-                        for event in events {
-                            let TerminalEvent::GraphicsAdded { image_id, row } = event else {
-                                // Mirrors stream text via %output itself; only
-                                // the frame-bearing event needs converting.
-                                continue;
+            while let Some(line) = queue.pop_front() {
+                // Reply blocks (input and resize acks) carry nothing to mirror,
+                // but an %error-terminated one means the daemon rejected a
+                // command this mirror sent (bad send-keys payload, unknown
+                // pane): without this log the rejection is invisible on both
+                // sides of the socket — no PTY_WRITE, no log — and looks
+                // identical to input lost inside the streamer.
+                if line.starts_with("%begin") {
+                    in_reply = true;
+                    reply_body.clear();
+                    continue;
+                }
+                if in_reply {
+                    if line.starts_with("%end") {
+                        in_reply = false;
+                    } else if line.starts_with("%error") {
+                        in_reply = false;
+                        crate::debug_error!(
+                            "STREAMING",
+                            "mux daemon rejected a command for pane %{}: {}",
+                            link.pane(),
+                            reply_body.join(" | ")
+                        );
+                    } else {
+                        if line.starts_with(&format!("{pane_id} ")) {
+                            apply_viewer_status(&link, &line);
+                        }
+                        reply_body.push(line);
+                    }
+                    continue;
+                }
+                let mut framed = line.into_bytes();
+                framed.push(b'\n');
+                for notification in parser.parse(&framed) {
+                    match notification {
+                        // The pane filter reads the link live, not the pass's
+                        // snapshot: a batch can carry `%workspaces-changed`
+                        // followed by more `%output`, and lines for the OLD
+                        // pane must not survive the retarget that happened
+                        // mid-batch.
+                        TmuxNotification::Output { pane_id: id, data }
+                            if id == format!("%{}", link.pane()) =>
+                        {
+                            // The damage line, when the daemon sent one, is the
+                            // VERY next line (one fan-out write). Peek at the
+                            // queue's front: this pane's `%pane-damage` is
+                            // parsed through the same parser and consumed
+                            // here; anything else stays for the next
+                            // iteration. An unpaired damage notification (the
+                            // `_` arm) is dropped - its `%output` already
+                            // applied, and absent fields just mean scan.
+                            let damage = match queue.front() {
+                                Some(next) => adjacent_damage(&mut parser, next, &id),
+                                None => None,
                             };
-                            if !link.claim_image(image_id) {
-                                continue;
+                            if damage.is_some() {
+                                queue.pop_front();
                             }
-                            let pane_label = link.pane_label();
-                            link.graphics_panes
-                                .lock()
-                                .insert(image_id, pane_label.clone());
-                            let Some(mut frame) = inline_image_frame_struct(
-                                &link.terminal.read(),
-                                image_id,
-                                Some(link.pane()),
-                            ) else {
-                                continue;
+                            let (dispatch_batch, events) = {
+                                let mut term = link.terminal.write();
+                                let batch = term.process_deferred(&data);
+                                term.drain_responses();
+                                // The events the batch raised drain under the same
+                                // lock: a GraphicsAdded fetches its pixels here,
+                                // once, never per subscriber.
+                                (batch, term.poll_events())
                             };
-                            frame.pane = Some(pane_label.clone());
-                            if let Some(server) = server.as_ref().and_then(std::sync::Weak::upgrade)
-                            {
-                                server.send_to_session(
-                                    &session_id,
-                                    ServerMessage::graphics_added_with_pane(
-                                        row as u16,
-                                        Some(pane_label),
-                                    ),
-                                );
-                                server.send_to_session(&session_id, ServerMessage::from(frame));
+                            dispatch_batch.deliver();
+                            forward(&link, &data, damage);
+                            for event in events {
+                                let TerminalEvent::GraphicsAdded { image_id, row } = event else {
+                                    // Mirrors stream text via %output itself; only
+                                    // the frame-bearing event needs converting.
+                                    continue;
+                                };
+                                if !link.claim_image(image_id) {
+                                    continue;
+                                }
+                                let pane_label = link.pane_label();
+                                link.graphics_panes
+                                    .lock()
+                                    .insert(image_id, pane_label.clone());
+                                let Some(mut frame) = inline_image_frame_struct(
+                                    &link.terminal.read(),
+                                    image_id,
+                                    Some(link.pane()),
+                                ) else {
+                                    continue;
+                                };
+                                frame.pane = Some(pane_label.clone());
+                                if let Some(server) =
+                                    server.as_ref().and_then(std::sync::Weak::upgrade)
+                                {
+                                    server.send_to_session(
+                                        &session_id,
+                                        ServerMessage::graphics_added_with_pane(
+                                            row as u16,
+                                            Some(pane_label),
+                                        ),
+                                    );
+                                    server.send_to_session(&session_id, ServerMessage::from(frame));
+                                }
                             }
                         }
-                    }
-                    TmuxNotification::LayoutChange {
-                        window_id,
-                        window_layout,
-                        ..
-                    } if window_id == link.window() => {
-                        let Some((cols, rows)) = pane_size_in_layout(&window_layout, link.pane())
-                        else {
-                            // The window's new layout no longer holds the
-                            // pane: it was killed or reaped.
+                        TmuxNotification::LayoutChange {
+                            window_id,
+                            window_layout,
+                            ..
+                        } if window_id == link.window() => {
+                            let Some((cols, rows)) =
+                                pane_size_in_layout(&window_layout, link.pane())
+                            else {
+                                // The window's new layout no longer holds the
+                                // pane: it was killed or reaped.
+                                link.alive.store(false, Ordering::Relaxed);
+                                continue;
+                            };
+                            // Observer delivery waits for the guard to drop
+                            // (ARC-001).
+                            let dispatch_batch = {
+                                let mut term = link.terminal.write();
+                                (term.size() != (cols, rows))
+                                    .then(|| term.resize_deferred(cols, rows))
+                            };
+                            if let Some(batch) = dispatch_batch {
+                                batch.deliver();
+                                if let Some(server) =
+                                    server.as_ref().and_then(std::sync::Weak::upgrade)
+                                {
+                                    server.send_to_session(
+                                        &session_id,
+                                        ServerMessage::resize(cols as u16, rows as u16),
+                                    );
+                                }
+                            }
+                        }
+                        TmuxNotification::ClientAttached { .. }
+                        | TmuxNotification::ClientLeft { .. } => {
+                            next_status = Instant::now();
+                        }
+                        // A desktop switch-workspace (or any roster move)
+                        // re-resolves the followed pane; pinned (`pane-N`)
+                        // mirrors never enter this arm. Re-resolution is
+                        // idempotent — a rename or add resolves to the same
+                        // pane and applies nothing.
+                        TmuxNotification::WorkspacesChanged if link.follows_active => {
+                            follow_active_workspace(
+                                &link,
+                                &session_id,
+                                &socket,
+                                MUX_REPLY_TIMEOUT,
+                                &server,
+                            );
+                        }
+                        TmuxNotification::WindowClose { window_id }
+                            if window_id == link.window() =>
+                        {
                             link.alive.store(false, Ordering::Relaxed);
-                            continue;
-                        };
-                        // Observer delivery waits for the guard to drop
-                        // (ARC-001).
-                        let dispatch_batch = {
-                            let mut term = link.terminal.write();
-                            (term.size() != (cols, rows)).then(|| term.resize_deferred(cols, rows))
-                        };
-                        if let Some(batch) = dispatch_batch {
-                            batch.deliver();
-                            if let Some(server) = server.as_ref().and_then(std::sync::Weak::upgrade)
-                            {
-                                server.send_to_session(
-                                    &session_id,
-                                    ServerMessage::resize(cols as u16, rows as u16),
-                                );
-                            }
                         }
+                        // Held-pane process lifecycle: the daemon names the
+                        // pane (and the status when it read one) as the
+                        // process exits under remain-on-exit; the pane, its
+                        // window and this mirror stream all stay open. The
+                        // pane filter reads the link live, so a retarget that
+                        // happened mid-batch drops the old pane's exit.
+                        TmuxNotification::PaneExited { pane_id, exit_code }
+                            if pane_id == format!("%{}", link.pane()) =>
+                        {
+                            publish_process_state(&link, &pane_id, true, exit_code);
+                        }
+                        // respawn-pane: same pane id, fresh terminal. The
+                        // re-seed clears the frozen screen AND the exited
+                        // state on this same stream, no reconnect.
+                        TmuxNotification::PaneRespawned { pane_id }
+                            if pane_id == format!("%{}", link.pane()) =>
+                        {
+                            reseed_after_respawn(
+                                &link,
+                                &session_id,
+                                &socket,
+                                MUX_REPLY_TIMEOUT,
+                                &server,
+                            );
+                        }
+                        TmuxNotification::Exit => {
+                            link.alive.store(false, Ordering::Relaxed);
+                        }
+                        _ => {}
                     }
-                    TmuxNotification::ClientAttached { .. }
-                    | TmuxNotification::ClientLeft { .. } => {
-                        next_status = Instant::now();
-                    }
-                    // A desktop switch-workspace (or any roster move)
-                    // re-resolves the followed pane; pinned (`pane-N`)
-                    // mirrors never enter this arm. Re-resolution is
-                    // idempotent — a rename or add resolves to the same
-                    // pane and applies nothing.
-                    TmuxNotification::WorkspacesChanged if link.follows_active => {
-                        follow_active_workspace(
-                            &link,
-                            &session_id,
-                            &socket,
-                            MUX_REPLY_TIMEOUT,
-                            &server,
-                        );
-                    }
-                    TmuxNotification::WindowClose { window_id } if window_id == link.window() => {
-                        link.alive.store(false, Ordering::Relaxed);
-                    }
-                    // Held-pane process lifecycle: the daemon names the
-                    // pane (and the status when it read one) as the
-                    // process exits under remain-on-exit; the pane, its
-                    // window and this mirror stream all stay open. The
-                    // pane filter reads the link live, so a retarget that
-                    // happened mid-batch drops the old pane's exit.
-                    TmuxNotification::PaneExited { pane_id, exit_code }
-                        if pane_id == format!("%{}", link.pane()) =>
-                    {
-                        publish_process_state(&link, &pane_id, true, exit_code);
-                    }
-                    // respawn-pane: same pane id, fresh terminal. The
-                    // re-seed clears the frozen screen AND the exited
-                    // state on this same stream, no reconnect.
-                    TmuxNotification::PaneRespawned { pane_id }
-                        if pane_id == format!("%{}", link.pane()) =>
-                    {
-                        reseed_after_respawn(
-                            &link,
-                            &session_id,
-                            &socket,
-                            MUX_REPLY_TIMEOUT,
-                            &server,
-                        );
-                    }
-                    TmuxNotification::Exit => {
-                        link.alive.store(false, Ordering::Relaxed);
-                    }
-                    _ => {}
                 }
             }
             if !link.alive.load(Ordering::Relaxed) {
@@ -344,15 +384,46 @@ pub(super) fn spawn_drain(
 }
 
 /// Hand pane output to the session broadcaster, or buffer it until
-/// `setup_session` connects one.
-pub(super) fn forward(link: &MirrorLink, data: &[u8]) {
+/// `setup_session` connects one. `damage` is the chunk the daemon reported
+/// for these bytes (`None` = not supplied - the chunk goes out without
+/// damage fields, which every client reads as "full scan").
+pub(super) fn forward(link: &MirrorLink, data: &[u8], damage: Option<(u64, Vec<(u32, u32)>)>) {
+    let chunk = match damage {
+        Some((generation, ranges)) => OutputChunk::with_damage(
+            String::from_utf8_lossy(data).into_owned(),
+            generation,
+            ranges,
+        ),
+        None => OutputChunk::plain(String::from_utf8_lossy(data).into_owned()),
+    };
     match &mut *link.sink.lock() {
-        Sink::Buffering(buffer) => buffer.extend_from_slice(data),
+        Sink::Buffering(buffer) => buffer.push(chunk),
         Sink::Live(sender) => {
-            let _ = sender.try_send(String::from_utf8_lossy(data).into_owned());
+            let _ = sender.try_send(chunk);
         }
         Sink::Closed => {}
     }
+}
+
+/// Parse `line` as the adjacent `%pane-damage` notification for `pane_id`,
+/// through `parser` (same parser state, typed result). `None` when the line
+/// is anything else - it is left for the queue's next iteration.
+fn adjacent_damage(
+    parser: &mut TmuxControlParser,
+    line: &str,
+    pane_id: &str,
+) -> Option<(u64, Vec<(u32, u32)>)> {
+    if !line.starts_with(&format!("%pane-damage {pane_id} ")) {
+        return None;
+    }
+    let mut framed = line.as_bytes().to_vec();
+    framed.push(b'\n');
+    parser.parse(&framed).into_iter().find_map(|n| match n {
+        TmuxNotification::OutputDamage {
+            generation, ranges, ..
+        } => Some((generation, ranges)),
+        _ => None,
+    })
 }
 
 #[cfg(test)]

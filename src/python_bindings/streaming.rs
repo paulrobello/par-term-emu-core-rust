@@ -5,6 +5,8 @@ use pyo3::prelude::*;
 use pyo3::types::PyBytes;
 
 #[cfg(feature = "streaming")]
+use crate::streaming::session::OutputChunk;
+#[cfg(feature = "streaming")]
 use crate::streaming::{StreamingConfig, StreamingServer, TlsConfig};
 #[cfg(feature = "streaming")]
 use std::sync::Arc;
@@ -820,7 +822,7 @@ impl PyStreamingServer {
                         // All bytes are valid UTF-8
                         let output = valid_str.to_string();
                         buffer.clear();
-                        if output_sender.try_send(output).is_err() {
+                        if output_sender.try_send(OutputChunk::plain(output)).is_err() {
                             crate::debug_info!("STREAMING", "Output channel full, message dropped");
                         }
                     }
@@ -833,7 +835,7 @@ impl PyStreamingServer {
                             let valid_str = std::str::from_utf8(&buffer[..valid_up_to])
                                 .expect("valid_up_to guarantees valid UTF-8");
                             let output = valid_str.to_string();
-                            if output_sender.try_send(output).is_err() {
+                            if output_sender.try_send(OutputChunk::plain(output)).is_err() {
                                 crate::debug_info!(
                                     "STREAMING",
                                     "Output channel full, message dropped"
@@ -849,7 +851,7 @@ impl PyStreamingServer {
                         if buffer.len() > 100 {
                             let output = String::from_utf8_lossy(&buffer).to_string();
                             buffer.clear();
-                            if output_sender.try_send(output).is_err() {
+                            if output_sender.try_send(OutputChunk::plain(output)).is_err() {
                                 crate::debug_info!(
                                     "STREAMING",
                                     "Output channel full, message dropped"

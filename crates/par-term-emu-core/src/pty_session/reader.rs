@@ -103,6 +103,7 @@ impl PtySession {
         let reply_xtwinops = Arc::clone(&self.reply_xtwinops);
         let geometry = Arc::clone(&self.geometry);
         let output_callback = Arc::clone(&self.output_callback);
+        let output_damage_callback = Arc::clone(&self.output_damage_callback);
         let coprocess_manager = Arc::clone(&self.coprocess_manager);
         let reaped = Arc::clone(&self.reaped);
         // Only the unix SIGWINCH pulse on alt-screen entry signals the child.
@@ -115,6 +116,13 @@ impl PtySession {
 
         let handle = thread::spawn(move || {
             let mut buffer = [0u8; 16384];
+            // The damage chain anchor (card 01a19ca4): every chunk's ranges
+            // are computed since the previous chunk's generation, so a
+            // consumer sees exactly the rows each chunk changed. Reader
+            // start is the only discontinuity — the first chunk's ranges
+            // may over-cover (harmless: over-coverage redraws extra rows,
+            // under-coverage would leave stale ones).
+            let mut last_damage_gen = terminal.read().damage_generation();
             #[cfg(test)]
             if let Some(delay) = first_read_delay {
                 thread::sleep(delay);
@@ -185,6 +193,9 @@ impl PtySession {
                         // terminal (streaming clients, Python queries, screenshot
                         // rendering) for the syscall's duration.
                         let mut response_bytes: Vec<u8> = Vec::new();
+                        // Assigned inside the write guard below; the output
+                        // callback dispatch after it reads the pair.
+                        let (damage_gen, damage_ranges): (u64, Vec<(u32, u32)>);
                         let dispatch_batch = {
                             let mut term = terminal.write();
                             let was_alt_screen = term.is_alt_screen_active();
@@ -270,6 +281,34 @@ impl PtySession {
                             // without ever taking this lock (ENH-023).
                             geometry.publish(&term);
 
+                            // Damage for this chunk (card 01a19ca4),
+                            // computed while the write guard still covers
+                            // the state it describes, so the ranges can
+                            // never race a concurrent mutator. Computed
+                            // unconditionally: O(rows) per read, and a
+                            // callback installed between here and the
+                            // dispatch below still receives a consistent
+                            // (generation, ranges) pair for its first
+                            // chunk.
+                            damage_gen = term.damage_generation();
+                            damage_ranges = if damage_gen != last_damage_gen {
+                                let mut ranges = Vec::new();
+                                // The grid-level iterator (the Terminal
+                                // forwarder is ffi-gated): maximal inclusive
+                                // runs of rows damaged since the previous
+                                // chunk's generation, ascending.
+                                term.active_grid().for_each_damage_range_since(
+                                    last_damage_gen,
+                                    |start, end| {
+                                        ranges.push((start, end));
+                                    },
+                                );
+                                ranges
+                            } else {
+                                Vec::new()
+                            };
+                            last_damage_gen = damage_gen;
+
                             batch
                         }; // write guard (`term`) dropped here
 
@@ -301,11 +340,19 @@ impl PtySession {
                         // seed for a client it forwards these bytes to)
                         // observes state that already includes them — the
                         // forwarded output can never race ahead of the
-                        // seed. Still raw, unmodified bytes.
+                        // seed. Still raw, unmodified bytes. The damage-aware
+                        // callback, when set, takes the chunk's slot instead
+                        // of the plain one, with the (generation, ranges)
+                        // pair computed under the write guard above.
                         {
-                            let callback_guard = output_callback.lock();
-                            if let Some(ref callback) = *callback_guard {
-                                callback(&buffer[..n]);
+                            let damage_callback_guard = output_damage_callback.lock().clone();
+                            if let Some(ref callback) = damage_callback_guard {
+                                callback(&buffer[..n], damage_gen, &damage_ranges);
+                            } else {
+                                let callback_guard = output_callback.lock();
+                                if let Some(ref callback) = *callback_guard {
+                                    callback(&buffer[..n]);
+                                }
                             }
                         }
 

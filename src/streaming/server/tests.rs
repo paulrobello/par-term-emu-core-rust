@@ -59,6 +59,7 @@ async fn broadcast_all_reaches_every_session() {
 }
 
 use super::*;
+use crate::streaming::session::OutputChunk;
 use crate::terminal::Terminal;
 
 #[tokio::test]
@@ -67,7 +68,7 @@ async fn test_output_sender() {
     let server = StreamingServer::new(terminal, "127.0.0.1:0".to_string());
 
     let tx = server.get_output_sender();
-    assert!(tx.try_send("test".to_string()).is_ok());
+    assert!(tx.try_send(OutputChunk::plain("test".to_string())).is_ok());
 }
 
 #[tokio::test]

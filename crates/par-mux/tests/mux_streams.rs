@@ -332,7 +332,11 @@ fn a_controller_writes_input_and_its_size_report_is_withdrawn_on_disconnect() {
     let sent = controller.command(&format!("send-keys -t {a} -H {}", hex.join(" ")));
     assert!(sent.last().is_some_and(|l| l.starts_with("%end")));
     let lines = controller.until(|l| l.contains("CTLMARK"), "the controller's echo");
-    assert!(lines.iter().all(|l| l.starts_with("%output ")));
+    // Pane streams carry the adjacent `%pane-damage` line too (docs/MUX.md
+    // "Notifications"); every other line must be pane output.
+    assert!(lines
+        .iter()
+        .all(|l| l.starts_with("%output ") || l.starts_with("%pane-damage ")));
 
     // A smaller size report shrinks the pane's window while connected.
     let resized = controller.command(&format!("refresh-client -t {a} -C 50x12"));

@@ -131,9 +131,23 @@ impl PtySession {
         *self.output_callback.lock() = Some(callback);
     }
 
+    /// Set the damage-aware output callback
+    /// ([`OutputDamageCallback`]). When set, the reader thread invokes it
+    /// INSTEAD of any plain callback set with `set_output_callback`, with
+    /// the same raw bytes plus the damage generation and the inclusive
+    /// viewport row ranges the chunk changed since this consumer's previous
+    /// chunk (ascending, 0-based, viewport-relative). Wholesale changes
+    /// (scrolls, alt-screen switches, RIS, resize, snapshot restore) report
+    /// the whole viewport, so a consumer's stale row set never survives
+    /// them.
+    pub fn set_output_callback_with_damage(&mut self, callback: OutputDamageCallback) {
+        *self.output_damage_callback.lock() = Some(callback);
+    }
+
     /// Remove the output callback
     pub fn clear_output_callback(&mut self) {
         *self.output_callback.lock() = None;
+        *self.output_damage_callback.lock() = None;
     }
 
     /// Fire the output callback with data that did not come from the PTY

@@ -9492,6 +9492,20 @@ class TmuxNotification:
     @command_number.setter
     def command_number(self, value: Any) -> None: ...
     @property
+    def damage_generation(self) -> Any:
+        """Damage generation (for `pane-damage`): the pane terminal's damage
+        generation after the adjacent `%output` applied
+        """
+    @damage_generation.setter
+    def damage_generation(self, value: Any) -> None: ...
+    @property
+    def damage_rows(self) -> Any:
+        """Inclusive viewport row ranges (for `pane-damage`), 0-based and
+        ascending, that the adjacent `%output` changed
+        """
+    @damage_rows.setter
+    def damage_rows(self, value: Any) -> None: ...
+    @property
     def data(self) -> Any:
         """Output data (for output notifications, as bytes)"""
     @data.setter

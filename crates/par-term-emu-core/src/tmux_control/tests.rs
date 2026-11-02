@@ -76,6 +76,90 @@ fn test_parse_output() {
     }
 }
 
+/// `%pane-damage` (card 01a19ca4): the whole grammar — generation plus
+/// multiple ascending ranges, an empty range set, and the malformed forms
+/// that degrade to no notification (its `%output` already applied; a
+/// consumer without damage info full-scans).
+#[test]
+fn test_parse_pane_damage() {
+    let mut parser = TmuxControlParser::new(true);
+
+    let notifications = parser.parse(b"%pane-damage %3 42 0-5 9-9 20-23\n");
+    assert_eq!(notifications.len(), 1);
+    match &notifications[0] {
+        TmuxNotification::OutputDamage {
+            pane_id,
+            generation,
+            ranges,
+        } => {
+            assert_eq!(pane_id, "%3");
+            assert_eq!(*generation, 42);
+            assert_eq!(ranges, &vec![(0, 5), (9, 9), (20, 23)]);
+        }
+        _ => panic!("Expected OutputDamage notification"),
+    }
+
+    // Generation only: the chunk changed no viewport row.
+    let notifications = parser.parse(b"%pane-damage %3 43\n");
+    assert_eq!(notifications.len(), 1);
+    match &notifications[0] {
+        TmuxNotification::OutputDamage {
+            generation, ranges, ..
+        } => {
+            assert_eq!(*generation, 43);
+            assert!(
+                ranges.is_empty(),
+                "no range tokens = empty set, not unknown"
+            );
+        }
+        _ => panic!("Expected OutputDamage notification"),
+    }
+
+    // Malformed forms yield no damage notification — never a partial or
+    // inverted range (the `%output` already applied; the consumer
+    // full-scans).
+    for line in [
+        "%pane-damage\n",
+        "%pane-damage %3\n",
+        "%pane-damage %3 notanumber 0-5\n",
+        "%pane-damage %3 42 0\n",
+        "%pane-damage %3 42 5-2\n",
+        "%pane-damage %3 42 0-x\n",
+    ] {
+        let notifications = parser.parse(line.as_bytes());
+        assert!(
+            !notifications
+                .iter()
+                .any(|n| matches!(n, TmuxNotification::OutputDamage { .. })),
+            "{line:?} must not parse as damage: {notifications:?}"
+        );
+    }
+}
+
+/// The `%output` + `%pane-damage` pair parses back to back in one feed,
+/// which is how the daemon writes them (one fan-out write).
+#[test]
+fn test_parse_output_then_damage_adjacent() {
+    let mut parser = TmuxControlParser::new(true);
+    let notifications =
+        parser.parse(b"%output %3 hello\n%pane-damage %3 7 0-0\n%window-close @1\n");
+    assert_eq!(notifications.len(), 3);
+    assert!(matches!(
+        &notifications[0],
+        TmuxNotification::Output { pane_id, data }
+            if pane_id == "%3" && data == b"hello"
+    ));
+    assert!(matches!(
+        &notifications[1],
+        TmuxNotification::OutputDamage { pane_id, generation, ranges }
+            if pane_id == "%3" && *generation == 7 && ranges == &vec![(0, 0)]
+    ));
+    assert!(matches!(
+        &notifications[2],
+        TmuxNotification::WindowClose { window_id } if window_id == "@1"
+    ));
+}
+
 #[test]
 fn test_parse_output_single_space() {
     // Regression test: single space character should not be trimmed away

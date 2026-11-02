@@ -161,7 +161,11 @@ pub(crate) fn record_and_broadcast(
 pub(crate) type OutputEpoch = std::sync::Arc<std::sync::atomic::AtomicU64>;
 
 /// The per-pane output sink: PTY bytes become `%output` lines pushed to every
-/// connected client as they are produced.
+/// connected client as they are produced, and — when the chunk carries damage
+/// (non-empty ranges, or the pane's damage generation advanced) — the adjacent
+/// `%pane-damage` line rides the SAME fan-out write, so a consumer never sees
+/// another pane's line between the pair (the adjacency contract,
+/// docs/MUX.md "Notifications").
 ///
 /// Shared by pane creation (`new-session`/`new-window`/`split-window` wiring)
 /// and the restore path — a restored pane pushes output exactly like a
@@ -170,16 +174,38 @@ pub(crate) fn pane_output_sink(
     clients: &Clients,
     pane_id: PaneId,
     epoch: &OutputEpoch,
-) -> impl Fn(&[u8]) + Send + Sync + 'static {
+) -> impl Fn(&[u8], u64, &[(u32, u32)]) + Send + Sync + 'static {
     let sinks = Arc::clone(clients);
     let epoch = Arc::clone(epoch);
-    move |bytes: &[u8]| {
+    // The last damage generation this sink forwarded. `u64::MAX` is the
+    // never-forwarded sentinel: the first chunk always counts as advanced,
+    // which keeps the chain conservative — a consumer that missed earlier
+    // chunks sees a present generation and scans nothing stale.
+    let last_generation = Arc::new(std::sync::atomic::AtomicU64::new(u64::MAX));
+    move |bytes: &[u8], generation: u64, ranges: &[(u32, u32)]| {
         epoch.fetch_add(1, std::sync::atomic::Ordering::Release);
+        let last = last_generation.swap(generation, std::sync::atomic::Ordering::AcqRel);
+        let advanced = generation != last;
+        let pane = pane_id.to_string();
         let line = emit(&TmuxNotification::Output {
-            pane_id: pane_id.to_string(),
+            pane_id: pane.clone(),
             data: bytes.to_vec(),
         });
-        push_to_clients(&sinks, line);
+        if !ranges.is_empty() || advanced {
+            let damage = emit(&TmuxNotification::OutputDamage {
+                pane_id: pane,
+                generation,
+                ranges: ranges.to_vec(),
+            });
+            // One push carries both lines: per-client queues and sockets see
+            // the pair atomically, which is the adjacency contract.
+            let mut combined = String::with_capacity(line.len() + damage.len());
+            combined.push_str(&line);
+            combined.push_str(&damage);
+            push_to_clients(&sinks, combined);
+        } else {
+            push_to_clients(&sinks, line);
+        }
     }
 }
 

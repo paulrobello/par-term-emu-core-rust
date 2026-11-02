@@ -6,7 +6,7 @@ use crate::streaming::error::{Result, StreamingError};
 use crate::streaming::proto::{decode_client_message, encode_server_message};
 use crate::streaming::protocol::{ClientMessage, ServerMessage, ThemeInfo};
 use crate::streaming::rate_limit::InputRateLimiter;
-use crate::streaming::session::{now_millis, SessionRegistry, StreamSessionState};
+use crate::streaming::session::{now_millis, OutputChunk, SessionRegistry, StreamSessionState};
 use crate::terminal::{SelectionMode, Terminal};
 use parking_lot::{Mutex, RwLock};
 use std::collections::HashMap;
@@ -627,12 +627,12 @@ impl StreamingServer {
     }
 
     /// Get a clone of the output sender channel (routes to default session)
-    pub fn get_output_sender(&self) -> mpsc::Sender<String> {
+    pub fn get_output_sender(&self) -> mpsc::Sender<OutputChunk> {
         if let Some(ref session) = self.default_session {
             session.get_output_sender()
         } else {
             // Create a dummy channel that will never be read
-            let (tx, _rx) = mpsc::channel(1);
+            let (tx, _rx) = mpsc::channel::<OutputChunk>(1);
             tx
         }
     }

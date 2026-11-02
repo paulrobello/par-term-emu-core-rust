@@ -296,9 +296,11 @@ impl SessionFactory for MuxSessionFactory {
         let sender = session.get_output_sender();
         {
             let mut sink = link.sink.lock();
-            if let Sink::Buffering(bytes) = &*sink {
-                if !bytes.is_empty() {
-                    let _ = sender.try_send(String::from_utf8_lossy(bytes).into_owned());
+            if let Sink::Buffering(chunks) = &*sink {
+                // Drain in order, each chunk with its own damage — the
+                // broadcaster merges per batch window.
+                for chunk in chunks {
+                    let _ = sender.try_send(chunk.clone());
                 }
             }
             *sink = Sink::Live(sender);

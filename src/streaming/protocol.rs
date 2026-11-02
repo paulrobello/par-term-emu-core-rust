@@ -335,6 +335,33 @@ pub const MAX_INLINE_IMAGE_BYTES: usize = 8 * 1024 * 1024;
 /// cap: Bytes accepted in one UploadChunk message payload from a streaming client.
 pub const MAX_UPLOAD_CHUNK_BYTES: usize = 64 * 1024;
 
+/// One inclusive run of viewport rows a terminal output chunk changed
+/// (card 01a19ca4). Rows are 0-based, inclusive, viewport-relative; the
+/// `damage` list on [`ServerMessage::Output`] is ascending and
+/// non-overlapping, and when a chunk's change cannot be expressed compactly
+/// (scroll, alternate-screen switch, RIS, resize, snapshot restore) it
+/// covers the whole viewport — the complete-coverage form; there is no
+/// sentinel variant. A client may always ignore the fields and full-scan.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize)]
+#[cfg_attr(
+    all(
+        any(feature = "python", feature = "python-test"),
+        feature = "streaming"
+    ),
+    derive(par_term_emu_derive::PyDictConvert)
+)]
+#[cfg_attr(feature = "streaming", derive(par_term_emu_derive::ProtoConvert))]
+#[cfg_attr(
+    feature = "streaming",
+    proto(wire = "crate::streaming::proto::pb::DamageRange")
+)]
+pub struct DamageRange {
+    /// First changed viewport row (0-based, inclusive).
+    pub start_row: u32,
+    /// Last changed viewport row (0-based, inclusive).
+    pub end_row: u32,
+}
+
 /// Messages sent from server to client
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[cfg_attr(
@@ -370,6 +397,33 @@ pub enum ServerMessage {
             pydict(encode_skip)
         )]
         timestamp: Option<u64>,
+        /// Viewport rows the accompanying `data` changed relative to the
+        /// pane's previous state (ascending, in-bounds). Empty means
+        /// "no damage info" ONLY together with an absent generation:
+        /// present generation + empty list = the chunk changed no viewport
+        /// row. JSON omits the key when empty.
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        #[cfg_attr(
+            all(
+                any(feature = "python", feature = "python-test"),
+                feature = "streaming"
+            ),
+            pydict(nested)
+        )]
+        damage: Vec<DamageRange>,
+        /// The pane's damage generation after `data` applied (monotonic per
+        /// pane). Present marks the damage fields authoritative —
+        /// distinguishes "no change" (present, `damage` empty) from "no
+        /// damage info" (both absent = full scan).
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        #[cfg_attr(
+            all(
+                any(feature = "python", feature = "python-test"),
+                feature = "streaming"
+            ),
+            pydict(encode_skip)
+        )]
+        damage_generation: Option<u64>,
     },
 
     /// Terminal size changed
@@ -2031,6 +2085,8 @@ impl ServerMessage {
         Self::Output {
             data,
             timestamp: None,
+            damage: Vec::new(),
+            damage_generation: None,
         }
     }
 
@@ -2039,6 +2095,27 @@ impl ServerMessage {
         Self::Output {
             data,
             timestamp: Some(timestamp),
+            damage: Vec::new(),
+            damage_generation: None,
+        }
+    }
+
+    /// Create a new output message carrying damage: the inclusive viewport
+    /// row ranges `data` changed (ascending, in-bounds) and the pane's
+    /// damage generation after `data` applied. With `generation` `Some`,
+    /// present ranges are authoritative; `Some` generation with empty
+    /// ranges says the chunk changed no viewport row. `None` (or empty
+    /// ranges with `None`) degrades to "no damage info — full scan".
+    pub fn output_with_damage(
+        data: String,
+        generation: Option<u64>,
+        damage: Vec<DamageRange>,
+    ) -> Self {
+        Self::Output {
+            data,
+            timestamp: None,
+            damage,
+            damage_generation: generation,
         }
     }
 
@@ -2713,7 +2790,9 @@ mod tests {
         // Deserialize back
         let deserialized: ServerMessage = serde_json::from_str(&json).unwrap();
         match deserialized {
-            ServerMessage::Output { data, timestamp } => {
+            ServerMessage::Output {
+                data, timestamp, ..
+            } => {
                 assert_eq!(data, "Hello, World!");
                 assert_eq!(timestamp, None);
             }

@@ -186,6 +186,7 @@ impl TmuxControlParser {
             "end" => Self::parse_end(args),
             "error" => Self::parse_error(args),
             "output" => Self::parse_output(args),
+            "pane-damage" => Self::parse_output_damage(args),
             "pane-mode-changed" => Self::parse_pane_mode_changed(args),
             "window-pane-changed" => Self::parse_window_pane_changed(args),
             "window-close" => Self::parse_window_close(args),
@@ -287,6 +288,34 @@ impl TmuxControlParser {
         };
 
         Some(TmuxNotification::Output { pane_id, data })
+    }
+
+    /// `%pane-damage <pane_id> <generation> [<start>-<end>…]` — the damage
+    /// report for the `%output` line immediately before it (0-based,
+    /// inclusive, viewport-relative rows; ascending). A line with no range
+    /// tokens parses as an empty set: the generation advanced, no viewport
+    /// row changed. `None` on any malformed token — an unparseable damage
+    /// line degrades to no notification, and its `%output` still applied
+    /// (a consumer without damage info full-scans).
+    fn parse_output_damage(args: &str) -> Option<TmuxNotification> {
+        let mut parts = args.split_whitespace();
+        let pane_id = parts.next()?.to_string();
+        let generation = parts.next()?.parse().ok()?;
+        let mut ranges = Vec::new();
+        for token in parts {
+            let (start, end) = token.split_once('-')?;
+            let start = start.parse().ok()?;
+            let end = end.parse().ok()?;
+            if start > end {
+                return None;
+            }
+            ranges.push((start, end));
+        }
+        Some(TmuxNotification::OutputDamage {
+            pane_id,
+            generation,
+            ranges,
+        })
     }
 
     /// Unescape tmux output data (octal escape sequences)

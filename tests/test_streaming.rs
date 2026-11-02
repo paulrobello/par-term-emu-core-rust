@@ -266,12 +266,83 @@ mod streaming_tests {
 
     mod protocol_constructors {
         use super::*;
+        use par_term_emu_core_rust::streaming::protocol::DamageRange;
+
+        /// Card 01a19ca4 acceptance 1: an `output` frame without damage
+        /// decodes to the pre-damage shape — the fields are ABSENT, not
+        /// empty, on the wire, and both the protobuf and the JSON carry no
+        /// damage keys an old client could trip on.
+        #[test]
+        fn output_without_damage_decodes_to_the_old_shape() {
+            let msg = ServerMessage::output("legacy".to_string());
+            let decoded = decode_server_message(&encode_server_message(&msg).unwrap()).unwrap();
+            match decoded {
+                ServerMessage::Output {
+                    data,
+                    timestamp,
+                    damage,
+                    damage_generation,
+                } => {
+                    assert_eq!(data, "legacy");
+                    assert_eq!(timestamp, None);
+                    assert!(damage.is_empty(), "absent, not empty");
+                    assert_eq!(damage_generation, None);
+                }
+                _ => panic!("Expected Output variant"),
+            }
+            let json = serde_json::to_value(&msg).unwrap();
+            assert!(json.get("damage").is_none(), "JSON omits the empty list");
+            assert!(
+                json.get("damage_generation").is_none(),
+                "JSON omits the absent generation"
+            );
+        }
+
+        /// The damage shape round-trips both wire encodings: ranges keep
+        /// their bounds and the generation its presence.
+        #[test]
+        fn output_with_damage_round_trips() {
+            let msg = ServerMessage::output_with_damage(
+                "dmg".to_string(),
+                Some(7),
+                vec![
+                    DamageRange {
+                        start_row: 0,
+                        end_row: 5,
+                    },
+                    DamageRange {
+                        start_row: 9,
+                        end_row: 9,
+                    },
+                ],
+            );
+            let decoded = decode_server_message(&encode_server_message(&msg).unwrap()).unwrap();
+            match decoded {
+                ServerMessage::Output {
+                    damage,
+                    damage_generation,
+                    ..
+                } => {
+                    assert_eq!(damage_generation, Some(7));
+                    assert_eq!(damage.len(), 2);
+                    assert_eq!((damage[0].start_row, damage[0].end_row), (0, 5));
+                    assert_eq!((damage[1].start_row, damage[1].end_row), (9, 9));
+                }
+                _ => panic!("Expected Output variant"),
+            }
+            let json = serde_json::to_value(&msg).unwrap();
+            assert_eq!(json["damage"][0]["start_row"], 0);
+            assert_eq!(json["damage"][1]["end_row"], 9);
+            assert_eq!(json["damage_generation"], 7);
+        }
 
         #[test]
         fn test_server_message_output() {
             let msg = ServerMessage::output("test output".to_string());
             match msg {
-                ServerMessage::Output { data, timestamp } => {
+                ServerMessage::Output {
+                    data, timestamp, ..
+                } => {
                     assert_eq!(data, "test output");
                     assert_eq!(timestamp, None);
                 }
@@ -283,7 +354,9 @@ mod streaming_tests {
         fn test_server_message_output_with_timestamp() {
             let msg = ServerMessage::output_with_timestamp("test".to_string(), 1234567890);
             match msg {
-                ServerMessage::Output { data, timestamp } => {
+                ServerMessage::Output {
+                    data, timestamp, ..
+                } => {
                     assert_eq!(data, "test");
                     assert_eq!(timestamp, Some(1234567890));
                 }

@@ -124,10 +124,37 @@ message ViewerPresence {
   repeated string viewers = 2;
 }
 
+// One inclusive run of viewport rows an Output.data chunk changed. Rows are
+// 0-based, inclusive, viewport-relative, and the list on Output is ascending
+// and non-overlapping. There is no sentinel variant: when a chunk's change
+// cannot be expressed compactly (scroll, alternate-screen switch, RIS,
+// resize, snapshot restore), the ranges cover the WHOLE viewport — that is
+// the complete-coverage form.
+message DamageRange {
+  uint32 start_row = 1;  // first changed viewport row (0-based, inclusive)
+  uint32 end_row = 2;    // last changed viewport row (0-based, inclusive)
+}
+
 // Terminal output data (very high frequency)
 message Output {
   bytes data = 1;                    // UTF-8 encoded terminal output with ANSI codes
   optional uint64 timestamp = 2;     // Unix epoch milliseconds
+  // Viewport rows the accompanying `data` bytes changed relative to the
+  // pane's previous state, describing the terminal state a client reaches
+  // by applying `data` to its own mirror. Ascending, non-overlapping,
+  // in-bounds for the pane's viewport. A chunk with NO damage fields
+  // (damage absent AND damage_generation absent) means "unknown — full
+  // scan"; a client may always ignore the fields and scan. Absent fields
+  // on a chunk that genuinely changed nothing are allowed and mean the
+  // same thing to a conservative client (scan; harm is only lost
+  // optimization). damage_generation present + damage empty means the
+  // chunk changed no viewport row, so there is nothing to redraw.
+  repeated DamageRange damage = 3;
+  // The pane's damage generation after `data` applied (monotonic per
+  // pane). Its presence marks the damage fields as authoritative —
+  // distinguishes "no change" (present, empty damage) from "no damage
+  // info" (both absent).
+  optional uint64 damage_generation = 4;
 }
 
 // Terminal resize notification

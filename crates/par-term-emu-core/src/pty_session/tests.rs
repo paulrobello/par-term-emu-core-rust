@@ -1929,3 +1929,279 @@ fn session_exports_match_terminal_exports() {
     assert_eq!(session.export_styled(), styled);
     assert_eq!(session.scrollback(), scrollback);
 }
+
+// --- Damage-aware output callback (card 01a19ca4) ------------------------
+
+type DamageChunk = (Vec<u8>, u64, Vec<(u32, u32)>);
+
+/// Collect the chunks the reader hands the damage-aware callback.
+fn collect_damage_chunks() -> (Arc<Mutex<Vec<DamageChunk>>>, OutputDamageCallback) {
+    let chunks: Arc<Mutex<Vec<DamageChunk>>> = Arc::new(Mutex::new(Vec::new()));
+    let sink = Arc::clone(&chunks);
+    let callback: OutputDamageCallback = Arc::new(move |data, generation, ranges| {
+        sink.lock()
+            .push((data.to_vec(), generation, ranges.to_vec()));
+    });
+    (chunks, callback)
+}
+
+/// Block until `ready` holds or the deadline passes (bounded like the
+/// spawn-then-assert siblings above).
+fn wait_for(what: &str, deadline: std::time::Instant, ready: impl Fn() -> bool) {
+    while !ready() {
+        assert!(
+            std::time::Instant::now() < deadline,
+            "{what} never became true"
+        );
+        std::thread::sleep(std::time::Duration::from_millis(25));
+    }
+}
+
+/// Ranges are valid viewport coordinates in ascending, non-overlapping
+/// order; generations are monotonic. This is the API contract the
+/// streaming layer forwards verbatim (card 01a19ca4 acceptance 2).
+fn assert_damage_invariants(chunks: &[DamageChunk], rows: u32) {
+    let mut last_generation = 0u64;
+    for (data, generation, ranges) in chunks {
+        assert!(
+            *generation >= last_generation,
+            "generation went backwards: {generation} after {last_generation} (chunk {:?})",
+            String::from_utf8_lossy(data)
+        );
+        last_generation = *generation;
+        let mut previous_end: Option<u32> = None;
+        for &(start, end) in ranges {
+            assert!(start <= end, "inverted range {start}-{end}");
+            assert!(
+                start < rows && end < rows,
+                "range {start}-{end} out of {rows} rows"
+            );
+            if let Some(prev) = previous_end {
+                assert!(
+                    start > prev,
+                    "ranges overlap or descend: {prev} then {start} ({ranges:?})"
+                );
+            }
+            previous_end = Some(end);
+        }
+    }
+}
+
+/// Every chunk the reader dispatches carries in-bounds, ascending,
+/// non-overlapping ranges under a monotonic generation, driven by a real
+/// shell printing across several reads.
+#[cfg(unix)]
+#[test]
+fn damage_ranges_are_in_bounds_ascending_and_generations_monotonic() {
+    let mut session = new_test_session(80, 24, 1000);
+    let (chunks, callback) = collect_damage_chunks();
+    session.set_output_callback_with_damage(callback);
+    session
+        .spawn(
+            "/bin/sh",
+            &[
+                "-c",
+                "printf 'A%d\\n' $(seq 1 10); printf 'B%d\\n' $(seq 1 30); sleep 5",
+            ],
+        )
+        .expect("spawn");
+
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+    wait_for("the final marker chunk", deadline, || {
+        chunks
+            .lock()
+            .iter()
+            .any(|(data, _, _)| data.windows(3).any(|w| w == b"B30"))
+    });
+
+    let collected = chunks.lock().clone();
+    assert!(!collected.is_empty(), "the reader dispatched no chunks");
+    assert_damage_invariants(&collected, 24);
+}
+
+/// Wholesale changes — scroll, alternate-screen switch, RIS — mark the
+/// whole viewport, so the chunk that performed each reports ranges
+/// covering 0..rows-1: complete coverage or nothing, never a partial
+/// stale hint (acceptance 3; snapshot restore rides the same
+/// `invalidate_visible_screen` path as RIS).
+#[cfg(unix)]
+#[test]
+fn wholesale_changes_report_the_whole_viewport() {
+    let mut session = new_test_session(80, 24, 1000);
+    let (chunks, callback) = collect_damage_chunks();
+    session.set_output_callback_with_damage(callback);
+    // One printf per scenario, separated by sleeps so each lands in its
+    // own PTY read.
+    session
+        .spawn(
+            "/bin/sh",
+            &[
+                "-c",
+                "printf 'SCROLL-START\\n'; sleep 0.3; \
+                 printf 'L%d\\n' $(seq 1 40); sleep 0.3; \
+                 printf 'RIS-NEXT\\033c'; sleep 0.3; \
+                 printf 'ALT-NEXT\\033[?1049h'; sleep 0.3; \
+                 printf 'ALT-EXIT\\033[?1049l'; sleep 5",
+            ],
+        )
+        .expect("spawn");
+
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(8);
+    wait_for("the alt-screen exit chunk", deadline, || {
+        chunks
+            .lock()
+            .iter()
+            .any(|(data, _, _)| data.windows(8).any(|w| w == b"ALT-EXIT"))
+    });
+
+    let collected = chunks.lock().clone();
+    assert_damage_invariants(&collected, 24);
+
+    // The 40-line printf overflows the 24-row viewport: the chunk that
+    // completes it scrolled, and a scroll dirties every row. (The PTY's
+    // ONLCR renders each line `L<n>\r\n`, so match the line body only.)
+    let scrolled: Vec<&DamageChunk> = collected
+        .iter()
+        .filter(|(data, _, _)| data.windows(3).any(|w| w == b"L40"))
+        .collect();
+    assert!(
+        !scrolled.is_empty(),
+        "no chunk carried the scroll's end; chunks: {:?}",
+        collected
+            .iter()
+            .map(|(d, g, r)| (String::from_utf8_lossy(d).to_string(), *g, r.clone()))
+            .collect::<Vec<_>>()
+    );
+    for (data, _, ranges) in scrolled {
+        assert!(
+            ranges.contains(&(0, 23)),
+            "the scrolling chunk must cover the whole viewport, got {ranges:?} ({:?})",
+            String::from_utf8_lossy(data)
+        );
+    }
+
+    // RIS (`ESC c`) invalidates the screen wholesale: the chunk carrying
+    // the reset byte reports the whole viewport.
+    let ris = collected
+        .iter()
+        .find(|(data, _, _)| data.windows(2).any(|w| w == b"\x1bc"))
+        .expect("no chunk carried the RIS byte");
+    assert!(
+        ris.2.contains(&(0, 23)),
+        "RIS must cover the whole viewport, got {:?} ({:?})",
+        ris.2,
+        String::from_utf8_lossy(&ris.0)
+    );
+
+    // Alternate-screen entry and exit each invalidate the screen.
+    for marker in [b"1049h".as_slice(), b"1049l".as_slice()] {
+        let hit = collected
+            .iter()
+            .find(|(data, _, ranges)| {
+                data.windows(marker.len()).any(|w| w == marker) && !ranges.is_empty()
+            })
+            .unwrap_or_else(|| panic!("no chunk carried {}", String::from_utf8_lossy(marker)));
+        assert!(
+            hit.2.contains(&(0, 23)),
+            "alt-screen switch must cover the whole viewport, got {:?}",
+            hit.2
+        );
+    }
+}
+
+/// A resize marks every row; the first chunk after one reports the whole
+/// viewport so a client never keeps pre-resize geometry hints.
+#[cfg(unix)]
+#[test]
+fn resize_marks_the_whole_viewport_for_the_next_chunk() {
+    let mut session = new_test_session(80, 24, 1000);
+    let (chunks, callback) = collect_damage_chunks();
+    session.set_output_callback_with_damage(callback);
+    // Settle on a chunk the shell always prints, so the reader's damage
+    // chain anchor predates the resize — a resize landing before the
+    // reader even started folds into the anchor instead of the first
+    // chunk's ranges (a benign race a client covers through the resize
+    // event, but not what this test pins).
+    session
+        .spawn("/bin/sh", &["-c", "printf 'FIRST-MARK\\n'; sleep 5"])
+        .expect("spawn");
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+    wait_for("the first chunk", deadline, || {
+        chunks
+            .lock()
+            .iter()
+            .any(|(data, _, _)| data.windows(5).any(|w| w == b"FIRST"))
+    });
+    chunks.lock().clear();
+
+    session.resize(100, 30).expect("resize");
+    session.write(b"RESIZED-MARK\n").expect("write");
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+    wait_for("the post-resize chunk", deadline, || {
+        chunks
+            .lock()
+            .iter()
+            .any(|(data, _, _)| data.windows(7).any(|w| w == b"RESIZED"))
+    });
+
+    let collected = chunks.lock().clone();
+    assert_damage_invariants(&collected, 30);
+    let hit = collected
+        .iter()
+        .find(|(data, _, _)| data.windows(7).any(|w| w == b"RESIZED"))
+        .expect("the post-resize chunk");
+    assert!(
+        hit.2.contains(&(0, 29)),
+        "the first chunk after a resize must cover the whole 30-row viewport, got {:?}",
+        hit.2
+    );
+}
+
+/// The plain callback keeps its exact pre-damage shape when no damage
+/// callback is installed: same bytes, no other change.
+#[cfg(unix)]
+#[test]
+fn plain_output_callback_still_receives_the_bytes() {
+    let mut session = new_test_session(80, 24, 1000);
+    let collected: Arc<Mutex<Vec<u8>>> = Arc::new(Mutex::new(Vec::new()));
+    let sink = Arc::clone(&collected);
+    session.set_output_callback(Arc::new(move |data: &[u8]| {
+        sink.lock().extend_from_slice(data);
+    }));
+    session
+        .spawn("/bin/sh", &["-c", "printf 'PLAIN-MARK\\n'; sleep 5"])
+        .expect("spawn");
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+    wait_for("the plain callback bytes", deadline, || {
+        String::from_utf8_lossy(&collected.lock()).contains("PLAIN-MARK")
+    });
+}
+
+/// When both callbacks are installed, the damage-aware one wins and the
+/// plain one stays silent (documented precedence).
+#[cfg(unix)]
+#[test]
+fn damage_callback_takes_precedence_over_the_plain_one() {
+    let mut session = new_test_session(80, 24, 1000);
+    let (chunks, callback) = collect_damage_chunks();
+    session.set_output_callback_with_damage(callback);
+    let plain: Arc<Mutex<Vec<u8>>> = Arc::new(Mutex::new(Vec::new()));
+    let plain_sink = Arc::clone(&plain);
+    session.set_output_callback(Arc::new(move |data: &[u8]| {
+        plain_sink.lock().extend_from_slice(data);
+    }));
+    session
+        .spawn("/bin/sh", &["-c", "printf 'PRECEDENCE-MARK\\n'; sleep 5"])
+        .expect("spawn");
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+    wait_for("the damage callback bytes", deadline, || {
+        chunks
+            .lock()
+            .iter()
+            .any(|(data, _, _)| data.windows(10).any(|w| w == b"PRECEDENCE"))
+    });
+    assert!(
+        plain.lock().is_empty(),
+        "the plain callback must not fire when the damage one is set"
+    );
+}

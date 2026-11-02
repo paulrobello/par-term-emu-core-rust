@@ -649,7 +649,8 @@ fn start_macro_playback(
         let mut session = macro_pty.lock();
         session.set_output_callback(Arc::new(move |data| {
             let text = String::from_utf8_lossy(data).to_string();
-            let _ = output_sender_clone.try_send(text);
+            let _ = output_sender_clone
+                .try_send(par_term_emu_core_rust::streaming::session::OutputChunk::plain(text));
         }));
     }
 

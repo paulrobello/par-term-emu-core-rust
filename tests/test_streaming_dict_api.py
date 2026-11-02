@@ -68,13 +68,20 @@ THEME = {
 # `type` is filled in from the id. These pin keys AND values, including the
 # encode defaults and the deliberately-preserved quirks.
 SERVER_CASES = [
-    # output ignores a `timestamp` kwarg (constructor sets None).
+    # output ignores a `timestamp` kwarg (constructor sets None). The
+    # damage fields are server-generated: no kwargs, and the decoded dict
+    # carries damage_generation None (unknown) with the damage key omitted
+    # while empty.
     (
         "output",
         {"data": "hello", "timestamp": 999},
-        {"data": "hello", "timestamp": None},
+        {"data": "hello", "timestamp": None, "damage_generation": None},
     ),
-    ("output", {"data": "esc\x1b[31m"}, {"data": "esc\x1b[31m", "timestamp": None}),
+    (
+        "output",
+        {"data": "esc\x1b[31m"},
+        {"data": "esc\x1b[31m", "timestamp": None, "damage_generation": None},
+    ),
     ("resize", {}, {"cols": 80, "rows": 24}),
     ("resize", {"cols": 132, "rows": 43}, {"cols": 132, "rows": 43}),
     ("title", {"title": "My Title"}, {"title": "My Title"}),

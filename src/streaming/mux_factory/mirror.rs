@@ -9,7 +9,7 @@ use crate::mux::{connect_local_stream, LocalStream};
 use crate::streaming::apply_inline_image;
 use crate::streaming::protocol::{ServerMessage, MAX_INLINE_IMAGE_BYTES};
 use crate::streaming::server::StreamingServer;
-use crate::streaming::session::StreamSessionState;
+use crate::streaming::session::{OutputChunk, StreamSessionState};
 use crate::terminal::Terminal;
 use interprocess::TryClone as _;
 use parking_lot::{Mutex, RwLock};
@@ -39,8 +39,8 @@ pub(super) struct MirrorLink {
     pub(super) alive: AtomicBool,
     /// Set by teardown so the drain thread stops forwarding.
     pub(super) closed: AtomicBool,
-    /// Output buffered until `setup_session` connects the broadcaster
-    /// (`Buffering`), then the broadcaster's sender (`Live`).
+    /// Output chunks buffered until `setup_session` connects the
+    /// broadcaster (`Buffering`), then the broadcaster's sender (`Live`).
     pub(super) sink: Mutex<Sink>,
     /// Graphics ids already streamed as InlineImage frames. A placement
     /// raises `GraphicsAdded` exactly once per mirror, but re-fits re-seed
@@ -91,8 +91,10 @@ impl MirrorLink {
 }
 
 pub(super) enum Sink {
-    Buffering(Vec<u8>),
-    Live(tokio::sync::mpsc::Sender<String>),
+    /// Chunks buffered until `setup_session` connects the broadcaster;
+    /// each keeps its damage.
+    Buffering(Vec<OutputChunk>),
+    Live(tokio::sync::mpsc::Sender<OutputChunk>),
     Closed,
 }
 
@@ -482,7 +484,7 @@ fn apply_workspace_target(
             );
         }
     }
-    forward(link, restore.as_bytes());
+    forward(link, restore.as_bytes(), None);
 }
 
 /// Re-seed the mirror in place after `%pane-respawned`: the daemon gave

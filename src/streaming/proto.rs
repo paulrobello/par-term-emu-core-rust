@@ -656,7 +656,10 @@ mod tests {
         let encoded = encode_server_message(&msg).unwrap();
         let decoded = decode_server_message(&encoded).unwrap();
 
-        let AppServerMessage::Output { data, timestamp } = decoded else {
+        let AppServerMessage::Output {
+            data, timestamp, ..
+        } = decoded
+        else {
             panic!("Wrong message type");
         };
         assert_eq!(data, "Hello, World!");
@@ -1083,6 +1086,8 @@ mod tests {
         let msg = AppServerMessage::Output {
             data: unicode_content.to_string(),
             timestamp: None,
+            damage: Vec::new(),
+            damage_generation: None,
         };
         let encoded = encode_server_message(&msg).unwrap();
         let decoded = decode_server_message(&encoded).unwrap();
@@ -1098,6 +1103,8 @@ mod tests {
         let msg = AppServerMessage::Output {
             data: ansi_data.to_string(),
             timestamp: None,
+            damage: Vec::new(),
+            damage_generation: None,
         };
         let encoded = encode_server_message(&msg).unwrap();
         let decoded = decode_server_message(&encoded).unwrap();
@@ -1114,10 +1121,15 @@ mod tests {
         let msg = AppServerMessage::Output {
             data: "test".to_string(),
             timestamp: Some(1234567890123),
+            damage: Vec::new(),
+            damage_generation: None,
         };
         let encoded = encode_server_message(&msg).unwrap();
         let decoded = decode_server_message(&encoded).unwrap();
-        let AppServerMessage::Output { data, timestamp } = decoded else {
+        let AppServerMessage::Output {
+            data, timestamp, ..
+        } = decoded
+        else {
             panic!("Wrong message type");
         };
         assert_eq!(data, "test");
@@ -1139,6 +1151,8 @@ mod tests {
         let msg = AppServerMessage::Output {
             data: String::new(),
             timestamp: None,
+            damage: Vec::new(),
+            damage_generation: None,
         };
         let encoded = encode_server_message(&msg).unwrap();
         let decoded = decode_server_message(&encoded).unwrap();

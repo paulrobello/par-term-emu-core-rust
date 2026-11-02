@@ -9,7 +9,7 @@
 use crate::mouse::{MouseEncoding, MouseMode};
 use crate::streaming::error::{Result, StreamingError};
 use crate::streaming::inline_image_frame_struct;
-use crate::streaming::protocol::{InlineImageFrame, ServerMessage, ThemeInfo};
+use crate::streaming::protocol::{DamageRange, InlineImageFrame, ServerMessage, ThemeInfo};
 use crate::terminal::Terminal;
 use parking_lot::{Mutex, RwLock};
 use std::collections::HashMap;
@@ -107,6 +107,99 @@ impl SessionMetrics {
 // Session State
 // =============================================================================
 
+/// One chunk of pane output queued into a session's output broadcaster
+/// (card 01a19ca4): the decoded text plus, when the producer had it, the
+/// chunk's damage. A producer without damage information sends
+/// [`OutputChunk::plain`]; its chunks carry no damage fields on the wire
+/// and a client full-scans — the conservative default.
+#[derive(Debug, Clone, Default)]
+pub struct OutputChunk {
+    /// Decoded text of the output chunk (lossy UTF-8 of the raw bytes).
+    pub data: String,
+    /// Inclusive viewport row ranges the chunk changed, ascending.
+    pub damage: Vec<DamageRange>,
+    /// The pane's damage generation after this chunk applied. `Some` marks
+    /// the damage authoritative (empty `damage` = no viewport row
+    /// changed); `None` = no damage information.
+    pub damage_generation: Option<u64>,
+}
+
+impl OutputChunk {
+    /// A chunk without damage information.
+    pub fn plain(data: String) -> Self {
+        Self {
+            data,
+            damage: Vec::new(),
+            damage_generation: None,
+        }
+    }
+
+    /// A chunk with authoritative damage: generation present even when
+    /// `ranges` is empty (which then means "no viewport row changed").
+    pub fn with_damage(data: String, generation: u64, ranges: Vec<(u32, u32)>) -> Self {
+        Self {
+            data,
+            damage: ranges
+                .into_iter()
+                .map(|(start_row, end_row)| DamageRange { start_row, end_row })
+                .collect(),
+            damage_generation: Some(generation),
+        }
+    }
+
+    /// Coalesce `ranges` into the accumulator, keeping it sorted and
+    /// non-overlapping. Adjacent-or-overlapping runs merge; a gap stays a
+    /// gap (a gap between ranges is information: rows the client need not
+    /// redraw).
+    fn accumulate(ranges: &mut Vec<(u32, u32)>, incoming: &[(u32, u32)]) {
+        ranges.extend_from_slice(incoming);
+        ranges.sort_unstable();
+        let mut write = 0;
+        for read in 1..ranges.len() {
+            // Merge when the next range touches or overlaps the current
+            // run (`read.start <= write.end + 1`).
+            if ranges[read].0 <= ranges[write].1.saturating_add(1) {
+                ranges[write].1 = ranges[write].1.max(ranges[read].1);
+            } else {
+                write += 1;
+                ranges[write] = ranges[read];
+            }
+        }
+        ranges.truncate(write + 1);
+    }
+
+    /// Merge this chunk's damage into `batch` (see
+    /// [`StreamSessionState::output_broadcaster_loop`]): a chunk without
+    /// damage information poisons the batch (absent fields on the wire —
+    /// the client full-scans), while damaged chunks union their ranges
+    /// under the maximum generation.
+    fn merge_into(&self, batch: &mut DamageBatch) {
+        match (&mut *batch, self.damage_generation) {
+            (Some(Some((gen, ranges))), Some(chunk_gen)) => {
+                *gen = (*gen).max(chunk_gen);
+                Self::accumulate(ranges, &self.damage_pairs());
+            }
+            (None, Some(chunk_gen)) => {
+                *batch = Some(Some((chunk_gen, self.damage_pairs().into_iter().collect())))
+            }
+            _ => *batch = Some(None),
+        }
+    }
+
+    fn damage_pairs(&self) -> Vec<(u32, u32)> {
+        self.damage
+            .iter()
+            .map(|r| (r.start_row, r.end_row))
+            .collect()
+    }
+}
+
+/// One batch's damage accumulator in [`StreamSessionState::output_broadcaster_loop`]:
+/// `None` = nothing accumulated yet; `Some(None)` = poisoned by a chunk
+/// without damage information; `Some(Some((generation, ranges)))` = every
+/// chunk carried damage.
+type DamageBatch = Option<Option<(u64, Vec<(u32, u32)>)>>;
+
 /// Per-session state extracted from StreamingServer for multi-session support
 pub struct StreamSessionState {
     /// Unique session identifier
@@ -116,9 +209,9 @@ pub struct StreamSessionState {
     /// Broadcast channel for sending output to all clients in this session
     pub(crate) broadcast_tx: broadcast::Sender<ServerMessage>,
     /// Channel for sending output data into the broadcaster loop (bounded for backpressure)
-    pub(crate) output_tx: mpsc::Sender<String>,
+    pub(crate) output_tx: mpsc::Sender<OutputChunk>,
     /// Receiver end of the output channel (consumed by broadcaster loop)
-    pub(crate) output_rx: Arc<tokio::sync::Mutex<mpsc::Receiver<String>>>,
+    pub(crate) output_rx: Arc<tokio::sync::Mutex<mpsc::Receiver<OutputChunk>>>,
     /// PTY writer for sending client input (optional, only set if PTY is available)
     pub(crate) pty_writer: RwLock<Option<PtyWriterHandle>>,
     /// Serialized PTY input path (QA-110): every input-bearing client
@@ -746,8 +839,10 @@ impl StreamSessionState {
         }
     }
 
-    /// Get a clone of the output sender channel
-    pub fn get_output_sender(&self) -> mpsc::Sender<String> {
+    /// Get a clone of the output sender channel. Chunks may carry damage
+    /// ([`OutputChunk::with_damage`]); damage-less chunks are the
+    /// conservative default (no damage fields on the wire).
+    pub fn get_output_sender(&self) -> mpsc::Sender<OutputChunk> {
         self.output_tx.clone()
     }
 
@@ -774,9 +869,18 @@ impl StreamSessionState {
     }
 
     /// Run the output broadcaster loop for this session
+    ///
+    /// Batches queued [`OutputChunk`]s on the 16 ms window (and the 8 KiB
+    /// size cap), merging their damage as it goes (card 01a19ca4): chunks
+    /// without damage information poison the batch (the flush emits no
+    /// damage fields and a client full-scans); chunks that all carry
+    /// damage flush with the maximum generation and the coalesced union
+    /// of their ranges — every row any chunk changed is redrawn, and no
+    /// row that stayed clean is claimed.
     pub async fn output_broadcaster_loop(&self) {
         let mut rx = self.output_rx.lock().await;
         let mut buffer = String::new();
+        let mut batch: DamageBatch = None;
         let mut last_flush = tokio::time::Instant::now();
 
         const BATCH_WINDOW: Duration = Duration::from_millis(16);
@@ -787,23 +891,18 @@ impl StreamSessionState {
                 _ = self.shutdown.notified() => {
                     crate::debug_info!("STREAMING", "Session {} broadcaster received shutdown signal", self.id);
                     if !buffer.is_empty() {
-                        let data_len = buffer.len();
-                        let msg = ServerMessage::output(buffer);
-                        self.broadcast(msg);
-                        self.metrics.bytes_sent.fetch_add(data_len, Ordering::Relaxed);
+                        self.flush_output_batch(&mut buffer, &mut batch);
                     }
                     break;
                 }
                 msg = rx.recv() => {
                     match msg {
-                        Some(data) => {
-                            if !data.is_empty() {
-                                buffer.push_str(&data);
+                        Some(chunk) => {
+                            if !chunk.data.is_empty() {
+                                chunk.merge_into(&mut batch);
+                                buffer.push_str(&chunk.data);
                                 if buffer.len() > MAX_BATCH_SIZE {
-                                    let data_len = buffer.len();
-                                    let msg = ServerMessage::output(std::mem::take(&mut buffer));
-                                    self.broadcast(msg);
-                                    self.metrics.bytes_sent.fetch_add(data_len, Ordering::Relaxed);
+                                    self.flush_output_batch(&mut buffer, &mut batch);
                                     self.metrics.last_broadcast_time.store(now_millis(), Ordering::Relaxed);
                                     last_flush = tokio::time::Instant::now();
                                 }
@@ -811,25 +910,43 @@ impl StreamSessionState {
                         }
                         None => {
                             if !buffer.is_empty() {
-                                let data_len = buffer.len();
-                                let msg = ServerMessage::output(buffer);
-                                self.broadcast(msg);
-                                self.metrics.bytes_sent.fetch_add(data_len, Ordering::Relaxed);
+                                self.flush_output_batch(&mut buffer, &mut batch);
                             }
                             break;
                         }
                     }
                 }
                 _ = tokio::time::sleep_until(last_flush + BATCH_WINDOW), if !buffer.is_empty() => {
-                    let data_len = buffer.len();
-                    let msg = ServerMessage::output(std::mem::take(&mut buffer));
-                    self.broadcast(msg);
-                    self.metrics.bytes_sent.fetch_add(data_len, Ordering::Relaxed);
+                    self.flush_output_batch(&mut buffer, &mut batch);
                     self.metrics.last_broadcast_time.store(now_millis(), Ordering::Relaxed);
                     last_flush = tokio::time::Instant::now();
                 }
             }
         }
+    }
+
+    /// Emit `buffer` as one `output` frame with the batch's merged damage,
+    /// then clear both accumulators. Metrics match the pre-damage loop:
+    /// `bytes_sent` counts the text length only.
+    fn flush_output_batch(&self, buffer: &mut String, batch: &mut DamageBatch) {
+        let data_len = buffer.len();
+        let (generation, ranges) = match batch.take() {
+            // Already sorted and coalesced: `merge_into` accumulates on
+            // every damaged chunk.
+            Some(Some((gen, ranges))) => (
+                Some(gen),
+                ranges
+                    .into_iter()
+                    .map(|(start_row, end_row)| DamageRange { start_row, end_row })
+                    .collect::<Vec<DamageRange>>(),
+            ),
+            _ => (None, Vec::new()),
+        };
+        let msg = ServerMessage::output_with_damage(std::mem::take(buffer), generation, ranges);
+        self.broadcast(msg);
+        self.metrics
+            .bytes_sent
+            .fetch_add(data_len, Ordering::Relaxed);
     }
 
     /// Signal this session to shut down
@@ -1082,8 +1199,12 @@ mod tests {
         let broadcaster =
             tokio::spawn(async move { broadcaster_session.output_broadcaster_loop().await });
 
-        tx.send("hello ".to_string()).await.expect("queued");
-        tx.send("world".to_string()).await.expect("queued");
+        tx.send(OutputChunk::plain("hello ".to_string()))
+            .await
+            .expect("queued");
+        tx.send(OutputChunk::plain("world".to_string()))
+            .await
+            .expect("queued");
         // The 16 ms batch window flushes both chunks as one frame.
         tokio::time::sleep(Duration::from_millis(80)).await;
 
@@ -1092,6 +1213,7 @@ mod tests {
             if let ServerMessage::Output {
                 ref data,
                 timestamp,
+                ..
             } = msg
             {
                 saw_output = true;
@@ -1572,4 +1694,24 @@ mod tests {
         // bytes for a process that is gone.
         assert!(session.pty_writer.read().is_none());
     }
+}
+
+#[test]
+fn output_batch_damage_merges_union_max_generation_and_a_plain_chunk_poisons() {
+    // Two damaged chunks: the union coalesces (touching ranges merge),
+    // the generation takes the max.
+    let mut batch: DamageBatch = None;
+    OutputChunk::with_damage("a".into(), 5, vec![(0, 2)]).merge_into(&mut batch);
+    OutputChunk::with_damage("b".into(), 9, vec![(10, 11), (2, 5)]).merge_into(&mut batch);
+    assert_eq!(batch, Some(Some((9, vec![(0, 5), (10, 11)]))));
+
+    // One chunk without damage information poisons the batch: absent
+    // fields on the flush, the conservative direction.
+    OutputChunk::plain("c".into()).merge_into(&mut batch);
+    assert_eq!(batch, Some(None));
+
+    // A fresh batch poisoned from the first chunk stays poisoned.
+    let mut fresh: DamageBatch = None;
+    OutputChunk::plain("x".into()).merge_into(&mut fresh);
+    assert_eq!(fresh, Some(None));
 }

@@ -3,7 +3,7 @@
 use crate::mux::agent_resume::render_surviving;
 use crate::mux::ids::{PaneId, SessionId, WindowId, WorkspaceId};
 use par_term_emu_core::pty_error::PtyError;
-use par_term_emu_core::pty_session::{OutputCallback, PtyInputHandle, PtySession};
+use par_term_emu_core::pty_session::{OutputDamageCallback, PtyInputHandle, PtySession};
 use par_term_emu_core::terminal::replay_snapshot::TerminalSnapshot;
 use par_term_emu_core::terminal::{ObserverDispatchBatch, Terminal};
 use parking_lot::{Mutex, RwLock};
@@ -739,8 +739,11 @@ impl MuxPane {
     /// [`Self::on_output`] for a sink already shared as an [`OutputSink`] —
     /// the dispatcher re-installs the one it handed the spawn, so a factory
     /// that ignored [`SpawnContext::output`] still forwards (ARC-103).
+    /// Damage-aware: the sink receives the chunk's damage generation and
+    /// viewport row ranges, which the control-mode fan-out forwards as the
+    /// adjacent `%pane-damage` line.
     pub fn on_output_sink(&mut self, sink: OutputSink) {
-        self.session.set_output_callback(sink.0);
+        self.session.set_output_callback_with_damage(sink.0);
     }
 
     /// Feed `bytes` to the pane's terminal as if the program printed them
@@ -851,9 +854,10 @@ impl MuxPane {
 
 /// A pane output sink carried into the spawn so it is installed before the
 /// reader thread starts (ARC-103). A newtype so [`SpawnContext`] keeps
-/// `Debug`.
+/// `Debug`. Holds the damage-aware callback type, so a sink installed here
+/// also receives the chunk's damage generation and viewport row ranges.
 #[derive(Clone)]
-pub struct OutputSink(pub OutputCallback);
+pub struct OutputSink(pub OutputDamageCallback);
 
 impl std::fmt::Debug for OutputSink {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -1062,7 +1066,7 @@ impl ShellPaneFactory {
         // Before the spawn: the reader thread reads this slot from its
         // first read(), so no output can precede the sink.
         if let Some(OutputSink(sink)) = context.output {
-            session.set_output_callback(Arc::clone(sink));
+            session.set_output_callback_with_damage(Arc::clone(sink));
         }
         session
     }
@@ -1565,9 +1569,11 @@ mod tests {
     fn spawn_context_output_sink_sees_the_first_byte() {
         let collected = Arc::new(Mutex::new(Vec::new()));
         let into = Arc::clone(&collected);
-        let sink = OutputSink(Arc::new(move |bytes: &[u8]| {
-            into.lock().extend_from_slice(bytes)
-        }));
+        let sink = OutputSink(Arc::new(
+            move |bytes: &[u8], _gen: u64, _rows: &[(u32, u32)]| {
+                into.lock().extend_from_slice(bytes)
+            },
+        ));
         let _pane = ShellPaneFactory::default()
             .create_pane(
                 PaneId(12),

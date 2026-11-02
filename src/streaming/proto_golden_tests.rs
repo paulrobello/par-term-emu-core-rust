@@ -105,6 +105,33 @@ fn server_fixtures() -> Vec<AppServerMessage> {
         S::Output {
             data: "out\x1b[1mput".into(),
             timestamp: Some(11),
+            damage: Vec::new(),
+            damage_generation: None,
+        },
+        // Card 01a19ca4: the damage shape — both fields present — and the
+        // generation-only shape (advanced, zero changed rows). The two
+        // pre-damage fixtures above/below pin the absent-field shape an
+        // old client decodes unchanged.
+        S::Output {
+            data: "dmg".into(),
+            timestamp: None,
+            damage: vec![
+                super::super::protocol::DamageRange {
+                    start_row: 0,
+                    end_row: 5,
+                },
+                super::super::protocol::DamageRange {
+                    start_row: 9,
+                    end_row: 9,
+                },
+            ],
+            damage_generation: Some(42),
+        },
+        S::Output {
+            data: String::new(),
+            timestamp: None,
+            damage: Vec::new(),
+            damage_generation: Some(43),
         },
         S::UploadStarted { upload_id: 7 },
         S::UploadFinished {
@@ -120,6 +147,8 @@ fn server_fixtures() -> Vec<AppServerMessage> {
         S::Output {
             data: String::new(),
             timestamp: None,
+            damage: Vec::new(),
+            damage_generation: None,
         },
         S::Resize {
             cols: 132,
@@ -594,6 +623,7 @@ fn lossy_server_inputs() -> Vec<(&'static str, pb::ServerMessage)> {
             wrap(M::Output(pb::Output {
                 data: vec![b'o', 0xc3, 0x28],
                 timestamp: None,
+                ..Default::default()
             })),
         ),
         (

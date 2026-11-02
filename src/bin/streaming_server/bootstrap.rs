@@ -471,7 +471,8 @@ impl SessionFactory for BinarySessionFactory {
             let mut ps = pty_session.lock();
             ps.set_output_callback(Arc::new(move |data| {
                 let text = String::from_utf8_lossy(data).to_string();
-                let _ = output_sender.try_send(text);
+                let _ = output_sender
+                    .try_send(par_term_emu_core_rust::streaming::session::OutputChunk::plain(text));
             }));
         }
 

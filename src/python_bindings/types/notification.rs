@@ -78,6 +78,14 @@ pub struct PyTmuxNotification {
     /// `agent-state-changed`; the `notification` type's body rides here
     /// too). None when the daemon sent no `msg=` token or empty body
     pub message: Option<String>,
+
+    /// Damage generation (for `pane-damage`): the pane terminal's damage
+    /// generation after the adjacent `%output` applied
+    pub damage_generation: Option<u64>,
+
+    /// Inclusive viewport row ranges (for `pane-damage`), 0-based and
+    /// ascending, that the adjacent `%output` changed
+    pub damage_rows: Option<Vec<(u32, u32)>>,
 }
 
 #[pymethods]
@@ -166,6 +174,8 @@ impl PyTmuxNotification {
             raw_line: None,
             workspace_id: None,
             message: None,
+            damage_generation: None,
+            damage_rows: None,
         }
     }
 }
@@ -256,6 +266,16 @@ impl From<&crate::tmux_control::TmuxNotification> for PyTmuxNotification {
                 // Deprecated: name-as-exit-string; clients read exit_code.
                 name: exit_code.map(|code| code.to_string()),
                 exit_code: *exit_code,
+                ..PyTmuxNotification::empty(kind)
+            },
+            TmuxNotification::OutputDamage {
+                pane_id,
+                generation,
+                ranges,
+            } => PyTmuxNotification {
+                pane_id: Some(pane_id.clone()),
+                damage_generation: Some(*generation),
+                damage_rows: Some(ranges.clone()),
                 ..PyTmuxNotification::empty(kind)
             },
         })
@@ -419,46 +439,46 @@ mod tests {
     use crate::tmux_control::TmuxNotification;
 
     const GOLDEN: &str = concat!(
-        "begin | None | None | None | None | None | None | None | None | Some(101) | Some(201) | Some(\"flags-begin\") | None | None | None | None | None | None | None | None\n",
-        "end | None | None | None | None | None | None | None | None | Some(102) | Some(202) | Some(\"flags-end\") | None | None | None | None | None | None | None | None\n",
-        "error | None | None | None | None | None | None | None | None | Some(103) | Some(203) | Some(\"flags-error\") | None | None | None | None | None | None | None | None\n",
-        "output | None | Some(\"p-output\") | None | None | None | None | None | Some([111, 117, 116, 45, 100, 97, 116, 97]) | None | None | None | None | None | None | None | None | None | None | None\n",
-        "pane-mode-changed | None | Some(\"p-pane-mode\") | None | None | None | None | None | None | None | None | None | None | None | None | None | None | None | None | None\n",
-        "window-pane-changed | None | Some(\"p-window-pane\") | Some(\"w-pane-changed\") | None | None | None | None | None | None | None | None | None | None | None | None | None | None | None | None\n",
-        "window-close | None | None | Some(\"w-close\") | None | None | None | None | None | None | None | None | None | None | None | None | None | None | None | None\n",
-        "unlinked-window-close | None | None | Some(\"w-unlinked-close\") | None | None | None | None | None | None | None | None | None | None | None | None | None | None | None | None\n",
-        "window-add | None | None | Some(\"w-add\") | None | None | None | None | None | None | None | None | None | None | None | Some(\"layout-add\") | Some(\"visible-add\") | Some(\"flags-add\") | None | None\n",
-        "window-add | None | None | Some(\"w-add-bare\") | None | None | None | None | None | None | None | None | None | None | None | None | None | None | None | None\n",
-        "unlinked-window-add | None | None | Some(\"w-unlinked-add\") | None | None | None | None | None | None | None | None | None | None | None | None | None | None | None | None\n",
-        "window-renamed | None | None | Some(\"w-renamed\") | None | Some(\"n-window-renamed\") | None | None | None | None | None | None | None | None | None | None | None | None | None | None\n",
-        "unlinked-window-renamed | None | None | Some(\"w-unlink-renamed\") | None | Some(\"n-unlink-renamed\") | None | None | None | None | None | None | None | None | None | None | None | None | None | None\n",
-        "session-changed | None | None | None | Some(\"s-changed\") | Some(\"n-session-changed\") | None | None | None | None | None | None | None | None | None | None | None | None | None | None\n",
-        "client-session-changed | None | None | None | Some(\"s-client-session\") | Some(\"n-client-session\") | None | Some(\"c-client\") | None | None | None | None | None | None | None | None | None | None | None | None\n",
-        "session-renamed | None | None | None | Some(\"s-renamed\") | Some(\"n-session-renamed\") | None | None | None | None | None | None | None | None | None | None | None | None | None | None\n",
-        "sessions-changed | None | None | None | None | None | None | None | None | None | None | None | None | None | None | None | None | None | None | None\n",
-        "session-window-changed | None | None | Some(\"w-session-window\") | Some(\"s-session-window\") | None | None | None | None | None | None | None | None | None | None | None | None | None | None | None\n",
-        "client-detached | None | None | None | None | None | None | Some(\"c-detached\") | None | None | None | None | None | None | None | None | None | None | None | None\n",
-        "client-attached | None | None | None | None | None | None | Some(\"c-attached\") | None | None | None | None | None | None | None | None | None | None | None | None\n",
-        "client-left | None | None | Some(\"w-client-left\") | Some(\"s-client-left\") | None | None | Some(\"c-left\") | None | None | None | None | None | None | None | None | None | None | None | None\n",
-        "exit | None | None | None | None | None | None | None | None | None | None | None | None | None | None | None | None | None | None | None\n",
-        "agent-state-changed | Some(\"hook\") | Some(\"p-agent-state\") | None | None | Some(\"agent-state\") | None | None | None | None | None | None | None | None | Some(\"working\") | None | None | None | None | Some(\"+1\")\n",
-        "agent-released | None | Some(\"p-agent-released\") | None | None | Some(\"agent-released\") | None | None | None | None | None | None | None | None | None | None | None | None | None | None\n",
-        "agent-telemetry-changed | None | Some(\"p-agent-telemetry\") | None | None | Some(\"agent-telemetry\") | None | None | None | None | None | None | None | None | None | None | None | None | None | None\n",
-        "pane-title-changed | None | Some(\"p-title\") | None | None | Some(\"pane-title\") | None | None | None | None | None | None | None | None | None | None | None | None | None | None\n",
-        "pane-exited | None | Some(\"p-exited\") | None | None | Some(\"3\") | Some(3) | None | None | None | None | None | None | None | None | None | None | None | None | None\n",
-        "pane-exited | None | Some(\"p-exited-signal\") | None | None | None | None | None | None | None | None | None | None | None | None | None | None | None | None | None\n",
-        "pane-respawned | None | Some(\"p-respawned\") | None | None | None | None | None | None | None | None | None | None | None | None | None | None | None | None | None\n",
-        "notification | None | None | None | None | Some(\"n-title\") | None | None | None | None | None | None | None | None | None | None | None | None | None | None\n",
-        "pause | None | Some(\"p-pause\") | None | None | None | None | None | None | None | None | None | None | None | None | None | None | None | None | None\n",
-        "extended-output | None | Some(\"p-extended\") | None | None | None | None | None | Some([101, 120, 116, 101, 110, 100, 101, 100, 45, 100, 97, 116, 97]) | None | None | None | Some(777) | None | None | None | None | None | None | None\n",
-        "continue | None | Some(\"p-continue\") | None | None | None | None | None | None | None | None | None | None | None | None | None | None | None | None | None\n",
-        "subscription-changed | None | None | None | None | None | None | None | None | None | None | None | None | Some(\"sub-name\") | Some(\"sub-value\") | None | None | None | None | None\n",
-        "layout-change | None | None | Some(\"w-layout\") | None | None | None | None | None | None | None | None | None | None | None | Some(\"layout-main\") | Some(\"layout-visible\") | Some(\"flags-raw\") | None | None\n",
-        "paste-buffer-changed | None | None | None | None | Some(\"buf-changed\") | None | None | None | None | None | None | None | None | None | None | None | None | None | None\n",
-        "paste-buffer-deleted | None | None | None | None | Some(\"buf-deleted\") | None | None | None | None | None | None | None | None | None | None | None | None | None | None\n",
-        "unknown | None | None | None | None | None | None | None | None | None | None | None | None | None | None | None | None | None | Some(\"%begin 101 201 1\") | None\n",
-        "terminal-output | None | None | None | None | None | None | None | Some([116, 101, 114, 109, 105, 110, 97, 108, 45, 100, 97, 116, 97]) | None | None | None | None | None | None | None | None | None | None | None\n",
-
+        "begin | None | None | None | None | None | None | None | None | Some(101) | Some(201) | Some(\"flags-begin\") | None | None | None | None | None | None | None | None | None | None | None\n",
+        "end | None | None | None | None | None | None | None | None | Some(102) | Some(202) | Some(\"flags-end\") | None | None | None | None | None | None | None | None | None | None | None\n",
+        "error | None | None | None | None | None | None | None | None | Some(103) | Some(203) | Some(\"flags-error\") | None | None | None | None | None | None | None | None | None | None | None\n",
+        "output | None | Some(\"p-output\") | None | None | None | None | None | Some([111, 117, 116, 45, 100, 97, 116, 97]) | None | None | None | None | None | None | None | None | None | None | None | None | None | None\n",
+        "pane-mode-changed | None | Some(\"p-pane-mode\") | None | None | None | None | None | None | None | None | None | None | None | None | None | None | None | None | None | None | None | None\n",
+        "window-pane-changed | None | Some(\"p-window-pane\") | Some(\"w-pane-changed\") | None | None | None | None | None | None | None | None | None | None | None | None | None | None | None | None | None | None | None\n",
+        "window-close | None | None | Some(\"w-close\") | None | None | None | None | None | None | None | None | None | None | None | None | None | None | None | None | None | None | None\n",
+        "unlinked-window-close | None | None | Some(\"w-unlinked-close\") | None | None | None | None | None | None | None | None | None | None | None | None | None | None | None | None | None | None | None\n",
+        "window-add | None | None | Some(\"w-add\") | None | None | None | None | None | None | None | None | None | None | None | Some(\"layout-add\") | Some(\"visible-add\") | Some(\"flags-add\") | None | None | None | None | None\n",
+        "window-add | None | None | Some(\"w-add-bare\") | None | None | None | None | None | None | None | None | None | None | None | None | None | None | None | None | None | None | None\n",
+        "unlinked-window-add | None | None | Some(\"w-unlinked-add\") | None | None | None | None | None | None | None | None | None | None | None | None | None | None | None | None | None | None | None\n",
+        "window-renamed | None | None | Some(\"w-renamed\") | None | Some(\"n-window-renamed\") | None | None | None | None | None | None | None | None | None | None | None | None | None | None | None | None | None\n",
+        "unlinked-window-renamed | None | None | Some(\"w-unlink-renamed\") | None | Some(\"n-unlink-renamed\") | None | None | None | None | None | None | None | None | None | None | None | None | None | None | None | None | None\n",
+        "session-changed | None | None | None | Some(\"s-changed\") | Some(\"n-session-changed\") | None | None | None | None | None | None | None | None | None | None | None | None | None | None | None | None | None\n",
+        "client-session-changed | None | None | None | Some(\"s-client-session\") | Some(\"n-client-session\") | None | Some(\"c-client\") | None | None | None | None | None | None | None | None | None | None | None | None | None | None | None\n",
+        "session-renamed | None | None | None | Some(\"s-renamed\") | Some(\"n-session-renamed\") | None | None | None | None | None | None | None | None | None | None | None | None | None | None | None | None | None\n",
+        "sessions-changed | None | None | None | None | None | None | None | None | None | None | None | None | None | None | None | None | None | None | None | None | None | None\n",
+        "session-window-changed | None | None | Some(\"w-session-window\") | Some(\"s-session-window\") | None | None | None | None | None | None | None | None | None | None | None | None | None | None | None | None | None | None\n",
+        "client-detached | None | None | None | None | None | None | Some(\"c-detached\") | None | None | None | None | None | None | None | None | None | None | None | None | None | None | None\n",
+        "client-attached | None | None | None | None | None | None | Some(\"c-attached\") | None | None | None | None | None | None | None | None | None | None | None | None | None | None | None\n",
+        "client-left | None | None | Some(\"w-client-left\") | Some(\"s-client-left\") | None | None | Some(\"c-left\") | None | None | None | None | None | None | None | None | None | None | None | None | None | None | None\n",
+        "exit | None | None | None | None | None | None | None | None | None | None | None | None | None | None | None | None | None | None | None | None | None | None\n",
+        "agent-state-changed | Some(\"hook\") | Some(\"p-agent-state\") | None | None | Some(\"agent-state\") | None | None | None | None | None | None | None | None | Some(\"working\") | None | None | None | None | Some(\"+1\") | None | None | None\n",
+        "agent-released | None | Some(\"p-agent-released\") | None | None | Some(\"agent-released\") | None | None | None | None | None | None | None | None | None | None | None | None | None | None | None | None | None\n",
+        "agent-telemetry-changed | None | Some(\"p-agent-telemetry\") | None | None | Some(\"agent-telemetry\") | None | None | None | None | None | None | None | None | None | None | None | None | None | None | None | None | None\n",
+        "pane-title-changed | None | Some(\"p-title\") | None | None | Some(\"pane-title\") | None | None | None | None | None | None | None | None | None | None | None | None | None | None | None | None | None\n",
+        "pane-exited | None | Some(\"p-exited\") | None | None | Some(\"3\") | Some(3) | None | None | None | None | None | None | None | None | None | None | None | None | None | None | None | None\n",
+        "pane-exited | None | Some(\"p-exited-signal\") | None | None | None | None | None | None | None | None | None | None | None | None | None | None | None | None | None | None | None | None\n",
+        "pane-respawned | None | Some(\"p-respawned\") | None | None | None | None | None | None | None | None | None | None | None | None | None | None | None | None | None | None | None | None\n",
+        "notification | None | None | None | None | Some(\"n-title\") | None | None | None | None | None | None | None | None | None | None | None | None | None | None | Some(\"n-body\") | None | None\n",
+        "pause | None | Some(\"p-pause\") | None | None | None | None | None | None | None | None | None | None | None | None | None | None | None | None | None | None | None | None\n",
+        "extended-output | None | Some(\"p-extended\") | None | None | None | None | None | Some([101, 120, 116, 101, 110, 100, 101, 100, 45, 100, 97, 116, 97]) | None | None | None | Some(777) | None | None | None | None | None | None | None | None | None | None\n",
+        "continue | None | Some(\"p-continue\") | None | None | None | None | None | None | None | None | None | None | None | None | None | None | None | None | None | None | None | None\n",
+        "subscription-changed | None | None | None | None | None | None | None | None | None | None | None | None | Some(\"sub-name\") | Some(\"sub-value\") | None | None | None | None | None | None | None | None\n",
+        "layout-change | None | None | Some(\"w-layout\") | None | None | None | None | None | None | None | None | None | None | None | Some(\"layout-main\") | Some(\"layout-visible\") | Some(\"flags-raw\") | None | None | None | None | None\n",
+        "paste-buffer-changed | None | None | None | None | Some(\"buf-changed\") | None | None | None | None | None | None | None | None | None | None | None | None | None | None | None | None | None\n",
+        "paste-buffer-deleted | None | None | None | None | Some(\"buf-deleted\") | None | None | None | None | None | None | None | None | None | None | None | None | None | None | None | None | None\n",
+        "unknown | None | None | None | None | None | None | None | None | None | None | None | None | None | None | None | None | None | Some(\"%begin 101 201 1\") | None | None | None | None\n",
+        "terminal-output | None | None | None | None | None | None | None | Some([116, 101, 114, 109, 105, 110, 97, 108, 45, 100, 97, 116, 97]) | None | None | None | None | None | None | None | None | None | None | None | None | None | None\n",
+        "pane-damage | None | Some(\"%1\") | None | None | None | None | None | None | None | None | None | None | None | None | None | None | None | None | None | None | Some(3) | Some([(0, 1)])\n",
     );
 
     fn all_variants() -> Vec<TmuxNotification> {
@@ -616,19 +636,42 @@ mod tests {
             TmuxNotification::TerminalOutput {
                 data: b"terminal-data".to_vec(),
             },
+            TmuxNotification::OutputDamage {
+                pane_id: "%1".to_string(),
+                generation: 3,
+                ranges: vec![(0, 1)],
+            },
         ]
     }
 
-    /// All 20 `PyTmuxNotification` fields, in declaration order.
+    /// All 23 `PyTmuxNotification` fields, in declaration order.
     fn render(n: &PyTmuxNotification) -> String {
-        format!(
-            "{} | {:?} | {:?} | {:?} | {:?} | {:?} | {:?} | {:?} | {:?} | {:?} | {:?} | {:?} | {:?} | {:?} | {:?} | {:?} | {:?} | {:?} | {:?} | {:?}",
-            n.notification_type, n.source, n.pane_id, n.window_id, n.session_id,
-            n.name, n.exit_code, n.client, n.data, n.timestamp, n.command_number,
-            n.flags, n.delay_ms, n.subscription_name, n.value, n.window_layout,
-            n.window_visible_layout, n.window_raw_flags, n.raw_line,
-            n.workspace_id
-        )
+        [
+            n.notification_type.to_string(),
+            format!("{:?}", n.source),
+            format!("{:?}", n.pane_id),
+            format!("{:?}", n.window_id),
+            format!("{:?}", n.session_id),
+            format!("{:?}", n.name),
+            format!("{:?}", n.exit_code),
+            format!("{:?}", n.client),
+            format!("{:?}", n.data),
+            format!("{:?}", n.timestamp),
+            format!("{:?}", n.command_number),
+            format!("{:?}", n.flags),
+            format!("{:?}", n.delay_ms),
+            format!("{:?}", n.subscription_name),
+            format!("{:?}", n.value),
+            format!("{:?}", n.window_layout),
+            format!("{:?}", n.window_visible_layout),
+            format!("{:?}", n.window_raw_flags),
+            format!("{:?}", n.raw_line),
+            format!("{:?}", n.workspace_id),
+            format!("{:?}", n.message),
+            format!("{:?}", n.damage_generation),
+            format!("{:?}", n.damage_rows),
+        ]
+        .join(" | ")
     }
 
     #[test]
@@ -641,6 +684,7 @@ mod tests {
                 TmuxNotification::End { .. } => (),
                 TmuxNotification::Error { .. } => (),
                 TmuxNotification::Output { .. } => (),
+                TmuxNotification::OutputDamage { .. } => (),
                 TmuxNotification::PaneModeChanged { .. } => (),
                 TmuxNotification::WindowPaneChanged { .. } => (),
                 TmuxNotification::WindowClose { .. } => (),

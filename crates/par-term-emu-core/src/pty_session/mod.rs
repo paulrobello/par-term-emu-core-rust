@@ -78,6 +78,17 @@ pub use io::PtyInputHandle;
 /// * `data` - The raw bytes read from the PTY
 pub type OutputCallback = Arc<dyn Fn(&[u8]) + Send + Sync>;
 
+/// The damage-aware [`OutputCallback`]: called with the raw PTY bytes, the
+/// pane terminal's damage generation after those bytes applied, and the
+/// inclusive viewport row ranges (ascending, 0-based, viewport-relative)
+/// they changed since this consumer's previous chunk. Installed via
+/// [`PtySession::set_output_callback_with_damage`]; when set, the reader
+/// invokes it INSTEAD of any plain callback. The generation is present on
+/// every chunk, so `ranges` empty means "no viewport row changed", never
+/// "unknown" — the unknown case only exists for consumers (and chunks)
+/// without damage information.
+pub type OutputDamageCallback = Arc<dyn Fn(&[u8], u64, &[(u32, u32)]) + Send + Sync>;
+
 /// Wait-free geometry mirror (ENH-023). The reader thread and every resize
 /// path publish `(cols, rows, cursor)` here while already holding the
 /// terminal write lock, so hot polling consumers (`size()`,
@@ -169,6 +180,9 @@ pub struct PtySession {
     /// Optional callback for raw PTY output (for streaming, logging, etc.)
     /// Wrapped in Arc<Mutex> so it can be updated after the reader thread starts
     output_callback: Arc<Mutex<Option<OutputCallback>>>,
+    /// Optional damage-aware output callback (see [`OutputDamageCallback`]).
+    /// When set, the reader calls it instead of `output_callback`.
+    output_damage_callback: Arc<Mutex<Option<OutputDamageCallback>>>,
     /// Coprocess manager for piping terminal output to external processes
     coprocess_manager: Arc<Mutex<CoprocessManager>>,
     /// PID of the spawned child process (shell or command), set after spawn
@@ -261,6 +275,7 @@ impl PtySession {
             reply_xtwinops: Arc::new(AtomicBool::new(reply_xtwinops)),
             geometry: Arc::new(GeometryMirror::default()),
             output_callback: Arc::new(Mutex::new(None)),
+            output_damage_callback: Arc::new(Mutex::new(None)),
             coprocess_manager: Arc::new(Mutex::new(CoprocessManager::new())),
             child_pid: None,
             reaped: Arc::new(Mutex::new(None)),

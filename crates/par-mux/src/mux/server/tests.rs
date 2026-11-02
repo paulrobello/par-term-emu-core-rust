@@ -3357,3 +3357,74 @@ fn workspace_commands_dispatch_and_broadcast() {
         assert_eq!(guard.workspaces().len(), 1, "'other' survives");
     }
 }
+
+/// Card 01a19ca4: the pane output sink emits `%output` and, when the chunk
+/// carries damage (non-empty ranges or an advanced generation), the
+/// `%pane-damage` line rides the SAME fan-out push - one queue entry, so
+/// every client queue and socket sees the pair atomically. A chunk with
+/// empty ranges and an unchanged generation emits `%output` alone.
+#[test]
+fn pane_output_sink_emits_the_damage_line_adjacent_and_suppresses_when_unchanged() {
+    let clients: Clients = Arc::new(Mutex::new(Vec::new()));
+    let epoch: OutputEpoch = Arc::new(std::sync::atomic::AtomicU64::new(0));
+    let sink = pane_output_sink(&clients, PaneId(3), &epoch);
+
+    let (tx, rx) = std::sync::mpsc::sync_channel(64);
+    let queued = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let evicted = Arc::new(std::sync::atomic::AtomicBool::new(false));
+    clients.lock().push((
+        7,
+        tx,
+        Arc::clone(&queued),
+        Arc::clone(&evicted),
+        ConnectionAbort::none(),
+    ));
+
+    // First chunk: generation advanced (never-forwarded sentinel), so the
+    // pair rides one push.
+    sink(b"hello", 5, &[(0, 0)]);
+    let line = rx
+        .recv_timeout(std::time::Duration::from_secs(2))
+        .expect("first push");
+    assert!(line.starts_with("%output %3 "), "output first: {line:?}");
+    assert!(
+        line.contains("\n%pane-damage %3 5 0-0\n"),
+        "damage line follows in the same push: {line:?}"
+    );
+    assert!(
+        line.ends_with('\n') && line.matches('\n').count() == 2,
+        "exactly two lines, both newline-terminated: {line:?}"
+    );
+
+    // Second chunk: empty ranges, SAME generation (nothing changed) ->
+    // suppressed.
+    sink(b"", 5, &[]);
+    let line = rx
+        .recv_timeout(std::time::Duration::from_secs(2))
+        .expect("second push");
+    assert!(
+        !line.contains("%pane-damage"),
+        "unchanged generation suppresses the damage line: {line:?}"
+    );
+
+    // Third chunk: empty ranges, advanced generation (a positional-only
+    // change, e.g. a cursor move) -> the generation-only form.
+    sink(b"", 6, &[]);
+    let line = rx
+        .recv_timeout(std::time::Duration::from_secs(2))
+        .expect("third push");
+    assert!(
+        line.contains("\n%pane-damage %3 6\n"),
+        "advanced generation with no rows emits the generation-only form: {line:?}"
+    );
+
+    // Fourth chunk: non-empty ranges within one generation -> emitted.
+    sink(b"x", 6, &[(2, 2)]);
+    let line = rx
+        .recv_timeout(std::time::Duration::from_secs(2))
+        .expect("fourth push");
+    assert!(
+        line.contains("\n%pane-damage %3 6 2-2\n"),
+        "non-empty ranges always emit: {line:?}"
+    );
+}
