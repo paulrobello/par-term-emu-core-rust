@@ -26,8 +26,6 @@ use ratatui::buffer::{Buffer, Cell as RtCell};
 use ratatui::style::Color as RtColor;
 use std::collections::HashMap;
 use std::io::Write as _;
-use std::sync::mpsc::RecvTimeoutError;
-
 mod chrome;
 mod cursor;
 mod drag;
@@ -1546,7 +1544,7 @@ impl WindowSession {
             self.apply_drag(conn);
 
             // 9. Frame whatever accumulated, then wait for the next push.
-            if self.pump_frame(conn, sink).is_break() {
+            if self.pump_frame(conn, sink, &mut stdin).is_break() {
                 return Ok(());
             }
         }
@@ -1601,6 +1599,7 @@ impl WindowSession {
         &mut self,
         conn: &mut crate::mux::attach::conn::AttachConn,
         sink: &mut dyn FlushSink,
+        stdin: &mut super::Stdin,
     ) -> std::ops::ControlFlow<()> {
         let mut handled = false;
         self.drain_pushes_counting(conn, &mut handled)?;
@@ -1613,7 +1612,7 @@ impl WindowSession {
         self.frame_hold_since = None;
         self.bridge_pane_clipboard();
         self.frame(sink);
-        self.wait_next_push(conn)
+        self.wait_next_push(conn, stdin)
     }
 
     /// Bridge the focused pane's OSC 52 clipboard writes to the host
@@ -1684,10 +1683,10 @@ impl WindowSession {
                         return std::ops::ControlFlow::Break(());
                     }
                 }
-                Err(std::sync::mpsc::TryRecvError::Empty) => {
+                Err(crossbeam_channel::TryRecvError::Empty) => {
                     return std::ops::ControlFlow::Continue(());
                 }
-                Err(std::sync::mpsc::TryRecvError::Disconnected) => {
+                Err(crossbeam_channel::TryRecvError::Disconnected) => {
                     return std::ops::ControlFlow::Break(());
                 }
             }
@@ -1736,20 +1735,37 @@ impl WindowSession {
         Ok(std::ops::ControlFlow::Continue(()))
     }
 
-    /// Pump step 9's wait: block up to one poll interval for the next
-    /// push.
+    /// Pump step 9's wait: block until the next daemon push, the next
+    /// stdin chunk, or one poll interval — whichever lands first. The
+    /// stdin arm is the input-latency lever (card 01a19d78): the wait
+    /// used to block on the daemon channel alone, so a host click waited
+    /// out up to a full POLL tick before step 3 routed it. The stdin arm
+    /// only wakes the tick — the chunk it consumes is parked on `Stdin`
+    /// so step 3 sees it first, and all routing stays on the pump's
+    /// step-3 path. Select picks randomly among ready arms, so a push and
+    /// a click landing together serve both — the other stays queued for
+    /// the next tick's drains.
     fn wait_next_push(
         &mut self,
         conn: &mut crate::mux::attach::conn::AttachConn,
+        stdin: &mut super::Stdin,
     ) -> std::ops::ControlFlow<()> {
-        match conn.recv_timeout(super::POLL) {
-            Ok(event) => {
-                if self.handle_event(event) == EventOutcome::End {
-                    return std::ops::ControlFlow::Break(());
+        crossbeam_channel::select! {
+            recv(conn.notifications()) -> event => {
+                match event {
+                    Ok(event) => {
+                        if self.handle_event(event) == EventOutcome::End {
+                            return std::ops::ControlFlow::Break(());
+                        }
+                    }
+                    // Empty + disconnected: the reader thread ended and
+                    // dropped the sender — the connection-ended signal
+                    // (the recv-family disconnect contract).
+                    Err(_) => return std::ops::ControlFlow::Break(()),
                 }
             }
-            Err(RecvTimeoutError::Timeout) => {}
-            Err(RecvTimeoutError::Disconnected) => return std::ops::ControlFlow::Break(()),
+            recv(stdin.wake_rx()) -> msg => stdin.stash_wake(msg),
+            recv(crossbeam_channel::after(super::POLL)) -> _ => {}
         }
         self.dispatch_replies(conn);
         self.drain_popup(conn);

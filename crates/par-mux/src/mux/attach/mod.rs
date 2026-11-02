@@ -962,8 +962,16 @@ type StdinMsg = std::io::Result<Vec<u8>>;
 /// non-blocking drain and its bounded notification wait are what observe
 /// the disconnect. Byte order is preserved (one reader, FIFO channel);
 /// Unix behavior is unchanged beyond who performs the same read.
+///
+/// The channel is crossbeam (card 01a19d78) so the render pump's wait can
+/// select over it and the daemon-push channel together: a host click
+/// wakes the tick immediately instead of riding out the poll remainder.
 pub(crate) struct Stdin {
-    rx: std::sync::mpsc::Receiver<StdinMsg>,
+    rx: crossbeam_channel::Receiver<StdinMsg>,
+    /// The chunk the wait's select consumed on the stdin arm, parked so
+    /// the next tick's `read_available` returns it first — the select
+    /// cannot peek, and re-queueing behind unread chunks would reorder.
+    front: Option<StdinMsg>,
 }
 
 impl Stdin {
@@ -977,12 +985,28 @@ impl Stdin {
     /// between the query and the deadline); this is how they get back
     /// into the stream instead of being eaten.
     fn new_with_primer(primer: Vec<u8>) -> Self {
-        let (tx, rx) = std::sync::mpsc::sync_channel::<std::io::Result<Vec<u8>>>(64);
+        let (tx, rx) = crossbeam_channel::bounded::<std::io::Result<Vec<u8>>>(64);
         if !primer.is_empty() {
             let _ = tx.send(Ok(primer));
         }
         Self::spawn_reader(std::io::stdin(), tx);
-        Self { rx }
+        Self { rx, front: None }
+    }
+
+    /// The receiver the render pump's wait selects over. Returning the
+    /// live receiver (not a clone) keeps the EOF/disconnect semantics:
+    /// the channel closes when the reader thread ends.
+    fn wake_rx(&self) -> &crossbeam_channel::Receiver<StdinMsg> {
+        &self.rx
+    }
+
+    /// Park a chunk the wait's stdin arm consumed, so the next tick's
+    /// step 3 (`pump_stdin` → `read_available`) sees it before anything
+    /// still queued in the channel.
+    fn stash_wake(&mut self, msg: Result<StdinMsg, crossbeam_channel::RecvError>) {
+        if let Ok(chunk) = msg {
+            self.front = Some(chunk);
+        }
     }
 
     /// The stdin reader thread's body: feed every read result into `tx`.
@@ -990,7 +1014,7 @@ impl Stdin {
     /// same classification.
     fn spawn_reader<R: std::io::Read + Send + 'static>(
         mut handle: R,
-        tx: std::sync::mpsc::SyncSender<StdinMsg>,
+        tx: crossbeam_channel::Sender<StdinMsg>,
     ) {
         std::thread::spawn(move || {
             let mut buf = [0u8; 4096];
@@ -1028,12 +1052,17 @@ impl Stdin {
     }
 
     /// Read whatever is available, or `Some(Ok(vec![]))` on EOF. `None`
-    /// when nothing is pending (would block).
+    /// when nothing is pending (would block). The wait's stash comes
+    /// first so a select-consumed chunk keeps its place at the head of
+    /// the stream.
     fn read_available(&mut self) -> Option<std::io::Result<Vec<u8>>> {
+        if let Some(chunk) = self.front.take() {
+            return Some(chunk);
+        }
         match self.rx.try_recv() {
             Ok(read) => Some(read),
-            Err(std::sync::mpsc::TryRecvError::Empty) => None,
-            Err(std::sync::mpsc::TryRecvError::Disconnected) => {
+            Err(crossbeam_channel::TryRecvError::Empty) => None,
+            Err(crossbeam_channel::TryRecvError::Disconnected) => {
                 // The reader thread ended (EOF or error already
                 // delivered). Report idle; the pump treats a delivered
                 // empty read as EOF and detaches.

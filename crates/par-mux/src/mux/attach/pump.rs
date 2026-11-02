@@ -302,8 +302,8 @@ impl Session {
                             return PumpOutcome::DaemonExited;
                         }
                     }
-                    Err(std::sync::mpsc::TryRecvError::Empty) => break,
-                    Err(std::sync::mpsc::TryRecvError::Disconnected) => {
+                    Err(crossbeam_channel::TryRecvError::Empty) => break,
+                    Err(crossbeam_channel::TryRecvError::Disconnected) => {
                         // Socket closed: %exit delivered, eviction, or
                         // process death. One reconnect-and-requery; a
                         // client that cannot reattach reports the close.

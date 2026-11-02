@@ -41,6 +41,10 @@ parking_lot = "0.13"
 # Cross-platform local socket (Unix domain sockets / Windows named pipes) for
 # the control socket (par-mux.md D4).
 interprocess = { version = "2.4.2", optional = true }
+# Multi-source pump wait (card 01a19d78): the render attach wait selects
+# over the daemon-push channel and the stdin reader channel, so a host
+# click wakes the tick instead of riding out the 16 ms poll remainder.
+crossbeam-channel = { version = "0.5", optional = true }
 # Agent scrape patterns (bundled + local override) — comments in the
 # override files are the point, so the format is TOML not JSON.
 toml = { version = "0.9", optional = true }
@@ -117,7 +121,7 @@ default = []
 # The multiplexer library: PTYs, session tree, control-mode socket, on-disk
 # persistence. `serde` and `dirs` are intrinsic — a mux build that cannot
 # save is not a configuration the daemon supports (par-mux.md D3).
-mux = ["dep:interprocess", "dep:toml", "dep:dirs", "dep:nix", "dep:widestring", "dep:windows-sys", "dep:sysinfo", "serde"]
+mux = ["dep:interprocess", "dep:crossbeam-channel", "dep:toml", "dep:dirs", "dep:nix", "dep:widestring", "dep:windows-sys", "dep:sysinfo", "serde"]
 # Serde derives on the mux ids/layout/persist types (the on-disk format).
 serde = ["par-term-emu-core/serde"]
 # The `par-mux` daemon binary: `mux` plus its CLI parser and the

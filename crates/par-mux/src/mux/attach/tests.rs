@@ -3362,7 +3362,7 @@ fn nonblocking_stdin_wouldblock_does_not_end_the_reader() {
         }
     }
 
-    let (tx, rx) = std::sync::mpsc::sync_channel::<StdinMsg>(64);
+    let (tx, rx) = crossbeam_channel::bounded::<StdinMsg>(64);
     Stdin::spawn_reader(FdReader(read_fd), tx);
 
     // Idle + nonblocking: nothing may arrive. Pre-fix this received
@@ -3390,6 +3390,79 @@ fn nonblocking_stdin_wouldblock_does_not_end_the_reader() {
         Ok(Ok(bytes)) => assert!(bytes.is_empty(), "expected EOF, got {bytes:?}"),
         other => panic!("expected EOF, got {other:?}"),
     }
+}
+
+/// The pump-wait primitive (card 01a19d78): a select over the daemon
+/// channel and the stdin channel wakes on stdin bytes immediately, not
+/// on the 16 ms poll boundary — the wait used to block on the daemon
+/// channel alone, so input waited out the remainder (p50 35-45 ms to
+/// route_mouse even at load 1). Best-of-5 attempts: a host load spike
+/// can delay any single wake past the tick, but five consecutive
+/// all-slow runs would mean the wake is quantized again.
+#[test]
+#[cfg(unix)]
+fn pump_wait_wakes_on_stdin_off_the_poll_tick() {
+    // A real pipe whose write end gets click bytes mid-wait; the read
+    // end is blocking, the real host-tty shape. Rebuilt per attempt — a
+    // pipe write is consumed once.
+    for _attempt in 0..5 {
+        let (_event_tx, event_rx) = crossbeam_channel::unbounded::<()>();
+        let (tx, rx) = crossbeam_channel::bounded::<StdinMsg>(64);
+        let mut fds = [0 as libc::c_int; 2];
+        assert_eq!(unsafe { libc::pipe(fds.as_mut_ptr()) }, 0);
+        let (read_fd, write_fd) = (fds[0], fds[1]);
+        struct FdReader(libc::c_int);
+        impl std::io::Read for FdReader {
+            fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
+                loop {
+                    let n = unsafe { libc::read(self.0, buf.as_mut_ptr().cast(), buf.len()) };
+                    if n < 0 {
+                        let err = std::io::Error::last_os_error();
+                        if err.kind() == std::io::ErrorKind::Interrupted {
+                            continue;
+                        }
+                        return Err(err);
+                    }
+                    return Ok(n as usize);
+                }
+            }
+        }
+        impl Drop for FdReader {
+            fn drop(&mut self) {
+                unsafe { libc::close(self.0) };
+            }
+        }
+        Stdin::spawn_reader(FdReader(read_fd), tx);
+
+        // The write lands 3 ms into the wait — mid-wait, not on a tick
+        // boundary.
+        std::thread::spawn(move || {
+            std::thread::sleep(std::time::Duration::from_millis(3));
+            let bytes = b"\x1b[<0;10;5M";
+            let _ = unsafe { libc::write(write_fd, bytes.as_ptr().cast(), bytes.len()) };
+        });
+
+        let started = std::time::Instant::now();
+        let mut woken_by_stdin = false;
+        crossbeam_channel::select! {
+            recv(event_rx) -> _ => {}
+            recv(rx) -> msg => {
+                woken_by_stdin = true;
+                match msg {
+                    Ok(Ok(bytes)) => assert_eq!(bytes, b"\x1b[<0;10;5M"),
+                    other => panic!("expected the click bytes, got {other:?}"),
+                }
+            }
+            recv(crossbeam_channel::after(super::POLL)) -> _ => {}
+        }
+        if woken_by_stdin && started.elapsed() < super::POLL {
+            return; // the wake beat the tick: the lever works
+        }
+    }
+    panic!(
+        "the wait never woke on stdin inside the 16 ms poll in 5 attempts; \
+         the wake is quantized or the host is pathologically loaded"
+    );
 }
 
 /// The old `let _ = stdout.write_all(data)` shape dropped everything

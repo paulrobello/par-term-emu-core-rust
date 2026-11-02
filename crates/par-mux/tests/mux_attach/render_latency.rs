@@ -457,3 +457,94 @@ fn click_latency_harness_records_click_to_action_ms_at_load_shapes() {
     }
     host.killer.kill().ok();
 }
+
+/// The input-stage quantization gate (card 01a19d78): the pump's wait
+/// selects over stdin, so host click bytes reach `route_mouse` off the
+/// 16 ms poll tick. The wait used to block on the daemon channel alone,
+/// so a click waited out the remainder — measured p50 35-45 ms even at
+/// load 1. Gate: p50 of click-bytes → `mouse cb=` trace stamp under
+/// 8 ms across 16 clicks at 30 ms spacing; the quantized shape's floor
+/// is a half tick on average, so 8 ms separates woken from quantized.
+/// Not `#[ignore]`d: it measures the client-side wake only — the daemon
+/// chain and paint stay out of the delta — and passes in seconds.
+#[test]
+#[cfg(unix)]
+fn stdin_wake_routes_host_clicks_off_the_poll_tick() {
+    const CLICKS: usize = 16;
+    const SPACING_MS: u64 = 30;
+    let (fixture, _daemon, mut client) = fixture_with_session("latency-wake");
+    let pane = session_first_pane(&mut client, "$0");
+
+    let trace_log = std::env::temp_dir().join(format!(
+        "par-mux-latency-wake-{}-input.log",
+        std::process::id()
+    ));
+    let _ = std::fs::remove_file(&trace_log);
+    let _ = std::fs::File::create(&trace_log).expect("create trace log");
+    let (mut host, _stderr) = spawn_attach_host(
+        &fixture,
+        &["-t", &pane],
+        "render",
+        "",
+        &[("PAR_MUX_INPUT_TRACE", "1")],
+        false,
+        Some(&trace_log),
+    );
+    expect_output(
+        &host,
+        b"\x1b[?1002h",
+        Duration::from_secs(10),
+        "render client up with mouse routing",
+    );
+    let mut all: Vec<u8> = host.output_rx.try_iter().flatten().collect();
+    screen_stable(
+        &host,
+        &mut all,
+        Duration::from_millis(250),
+        Duration::from_secs(5),
+    );
+
+    let mut deltas: Vec<u128> = Vec::with_capacity(CLICKS);
+    for _ in 0..CLICKS {
+        std::thread::sleep(Duration::from_millis(SPACING_MS));
+        let t0 = epoch_ms();
+        host.to_child
+            .write_all(b"\x1b[<0;10;5M")
+            .expect("click write");
+        host.to_child.flush().ok();
+        // The click's own stamp: the first `mouse cb=` line at/after t0.
+        // Each click's stamp is awaited before the next click, so "first
+        // at/after t0" is unambiguous.
+        let deadline = Instant::now() + Duration::from_secs(2);
+        let delta = loop {
+            let log = std::fs::read_to_string(&trace_log).unwrap_or_default();
+            let (mouse, _, _) = parse_trace_stamps(&log, t0);
+            if let Some(stamp) = mouse {
+                break stamp.saturating_sub(t0);
+            }
+            assert!(
+                Instant::now() < deadline,
+                "click at t0={t0} never reached route_mouse; trace tail: {:?}",
+                std::fs::read_to_string(&trace_log)
+                    .unwrap_or_default()
+                    .lines()
+                    .last()
+            );
+            std::thread::sleep(Duration::from_millis(1));
+        };
+        deltas.push(delta);
+    }
+
+    let mut ms: Vec<f64> = deltas.iter().map(|d| *d as f64).collect();
+    ms.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+    let p50 = ms[ms.len() / 2];
+    eprintln!(
+        "LATENCY stdin-wake input-stage p50={p50:.1}ms n={}",
+        ms.len()
+    );
+    assert!(
+        p50 < 8.0,
+        "input stage p50 {p50:.1}ms: clicks are still riding the 16 ms poll tick"
+    );
+    host.killer.kill().ok();
+}

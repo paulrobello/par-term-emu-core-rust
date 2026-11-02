@@ -3081,7 +3081,7 @@ fn killing_a_windows_last_pane_broadcasts_window_close() {
                 return;
             }
             Ok(other) => seen.push(format!("{other:?}")),
-            Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {
+            Err(crossbeam_channel::RecvTimeoutError::Timeout) => {
                 assert!(
                     std::time::Instant::now() < deadline,
                     "%window-close never arrived after kill-pane emptied the window; \

@@ -39,7 +39,9 @@ const SPAWN_CONNECT_DEADLINE: Duration = Duration::from_secs(10);
 pub struct MuxClient {
     writer: LocalStream,
     reply_rx: Receiver<Reply>,
-    notifications_rx: Receiver<TmuxNotification>,
+    /// Crossbeam so the attach wait can select over it and the stdin
+    /// channel together (card 01a19d78).
+    notifications_rx: crossbeam_channel::Receiver<TmuxNotification>,
     /// Set by [`MuxClient::discard_notifications`]: the reader parses
     /// pushed lines but drops them instead of queueing them.
     discard_notifications: Arc<AtomicBool>,
@@ -239,7 +241,8 @@ impl MuxClient {
 
         let writer = stream.try_clone()?;
         let (reply_tx, reply_rx) = channel::<Reply>();
-        let (notification_tx, notifications_rx) = channel::<TmuxNotification>();
+        let (notification_tx, notifications_rx) =
+            crossbeam_channel::unbounded::<TmuxNotification>();
         let discard_notifications = Arc::new(AtomicBool::new(false));
         let discard = Arc::clone(&discard_notifications);
         // Best-effort: named pipes (Windows) reject I/O timeouts, so there
@@ -359,7 +362,7 @@ impl MuxClient {
     }
 
     /// Pushed notifications (`%output` and friends), already parsed.
-    pub fn notifications(&self) -> &Receiver<TmuxNotification> {
+    pub fn notifications(&self) -> &crossbeam_channel::Receiver<TmuxNotification> {
         &self.notifications_rx
     }
 
@@ -430,7 +433,7 @@ impl Drop for MuxClient {
 fn reader_loop(
     stream: LocalStream,
     reply_tx: Sender<Reply>,
-    notification_tx: Sender<TmuxNotification>,
+    notification_tx: crossbeam_channel::Sender<TmuxNotification>,
     discard: &AtomicBool,
     closed: Arc<AtomicBool>,
 ) {

@@ -1354,8 +1354,8 @@ fn saw_pane_exited(client: &par_mux::mux::MuxClient, deadline: Duration) -> bool
             Ok(par_term_emu_core::tmux_control::TmuxNotification::PaneExited { .. }) => {
                 return true
             }
-            Ok(_) | Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {}
-            Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => return false,
+            Ok(_) | Err(crossbeam_channel::RecvTimeoutError::Timeout) => {}
+            Err(crossbeam_channel::RecvTimeoutError::Disconnected) => return false,
         }
     }
     false
