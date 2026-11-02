@@ -948,8 +948,13 @@ impl WindowSession {
             match event {
                 TmuxNotification::Output { pane_id, data }
                 | TmuxNotification::ExtendedOutput { pane_id, data, .. } => {
+                    // Card 01a19947: the daemon enqueues the seed reply
+                    // under the clients lock with the output-epoch
+                    // re-check, so every %output enqueued before the reply
+                    // is reflected in the replay — discarding pre-reply
+                    // output for the seeded panes loses nothing.
                     super::trace_input(format_args!(
-                        "seed discards {} output bytes for pane {pane_id} (covered by the replay that follows)",
+                        "seed discards {} output bytes for pane {pane_id} (replay-covered: the daemon orders the reply after every %output it subsumes)",
                         data.len()
                     ));
                 }

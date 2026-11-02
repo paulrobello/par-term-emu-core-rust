@@ -167,14 +167,7 @@ fn replay_pane_screen(ctx: &Ctx<'_>, pane: PaneId, graphics: bool) -> Outcome {
         Some(target) => {
             let terminal = target.terminal();
             let terminal = terminal.read();
-            let mut seed = terminal.export_screen_restore_sequence();
-            if graphics {
-                if let Some(section) = graphics_seed_section(&terminal) {
-                    seed.push('\n');
-                    seed.push_str(&section);
-                }
-            }
-            Outcome::ok(ctx, &seed)
+            Outcome::ok(ctx, &replay_reply_body(&terminal, graphics))
         }
         None => Outcome::err(ctx, &format!("no such pane: {pane}")),
     }
@@ -199,6 +192,20 @@ const GRAPHICS_SEED_END: &str = "%graphics-end";
 /// One line per placement: `%gfx <id> <col> <row> <width> <height>
 /// <base64-rgba>` — the shape `apply_inline_image` ingests, so a mirror
 /// reconstructs every placement without re-decoding an image format.
+pub(crate) fn replay_reply_body(
+    terminal: &par_term_emu_core::terminal::Terminal,
+    graphics: bool,
+) -> String {
+    let mut seed = terminal.export_screen_restore_sequence();
+    if graphics {
+        if let Some(section) = graphics_seed_section(terminal) {
+            seed.push('\n');
+            seed.push_str(&section);
+        }
+    }
+    seed
+}
+
 fn graphics_seed_section(terminal: &par_term_emu_core::terminal::Terminal) -> Option<String> {
     use base64::Engine as _;
     let store = terminal.all_graphics();

@@ -1422,7 +1422,7 @@ sections; the numbers live here.
 | `MAX_CLIENT_COLS` | 1,000 | `crates/par-mux/src/mux/command/mod.rs:1009` | Columns a par-mux client may report for a window grid (`refresh-client -C`). |
 | `MAX_CLIENT_ROWS` | 500 | `crates/par-mux/src/mux/command/mod.rs:1011` | Rows a par-mux client may report for a window grid (`refresh-client -C`). |
 | `MAX_CELL_PIXELS` | 512 | `crates/par-mux/src/mux/command/mod.rs:1013` | Pixels per cell axis a par-mux client may report (`refresh-client -p`). |
-| `STALLED_AFTER_MS` | 300,000 | `crates/par-mux/src/mux/dispatch/client.rs:312` | Milliseconds of no output and no report before a working agent reads stalled. |
+| `STALLED_AFTER_MS` | 300,000 | `crates/par-mux/src/mux/dispatch/client.rs:319` | Milliseconds of no output and no report before a working agent reads stalled. |
 | `EVENT_RING_CAPACITY` | 1,024 | `crates/par-mux/src/mux/events.rs:27` | Lifecycle events retained by the daemon's replay ring. |
 | `MAX_FOREGROUND_NAME_LEN` | 128 | `crates/par-mux/src/mux/foreground.rs:42` | Bytes of a pane's foreground command name served by pane-info. |
 | `MAX_REPORT_VALUE_LEN` | 4,096 | `crates/par-mux/src/mux/hooks/mod.rs:148` | Bytes accepted for one hook or agent report value sent from a pane. |
@@ -1433,9 +1433,9 @@ sections; the numbers live here.
 | `MAX_PERSISTED_SCROLLBACK_CELLS` | 100,000 | `crates/par-mux/src/mux/persist/format.rs:35` | Scrollback cells restored per pane from an untrusted on-disk state file. |
 | `MAX_RESTORED_COLS` | 1,000 | `crates/par-mux/src/mux/persist/format.rs:45` | Columns one restored window may claim from an untrusted state file. |
 | `MAX_RESTORED_ROWS` | 500 | `crates/par-mux/src/mux/persist/format.rs:47` | Rows one restored window may claim from an untrusted state file. |
-| `CLIENT_QUEUE_DEPTH` | 4,096 | `crates/par-mux/src/mux/server/mod.rs:87` | Broadcast lines queued per control-socket client before the daemon evicts it. |
-| `CLIENT_QUEUE_AGGREGATE_DEPTH` | `CLIENT_QUEUE_DEPTH * 2` | `crates/par-mux/src/mux/server/mod.rs:99` | Broadcast lines queued across all control-socket clients before the daemon evicts the deepest queue. |
-| `MAX_CONTROL_LINE_BYTES` | 1 MiB | `crates/par-mux/src/mux/server/mod.rs:108` | Bytes accumulated from one control-socket client line before the daemon closes it. |
+| `CLIENT_QUEUE_DEPTH` | 4,096 | `crates/par-mux/src/mux/server/mod.rs:88` | Broadcast lines queued per control-socket client before the daemon evicts it. |
+| `CLIENT_QUEUE_AGGREGATE_DEPTH` | `CLIENT_QUEUE_DEPTH * 2` | `crates/par-mux/src/mux/server/mod.rs:100` | Broadcast lines queued across all control-socket clients before the daemon evicts the deepest queue. |
+| `MAX_CONTROL_LINE_BYTES` | 1 MiB | `crates/par-mux/src/mux/server/mod.rs:109` | Bytes accumulated from one control-socket client line before the daemon closes it. |
 | `MAX_UPLOAD_CHUNK_BYTES` | 64 KiB | `crates/par-mux/src/mux/uploads.rs:33` | Base64-decoded bytes accepted for one `upload-chunk`. |
 | `MAX_UPLOAD_TOTAL_BYTES` | 100 MiB | `crates/par-mux/src/mux/uploads.rs:36` | Total bytes one upload may stage. |
 | `MAX_UPLOAD_CHUNKS` | 4,096 | `crates/par-mux/src/mux/uploads.rs:39` | Chunks one upload may accept (bounds a tiny-chunk flood below the |

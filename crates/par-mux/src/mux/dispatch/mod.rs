@@ -60,6 +60,10 @@ mod worktrees;
 use agents::*;
 use buffers::*;
 use client::*;
+// The ordered replay re-export (server/client.rs) rebuilds the seed reply
+// through the same body builder as the dispatch handler, so the two export
+// forms cannot drift (card 01a19947).
+pub(super) use client::replay_reply_body;
 use layouts::*;
 use panes::*;
 use sessions::*;

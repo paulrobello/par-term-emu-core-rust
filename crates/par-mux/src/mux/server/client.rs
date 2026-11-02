@@ -507,6 +507,22 @@ impl Connection {
         if let crate::mux::command::MuxCommand::PaneStream { pane, control } = command {
             return self.on_pane_stream(command_number, pane, control);
         }
+        // The seed replay form (`refresh-client -t %N` with no `-C`/`-p`)
+        // is ordered like the pane-stream seed above (card 01a19947): its
+        // reply is enqueued under the clients lock with the output-epoch
+        // re-check, so every `%output` enqueued before the reply is
+        // reflected in it and the attach client's replay-covered discard
+        // loses no raced byte. The size-report forms mutate the tree and
+        // broadcast `%layout-change`, so they keep the normal path.
+        if let crate::mux::command::MuxCommand::RefreshClient {
+            pane: Some(_),
+            size: None,
+            cell_pixels: None,
+            ..
+        } = &command
+        {
+            return self.on_ordered_replay(command_number, command, line);
+        }
         par_term_emu_core::debug_log!(
             "MUX",
             "received #{} from client {}: {}",
@@ -653,6 +669,94 @@ impl Connection {
             streamed,
         );
         Flow::Continue
+    }
+
+    /// The seed replay (`refresh-client -t %N`, no `-C`/`-p`): the pane's
+    /// screen-restore reply is enqueued under the clients lock with the
+    /// output-epoch re-check — the observe-pane seed's shape — so every
+    /// `%output` enqueued before the reply is reflected in it and every
+    /// byte the pane produces during the seed arrives either in the reply
+    /// or after it. The attach client discards pre-reply output as
+    /// replay-covered (card 01a19947): without this ordering, a byte
+    /// racing the capture→enqueue gap is discarded uncovered and lost.
+    ///
+    /// Lock discipline: the tree lock resolves the pane handle and is
+    /// released BEFORE the clients lock is taken; the only nesting here is
+    /// clients → terminal-read, the same nesting the observe-pane seed
+    /// uses. The reply send is try_send (a blocking send under the lock
+    /// would stall every client's fan-out on a full queue); a full queue
+    /// falls back to the normal blocking send after the lock drops — the
+    /// client is being evicted anyway, and an evicted client's ordering
+    /// no longer matters.
+    fn on_ordered_replay(
+        &mut self,
+        command_number: u32,
+        command: crate::mux::command::MuxCommand,
+        line: &str,
+    ) -> Flow {
+        par_term_emu_core::debug_log!(
+            "MUX",
+            "received #{} from client {}: {}",
+            command_number,
+            self.client_id,
+            summarize_line(line)
+        );
+        // Destructured before the dispatch moves the command: the raced
+        // re-export needs the pane target and the `-G` flag.
+        let (pane_target, graphics) = match &command {
+            crate::mux::command::MuxCommand::RefreshClient { pane, graphics, .. } => {
+                (pane.clone(), *graphics)
+            }
+            _ => (None, false),
+        };
+
+        let ctx = Ctx {
+            tree: &self.tree,
+            clients: &self.clients,
+            command_number,
+            shutdown: self.shutdown.as_deref(),
+            config: self.config.as_deref(),
+            client_id: Some(self.client_id),
+            layouts_dir: self.layouts_dir.as_deref(),
+            output_epoch: &self.output_epoch,
+        };
+        // The epoch baseline is sampled BEFORE the export (the observe-pane
+        // seed's lesson: sampling after only covers the lock-acquisition
+        // gap — a load-slowed export loses markers that raced it while the
+        // check compared two equal post-export loads).
+        let before = self.output_epoch.load(std::sync::atomic::Ordering::Acquire);
+        let reply = dispatch_contained(command, &ctx, self.persist.as_ref(), Some(&self.tx));
+        // Resolve the re-export handle off the clients lock (tree lock
+        // released before the clients lock is taken). A pane that resolved
+        // for the dispatch but vanished since keeps the first reply — an
+        // error block, whose ordering is irrelevant.
+        let terminal = pane_target.and_then(|target| {
+            let id = self.tree.lock().resolve_pane_target(target).ok();
+            id.and_then(|id| self.tree.lock().pane(id).map(|pane| (id, pane.terminal())))
+        });
+        let _clients = self.clients.lock();
+        let raced = self.output_epoch.load(std::sync::atomic::Ordering::Acquire) != before;
+        let reply = if raced {
+            match terminal {
+                Some((_id, terminal)) => {
+                    let term = terminal.read();
+                    emit_block(command_number, &replay_reply_body(&term, graphics), true)
+                }
+                None => reply,
+            }
+        } else {
+            reply
+        };
+        match self.tx.try_send(reply) {
+            Ok(()) => Flow::Continue,
+            // Full queue under the clients lock: fall back to the normal
+            // blocking send after the lock drops (backpressure, the
+            // ordinary reply path's behavior). The client is at its
+            // eviction bound anyway, and an evicted client's wire order no
+            // longer matters.
+            Err(std::sync::mpsc::TrySendError::Full(item)) => Flow::after_send(self.tx.send(item)),
+            Err(std::sync::mpsc::TrySendError::Disconnected(_)) => Flow::Close,
+        }
     }
 
     fn on_parse_error(&mut self, err: &str, line: &str) -> Flow {

@@ -338,6 +338,10 @@ par-mux attach work --prefix C-a    # named daemon, custom prefix
 The handshake runs in the client-contract order (`version`, `list-commands`, `set-client-colors`, the `refresh-client -C WxH -p WxH` size report), the target resolves to a pane (`%N` directly; a window/session target narrows through the targeted `list-panes`/`list-windows` queries to the marked pane; no `-t` takes the highest pane id (ids are monotonic, so the max is the newest pane)), and the pane's screen-restore replay goes to your terminal verbatim.
 The daemon then pushes `%output` for that pane as it arrives, octal-decoded to raw bytes — mouse tracking, bracketed paste, and every graphics protocol work for free in passthrough: the pane's escape bytes flow to the host emulator, and the host's reports flow back on stdin.
 
+#### Seed-ordering contract (card 01a19947)
+
+A `refresh-client -t %N` seed reply is enqueued under the daemon's clients lock with the output-epoch re-check — the same shape the raw pane-stream seed has — so the wire separates a pane's output into exactly two classes relative to each reply: every `%output` line delivered BEFORE the reply is already reflected in it, and every byte the pane produces during the seed arrives after it. A consumer that buffers `%output` across a seed therefore drops its entire pre-reply backlog at the reply and loses nothing; a consumer that discards pre-reply output as replay-covered (the attach TUI's seed) loses nothing either. The refresh-client and pane-stream replays carry the `-G` graphics section identically (shared reply-body builder).
+
 ### Passthrough mode
 
 #### Passthrough keys

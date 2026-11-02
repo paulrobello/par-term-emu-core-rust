@@ -12,7 +12,8 @@ use crate::mux::command::parse_command;
 use crate::mux::command::{parse_line, Line};
 use crate::mux::config::EffectiveConfig;
 use crate::mux::dispatch::{
-    dispatch_command, workspace_roster_changed, workspace_roster_fingerprint, Ctx,
+    dispatch_command, replay_reply_body, workspace_roster_changed, workspace_roster_fingerprint,
+    Ctx,
 };
 use crate::mux::emit::{emit, emit_block};
 use crate::mux::ids::{PaneId, WindowId};
