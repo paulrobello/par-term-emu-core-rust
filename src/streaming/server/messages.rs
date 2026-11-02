@@ -730,6 +730,15 @@ impl StreamingServer {
                 let mods = if shift { 1u8 } else { 0 }
                     | if alt { 2 } else { 0 }
                     | if ctrl { 4 } else { 0 };
+                // `button` is raw SGR code space (see MouseInput docs), but a
+                // logical Move (button 0 left-held, 3 buttonless) is accepted
+                // too: bit 32 marks every motion report, and the OR is
+                // idempotent for clients that already send raw 32/35.
+                let button = if event_type == crate::streaming::protocol::MouseEventType::Move {
+                    button | 32
+                } else {
+                    button
+                };
                 let pressed = event_type != crate::streaming::protocol::MouseEventType::Release;
                 let mouse_event = crate::mouse::MouseEvent::new(
                     button,

@@ -1608,14 +1608,21 @@ pub enum ClientMessage {
         events: Vec<EventType>,
     },
 
-    /// Mouse input from client
+    /// Mouse input from client. `button` is the raw SGR code space: low
+    /// bits 0=left, 1=middle, 2=right, 3=none/release, plus the motion bit
+    /// 32 and the wheel bit 64 ORed on top. A `move` event may carry the
+    /// logical button (0 left-held, 3 buttonless); the server normalizes it
+    /// with an idempotent `| 32` before encoding.
     #[cfg_attr(feature = "streaming", proto(message = "MouseInput"))]
     Mouse {
         /// Column position
         col: u16,
         /// Row position
         row: u16,
-        /// Button: 0=left, 1=middle, 2=right, 3=release, 4=scroll_up, 5=scroll_down
+        /// Raw SGR code: 0=left, 1=middle, 2=right, 3=none/release,
+        /// +32 motion flag, +64 wheel flag. Scroll uses 64/65; a `move`
+        /// event's button is normalized to include the motion bit (0→32,
+        /// 3→35) before the report is encoded.
         #[cfg_attr(
             feature = "streaming",
             proto(with = "crate::streaming::proto::wire::mouse_button")
@@ -1767,6 +1774,10 @@ pub enum ClientMessage {
 ///
 /// On the protobuf wire and in the Python dict API it is the lowercase
 /// name (`"press"`, `"release"`, `"move"`, `"scroll"`).
+///
+/// A `move` event's `button` is normalized: the server ORs in the SGR
+/// motion bit 32 (button 0→32, 3→35; already-raw 32/35 pass unchanged).
+/// `press`/`release`/`scroll` pass `button` through verbatim.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum MouseEventType {

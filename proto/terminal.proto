@@ -598,11 +598,15 @@ message Subscribe {
   repeated EventType events = 1;
 }
 
-// Mouse input from client
+// Mouse input from client. `button` is the raw SGR code space: low bits
+// 0=left, 1=middle, 2=right, 3=none/release, plus the motion bit 32 and
+// the wheel bit 64 ORed on top. A "move" event may carry the logical
+// button (0 left-held, 3 buttonless); the server normalizes it with an
+// idempotent `| 32` before encoding (0→32, 3→35; 32/35 pass unchanged).
 message MouseInput {
   uint32 col = 1;
   uint32 row = 2;
-  uint32 button = 3;                   // 0=left, 1=middle, 2=right, 3=release, 4=scroll_up, 5=scroll_down
+  uint32 button = 3;                   // raw SGR bits: 0=left, 1=middle, 2=right, 3=none; +32 motion, +64 wheel
   bool shift = 4;
   bool ctrl = 5;
   bool alt = 6;

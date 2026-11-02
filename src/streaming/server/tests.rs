@@ -782,4 +782,204 @@ async fn pane_create_is_refused_read_only_and_without_a_daemon_when_enabled() {
     }
 }
 
+// ─── Mouse move normalization (raw SGR button bits) ─────────────────────
+
+/// The (PTY writer, capture buffer) pair [`capture_writer`] hands back.
+type CapturedWriter = (
+    std::sync::Arc<parking_lot::Mutex<Box<dyn std::io::Write + Send>>>,
+    std::sync::Arc<parking_lot::Mutex<Vec<u8>>>,
+);
+
+/// A PTY writer backed by a shared buffer so a test can assert the exact
+/// bytes the serialized input path delivered, in order.
+fn capture_writer() -> CapturedWriter {
+    let captured = std::sync::Arc::new(parking_lot::Mutex::new(Vec::<u8>::new()));
+    let writer = std::sync::Arc::new(parking_lot::Mutex::new(Box::new(CaptureWriter {
+        buf: std::sync::Arc::clone(&captured),
+    })
+        as Box<dyn std::io::Write + Send>));
+    (writer, captured)
+}
+
+/// The `Box<dyn Write + Send>` payload behind [`capture_writer`]: appends
+/// every write into the shared buffer.
+struct CaptureWriter {
+    buf: std::sync::Arc<parking_lot::Mutex<Vec<u8>>>,
+}
+
+impl std::io::Write for CaptureWriter {
+    fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
+        self.buf.lock().extend_from_slice(bytes);
+        Ok(bytes.len())
+    }
+    fn flush(&mut self) -> std::io::Result<()> {
+        Ok(())
+    }
+}
+
+/// Poll until the captured PTY bytes end with `needle`; returns the buffer.
+fn wait_for_writer_bytes(
+    captured: &std::sync::Arc<parking_lot::Mutex<Vec<u8>>>,
+    needle: &[u8],
+) -> Vec<u8> {
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+    loop {
+        let buf = captured.lock().clone();
+        if buf.ends_with(needle) {
+            return buf;
+        }
+        assert!(
+            std::time::Instant::now() < deadline,
+            "PTY writer never received {needle:?}; have {:?}",
+            captured.lock(),
+        );
+        std::thread::sleep(std::time::Duration::from_millis(5));
+    }
+}
+
+fn dispatch_mouse(
+    server: &std::sync::Arc<StreamingServer>,
+    session: &std::sync::Arc<StreamSessionState>,
+    read_only: bool,
+    button: u8,
+    event_type: crate::streaming::protocol::MouseEventType,
+) {
+    server.handle_client_message(
+        session,
+        super::ConnCtx {
+            transport_label: "ws-test",
+            client_id: uuid::Uuid::new_v4(),
+            read_only,
+        },
+        &mut None,
+        &mut None,
+        crate::streaming::protocol::ClientMessage::Mouse {
+            col: 1,
+            row: 1,
+            button,
+            shift: false,
+            ctrl: false,
+            alt: false,
+            event_type,
+        },
+    );
+}
+
+/// A server session with SGR any-event tracking armed and a capturing PTY
+/// writer attached, ready to receive mouse input.
+fn mouse_session() -> (
+    std::sync::Arc<StreamingServer>,
+    std::sync::Arc<StreamSessionState>,
+    std::sync::Arc<parking_lot::Mutex<Vec<u8>>>,
+) {
+    let server = Arc::new(StreamingServer::new(
+        Arc::new(RwLock::new(Terminal::new(80, 24))),
+        "127.0.0.1:0".to_string(),
+    ));
+    let session = server.get_session("default").expect("default session");
+    {
+        let mut terminal = session.terminal.write();
+        terminal.set_mouse_mode(crate::mouse::MouseMode::AnyEvent);
+        terminal.set_mouse_encoding(crate::mouse::MouseEncoding::Sgr);
+    }
+    let (writer, captured) = capture_writer();
+    session.set_pty_writer(writer);
+    (server, session, captured)
+}
+
+/// A logical `move` (button 0 left-held, 3 buttonless) and an already-raw
+/// one (32/35) all encode as SGR motion reports `<32` / `<35`; modifiers
+/// keep ORing their bits (shift adds 4) on top of the motion bit.
+#[tokio::test]
+async fn mouse_move_normalizes_logical_button_to_raw_sgr_bits() {
+    use crate::streaming::protocol::MouseEventType;
+
+    let (server, session, captured) = mouse_session();
+
+    for (button, expected) in [
+        (0u8, &b"\x1b[<32;2;2M"[..]),
+        (3, &b"\x1b[<35;2;2M"[..]),
+        (32, &b"\x1b[<32;2;2M"[..]),
+        (35, &b"\x1b[<35;2;2M"[..]),
+    ] {
+        dispatch_mouse(&server, &session, false, button, MouseEventType::Move);
+        wait_for_writer_bytes(&captured, expected);
+    }
+}
+
+/// `press`/`release` pass the button through verbatim in both spellings —
+/// the logical 0-press / 3-release pair and raw values — and a raw press
+/// code (the motion bit set) is not rewritten.
+#[tokio::test]
+async fn mouse_press_and_release_buttons_stay_verbatim() {
+    use crate::streaming::protocol::MouseEventType;
+
+    let (server, session, captured) = mouse_session();
+
+    for (button, event_type, expected) in [
+        (0u8, MouseEventType::Press, &b"\x1b[<0;2;2M"[..]),
+        (3, MouseEventType::Release, &b"\x1b[<3;2;2m"[..]),
+        (1, MouseEventType::Press, &b"\x1b[<1;2;2M"[..]),
+        (2, MouseEventType::Press, &b"\x1b[<2;2;2M"[..]),
+        (32, MouseEventType::Press, &b"\x1b[<32;2;2M"[..]),
+    ] {
+        dispatch_mouse(&server, &session, false, button, event_type);
+        wait_for_writer_bytes(&captured, expected);
+    }
+}
+
+/// A read-only viewer's `move` never reaches the serialized input path:
+/// nothing is enqueued, and the silence is not counted as a drop.
+#[tokio::test]
+async fn read_only_mouse_move_sends_nothing() {
+    use crate::streaming::protocol::MouseEventType;
+
+    let (server, session, captured) = mouse_session();
+
+    dispatch_mouse(&server, &session, true, 0, MouseEventType::Move);
+    std::thread::sleep(std::time::Duration::from_millis(100));
+    assert!(
+        captured.lock().is_empty(),
+        "read-only move must not enqueue PTY bytes"
+    );
+    assert_eq!(
+        session.metrics.dropped_messages.load(Ordering::Relaxed),
+        0,
+        "read-only silence is not a drop"
+    );
+}
+
+/// The normalized `move` rides the same serialized input path as
+/// keystrokes (QA-110): one blocking drain task writes queue order, so a
+/// move flanked by keystrokes cannot overtake or trail them.
+#[tokio::test]
+async fn mouse_move_rides_the_serialized_input_path_with_keystrokes() {
+    use crate::streaming::protocol::{ClientMessage, MouseEventType};
+
+    let (server, session, captured) = mouse_session();
+    let dispatch = |msg: ClientMessage| {
+        server.handle_client_message(
+            &session,
+            super::ConnCtx {
+                transport_label: "ws-test",
+                client_id: uuid::Uuid::new_v4(),
+                read_only: false,
+            },
+            &mut None,
+            &mut None,
+            msg,
+        )
+    };
+
+    dispatch(ClientMessage::Input {
+        data: "q".to_string(),
+    });
+    dispatch_mouse(&server, &session, false, 0, MouseEventType::Move);
+    dispatch(ClientMessage::Input {
+        data: "x".to_string(),
+    });
+
+    wait_for_writer_bytes(&captured, b"q\x1b[<32;2;2Mx");
+}
+
 // ─── InputRateLimiter tests ─────────────────────────────────────────────

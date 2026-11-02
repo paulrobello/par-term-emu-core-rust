@@ -349,6 +349,13 @@ struct ConnCtx<'a> {
 
 /// The fields of a decoded `ClientMessage::Mouse` that
 /// [`StreamingServer::handle_mouse`] turns into a mouse report.
+///
+/// `button` is the raw SGR code space: low bits 0=left, 1=middle,
+/// 2=right, 3=none/release, plus the motion bit 32 and the wheel bit 64
+/// ORed on top. A `move` event may carry the logical button instead
+/// (0 left-held, 3 buttonless); the handler normalizes it with an
+/// idempotent `| 32` before encoding. `press`/`release`/`scroll` pass
+/// through verbatim.
 #[derive(Debug, Clone, Copy)]
 struct MouseInput {
     col: u16,

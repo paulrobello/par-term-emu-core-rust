@@ -933,7 +933,7 @@ The connect handshake's replay is bounded: NEWEST graphics seed first — the on
 | `ping` | (none) | Keepalive ping |
 | `refresh` | (none) | Request full screen refresh |
 | `subscribe` | `events: EventType[]` | Subscribe to specific event types (filters server messages) |
-| `mouse` | `col: uint32`, `row: uint32`, `button: uint32`, `shift: bool`, `ctrl: bool`, `alt: bool`, `event_type: string` | Mouse input (press/release/move/scroll) |
+| `mouse` | `col: uint32`, `row: uint32`, `button: uint32`, `shift: bool`, `ctrl: bool`, `alt: bool`, `event_type: string` | Mouse input (press/release/move/scroll). `button` is the raw SGR code space — see [Mouse, Focus, and Paste](#mouse-focus-and-paste) |
 | `focus` | `focused: bool` | Window focus change (in/out) |
 | `paste` | `content: string` | Paste content (auto-wrapped in bracketed paste when active) |
 | `selection` | `start_col: uint32`, `start_row: uint32`, `end_col: uint32`, `end_row: uint32`, `mode: string` | Selection request (chars/line/block/word/clear) |
@@ -1088,10 +1088,10 @@ ws.send(encodeClientMessage(msg));
 The web frontend automatically handles mouse, focus, and paste events based on terminal mode state:
 
 **Mouse Events:**
-- When the server sends `modeChanged` with `mode: "mouse_tracking"` and `enabled: true`, the frontend captures mouse events (click, release, move, scroll) on the terminal element and sends `MouseInput` messages
+- The server syncs mouse state through `modeChanged` messages that carry the terminal's exact mode names — tracking: `mouse_x10` (DECSET 9), `mouse_normal` (1000), `mouse_button_event` (1002), `mouse_any_event` (1003); encoding: `mouse_sgr` (1006), `mouse_utf8` (1005), `mouse_urxvt` (1015). They arrive at connect time from the mode-sync block for already-active modes and live as the pane app sets or clears them. A client captures mouse events (click, release, move, scroll) on the terminal element and sends `MouseInput` messages while any tracking mode is enabled.
 - Mouse coordinates are translated from pixel positions to terminal cell coordinates
-- Button values: 0=left, 1=middle, 2=right, 3=release, 4=scroll_up, 5=scroll_down
-- Modifiers: shift, ctrl, alt bitmask
+- `button` is the RAW SGR code: 0=left, 1=middle, 2=right, 3=none/release, with the motion bit 32 and the wheel bit 64 ORed on top (wheel up=64, wheel down=65). Send `press`/`release`/`scroll` verbatim. For `move`, send either the raw code (32 = left-drag motion, 35 = buttonless motion) or the logical button (0 = left-held, 3 = buttonless) — the server normalizes a `move` with an idempotent `| 32`, so both encode identically. A move with button 0 reports `<32;…M`; button 3 reports `<35;…M`.
+- Modifiers: shift, ctrl, alt flags (the report ORs shift=4, alt=8, ctrl=16 into the SGR code)
 
 **Focus Events:**
 - When the server sends `modeChanged` with `mode: "focus_tracking"` and `enabled: true`, the frontend sends `FocusChange` messages on window focus/blur
