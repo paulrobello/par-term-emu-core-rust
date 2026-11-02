@@ -30,7 +30,7 @@ BINDINGS = ROOT / "src" / "python_bindings"
 
 # Ratchet ceiling for documented pymethods lacking an Example on the default
 # scan (audit DOC-002). Lower it whenever the count drops; never raise it.
-MISSING_EXAMPLE_FLOOR = 277
+MISSING_EXAMPLE_FLOOR = 276
 
 FN_RE = re.compile(r"^(\s*)(?:pub(?:\([^)]*\))?\s+)?fn (\w+)")
 DOC_RE = re.compile(r"^(\s*)///(?: (.*))?$")
