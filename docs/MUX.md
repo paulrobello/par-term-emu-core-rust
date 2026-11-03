@@ -910,7 +910,16 @@ hook payload names the thread rather than the rollout, so both codex hook
 assets derive the id they report (and resume with) from the transcript's
 `rollout-<timestamp>-<uuid>.jsonl` filename when it parses and differs
 from the payload id; the `CODEX_THREAD_ID` fork guard still rules on the
-payload id. The muse arm is the one that cannot carry `PAR_MUX_PANE_ID` at
+payload id. codex's claude-wire hook system fires more than SessionStart
+(claude-wire names, documented in codex's hooks crate as
+`HOOK_EVENT_NAMES`), and the codex assets put each to roster use: the
+install registers five events — SessionStart (the identity report),
+UserPromptSubmit (working), PermissionRequest (question), Stop (idle —
+the turn finished, codex is back at its prompt; this is what enrolls an
+idle codex pane on the roster, which a SessionStart-only hook never
+could, since the roster lists only panes WITH state), and SessionEnd
+(the release, the corrected session id riding along as ownership
+proof). The muse arm is the one that cannot carry `PAR_MUX_PANE_ID` at
 all: muse clears its hook environment down to `MUSE_SESSION_ID`/
 `MUSE_THREAD_ID` (verified live against 1.4.9/1.4.10), so its reporter
 discovers the daemon sockets at the `default_socket_path` tiers and sends

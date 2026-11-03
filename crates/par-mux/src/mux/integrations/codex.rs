@@ -1,9 +1,12 @@
 //! codex arm: codex reads claude-format hooks from `~/.codex/hooks.json`,
 //! gated by a `[features] hooks = true` flag in `~/.codex/config.toml`
-//! (herdr's proven model). Installing merges a matcher-less SessionStart
-//! entry into hooks.json with the engine in [`super`] and enables the flag
-//! with a comment-preserving line edit; uninstall removes the entries and
-//! the script but leaves the flag — without hook entries it enables nothing.
+//! (herdr's proven model). Installing merges matcher-less entries for the
+//! five lifecycle events codex fires (SessionStart, UserPromptSubmit,
+//! PermissionRequest, Stop, SessionEnd — `HOOK_EVENT_NAMES` in codex's
+//! hooks crate, claude-wire names) into hooks.json with the engine in
+//! [`super`] and enables the flag with a comment-preserving line edit;
+//! uninstall removes the entries and the script but leaves the flag —
+//! without hook entries it enables nothing.
 
 use std::fs;
 use std::io;
@@ -100,8 +103,29 @@ fn hook_asset_path() -> io::Result<PathBuf> {
     asset_path_for(codex_hook_install_name())
 }
 
-/// Install the codex session hook: write the script asset, merge the
-/// SessionStart entry into hooks.json, and enable `[features] hooks`.
+/// The hooks.json entries par-mux installs, in merge order: the event name
+/// and the action-bearing command (claude's model — the action picks the
+/// asset's arm, the event key only routes the invocation; codex documents
+/// the claude-wire names as its stable `HOOK_EVENT_NAMES`). Codex ignores
+/// matcher fields on these events, so every group is matcher-less.
+fn install_entries(hook_path: &Path) -> [(&'static str, String); 5] {
+    [
+        ("SessionStart", codex_hook_command(hook_path)),
+        (
+            "UserPromptSubmit",
+            hook_command_with_action(hook_path, "prompt"),
+        ),
+        (
+            "PermissionRequest",
+            hook_command_with_action(hook_path, "question"),
+        ),
+        ("Stop", hook_command_with_action(hook_path, "stop")),
+        ("SessionEnd", hook_command_with_action(hook_path, "release")),
+    ]
+}
+
+/// Install the codex session hook: write the script asset, merge the five
+/// lifecycle entries into hooks.json, and enable `[features] hooks`.
 pub fn install_codex_hook() -> io::Result<CodexHookInstall> {
     install_codex_hook_into(&codex_config_dir()?, &hook_asset_path()?)
 }
@@ -121,15 +145,27 @@ pub fn install_codex_hook_into(codex_dir: &Path, hook_path: &Path) -> io::Result
     let config_content = read_or_default(&config_path, "")?;
 
     // Merge and verify BOTH files before writing anything: a malformed user
-    // config must fail with every file — and the asset — untouched.
-    let command = codex_hook_command(hook_path);
-    let merged = merge_hook_event(&hooks_content, &hooks_path, &command, None, "SessionStart")?;
+    // config must fail with every file — and the asset — untouched. All five
+    // entries merge against the sequentially updated text so a fresh install
+    // (or an upgrade from the SessionStart-only version) splices in one
+    // write.
+    let mut current = hooks_content;
+    let mut hooks_changed = false;
+    for (event, command) in install_entries(hook_path) {
+        current = match merge_hook_event(&current, &hooks_path, &command, None, event)? {
+            Some(updated) => {
+                hooks_changed = true;
+                updated
+            }
+            None => current,
+        };
+    }
     let config_updated = ensure_features_hooks_true(&config_content, &config_path)?;
 
     write_hook_asset(hook_path, codex_hook_asset())?;
 
-    if let Some(updated) = &merged {
-        save_settings(&hooks_path, updated)?;
+    if hooks_changed {
+        save_settings(&hooks_path, &current)?;
     }
     if let Some(updated) = &config_updated {
         save_settings(&config_path, updated)?;
@@ -139,7 +175,7 @@ pub fn install_codex_hook_into(codex_dir: &Path, hook_path: &Path) -> io::Result
         hook_path: hook_path.to_path_buf(),
         hooks_path,
         config_path,
-        hooks_changed: merged.is_some(),
+        hooks_changed,
         config_changed: config_updated.is_some(),
     })
 }
@@ -150,6 +186,12 @@ pub fn install_codex_hook_into(codex_dir: &Path, hook_path: &Path) -> io::Result
 /// removing a flag the user may have set themselves is not ours to decide.
 pub fn uninstall_codex_hook() -> io::Result<CodexHookUninstall> {
     uninstall_codex_hook_into(&codex_config_dir()?, &hook_asset_path()?)
+}
+
+/// The entries the uninstall removes: the same five events install merges,
+/// each with its own action-bearing command.
+fn uninstall_entries(hook_path: &Path) -> Vec<(&'static str, String)> {
+    install_entries(hook_path).into_iter().collect()
 }
 
 /// Uninstall with explicit paths (test/install seam).
@@ -163,10 +205,12 @@ pub fn uninstall_codex_hook_into(
     let mut hooks_changed = false;
     if hooks_path.is_file() {
         let content = fs::read_to_string(&hooks_path)?;
-        let command = codex_hook_command(hook_path);
-        if let Some(updated) =
-            unmerge_hook_entries(&content, &hooks_path, &[("SessionStart", command.as_str())])?
-        {
+        let owned_entries = uninstall_entries(hook_path);
+        let entries: Vec<(&str, &str)> = owned_entries
+            .iter()
+            .map(|(event, command)| (*event, command.as_str()))
+            .collect();
+        if let Some(updated) = unmerge_hook_entries(&content, &hooks_path, &entries)? {
             save_settings(&hooks_path, &updated)?;
             hooks_changed = true;
         }
@@ -618,6 +662,10 @@ args = ["mcp", "serve"]
         assert_eq!(asset, codex_hook_asset());
         assert!(asset.contains(CODEX_HOOK_MARKER));
         assert!(asset.contains("CODEX_THREAD_ID"));
+        assert!(
+            asset.contains("PAR_MUX_INTEGRATION_VERSION=3"),
+            "the idle-capture regeneration bumps the integration version: {asset}"
+        );
         let resume_argv = if cfg!(windows) {
             r#"@("codex", "resume", "$sessionId")"#
         } else {
@@ -946,11 +994,62 @@ args = ["mcp", "serve"]
             CODEX_HOOK_ASSET_WINDOWS.contains("pane.report_agent_session"),
             "speaks the same control-socket method"
         );
+        assert!(
+            CODEX_HOOK_ASSET_WINDOWS.contains("pane.report_agent")
+                && CODEX_HOOK_ASSET_WINDOWS.contains("pane.release_agent"),
+            "the state and release arms survive the port"
+        );
         assert!(CODEX_HOOK_ASSET_WINDOWS.contains("par-mux:codex"));
         assert!(CODEX_HOOK_ASSET_WINDOWS.contains("session_resume_argv"));
         // The codex-specific guards survive the port.
         assert!(CODEX_HOOK_ASSET_WINDOWS.contains("CODEX_THREAD_ID"));
         assert!(CODEX_HOOK_ASSET_WINDOWS.contains("SessionStart"));
+    }
+
+    /// Fresh install registers all five lifecycle events codex fires
+    /// (claude-wire names, matcher-less — codex ignores matchers on these),
+    /// each with its own action-bearing command so the asset's arms dispatch.
+    #[test]
+    fn install_registers_all_five_lifecycle_events() {
+        let root = temp_root();
+        let codex_dir = root.path().join("codex");
+        fs::create_dir_all(&codex_dir).unwrap();
+        let hook = root.path().join(codex_hook_install_name());
+
+        let result = install_codex_hook_into(&codex_dir, &hook).unwrap();
+
+        let hooks = fs::read_to_string(&result.hooks_path).unwrap();
+        for (event, action) in [
+            ("SessionStart", "session"),
+            ("UserPromptSubmit", "prompt"),
+            ("PermissionRequest", "question"),
+            ("Stop", "stop"),
+            ("SessionEnd", "release"),
+        ] {
+            let commands: Vec<String> = {
+                let value: JsonValue = parse_serde(&hooks, Path::new("<test>")).unwrap();
+                value["hooks"][event]
+                    .as_array()
+                    .unwrap_or_else(|| panic!("{event} registered"))
+                    .iter()
+                    .flat_map(|group| {
+                        group["hooks"].as_array().map(|entries| {
+                            entries
+                                .iter()
+                                .filter_map(|e| e.get("command").and_then(JsonValue::as_str))
+                                .map(String::from)
+                                .collect::<Vec<_>>()
+                        })
+                    })
+                    .flatten()
+                    .collect()
+            };
+            assert_eq!(
+                commands,
+                vec![hook_command_with_action(&hook, action)],
+                "{event} carries exactly our {action} command"
+            );
+        }
     }
 
     /// One hook run against a local listener: writes the shipped POSIX asset
@@ -959,6 +1058,13 @@ args = ["mcp", "serve"]
     /// nothing arrived within the deadline (the guard refused).
     #[cfg(unix)]
     fn run_hook(payload: &str, thread_id: &str) -> Option<JsonValue> {
+        run_hook_action("session", payload, thread_id)
+    }
+
+    /// [`run_hook`] with the asset's action argument under test — the v3
+    /// arms dispatch on it (prompt/stop/question/release).
+    #[cfg(unix)]
+    fn run_hook_action(action: &str, payload: &str, thread_id: &str) -> Option<JsonValue> {
         use std::io::Write as _;
         use std::net::Shutdown;
         use std::os::unix::net::UnixListener;
@@ -972,7 +1078,7 @@ args = ["mcp", "serve"]
         fs::write(&script, CODEX_HOOK_ASSET_POSIX).expect("writes the asset");
         let mut child = Command::new("sh")
             .arg(&script)
-            .arg("session")
+            .arg(action)
             .env("PAR_MUX_ENV", "1")
             .env("PAR_MUX_SOCKET", &socket)
             .env("PAR_MUX_PANE_ID", "pane-1")
@@ -1105,5 +1211,102 @@ args = ["mcp", "serve"]
             "99999999-9999-7999-8999-999999999999",
         );
         assert!(refused.is_none(), "the thread-id guard still refuses");
+    }
+
+    /// The v3 idle-at-prompt capture (card 01a19ec3): codex 0.166's
+    /// claude-wire hook events (session_start/user-prompt-submit/
+    /// permission-request/stop/session-end `.command.input` in codex's
+    /// hooks/src/schema.rs — session_id + turn_id + transcript_path + cwd +
+    /// hook_event_name + model + permission_mode, deny_unknown_fields) must
+    /// map working/idle/question/release so an idle codex pane at its
+    /// prompt enrolls on the roster. Drives the shipped asset end to end,
+    /// unix only.
+    #[test]
+    #[cfg(unix)]
+    fn the_hook_reports_working_idle_question_and_release_for_the_lifecycle_events() {
+        // The payload names thread …5555…; the rollout filename carries the
+        // resumable id …4444…, so every report that knows the transcript
+        // must correct to it (the id the daemon's release-proof compares).
+        let session_id = "0e581433-eeee-7555-8555-555555555555";
+        let transcript =
+            "/sessions/rollout-2026-11-02T10-00-00-0e581433-dddd-7444-8444-444444444444.jsonl";
+        let resumable = "0e581433-dddd-7444-8444-444444444444";
+
+        // UserPromptSubmit → working, with identity so the daemon
+        // re-establishes a lost claim.
+        let params = run_hook_action(
+            "prompt",
+            &format!(
+                r#"{{"hook_event_name":"UserPromptSubmit","session_id":"{session_id}","turn_id":"t1","transcript_path":"{transcript}","cwd":"/w","model":"gpt-5-codex","permission_mode":"default","prompt":"ship it"}}"#
+            ),
+            session_id,
+        )
+        .expect("the prompt payload reports");
+        assert_eq!(params["state"], "working", "a prompt submit is working");
+        assert_eq!(params["agent_session_id"], resumable);
+        assert_eq!(params["agent_session_path"], transcript);
+
+        // Stop → idle: the turn finished, codex is back at its prompt — the
+        // idle-at-prompt capture this integration previously lacked. The
+        // rollout filename's id wins on state reports too.
+        let params = run_hook_action(
+            "stop",
+            &format!(
+                r#"{{"hook_event_name":"Stop","session_id":"{session_id}","turn_id":"t1","transcript_path":"{transcript}","cwd":"/w","model":"gpt-5-codex","permission_mode":"default","stop_hook_active":false,"last_assistant_message":null}}"#
+            ),
+            session_id,
+        )
+        .expect("the stop payload reports");
+        assert_eq!(
+            params["state"], "idle",
+            "a finished turn is idle-at-prompt — the roster enrollment"
+        );
+        assert_eq!(
+            params["agent_session_id"], resumable,
+            "the rollout filename's resumable id wins on state reports too"
+        );
+
+        // PermissionRequest → question: the direct analog of the claude
+        // Notification arm's "permission" mapping.
+        let params = run_hook_action(
+            "question",
+            &format!(
+                r#"{{"hook_event_name":"PermissionRequest","session_id":"{session_id}","turn_id":"t1","transcript_path":null,"cwd":"/w","model":"gpt-5-codex","permission_mode":"default","tool_name":"shell","tool_input":{{"command":"rm -rf /"}}}}"#
+            ),
+            session_id,
+        )
+        .expect("the permission payload reports");
+        assert_eq!(params["state"], "question");
+        assert_eq!(
+            params["agent_session_id"], session_id,
+            "without a rollout filename the payload id stands"
+        );
+        assert!(
+            params.get("agent_session_path").is_none(),
+            "a null transcript adds no path"
+        );
+
+        // SessionEnd → release, with the session id as ownership proof.
+        let params = run_hook_action(
+            "release",
+            &format!(
+                r#"{{"hook_event_name":"SessionEnd","session_id":"{session_id}","transcript_path":null,"cwd":"/w","reason":"exit"}}"#
+            ),
+            session_id,
+        )
+        .expect("the session-end payload reports");
+        assert!(
+            params.get("state").is_none(),
+            "a release carries no state field"
+        );
+        assert_eq!(params["agent_session_id"], session_id);
+
+        // An event outside the five registered lifecycle events reports
+        // nothing (the session arm's SessionStart contract).
+        let refused = run_hook(
+            r#"{"hook_event_name":"PostToolUse","session_id":"0e581433-eeee-7555-8555-555555555555","turn_id":"t1","transcript_path":null,"cwd":"/w","model":"gpt-5-codex","permission_mode":"default","tool_name":"shell","tool_input":{}}"#,
+            "0e581433-eeee-7555-8555-555555555555",
+        );
+        assert!(refused.is_none(), "unregistered event names stay inert");
     }
 }

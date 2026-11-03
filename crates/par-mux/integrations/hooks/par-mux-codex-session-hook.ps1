@@ -1,14 +1,20 @@
 # par-mux codex session hook (Windows) — reports session identity to the
-# par-mux daemon on codex SessionStart events. PowerShell port of the POSIX
-# reporter (par-mux-codex-session-hook.sh): one JSON line over the control
-# socket, one reply read, close. Inert outside a par-mux pane (env guards)
-# and silent on every failure.
+# par-mux daemon on codex SessionStart events, and with codex's claude-wire
+# hook events also keeps a live session registered and stateful between
+# those: UserPromptSubmit → `prompt` (working), PermissionRequest →
+# `question`, Stop → `stop` (idle — the idle-at-prompt capture this
+# integration previously lacked: the roster lists only panes WITH state,
+# and a codex pane used to fire no state event after SessionStart, card
+# 01a19ec3), and releases the pane's claim on SessionEnd (`release`).
+# PowerShell port of the POSIX reporter (par-mux-codex-session-hook.sh):
+# one JSON line over the control socket, one reply read, close. Inert
+# outside a par-mux pane (env guards) and silent on every failure.
 # PAR_MUX_INTEGRATION_ID=codex
-# PAR_MUX_INTEGRATION_VERSION=2
+# PAR_MUX_INTEGRATION_VERSION=3
 
 param([string]$Action = "")
 
-if ($Action -ne "session") { exit 0 }
+if ($Action -notin @("session", "prompt", "question", "stop", "release")) { exit 0 }
 if ($env:PAR_MUX_ENV -ne "1") { exit 0 }
 if ([string]::IsNullOrWhiteSpace($env:PAR_MUX_SOCKET)) { exit 0 }
 if ([string]::IsNullOrWhiteSpace($env:PAR_MUX_PANE_ID)) { exit 0 }
@@ -50,15 +56,18 @@ try {
     exit 0
 }
 
-# codex names its events claude-style; only session starts are ours to report.
+# The action is ours — the installer registered it against a codex event —
+# while hook_event_name is codex's surface, the one that renamed itself out
+# from under v2 (card 01a19ec3). The arms therefore dispatch on the action
+# and never demand a particular event name (except the session arm, whose
+# payload shape is SessionStart's by contract).
 if ($null -eq $payload) { exit 0 }
-if ($payload.hook_event_name -isnot [string] -or $payload.hook_event_name -cne "SessionStart") { exit 0 }
 
 $sessionId = $payload.session_id
 if ([string]::IsNullOrWhiteSpace($sessionId)) { exit 0 }
 
 # codex exports the pane's thread id into hook processes. When a fork or
-# subagent fires SessionStart under a different id, that session is not this
+# subagent fires an event under a different id, that session is not this
 # pane's session — do not overwrite the roster with it.
 $inherited = $env:CODEX_THREAD_ID
 if (-not [string]::IsNullOrWhiteSpace($inherited) -and $inherited -ne $sessionId) { exit 0 }
@@ -66,10 +75,12 @@ if (-not [string]::IsNullOrWhiteSpace($inherited) -and $inherited -ne $sessionId
 # codex's payload names the THREAD, and a thread id is not always one
 # `codex resume` resolves — measured 2026-10-16 (codex 0.163): a restored
 # pane ran `codex resume <payload id>` into "no rollout found for thread
-# id" while the transcript's rollout existed under a different id, which
-# `codex exec resume` did resolve. The rollout filename carries the
-# resumable id (rollout-<timestamp>-<uuid>.jsonl), so when the transcript
-# matches that naming and holds a different id, the file wins.
+# id" while the transcript's rollout existed under a different id. The
+# rollout filename carries the resumable id (rollout-<timestamp>-<uuid>.jsonl),
+# so when the transcript matches that naming and holds a different id, the
+# file wins. The corrected id rides EVERY report so the daemon's
+# release-proof check compares against the id the session report
+# established.
 $transcriptPath = $null
 if ($payload.transcript_path -is [string] -and -not [string]::IsNullOrWhiteSpace($payload.transcript_path)) {
     $transcriptPath = "$($payload.transcript_path)"
@@ -83,32 +94,70 @@ if ($null -ne $transcriptPath) {
     }
 }
 
-$source = $payload.source
-if ([string]::IsNullOrWhiteSpace($source)) { $source = "startup" }
-
 $seq = [DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds() * 1000000
-$requestId = "par-mux:codex:$([DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds()):$('{0:D6}' -f (Get-Random -Minimum 0 -Maximum 999999))"
-$params = [ordered]@{
-    pane_id = "$($env:PAR_MUX_PANE_ID)"
-    source = "par-mux:codex"
-    agent = "codex"
-    seq = $seq
-    session_start_source = "$source"
-    agent_session_id = "$sessionId"
-    session_resume_argv = @("codex", "resume", "$sessionId")
+$requestId = "par-mux:codex:$Action`:$seq"
+switch ($Action) {
+    "session" {
+        if ($payload.hook_event_name -isnot [string] -or $payload.hook_event_name -cne "SessionStart") { exit 0 }
+        $source = $payload.source
+        if ([string]::IsNullOrWhiteSpace($source)) { $source = "startup" }
+        $params = [ordered]@{
+            pane_id = "$($env:PAR_MUX_PANE_ID)"
+            source = "par-mux:codex"
+            agent = "codex"
+            seq = $seq
+            session_start_source = "$source"
+            agent_session_id = "$sessionId"
+            session_resume_argv = @("codex", "resume", "$sessionId")
+        }
+    }
+    "release" {
+        # pane.release_agent clears the pane claim. The corrected session id
+        # rides along as proof of ownership; the daemon no-ops a release
+        # whose proof does not match the claimed session (a nested codex
+        # exit never owns the parent claim).
+        $params = [ordered]@{
+            pane_id = "$($env:PAR_MUX_PANE_ID)"
+            source = "par-mux:codex"
+            agent = "codex"
+            seq = $seq
+            agent_session_id = "$sessionId"
+        }
+    }
+    default {
+        # prompt → working (UserPromptSubmit), question → question
+        # (PermissionRequest), stop → idle (Stop: the turn finished, codex
+        # is back at the prompt). The session id and transcript path ride
+        # every state report so a claim that lost its identity is
+        # re-established without waiting for a SessionStart.
+        $state = @{ prompt = "working"; question = "question"; stop = "idle" }[$Action]
+        if ($null -eq $state) { exit 0 }
+        $params = [ordered]@{
+            pane_id = "$($env:PAR_MUX_PANE_ID)"
+            source = "par-mux:codex"
+            agent = "codex"
+            seq = $seq
+            state = "$state"
+            agent_session_id = "$sessionId"
+        }
+    }
 }
-if ($null -ne $transcriptPath) {
+if ($null -ne $transcriptPath -and $Action -ne "release") {
     $params["agent_session_path"] = "$transcriptPath"
 }
 
 $request = [ordered]@{
     id = $requestId
-    method = "pane.report_agent_session"
+    method = if ($Action -eq "session") { "pane.report_agent_session" }
+             elseif ($Action -eq "release") { "pane.release_agent" }
+             else { "pane.report_agent" }
     params = $params
-} | ConvertTo-Json -Compress -Depth 6
+}
+
+$requestJson = $request | ConvertTo-Json -Compress -Depth 6
 
 try {
-    $bytes = [System.Text.Encoding]::UTF8.GetBytes($request + "`n")
+    $bytes = [System.Text.Encoding]::UTF8.GetBytes($requestJson + "`n")
     Send-MuxReport $env:PAR_MUX_SOCKET $bytes
 } catch {
 }

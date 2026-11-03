@@ -1,11 +1,17 @@
 #!/bin/sh
 # par-mux codex session hook — reports session identity to the par-mux
-# daemon on codex SessionStart events. Same reporter shape as the kimi port
-# (core tests/assets/par-mux-agent-state.sh): one JSON line over the control
-# socket, one reply read, close. Inert outside a par-mux pane (env guards)
-# and silent on every failure.
+# daemon on codex SessionStart events, and with codex's claude-wire hook
+# events also keeps a live session registered and stateful between those:
+# UserPromptSubmit → `prompt` (working), PermissionRequest → `question`,
+# Stop → `stop` (idle — the idle-at-prompt capture this integration
+# previously lacked: the roster lists only panes WITH state, and a codex
+# pane used to fire no state event after SessionStart, card 01a19ec3), and
+# releases the pane's claim on SessionEnd (`release`). Same reporter shape
+# as the kimi port (core tests/assets/par-mux-agent-state.sh): one JSON
+# line over the control socket, one reply read, close. Inert outside a
+# par-mux pane (env guards) and silent on every failure.
 # PAR_MUX_INTEGRATION_ID=codex
-# PAR_MUX_INTEGRATION_VERSION=2
+# PAR_MUX_INTEGRATION_VERSION=3
 
 set -eu
 
@@ -15,7 +21,7 @@ trap 'rm -f "$hook_input_file"' EXIT HUP INT TERM
 cat >"$hook_input_file" 2>/dev/null || true
 
 case "$action" in
-  session) ;;
+  session|prompt|question|stop|release) ;;
   *) exit 0 ;;
 esac
 
@@ -31,6 +37,7 @@ import random
 import socket
 import time
 
+action = os.environ.get("PAR_MUX_ACTION", "")
 source = "par-mux:codex"
 pane_id = os.environ.get("PAR_MUX_PANE_ID")
 socket_path = os.environ.get("PAR_MUX_SOCKET")
@@ -49,17 +56,17 @@ if hook_input_file:
     except Exception:
         hook_input = {}
 
-# codex names its events claude-style; only session starts are ours to report.
-hook_event_name = hook_input.get("hook_event_name")
-if hook_event_name != "SessionStart":
-    raise SystemExit(0)
-
+# The action is ours — the installer registered it against a codex event —
+# while hook_event_name is codex's surface, the one that renamed itself out
+# from under v2 (card 01a19ec3). The arms therefore dispatch on the action
+# and never demand a particular event name (except the session arm, whose
+# payload shape is SessionStart's by contract).
 session_id = hook_input.get("session_id")
 if not isinstance(session_id, str) or not session_id:
     raise SystemExit(0)
 
 # codex exports the pane's thread id into hook processes. When a fork or
-# subagent fires SessionStart under a different id, that session is not this
+# subagent fires an event under a different id, that session is not this
 # pane's session — do not overwrite the roster with it.
 inherited = os.environ.get("CODEX_THREAD_ID")
 if inherited and inherited != session_id:
@@ -71,7 +78,9 @@ if inherited and inherited != session_id:
 # id" while the transcript's rollout existed under a different id, which
 # `codex exec resume` did resolve. The rollout filename carries the
 # resumable id (rollout-<timestamp>-<uuid>.jsonl), so when the transcript
-# matches that naming and holds a different id, the file wins.
+# matches that naming and holds a different id, the file wins. The
+# corrected id rides EVERY report so the daemon's release-proof check
+# compares against the id the session report established.
 transcript = hook_input.get("transcript_path")
 if isinstance(transcript, str) and transcript:
     name = os.path.basename(transcript)
@@ -80,29 +89,77 @@ if isinstance(transcript, str) and transcript:
         if len(candidate) == 36 and candidate != session_id:
             session_id = candidate
 
-session_start_source = hook_input.get("source")
-if not isinstance(session_start_source, str) or not session_start_source:
-    session_start_source = "startup"
+seq = time.time_ns()
 
-request_id = f"{source}:{int(time.time() * 1000)}:{random.randrange(1_000_000):06d}"
-report_seq = time.time_ns()
-params = {
-    "pane_id": pane_id,
-    "source": source,
-    "agent": "codex",
-    "seq": report_seq,
-    "session_start_source": session_start_source,
-    "agent_session_id": session_id,
-    "session_resume_argv": ["codex", "resume", session_id],
-}
-if isinstance(transcript, str) and transcript:
-    params["agent_session_path"] = transcript
+if action == "session":
+    hook_event_name = hook_input.get("hook_event_name")
+    if hook_event_name != "SessionStart":
+        raise SystemExit(0)
 
-request = {
-    "id": request_id,
-    "method": "pane.report_agent_session",
-    "params": params,
-}
+    session_start_source = hook_input.get("source")
+    if not isinstance(session_start_source, str) or not session_start_source:
+        session_start_source = "startup"
+
+    params = {
+        "pane_id": pane_id,
+        "source": source,
+        "agent": "codex",
+        "seq": seq,
+        "session_start_source": session_start_source,
+        "agent_session_id": session_id,
+        "session_resume_argv": ["codex", "resume", session_id],
+    }
+    if isinstance(transcript, str) and transcript:
+        params["agent_session_path"] = transcript
+
+    request = {
+        "id": f"{source}:session:{seq}",
+        "method": "pane.report_agent_session",
+        "params": params,
+    }
+elif action == "release":
+    # pane.release_agent clears the pane claim. The corrected session id
+    # rides along as proof of ownership; the daemon no-ops a release whose
+    # proof does not match the claimed session (a nested codex exit never
+    # owns the parent claim).
+    params = {
+        "pane_id": pane_id,
+        "source": source,
+        "agent": "codex",
+        "seq": seq,
+        "agent_session_id": session_id,
+    }
+    request = {
+        "id": f"{source}:release:{seq}",
+        "method": "pane.release_agent",
+        "params": params,
+    }
+else:
+    # prompt → working (UserPromptSubmit), question → question
+    # (PermissionRequest), stop → idle (Stop: the turn finished, codex is
+    # back at the prompt). The session id and transcript path ride every
+    # state report so a claim that lost its identity is re-established
+    # without waiting for a SessionStart.
+    state = {"prompt": "working", "question": "question", "stop": "idle"}.get(action)
+    if state is None:
+        raise SystemExit(0)
+
+    params = {
+        "pane_id": pane_id,
+        "source": source,
+        "agent": "codex",
+        "seq": seq,
+        "state": state,
+        "agent_session_id": session_id,
+    }
+    if isinstance(transcript, str) and transcript:
+        params["agent_session_path"] = transcript
+
+    request = {
+        "id": f"{source}:{action}:{seq}",
+        "method": "pane.report_agent",
+        "params": params,
+    }
 
 try:
     client = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
