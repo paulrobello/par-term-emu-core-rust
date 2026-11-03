@@ -576,6 +576,12 @@ impl ScrapeEngine {
         self.sets.get(agent)
     }
 
+    /// The bundled set kinds, in table order — the fresh-pane detection
+    /// walk's probe labels ([`scrape_tick_with`]).
+    pub(crate) fn agent_kinds(&self) -> impl Iterator<Item = &'static str> {
+        BUNDLED_PATTERNS.iter().map(|(kind, _)| *kind)
+    }
+
     /// Key one compiled set under its id and every alias.
     fn index(&mut self, set: CompiledSet, id: &str, aliases: &[String]) {
         for alias in aliases {
@@ -698,7 +704,28 @@ pub(crate) fn scrape_tick_with(
         if !pane.is_running() {
             continue;
         }
-        let Some(agent) = pane.metadata().get("agent").cloned() else {
+        let mut agent = pane.metadata().get("agent").cloned();
+        if agent.is_none() {
+            // A pane nobody claimed yet: resolve the agent kind from its
+            // process tree so a plain `new-session -- codex` lands on the
+            // roster without hooks (card 01a19ec3 — the tick previously
+            // refreshed only ALREADY-claimed panes, which is why a fresh
+            // codex pane stayed invisible no matter how long it idled).
+            // Probe labels are the bundled set kinds; the first process
+            // match wins. The Unknown verdict (a present-but-unreadable
+            // descendant) never claims — the same no-guesses rule the
+            // liveness sweep runs under.
+            if let (Some(table), Some(child)) = (table, pane.child_pid()) {
+                if let Some(kind) = engine
+                    .agent_kinds()
+                    .find(|kind| table.agent_alive(child, kind) == Liveness::Matches)
+                {
+                    pane.set_metadata("agent", kind);
+                    agent = Some(kind.to_string());
+                }
+            }
+        }
+        let Some(agent) = agent else {
             continue;
         };
         let prior_source = pane.metadata().get("agent_state_source").cloned();
@@ -1985,13 +2012,72 @@ contains = ["Override Idle"]
         ])
     }
 
+    /// The fixture pane's real child pid (the tick's detection and the
+    /// fallback's liveness both walk from it).
+    fn fixture_child(tree: &Arc<Mutex<MuxTree>>, pane_id: PaneId) -> u32 {
+        tree.lock()
+            .pane(pane_id)
+            .expect("pane exists")
+            .child_pid()
+            .expect("spawned pane has a child")
+    }
+
+    /// A fresh pane nobody claimed (card 01a19ec3): the tick resolves the
+    /// agent kind from its process tree and the codex set's idle_fallback
+    /// lands the roster row, so a plain `new-session -- codex` is visible
+    /// without hooks and without a first turn.
+    #[test]
+    fn a_fresh_pane_running_codex_enrolls_through_the_tick_without_hooks() {
+        let (tree, pane_id) = tree_with_pane();
+        let child = fixture_child(&tree, pane_id);
+        let table = table_running(child, &["codex"]);
+        let (state, rule) = tick_state(&tree, pane_id, Some(&table));
+        assert_eq!(state.as_deref(), Some("idle"), "the fallback lands idle");
+        assert_eq!(rule.as_deref(), Some(IDLE_FALLBACK_RULE));
+        let guard = tree.lock();
+        let metadata = guard.pane(pane_id).expect("pane exists").metadata();
+        assert_eq!(
+            metadata.get("agent").map(String::as_str),
+            Some("codex"),
+            "the detection rides the same tick"
+        );
+    }
+
+    /// A fresh pane whose tree runs nothing known stays unclaimed — the
+    /// detection probes only the bundled agent kinds.
+    #[test]
+    fn a_fresh_pane_running_nothing_known_stays_unenrolled() {
+        let (tree, pane_id) = tree_with_pane();
+        let child = fixture_child(&tree, pane_id);
+        let table = table_running(child, &["vim"]);
+        tick_state(&tree, pane_id, Some(&table));
+        let guard = tree.lock();
+        let metadata = guard.pane(pane_id).expect("pane exists").metadata();
+        assert!(metadata.get("agent").is_none(), "no kind, no claim");
+        assert!(metadata.get("agent_state").is_none(), "no state");
+    }
+
+    /// An unprovable tree (a present-but-unreadable descendant) never
+    /// claims a fresh pane — the Unknown verdict is no claim, the same
+    /// no-guesses rule the liveness sweep runs under.
+    #[test]
+    fn an_unprovable_tree_never_claims_a_fresh_pane() {
+        let (tree, pane_id) = tree_with_pane();
+        let child = fixture_child(&tree, pane_id);
+        let table = ProcessTable::with_fixed_argv(&[(child as i32, 1, None)]);
+        tick_state(&tree, pane_id, Some(&table));
+        let guard = tree.lock();
+        let metadata = guard.pane(pane_id).expect("pane exists").metadata();
+        assert!(metadata.get("agent").is_none(), "Unknown claims nothing");
+    }
+
     #[test]
     fn idle_fallback_needs_the_agents_process_and_loses_to_a_rule() {
         let engine = ScrapeEngine::load(None);
-        for agent in ["droid", "copilot", "cursor"] {
+        for agent in ["droid", "copilot", "cursor", "codex"] {
             assert!(engine.set_for(agent).unwrap().idle_fallback(), "{agent}");
         }
-        for agent in ["claude", "codex", "grok", "muse"] {
+        for agent in ["claude", "grok", "muse"] {
             assert!(!engine.set_for(agent).unwrap().idle_fallback(), "{agent}");
         }
 

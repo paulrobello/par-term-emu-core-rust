@@ -20,8 +20,15 @@
 # Licensed under the Apache License, Version 2.0 as pattern data derived
 # from herdr; see herdr's LICENSE file for the license text.
 id = "codex"
-version = "2026.09.15.1-parmux1"
+version = "2026.09.15.1-parmux2"
 updated_at = "2026-09-15T00:00:00Z"
+
+# idle_fallback ports herdr's engine default for a known agent with no
+# matching rule (DEFAULT_KNOWN_AGENT_IDLE_FALLBACK in detect/manifest.rs):
+# codex 0.166 draws no idle marker on its Ready screen, so its idle is
+# "running, nothing matched". par-mux applies it only while the process
+# table shows codex in the pane (card 01a19ec3).
+idle_fallback = true
 
 [[rules]]
 id = "osc_title_blocked"
