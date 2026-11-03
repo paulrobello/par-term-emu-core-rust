@@ -11,7 +11,7 @@
 # line over the control socket, one reply read, close. Inert outside a
 # par-mux pane (env guards) and silent on every failure.
 # PAR_MUX_INTEGRATION_ID=codex
-# PAR_MUX_INTEGRATION_VERSION=3
+# PAR_MUX_INTEGRATION_VERSION=4
 
 set -eu
 
@@ -112,11 +112,34 @@ if action == "session":
     if isinstance(transcript, str) and transcript:
         params["agent_session_path"] = transcript
 
-    request = {
-        "id": f"{source}:session:{seq}",
-        "method": "pane.report_agent_session",
-        "params": params,
+    # The roster lists only panes WITH state, and codex's Stop fires per
+    # turn — a fresh pane idling at the Ready prompt since startup had no
+    # state until its first turn completed (card 01a19f8f). Idle rides the
+    # same hook run and connection, ordered after the identity report so
+    # the state claim carries the session id the daemon just learned.
+    idle = {
+        "pane_id": pane_id,
+        "source": source,
+        "agent": "codex",
+        "seq": seq + 1,
+        "state": "idle",
+        "agent_session_id": session_id,
     }
+    if isinstance(transcript, str) and transcript:
+        idle["agent_session_path"] = transcript
+
+    requests = [
+        {
+            "id": f"{source}:session:{seq}",
+            "method": "pane.report_agent_session",
+            "params": params,
+        },
+        {
+            "id": f"{source}:session-idle:{seq}",
+            "method": "pane.report_agent",
+            "params": idle,
+        },
+    ]
 elif action == "release":
     # pane.release_agent clears the pane claim. The corrected session id
     # rides along as proof of ownership; the daemon no-ops a release whose
@@ -129,11 +152,13 @@ elif action == "release":
         "seq": seq,
         "agent_session_id": session_id,
     }
-    request = {
-        "id": f"{source}:release:{seq}",
-        "method": "pane.release_agent",
-        "params": params,
-    }
+    requests = [
+        {
+            "id": f"{source}:release:{seq}",
+            "method": "pane.release_agent",
+            "params": params,
+        }
+    ]
 else:
     # prompt → working (UserPromptSubmit), question → question
     # (PermissionRequest), stop → idle (Stop: the turn finished, codex is
@@ -155,21 +180,24 @@ else:
     if isinstance(transcript, str) and transcript:
         params["agent_session_path"] = transcript
 
-    request = {
-        "id": f"{source}:{action}:{seq}",
-        "method": "pane.report_agent",
-        "params": params,
-    }
+    requests = [
+        {
+            "id": f"{source}:{action}:{seq}",
+            "method": "pane.report_agent",
+            "params": params,
+        }
+    ]
 
 try:
     client = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
     client.settimeout(0.5)
     client.connect(socket_path)
-    client.sendall((json.dumps(request) + "\n").encode())
-    try:
-        client.recv(4096)
-    except Exception:
-        pass
+    for request in requests:
+        client.sendall((json.dumps(request) + "\n").encode())
+        try:
+            client.recv(4096)
+        except Exception:
+            pass
     client.close()
 except Exception:
     pass

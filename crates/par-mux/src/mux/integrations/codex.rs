@@ -663,7 +663,7 @@ args = ["mcp", "serve"]
         assert!(asset.contains(CODEX_HOOK_MARKER));
         assert!(asset.contains("CODEX_THREAD_ID"));
         assert!(
-            asset.contains("PAR_MUX_INTEGRATION_VERSION=3"),
+            asset.contains("PAR_MUX_INTEGRATION_VERSION=4"),
             "the idle-capture regeneration bumps the integration version: {asset}"
         );
         let resume_argv = if cfg!(windows) {
@@ -995,6 +995,10 @@ args = ["mcp", "serve"]
             "speaks the same control-socket method"
         );
         assert!(
+            CODEX_HOOK_ASSET_WINDOWS.contains("session-idle"),
+            "the fresh-pane idle report survives the port (card 01a19f8f)"
+        );
+        assert!(
             CODEX_HOOK_ASSET_WINDOWS.contains("pane.report_agent")
                 && CODEX_HOOK_ASSET_WINDOWS.contains("pane.release_agent"),
             "the state and release arms survive the port"
@@ -1065,6 +1069,17 @@ args = ["mcp", "serve"]
     /// arms dispatch on it (prompt/stop/question/release).
     #[cfg(unix)]
     fn run_hook_action(action: &str, payload: &str, thread_id: &str) -> Option<JsonValue> {
+        run_hook_lines(action, payload, thread_id)
+            .into_iter()
+            .next()
+            .map(|request| request["params"].clone())
+    }
+
+    /// [`run_hook`] collecting EVERY report line the hook run delivers (the
+    /// v4 session action reports identity and the fresh-pane idle state in
+    /// one run — card 01a19f8f), in order, until the hook closes.
+    #[cfg(unix)]
+    fn run_hook_lines(action: &str, payload: &str, thread_id: &str) -> Vec<JsonValue> {
         use std::io::Write as _;
         use std::net::Shutdown;
         use std::os::unix::net::UnixListener;
@@ -1108,7 +1123,7 @@ args = ["mcp", "serve"]
                     if child.try_wait().ok().flatten().is_some()
                         && started.elapsed() > Duration::from_millis(300)
                     {
-                        return None;
+                        return Vec::new();
                     }
                     assert!(
                         Instant::now() < deadline,
@@ -1125,13 +1140,18 @@ args = ["mcp", "serve"]
         let mut buf = Vec::new();
         let mut reader = std::io::BufReader::new(stream);
         use std::io::BufRead as _;
-        // The report line can land late under load; a single-shot read turns
-        // that into a flaky panic, so poll until the line or a deadline.
+        // Report lines can land late under load; a single-shot read turns
+        // that into a flaky panic, so poll until every line arrives (the
+        // hook closes the connection when the run is done) or a deadline.
         let read_deadline = Instant::now() + Duration::from_secs(10);
+        let mut reports: Vec<String> = Vec::new();
         loop {
             match reader.read_until(b'\n', &mut buf) {
                 Ok(0) => break,
-                Ok(_) if buf.ends_with(b"\n") => break,
+                Ok(_) if buf.ends_with(b"\n") => {
+                    reports.push(String::from_utf8(buf).expect("utf-8 report"));
+                    buf = Vec::new();
+                }
                 Ok(_) => {}
                 Err(err)
                     if err.kind() == std::io::ErrorKind::WouldBlock
@@ -1139,16 +1159,17 @@ args = ["mcp", "serve"]
                 {
                     assert!(
                         Instant::now() < read_deadline,
-                        "the report line never arrived within 10s"
+                        "the report lines never arrived within 10s"
                     );
                 }
                 Err(err) => panic!("read failed: {err}"),
             }
         }
         let _ = reader.get_ref().shutdown(Shutdown::Both);
-        let line = String::from_utf8(buf).expect("utf-8 report");
-        let request: JsonValue = serde_json::from_str(line.trim()).expect("parses the report");
-        Some(request["params"].clone())
+        reports
+            .iter()
+            .map(|line| serde_json::from_str::<JsonValue>(line.trim()).expect("parses the report"))
+            .collect()
     }
 
     /// The rollout-filename correction (card 01a14584371a721490a1859e2c3379c0):
@@ -1308,5 +1329,62 @@ args = ["mcp", "serve"]
             "0e581433-eeee-7555-8555-555555555555",
         );
         assert!(refused.is_none(), "unregistered event names stay inert");
+    }
+
+    /// The v4 session action also enrolls idle (card 01a19f8f): the roster
+    /// lists only panes WITH state and codex's Stop fires per turn, so a
+    /// fresh pane idling at the Ready prompt since startup stays invisible
+    /// until its first turn completes. The session run reports identity
+    /// first, then the idle state on the same connection, so the state
+    /// claim carries the session id the daemon just learned.
+    #[test]
+    #[cfg(unix)]
+    fn a_session_report_rides_a_fresh_pane_idle_state_so_the_roster_never_waits_for_a_first_turn() {
+        let session_id = "0e581433-ffff-7666-8666-666666666666";
+        let transcript =
+            "/sessions/rollout-2026-11-02T10-00-00-0e581433-eeee-7555-8555-555555555555.jsonl";
+        let resumable = "0e581433-eeee-7555-8555-555555555555";
+
+        let reports = run_hook_lines(
+            "session",
+            &format!(
+                r#"{{"hook_event_name":"SessionStart","session_id":"{session_id}","transcript_path":"{transcript}","source":"startup"}}"#
+            ),
+            session_id,
+        );
+        assert_eq!(reports.len(), 2, "identity then idle, one run");
+        assert_eq!(
+            reports[0]["method"], "pane.report_agent_session",
+            "the identity report comes first"
+        );
+        assert_eq!(
+            reports[0]["params"]["session_resume_argv"],
+            serde_json::json!(["codex", "resume", resumable]),
+            "identity keeps its resume argv (the rollout id wins)"
+        );
+        assert_eq!(
+            reports[1]["method"], "pane.report_agent",
+            "the idle state report follows on the same run"
+        );
+        assert_eq!(reports[1]["params"]["state"], "idle");
+        assert_eq!(
+            reports[1]["params"]["agent_session_id"], resumable,
+            "the state claim carries the established session id"
+        );
+        assert_eq!(reports[1]["params"]["agent_session_path"], transcript);
+
+        // A transcript-less session still rides the idle report, without a
+        // path, and keeps the payload's id.
+        let bare = run_hook_lines(
+            "session",
+            &format!(
+                r#"{{"hook_event_name":"SessionStart","session_id":"{session_id}","source":"startup"}}"#
+            ),
+            session_id,
+        );
+        assert_eq!(bare.len(), 2, "idle rides a transcript-less session too");
+        assert_eq!(bare[1]["params"]["state"], "idle");
+        assert_eq!(bare[1]["params"]["agent_session_id"], session_id);
+        assert!(bare[1]["params"].get("agent_session_path").is_none());
     }
 }

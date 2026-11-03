@@ -10,7 +10,7 @@
 # one JSON line over the control socket, one reply read, close. Inert
 # outside a par-mux pane (env guards) and silent on every failure.
 # PAR_MUX_INTEGRATION_ID=codex
-# PAR_MUX_INTEGRATION_VERSION=3
+# PAR_MUX_INTEGRATION_VERSION=4
 
 param([string]$Action = "")
 
@@ -154,11 +154,34 @@ $request = [ordered]@{
     params = $params
 }
 
-$requestJson = $request | ConvertTo-Json -Compress -Depth 6
+# The roster lists only panes WITH state, and codex's Stop fires per turn
+# — a fresh pane idling at the Ready prompt since startup had no state
+# until its first turn completed (card 01a19f8f). Idle rides the same hook
+# run, ordered after the identity report so the state claim carries the
+# session id the daemon just learned.
+$requests = @($request)
+if ($Action -eq "session") {
+    $idleParams = [ordered]@{
+        pane_id = "$($env:PAR_MUX_PANE_ID)"
+        source = "par-mux:codex"
+        agent = "codex"
+        seq = $seq + 1
+        state = "idle"
+        agent_session_id = "$sessionId"
+    }
+    if ($null -ne $transcriptPath) { $idleParams["agent_session_path"] = "$transcriptPath" }
+    $requests = @($request, [ordered]@{
+        id = "par-mux:codex:session-idle:$seq"
+        method = "pane.report_agent"
+        params = $idleParams
+    })
+}
 
 try {
-    $bytes = [System.Text.Encoding]::UTF8.GetBytes($requestJson + "`n")
-    Send-MuxReport $env:PAR_MUX_SOCKET $bytes
+    foreach ($r in $requests) {
+        $bytes = [System.Text.Encoding]::UTF8.GetBytes(($r | ConvertTo-Json -Compress -Depth 6) + "`n")
+        Send-MuxReport $env:PAR_MUX_SOCKET $bytes
+    }
 } catch {
 }
 exit 0
