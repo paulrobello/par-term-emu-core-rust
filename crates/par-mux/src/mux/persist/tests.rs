@@ -3562,6 +3562,13 @@ fn restore_policy_and_the_pane_flag_round_trip_through_the_state_file() {
 #[cfg(unix)]
 #[test]
 fn agent_environment_real_stripped_daemon_restore() {
+    if !crate::mux::foreground::test_kernel_exposes_child_env() {
+        eprintln!(
+            "skipping: the kernel strips other-process env (capability probe negative — \
+             macOS 27.2+ returns an argv-only KERN_PROCARGS2 blob)"
+        );
+        return;
+    }
     if std::env::var_os("MUX_ENV_RESTORE_CHILD").is_none() {
         let status = std::process::Command::new(std::env::current_exe().unwrap())
             .args([
