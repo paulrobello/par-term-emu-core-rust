@@ -681,6 +681,21 @@ impl PaneRenderer {
         true
     }
 
+    /// Why prefix `[` would refuse this pane: `None` = it would enter.
+    /// Alt-screen wins over the scrollback check — an alt grid never
+    /// carries scrollback, and naming it is the actionable reason.
+    pub fn scroll_mode_refusal(&self, pane: u32) -> Option<&'static str> {
+        let emulator = self.emulators.get(&pane)?;
+        let terminal = emulator.terminal();
+        if terminal.is_alt_screen_active() {
+            Some("alt-screen pane: no history")
+        } else if terminal.active_grid().scrollback_len() == 0 {
+            Some("no scrollback")
+        } else {
+            None
+        }
+    }
+
     /// Whether `pane`'s scroll viewport is currently held (in scroll
     /// mode). Unknown pane → false.
     pub fn scroll_mode_active(&self, pane: u32) -> bool {

@@ -1778,13 +1778,15 @@ fn scroll_mode_keys_move_the_viewport_and_exit() {
 }
 
 /// prefix [ enters scroll mode only when the focused pane has
-/// history; in the mode, typed bytes never reach the pane and q
+/// history; a pane with nothing to scroll is refused with a flash
+/// naming why. In the mode, typed bytes never reach the pane and q
 /// leaves it.
 #[test]
 fn scroll_chord_needs_history_and_owns_typed_bytes() {
     let (rx, mut conn, mut session) = two_pane_session("scrollchord", FakeScript::default());
     chord(&mut session, &mut conn, b'[');
     assert!(!session.is_scroll(), "no history: nothing to scroll");
+    assert_eq!(session.chrome.flash_text(), Some("no scrollback"));
     for i in 0..40 {
         session
             .renderer
@@ -1797,6 +1799,28 @@ fn scroll_chord_needs_history_and_owns_typed_bytes() {
     assert!(drained(&rx).is_empty(), "typed bytes stay out of the pane");
     session.route_plain(b"q", &mut conn);
     assert!(!session.is_scroll());
+}
+
+/// An alt-screen pane refuses prefix [ with its own reason: an alt
+/// grid never carries scrollback, so the plain refusal would lie
+/// about the cause.
+#[test]
+fn scroll_chord_refuses_alt_screen_with_distinct_flash() {
+    let (_rx, mut conn, mut session) = two_pane_session("scrollalt", FakeScript::default());
+    session
+        .renderer
+        .feed_output(1, b"\x1b[?1049h".to_vec().as_slice());
+    assert!(session
+        .renderer
+        .pane_terminal(1)
+        .expect("pane")
+        .is_alt_screen_active());
+    chord(&mut session, &mut conn, b'[');
+    assert!(!session.is_scroll());
+    assert_eq!(
+        session.chrome.flash_text(),
+        Some("alt-screen pane: no history")
+    );
 }
 
 /// The help panel's key path: j/k and arrows scroll (clamped at the

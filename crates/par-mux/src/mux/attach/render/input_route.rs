@@ -226,11 +226,15 @@ impl WindowSession {
                     PrefixChord::Detach => return true,
                     PrefixChord::Scroll => {
                         // prefix [ — the scroll viewport on the focused
-                        // pane. No scrollback means nothing to scroll;
-                        // the key is consumed either way.
+                        // pane. A pane with nothing to scroll is refused
+                        // with a flash naming why; the key is consumed
+                        // either way.
                         if let Some(id) = self.renderer.focused() {
                             if self.renderer.enter_scroll_mode(id) {
                                 self.open_modal(Modal::Scroll);
+                            } else if let Some(why) = self.renderer.scroll_mode_refusal(id) {
+                                self.chrome.flash(why);
+                                self.draw_status_row();
                             }
                         }
                     }
