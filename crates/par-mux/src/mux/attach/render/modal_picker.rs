@@ -16,9 +16,10 @@ impl WindowSession {
     /// session roster with each session\'s windows nested, composed into
     /// the same themed modal the help panel uses (title `picker`, `esc
     /// close` badge, footer controls line), the current session/window
-    /// `>`-marked. `/` opens the filter box; arrows/j/k move the
-    /// selection; Enter selects through [`Self::picker_activate`];
-    /// esc/q dismiss and the prior frame repaints. Keys and the mouse
+    /// `>`-marked. The filter is live from the open: typing filters
+    /// immediately (no `/` first); arrows move the selection without
+    /// leaving the filter; Enter selects through [`Self::picker_activate`];
+    /// esc dismisses and the prior frame repaints. Keys and the mouse
     /// never reach the pane while it is up.
     pub(super) fn enter_picker(&mut self, conn: &mut crate::mux::attach::conn::AttachConn) {
         self.send_then(conn, "list-sessions", |s, c, reply| {
@@ -92,6 +93,7 @@ impl WindowSession {
         self.open_modal(Modal::Picker(PickerState {
             entries,
             selected,
+            filtering: true,
             ..PickerState::default()
         }));
         self.refresh_picker();
@@ -210,9 +212,10 @@ impl WindowSession {
     }
     /// Open the workspace picker (the workspace-picker chord): the
     /// daemon's workspace roster — id, name, the active one `>`-marked —
-    /// in the same themed modal, filter, cursor, and click handling the
-    /// session/window picker runs. Enter lands on the workspace through
-    /// the same select-then-resync every switch follows.
+    /// in the same themed modal, filter (live from the open), cursor,
+    /// and click handling the session/window picker runs. Enter lands on
+    /// the workspace through the same select-then-resync every switch
+    /// follows.
     pub(super) fn enter_ws_picker(&mut self, conn: &mut crate::mux::attach::conn::AttachConn) {
         self.send_then(conn, "list-workspaces", |s, _c, reply| {
             if !reply.ok {
@@ -230,6 +233,7 @@ impl WindowSession {
             s.open_modal(Modal::Picker(PickerState {
                 selected: open_on.unwrap_or(0),
                 workspaces: Some(workspaces),
+                filtering: true,
                 ..PickerState::default()
             }));
             s.refresh_ws_picker();
@@ -440,12 +444,11 @@ impl WindowSession {
     ) {
         let _ = conn;
         use par_term_emu_core::keyboard::TermKey;
-        // The palette's filter is live from the open: arrows move the
-        // selection without leaving the filter (a session/workspace
-        // picker filters only through its `/` box, whose typing owns
-        // every key).
+        // Every picker's filter is live from the open: arrows move the
+        // selection without leaving the filter (typing owns every other
+        // printable key).
         if let Modal::Picker(picker) = &self.modal {
-            if picker.filtering && picker.commands.is_some() {
+            if picker.filtering {
                 match ev.key() {
                     TermKey::Up => return self.picker_move(-1),
                     TermKey::Down => return self.picker_move(1),
@@ -506,14 +509,10 @@ impl WindowSession {
                     return false;
                 }
                 b'\r' => {
-                    // The palette runs the selected action straight from
-                    // its live filter; a session/workspace picker's Enter
-                    // commits the filter box and keeps the modal up.
-                    if picker.commands.is_some() {
-                        self.picker_activate(conn);
-                    } else {
-                        picker.filtering = false;
-                    }
+                    // Enter runs the selected row straight from the live
+                    // filter — the palette's semantics, now every
+                    // picker's.
+                    self.picker_activate(conn);
                 }
                 b if b.is_ascii_graphic() || b == b' ' => {
                     picker.filter.push(b as char);

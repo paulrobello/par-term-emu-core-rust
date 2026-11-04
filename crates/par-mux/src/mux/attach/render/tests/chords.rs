@@ -254,9 +254,10 @@ fn join_pane_chord_picks_a_window_and_joins() {
     drained(&rx);
     settle(&mut session, &mut conn);
     // The picker is up with the join intent; walk to the @1 window row
-    // (refs: session header, @0, @1) and activate it.
-    chord(&mut session, &mut conn, b'j');
-    chord(&mut session, &mut conn, b'j');
+    // (refs: session header, @0, @1) with arrows (the filter is live,
+    // so typed letters filter) and activate it.
+    session.picker_key(&mut conn, &TermKeyEvent::functional(TermKey::Down, 0));
+    session.picker_key(&mut conn, &TermKeyEvent::functional(TermKey::Down, 0));
     chord(&mut session, &mut conn, b'\r');
     settle(&mut session, &mut conn);
     let lines = drained(&rx);
@@ -753,7 +754,7 @@ fn workspace_picker_opens_on_the_active_row_and_lands_on_enter() {
     );
     assert!(text.contains(" +2  gamma"), "{text}");
     drained(&rx);
-    session.picker_byte(&mut conn, b'j');
+    session.picker_key(&mut conn, &TermKeyEvent::functional(TermKey::Down, 0));
     settle(&mut session, &mut conn);
     session.picker_byte(&mut conn, b'\r');
     settle(&mut session, &mut conn);
@@ -1846,17 +1847,19 @@ fn help_keys_scroll_filter_and_close() {
     assert!(!session.help().filtering && session.is_help());
 }
 
-/// The picker's key and byte paths: j/k/arrows move (wrapping), `/`
-/// filters as you type (Backspace pops, Enter commits, Escape
-/// closes), and an unbound key closes.
+/// The picker's key and byte paths from the live-filter open: typing
+/// filters immediately (no `/` first), arrows move the selection
+/// without leaving the filter, Enter activates straight from the
+/// filter, Backspace pops, Escape closes, and an unbound key commits
+/// the box (then j moves, `q` closes).
 #[test]
-fn picker_keys_move_filter_and_close() {
+fn picker_opens_in_search_mode_filters_arrows_and_enter() {
     let replies = std::collections::HashMap::from([
         ("list-sessions".to_string(), "$0: work\n$1: lab".to_string()),
         ("list-windows -t $0".to_string(), "@0 * main".to_string()),
         ("list-windows -t $1".to_string(), "@2 * logs".to_string()),
     ]);
-    let (_rx, mut conn, mut session) = two_pane_session(
+    let (rx, mut conn, mut session) = two_pane_session(
         "pickkeys",
         FakeScript {
             replies,
@@ -1865,44 +1868,77 @@ fn picker_keys_move_filter_and_close() {
     );
     chord(&mut session, &mut conn, b'w');
     assert!(session.is_picker());
+    assert!(
+        session.picker().filtering,
+        "the filter is live from the open"
+    );
     let count = session.picker().refs.len();
     assert_eq!(count, 4, "two sessions with one window each");
     assert_eq!(session.picker().selected, 0, "opens on the current session");
+
+    // Arrows move the selection without leaving the filter.
     session.picker_key(&mut conn, &TermKeyEvent::functional(TermKey::Up, 0));
     assert_eq!(
         session.picker().selected,
         count - 1,
         "Up wraps to the bottom"
     );
+    assert!(session.picker().filtering, "arrows keep the filter up");
     session.picker_key(&mut conn, &TermKeyEvent::functional(TermKey::Down, 0));
-    session.picker_key(&mut conn, &TermKeyEvent::char_('j', 0));
-    session.picker_key(&mut conn, &TermKeyEvent::char_('k', 0));
     assert_eq!(session.picker().selected, 0);
-    session.picker_key(&mut conn, &TermKeyEvent::char_('/', 0));
+
+    // Typing filters immediately, no `/` first.
     for c in "logs".chars() {
         session.picker_key(&mut conn, &TermKeyEvent::char_(c, 0));
     }
     assert_eq!(session.picker().filter, "logs");
+    assert!(session.picker().filtering);
+    assert_eq!(
+        session.picker().refs.len(),
+        2,
+        "the lab header and its logs window remain"
+    );
     let text = overlay_text(&session).join("\n");
     assert!(text.contains("logs") && !text.contains("main"), "{text}");
-    session.picker_key(&mut conn, &TermKeyEvent::functional(TermKey::Down, 0));
-    assert!(!session.picker().filtering, "a non-char key commits");
-    session.picker_byte(&mut conn, b'/');
+
+    // Enter activates the selected row straight from the live filter —
+    // the clamped selection sits on the lab header, whose active
+    // window (@2) is the landing target.
+    drained(&rx);
+    session.picker_byte(&mut conn, b'\r');
+    settle(&mut session, &mut conn);
+    assert!(!session.is_picker(), "Enter from the live filter activates");
+    assert_eq!(drained(&rx)[0], "switch-client -t @2");
+
+    // Reopen: Backspace pops the live filter; Escape closes from it.
+    chord(&mut session, &mut conn, b'w');
+    for c in "logs".chars() {
+        session.picker_byte(&mut conn, c as u8);
+    }
     session.picker_byte(&mut conn, 0x7f);
     assert_eq!(session.picker().filter, "log");
-    session.picker_byte(&mut conn, b'\r');
-    assert!(!session.picker().filtering && session.is_picker());
-    session.picker_key(&mut conn, &TermKeyEvent::functional(TermKey::Tab, 0));
-    assert!(!session.is_picker(), "an unbound key closes");
-
-    chord(&mut session, &mut conn, b'w');
-    session.picker_byte(&mut conn, b'/');
     assert!(!session.picker_byte(&mut conn, 0x1b), "Escape closes");
     assert!(!session.is_picker());
+
+    // An unbound key commits the box; j moves the committed list and
+    // `q` closes it, `/` re-opening the box.
     chord(&mut session, &mut conn, b'w');
-    session.picker_key(&mut conn, &TermKeyEvent::char_('/', 0));
-    session.picker_key(&mut conn, &TermKeyEvent::functional(TermKey::Escape, 0));
-    assert!(!session.is_picker());
+    session.picker_key(&mut conn, &TermKeyEvent::functional(TermKey::Tab, 0));
+    assert!(
+        !session.picker().filtering,
+        "a non-char key commits the box"
+    );
+    assert!(session.is_picker());
+    let count = session.picker().refs.len();
+    let before = session.picker().selected;
+    session.picker_byte(&mut conn, b'j');
+    assert_eq!(
+        session.picker().selected,
+        (before + 1) % count,
+        "j moved the committed list by one"
+    );
+    session.picker_byte(&mut conn, b'q');
+    assert!(!session.is_picker(), "q closes the committed box");
 }
 
 /// Coordinates SGR never sends (column or row 0) are dropped
@@ -2259,24 +2295,18 @@ fn picker_pointer_wheels_move_and_a_click_activates() {
     assert!(session.is_picker(), "the footer does nothing");
     assert!(drained(&rx).is_empty());
 
-    // Filtering: panel row 0 is the filter line.
-    session.picker_byte(&mut conn, b'/');
-    settle(&mut session, &mut conn);
-    session.picker_byte(&mut conn, b'a');
-    settle(&mut session, &mut conn);
-    session.picker_byte(&mut conn, b'\r');
-    settle(&mut session, &mut conn);
-    assert!(!session.picker().filtering);
+    // The picker opens with the live filter up: panel row 0 is the
+    // filter line, and a click on a content row activates straight
+    // from the filter.
     let (x0, y0, _, _) = session.renderer.overlay_geometry().expect("picker up");
     session.route_mouse(&mut conn, sgr(0, (x0 + 4) as u16, (y0 + 3) as u16, false));
     settle(&mut session, &mut conn);
     assert!(
         session.picker().filtering,
-        "the filter line re-opens the box"
+        "the filter line keeps the box up"
     );
     assert!(drained(&rx).is_empty());
-    // "a" keeps all three rows: panel row 3 is the third content
-    // row (gamma).
+    // Content row 2 (gamma) sits at panel row 3.
     session.route_mouse(&mut conn, sgr(0, (x0 + 4) as u16, (y0 + 6) as u16, false));
     settle(&mut session, &mut conn);
     assert!(!session.is_picker(), "a content click activates");

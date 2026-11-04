@@ -470,9 +470,10 @@ pub(crate) fn compose_help_panel(
     panel
 }
 
-/// The session/window picker's footer/controls line (render mode).
+/// The session/workspace picker's footer/controls line (render mode):
+/// the filter is live from the open, like the palette's.
 pub(crate) const PICKER_FOOTER: &str =
-    " navigate arrows/j/k · select enter/click · filter / · close esc/q ";
+    " type to filter · arrows/j/k navigate · enter select · click select · esc close ";
 
 /// The command palette's footer/controls line (render mode): the filter
 /// is live from the open, so the footer never advertises `filter /`.

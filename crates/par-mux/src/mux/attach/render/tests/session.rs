@@ -1110,10 +1110,11 @@ fn help_chord_opens_filters_and_dismissal_restores_the_frame() {
     assert_eq!(left, "LEFT", "the prior frame's cells restore");
 }
 
-/// The picker chord: prefix w opens the modal (sessions with nested
-/// windows, the current one emphasized), j moves the cursor, Enter
+/// The picker chord: prefix w opens the modal live-filtered (sessions
+/// with nested windows, the current one emphasized), Down moves the
+/// cursor without leaving the filter, Enter
 /// activates — the select+resync contract's select-window rides the
-/// wire — and `q` dismisses without selecting.
+/// wire — and esc dismisses without selecting.
 #[test]
 fn picker_chord_opens_navigates_and_selects_with_resync() {
     let replies = std::collections::HashMap::from([
@@ -1155,11 +1156,23 @@ fn picker_chord_opens_navigates_and_selects_with_resync() {
         "the active window carries *: {joined}"
     );
 
-    // j j moves the cursor to the second window row; Enter activates
-    // — the wire sees the switch-client landing and the re-seed's
-    // queries (the resync).
-    session.picker_byte(&mut conn, b'j');
-    session.picker_byte(&mut conn, b'j');
+    // Down Down moves the cursor to the second window row without
+    // leaving the live filter; Enter activates — the wire sees the
+    // switch-client landing and the re-seed's queries (the resync).
+    session.picker_key(
+        &mut conn,
+        &par_term_emu_core::keyboard::TermKeyEvent::functional(
+            par_term_emu_core::keyboard::TermKey::Down,
+            0,
+        ),
+    );
+    session.picker_key(
+        &mut conn,
+        &par_term_emu_core::keyboard::TermKeyEvent::functional(
+            par_term_emu_core::keyboard::TermKey::Down,
+            0,
+        ),
+    );
     session.picker_byte(&mut conn, b'\r');
     settle(&mut session, &mut conn);
     assert!(!session.is_picker(), "activation dismisses the modal");
@@ -1172,11 +1185,12 @@ fn picker_chord_opens_navigates_and_selects_with_resync() {
     let _ = wait_recorded(&rx, "refresh-client");
     assert_eq!(session.window, "@1", "the view re-seeded onto @1");
 
-    // Re-open and dismiss with q: no select goes out.
+    // Re-open (the filter live again) and dismiss with esc: no select
+    // goes out.
     assert!(!session.route_plain(&[crate::mux::attach::C_B, b'w'], &mut conn,));
     settle(&mut session, &mut conn);
     assert!(session.is_picker());
-    assert!(!session.picker_byte(&mut conn, b'q'));
+    assert!(!session.picker_byte(&mut conn, 0x1b));
     assert!(!session.is_picker());
 }
 
