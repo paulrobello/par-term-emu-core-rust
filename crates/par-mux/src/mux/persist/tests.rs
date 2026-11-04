@@ -265,7 +265,13 @@ impl PaneFactory for RecordingFactory {
                 .and_then(|env| env.get("PAR_MUX_RESUME_SESSION_ID").cloned()),
         ));
         self.envs.lock().unwrap().push((id, context.env.cloned()));
-        ShellPaneFactory::default().create_pane(id, cols, rows, Some("sleep 60"), context)
+        let mut pane =
+            ShellPaneFactory::default().create_pane(id, cols, rows, Some("sleep 60"), context)?;
+        // The real factory records the REQUESTED command (its default is
+        // empty); the sleeper above only keeps the pane alive in unit
+        // tests, so the recorded field must be put back by hand.
+        pane.set_spawn_command(command.map(str::to_string));
+        Ok(pane)
     }
 
     fn create_dead_pane(
@@ -1000,6 +1006,10 @@ fn held_dead_tree(exit_code: Option<i32>) -> (MuxTree, PaneId) {
         .process(b"MAIN-LINE\x1b[?1049h\x1b[?1000hALT-LINE");
     pane.set_metadata("agent", "claude");
     pane.set_metadata("agent_session_id", "sess-114");
+    // An explicit start command, so the round-trip pin below asserts real
+    // retention and not whatever command the recording factory's sleeper
+    // happened to leave on the pane.
+    pane.set_spawn_command(Some("sleep 60".to_string()));
     pane.mark_dead_with_code(exit_code);
     (tree, pane_id)
 }
@@ -1227,8 +1237,24 @@ fn dead_state_is_per_pane_and_live_panes_still_respawn() {
     assert_eq!(restored.pane(dead_id).unwrap().exit_code(), None);
     assert!(!restored.pane(live_id).unwrap().dead());
     assert!(restored.pane_mut(live_id).unwrap().poll_running());
-    assert!(factory.command_for(live_id).is_some(), "live pane spawned");
-    assert!(factory.command_for(dead_id).is_none(), "dead pane did not");
+    assert!(
+        factory
+            .received
+            .lock()
+            .unwrap()
+            .iter()
+            .any(|(pane, _)| *pane == live_id),
+        "live pane spawned"
+    );
+    assert!(
+        !factory
+            .received
+            .lock()
+            .unwrap()
+            .iter()
+            .any(|(pane, _)| *pane == dead_id),
+        "dead pane did not"
+    );
 }
 
 /// ARC-114 compat: a save file without the new fields (any pre-ARC-114
@@ -2357,6 +2383,86 @@ fn a_resume_invocation_spawns_in_the_persisted_cwd() {
     );
 }
 
+/// Paul's 2026-11-04 report: the daemon still restored claude sessions
+/// that had exited for days. A pre-fix restore persisted its GENERATED
+/// resume wrapper as the pane's spawn_command, so once the claim was gone
+/// (agent exited; release/gate cleared it) every later fallback respawn
+/// re-ran the wrapper's frozen `--resume <dead-id>` verbatim. The wrapper
+/// must never execute again: the pane restores as a plain shell (card
+/// 01a1a75c).
+#[test]
+#[cfg(unix)]
+fn a_stale_resume_wrapper_spawn_command_does_not_resurrect() {
+    let (tree, pane_id) = tree_with_agent_pane();
+    let mut state = tree.to_persist_state();
+    let pane = &mut state.sessions[0].windows[0].panes[0];
+    pane.agent_session = None;
+    pane.spawn_command = Some(crate::mux::agent_resume::render_surviving(&[
+        "claude".to_string(),
+        "--resume".to_string(),
+        "dead-session-id".to_string(),
+    ]));
+    let factory = RecordingFactory::default();
+    let restored = MuxTree::from_persist_state(&state, Box::new(factory.clone())).unwrap();
+    let command = factory.command_for(pane_id);
+    assert!(
+        !command
+            .as_deref()
+            .unwrap_or_default()
+            .contains("dead-session-id"),
+        "no fallback respawn may re-run the stale wrapper's --resume id (got {command:?})"
+    );
+    assert_eq!(
+        restored.pane(pane_id).unwrap().spawn_command(),
+        None,
+        "the wrapper must not survive as the pane's respawn default"
+    );
+    // And it must not ride the NEXT save either: the healed state carries
+    // no wrapper for any later restore.
+    let re_saved = restored.to_persist_state();
+    assert!(
+        !re_saved.sessions[0].windows[0].panes[0]
+            .spawn_command
+            .as_deref()
+            .unwrap_or_default()
+            .contains("dead-session-id"),
+        "the healed save must not re-persist the wrapper"
+    );
+}
+
+/// The forward half of card 01a1a75c: a restore that DOES resume an agent
+/// spawns the generated wrapper as the pane's process, but the pane's
+/// respawn default stays its PERSISTED start command — never the wrapper,
+/// whose --resume id is frozen at restore time.
+#[test]
+#[cfg(unix)]
+fn a_resume_restore_keeps_the_persisted_spawn_command_not_the_wrapper() {
+    let (tree, pane_id) = tree_with_agent_pane();
+    let mut state = capture_with_alive_agent(&tree, pane_id);
+    state.sessions[0].windows[0].panes[0].spawn_command = Some("make watch".to_string());
+    let factory = RecordingFactory::default();
+    let restored = MuxTree::from_persist_state(&state, Box::new(factory.clone())).unwrap();
+    // Positive control: this pane restored through the resume path (the
+    // factory received an invocation carrying the session identity).
+    assert!(
+        factory
+            .command_for(pane_id)
+            .is_some_and(|cmd| cmd.contains("pi-session")),
+        "positive control: the pane restored through the resume path"
+    );
+    assert_eq!(
+        restored.pane(pane_id).unwrap().spawn_command(),
+        Some("make watch"),
+        "the generated wrapper must not become the pane's spawn_command"
+    );
+    let re_saved = restored.to_persist_state();
+    assert_eq!(
+        re_saved.sessions[0].windows[0].panes[0].spawn_command,
+        Some("make watch".to_string()),
+        "the next save persists the original start command, not the wrapper"
+    );
+}
+
 /// A released pane restores through its ORIGINAL command, not the
 /// resume invocation: the release cleared the session identity, so
 /// persistence has nothing to resume and Phase 3 behavior resumes.
@@ -2952,14 +3058,14 @@ fn an_absent_agent_binary_degrades_inside_the_pane_not_the_restore() {
     let state = capture_with_alive_agent(&original, pane_id);
     let restored = MuxTree::from_persist_state(&state, Box::new(ShellPaneFactory::default()))
         .expect("restore completes — an absent binary is the pane's problem");
-    let expected = if cfg!(windows) {
-        "'par-mux-test-no-such-binary' '--resume' 's-1'".to_string()
-    } else {
-        format!("'par-mux-test-no-such-binary' '--resume' 's-1'{SURVIVING_TAIL}")
-    };
+    // The invocation still SPAWNS as generated (the pane below runs the
+    // wrapper and degrades inside itself — pinned by
+    // a_failed_resume_leaves_a_live_pane_with_its_restored_history), but
+    // the generated wrapper is not the pane's RETAINED start command (card
+    // 01a1a75c): this pane had no original command, so nothing is.
     assert_eq!(
         restored.pane(pane_id).unwrap().spawn_command(),
-        Some(expected.as_str()),
+        None,
         "no probe swapped in a fallback — the failure is contained in the pane"
     );
 }

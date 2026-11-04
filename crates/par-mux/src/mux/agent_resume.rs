@@ -203,6 +203,21 @@ pub fn render_surviving(argv: &[String]) -> String {
     format!("{rendered}{SURVIVING_TAIL}")
 }
 
+/// Whether `cmd` is a resume wrapper a par-mux restore GENERATED — the
+/// frozen `--resume` invocation an earlier restore spawned. Not a user
+/// start command: a pre-0.77.0 restore persisted it as the pane's
+/// `spawn_command`, and every later fallback respawn re-ran its stale id,
+/// resurrecting sessions that had exited long ago (card 01a1a75c). Two
+/// signatures, one per renderer: the unix wrapper ends in
+/// [`SURVIVING_TAIL`], and the Windows arm records the bare
+/// [`render_argv`] form, whose per-token quoting (the `--resume` flag
+/// itself single-quoted as its own token) no user-authored wrapper
+/// carries — a supervised wrapper reads `PAR_MUX_RESUME_SESSION_ID` for a
+/// fresh id instead of pinning a literal one.
+pub(crate) fn is_generated_resume_wrapper(cmd: &str) -> bool {
+    cmd.contains(SURVIVING_TAIL) || cmd.contains("' '--resume' '")
+}
+
 /// The session ref for pi/omp, which accept a transcript path as well as an
 /// id. Path-first when both are present, matching what our own extensions
 /// report.

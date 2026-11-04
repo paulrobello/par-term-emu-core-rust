@@ -302,6 +302,18 @@ fn spawn_restored_pane(
     // A pane persisted held-dead has no process to resume or to land in a
     // cwd: it is rebuilt processless below, so neither the agent resume
     // invocation nor the cwd spawn logic runs for it (ARC-114).
+    //
+    // The respawn default never carries a GENERATED resume wrapper: a
+    // pre-0.77.0 restore persisted the wrapper it spawned (frozen
+    // `--resume <id>` inside) as the pane's spawn_command, so every later
+    // fallback respawn re-ran a session that had exited long ago (card
+    // 01a1a75c). Such a command is dropped here — the pane falls back to
+    // the factory's default shell — and a fresh restore re-records the
+    // pane's persisted ORIGINAL command, never the wrapper (below).
+    let spawn_command = pane
+        .spawn_command
+        .as_deref()
+        .filter(|cmd| !crate::mux::agent_resume::is_generated_resume_wrapper(cmd));
     let via_start_command = !pane.dead
         && (pane.restore_start_command
             || restore_policy == Some(crate::mux::config::RestorePolicy::StartCommand));
@@ -378,23 +390,22 @@ fn spawn_restored_pane(
         output: None,
     };
     let mut created = if pane.dead {
-        factory.create_dead_pane(
-            PaneId(pane.id),
-            cols,
-            rows,
-            pane.spawn_command.as_deref(),
-            pane.exit_code,
-        )?
+        factory.create_dead_pane(PaneId(pane.id), cols, rows, spawn_command, pane.exit_code)?
     } else {
         match resume_argv {
-            Some(argv) => factory.create_argv_pane(PaneId(pane.id), cols, rows, &argv, &context)?,
-            None => factory.create_pane(
-                PaneId(pane.id),
-                cols,
-                rows,
-                pane.spawn_command.as_deref(),
-                &context,
-            )?,
+            Some(argv) => {
+                let mut created =
+                    factory.create_argv_pane(PaneId(pane.id), cols, rows, &argv, &context)?;
+                // The factory records the GENERATED wrapper it executed as
+                // the pane's start command; the respawn default must stay
+                // the pane's persisted ORIGINAL command (sanitized above),
+                // so a later restart without a live claim respawns the
+                // shell instead of the wrapper's frozen `--resume` id
+                // (card 01a1a75c).
+                created.set_spawn_command(spawn_command.map(str::to_string));
+                created
+            }
+            None => factory.create_pane(PaneId(pane.id), cols, rows, spawn_command, &context)?,
         }
     };
     if let Some(agent_session) = &pane.agent_session {
@@ -406,10 +417,9 @@ fn spawn_restored_pane(
         // respawns as, under the same gate `adopt-pane` applies — a label
         // the tick cannot classify would sit on the pane inertly — and
         // the 1s tick writes the state and broadcasts from here.
-        if let Some(kind) = agent_of_invocation(
-            &crate::mux::scrape::ScrapeEngine::bundled(),
-            pane.spawn_command.as_deref(),
-        ) {
+        if let Some(kind) =
+            agent_of_invocation(&crate::mux::scrape::ScrapeEngine::bundled(), spawn_command)
+        {
             created.set_metadata("agent", &kind);
         }
     }

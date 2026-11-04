@@ -386,6 +386,14 @@ impl MuxPane {
         self.spawn_command.as_deref()
     }
 
+    /// Overwrite the recorded start command — restore's seam for keeping a
+    /// resumed pane's respawn default at its PERSISTED command: the factory
+    /// records the daemon-generated resume wrapper it executed, which must
+    /// not become what the next restore respawns (card 01a1a75c).
+    pub(crate) fn set_spawn_command(&mut self, command: Option<String>) {
+        self.spawn_command = command;
+    }
+
     /// Whether this pane restores via its start command (`--restore
     /// start-command` at creation), not an agent resume invocation.
     pub(crate) fn restore_start_command(&self) -> bool {
