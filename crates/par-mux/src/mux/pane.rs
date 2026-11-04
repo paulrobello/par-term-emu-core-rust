@@ -1789,6 +1789,7 @@ mod tests {
             session_path: Some("/tmp/pi-session.jsonl".to_string()),
             session_start_source: Some("startup".to_string()),
             resume_argv: Some(vec!["pi".to_string(), "--session".to_string()]),
+            agent_pid: Some(4242),
             liveness_misses: Some(2),
             liveness_misses_agent: Some("pi".to_string()),
         };

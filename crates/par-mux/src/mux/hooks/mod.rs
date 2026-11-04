@@ -231,6 +231,7 @@ pub(crate) const AGENT_CLAIM_KEYS: &[&str] = &[
     "agent_session_path",
     "agent_session_start_source",
     "agent_resume_argv",
+    "agent_pid",
     "agent_liveness_misses",
     "agent_liveness_misses_agent",
 ];
@@ -282,6 +283,13 @@ pub(crate) struct AgentClaim {
     /// stored verbatim (`["pi","--session","<path>"]`).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub resume_argv: Option<Vec<String>>,
+    /// The reporting agent process's pid, validated against the pane's
+    /// tree at report time (hook v5). The save gate's IDENTITY-liveness
+    /// probe: a stamp whose pid is provably gone from the pane's tree
+    /// marks the claimed session dead even when another same-label agent
+    /// runs in the pane (card 01a1a765).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub agent_pid: Option<i32>,
     /// Unbroken liveness mismatches before the sweep clears the claim.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub liveness_misses: Option<u8>,
@@ -313,6 +321,7 @@ impl AgentClaim {
                 .ok()
                 .filter(|argv| !argv.is_empty())
         });
+        claim.agent_pid = get("agent_pid").and_then(|value| value.parse().ok());
         claim.liveness_misses = get("agent_liveness_misses").and_then(|value| value.parse().ok());
         claim.liveness_misses_agent = get("agent_liveness_misses_agent").map(str::to_string);
         Some(claim)
@@ -351,6 +360,10 @@ impl AgentClaim {
                 serde_json::to_string(argv).unwrap_or_default(),
             ),
             None => metadata.remove("agent_resume_argv"),
+        };
+        match &self.agent_pid {
+            Some(pid) => metadata.insert("agent_pid".to_string(), pid.to_string()),
+            None => metadata.remove("agent_pid"),
         };
         match &self.liveness_misses {
             Some(misses) => {

@@ -224,6 +224,13 @@ fn the_hook_speaks_at_top_level_and_stays_silent_for_a_nested_claude() {
         request["params"]["session_resume_argv"][2], "s-parent",
         "the resume argv is intact: {request}"
     );
+    // v5: the identity stamp rides the session report (the daemon
+    // tree-validates it; here only its presence and shape are pinned).
+    assert!(
+        request["params"]["agent_pid"].is_u64()
+            && request["params"]["agent_pid"].as_u64().unwrap_or(0) > 0,
+        "the session report stamps the agent pid: {request}"
+    );
 
     // Nested: the child's SessionStart sends nothing (the report that used
     // to re-key the parent's claim to the child's session).

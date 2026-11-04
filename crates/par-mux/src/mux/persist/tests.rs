@@ -2383,6 +2383,86 @@ fn a_resume_invocation_spawns_in_the_persisted_cwd() {
     );
 }
 
+/// The 01a1a765 residual of the resurrect report: a claim whose STAMPED
+/// agent pid is provably gone from the pane's tree must not ride the save
+/// even when another same-label agent is alive in the pane — label
+/// liveness alone resurrects a dead session when the replacement agent's
+/// reports were refused by the nested-agent guard (hook v5 stamps the
+/// reporting agent's pid; the daemon validates the stamp against the
+/// pane's tree at report time).
+#[test]
+#[cfg(unix)]
+fn a_claim_whose_stamped_agent_pid_is_gone_does_not_persist_for_resume() {
+    let (mut tree, pane_id) = tree_with_agent_pane();
+    let child = tree
+        .pane(pane_id)
+        .unwrap()
+        .child_pid()
+        .expect("live pane child");
+    // The stamp: the agent pid the session report recorded, pointing at a
+    // process that is NOT in the pane's tree (it exited), while a
+    // DIFFERENT same-label process lives in the tree (a replacement
+    // agent the nested-agent guard refuses to re-key to).
+    tree.pane_mut(pane_id)
+        .unwrap()
+        .set_metadata("agent_pid", &(child as i32 + 200_009).to_string());
+    let table = crate::mux::foreground::ProcessTable::with_fixed_argv(&[
+        (child as i32, 1, Some(vec!["bash".to_string()])),
+        (
+            child as i32 + 100_007,
+            child as i32,
+            Some(vec![tree
+                .pane(pane_id)
+                .unwrap()
+                .metadata()
+                .get("agent")
+                .cloned()
+                .unwrap_or_else(|| "pi".to_string())]),
+        ),
+    ]);
+    let state = tree
+        .collect_persist_capture()
+        .capture_with_table(Some(table));
+    let pane = &state.sessions[0].windows[0].panes[0];
+    assert!(
+        pane.agent_session.is_none(),
+        "a claim whose stamped agent pid is gone must not ride the save, even with a same-label agent alive in the pane"
+    );
+}
+
+/// The stamp must not bite the agent it names: the claimed pid IS in the
+/// pane's tree, so the claim rides the save exactly as before.
+#[test]
+#[cfg(unix)]
+fn a_claim_whose_stamped_agent_pid_is_alive_persists_for_resume() {
+    let (mut tree, pane_id) = tree_with_agent_pane();
+    let child = tree
+        .pane(pane_id)
+        .unwrap()
+        .child_pid()
+        .expect("live pane child");
+    let claimed_pid = child as i32 + 100_007;
+    tree.pane_mut(pane_id)
+        .unwrap()
+        .set_metadata("agent_pid", &claimed_pid.to_string());
+    let state = capture_with_alive_agent(&tree, pane_id);
+    let pane = &state.sessions[0].windows[0].panes[0];
+    let agent = pane.agent_session.as_ref().expect("claim rides the save");
+    assert_eq!(agent.agent_pid, Some(claimed_pid), "the stamp persists");
+}
+
+/// An unstamped claim (a v4 hook's report, an older save) keeps the
+/// label-liveness verdict — best-effort exactly as before the stamp.
+#[test]
+#[cfg(unix)]
+fn an_unstamped_claim_keeps_the_label_liveness_verdict() {
+    let (tree, pane_id) = tree_with_agent_pane();
+    let state = capture_with_alive_agent(&tree, pane_id);
+    let pane = &state.sessions[0].windows[0].panes[0];
+    let agent = pane.agent_session.as_ref().expect("claim rides the save");
+    assert_eq!(agent.agent_pid, None, "no stamp on a v4-era claim");
+}
+
 /// Paul's 2026-11-04 report: the daemon still restored claude sessions
 /// that had exited for days. A pre-fix restore persisted its GENERATED
 /// resume wrapper as the pane's spawn_command, so once the claim was gone
@@ -2513,6 +2593,7 @@ fn agent_session_identity_round_trips() {
             session_path: Some("/tmp/pi-session.jsonl".to_string()),
             source: Some("par-mux:pi".to_string()),
             resume_argv: Some(r#"["pi","--session","/tmp/pi-session.jsonl"]"#.to_string()),
+            agent_pid: None,
             state: Some("working".to_string()),
             state_source: Some("hook".to_string()),
             message: None,
@@ -2907,6 +2988,7 @@ fn pi_shaped_path_only_identity_round_trips() {
             session_path: Some("/tmp/omp-session.jsonl".to_string()),
             source: None,
             resume_argv: Some(r#"["omp","--resume=/tmp/omp-session.jsonl"]"#.to_string()),
+            agent_pid: None,
             state: None,
             state_source: None,
             message: None,

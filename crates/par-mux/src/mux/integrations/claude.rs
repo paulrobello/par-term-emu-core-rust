@@ -713,8 +713,12 @@ mod tests {
                 "the state-report method"
             );
             assert!(
-                asset.contains("PAR_MUX_INTEGRATION_VERSION=4"),
-                "the version marker moved past the state-report install"
+                asset.contains("PAR_MUX_INTEGRATION_VERSION=5"),
+                "the version marker moved past the v5 identity stamp"
+            );
+            assert!(
+                asset.contains("agent_pid"),
+                "the v5 session report stamps the reporting agent's pid"
             );
             assert!(
                 asset.contains("agent_session_id"),

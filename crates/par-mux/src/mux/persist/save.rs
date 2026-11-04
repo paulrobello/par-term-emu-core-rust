@@ -34,6 +34,7 @@ fn agent_session_from_metadata(metadata: &HashMap<String, String>) -> Option<Per
         resume_argv: claim
             .resume_argv
             .map(|argv| serde_json::to_string(&argv).unwrap_or_default()),
+        agent_pid: claim.agent_pid,
         state: claim.state,
         state_source: claim.state_source,
         message: claim.message,
@@ -220,10 +221,28 @@ impl PersistCapture {
                                         let alive = table.as_ref().zip(pane.child_pid).map(
                                             |(table, root)| table.agent_alive(root, &agent.agent),
                                         );
-                                        if matches!(
+                                        let mut dead = matches!(
                                             alive,
                                             Some(crate::mux::foreground::Liveness::Mismatch)
-                                        ) {
+                                        );
+                                        // Identity liveness (hook v5's stamp, card
+                                        // 01a1a765): a stamped pid provably gone
+                                        // from the pane's tree marks the CLAIMED
+                                        // session dead even when another
+                                        // same-label agent runs in the pane — the
+                                        // composition (no-release exit + refused
+                                        // replacement reports) that resurrected a
+                                        // dead transcript at restart. No stamp
+                                        // (v4 hook, older save) or an unwalkable
+                                        // tree keeps the label verdict above.
+                                        if !dead {
+                                            dead = agent.agent_pid.is_some_and(|pid| {
+                                                table.as_ref().zip(pane.child_pid).and_then(
+                                                    |(table, root)| table.pid_in_tree(root, pid),
+                                                ) == Some(false)
+                                            });
+                                        }
+                                        if dead {
                                             pane.agent_session = None;
                                         }
                                     }

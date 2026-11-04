@@ -14,7 +14,7 @@
 # session id — proof of ownership for the release, and the resume identity
 # a state report re-establishes after a claim-losing event.
 # PAR_MUX_INTEGRATION_ID=claude
-# PAR_MUX_INTEGRATION_VERSION=4
+# PAR_MUX_INTEGRATION_VERSION=5
 
 if ($env:PAR_MUX_ENV -ne "1") { exit 0 }
 if ([string]::IsNullOrWhiteSpace($env:PAR_MUX_SOCKET)) { exit 0 }
@@ -204,6 +204,10 @@ $params = [ordered]@{
     session_start_source = "$source"
     agent_session_id = "$sessionId"
     session_resume_argv = @("claude", "--resume", "$sessionId")
+    # v5 note: the identity stamp (agent_pid) is POSIX-only — the daemon
+    # validates it against the pane process tree, which has no Windows
+    # walk yet, so a stamp sent here would never land. Windows keeps
+    # label liveness until that walk exists.
 }
 if ($payload.transcript_path -is [string] -and -not [string]::IsNullOrWhiteSpace($payload.transcript_path)) {
     $params["agent_session_path"] = "$($payload.transcript_path)"

@@ -110,6 +110,38 @@ impl ProcessTable {
         }
     }
 
+    /// Whether `pid` sits in `root`'s descendant tree (root included):
+    /// the identity-liveness probe for a pid-stamped claim (hook v5). A
+    /// pure presence walk over the child map — no argv is read, so there
+    /// is no unreadable-argv middle verdict; the only `None` is a root
+    /// absent from the table (a race with process exit), which callers
+    /// treat as unknown, never as gone.
+    pub(crate) fn pid_in_tree(&self, root: u32, pid: i32) -> Option<bool> {
+        let root = root as i32;
+        if !self.metas.iter().any(|meta| meta.pid == root) {
+            return None;
+        }
+        let mut children: std::collections::HashMap<i32, Vec<i32>> =
+            std::collections::HashMap::new();
+        for meta in &self.metas {
+            children.entry(meta.ppid).or_default().push(meta.pid);
+        }
+        let mut stack = vec![root];
+        let mut visited = std::collections::HashSet::new();
+        while let Some(current) = stack.pop() {
+            if current == pid {
+                return Some(true);
+            }
+            if !visited.insert(current) {
+                continue;
+            }
+            if let Some(kids) = children.get(&current) {
+                stack.extend(kids.iter().copied());
+            }
+        }
+        Some(false)
+    }
+
     /// The pid of the first process in `root`'s descendant tree (root
     /// included) whose argv matches the claimed agent `label`. Per-process
     /// introspection targets THIS process: the pane's direct child is

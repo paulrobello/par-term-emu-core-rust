@@ -517,7 +517,11 @@ fn restore_agent_claim(
     // Verbatim argv passthrough: a malformed (hand-edited) argv string in
     // the state file cannot parse into the typed argv, so it is stored raw
     // rather than silently dropped — loading an old file never loses what
-    // the file said.
+    // the file said. The identity stamp (agent_pid) is deliberately NOT
+    // restored: it names a process from BEFORE the restart, and the
+    // freshly spawned pane has no such process — a restored stamp would
+    // mark the claim dead at the first save, before the resumed agent
+    // re-reports. The resumed agent's own session report re-stamps.
     let mut raw_argv: Option<&str> = None;
     match agent_session
         .resume_argv

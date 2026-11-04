@@ -242,6 +242,7 @@ mod tests {
             session_path: path.map(str::to_string),
             source: Some("par-mux:test".to_string()),
             resume_argv: None,
+            agent_pid: None,
             state: None,
             state_source: None,
             message: None,
