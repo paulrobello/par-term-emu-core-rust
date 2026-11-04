@@ -118,8 +118,11 @@ impl Write for SendKeysWriter {
     }
 }
 
-// Bound lookahead when the socket reader has not delivered the adjacent damage line.
-const DAMAGE_PAIR_WINDOW: Duration = Duration::from_millis(20);
+// Bound lookahead when the socket reader has not delivered the adjacent
+// damage line. Generous on purpose: recv_timeout returns early on arrival,
+// so the full window elapses only when the link is genuinely silent — the
+// reader thread merely being descheduled must not cost the pairing hint.
+const DAMAGE_PAIR_WINDOW: Duration = Duration::from_millis(200);
 
 /// Read the daemon connection in order: apply the pane's `%output` to the
 /// mirror and forward it to viewers, re-fit on `%layout-change`, and mark the
@@ -456,7 +459,7 @@ mod tests {
         let mut queue = VecDeque::new();
         let (tx, rx) = std::sync::mpsc::channel();
         let damage = take_adjacent_damage(&mut parser, &mut queue, "%3", |timeout| {
-            assert_eq!(timeout, Duration::from_millis(20));
+            assert_eq!(timeout, DAMAGE_PAIR_WINDOW);
             // Deliver only after the helper has observed an empty queue.
             tx.send(Ok("%pane-damage %3 42 0-5".to_string())).unwrap();
             rx.recv_timeout(timeout)
@@ -509,7 +512,7 @@ mod tests {
         let mut queue = VecDeque::new();
         assert_eq!(
             take_adjacent_damage(&mut parser, &mut queue, "%3", |timeout| {
-                assert_eq!(timeout, Duration::from_millis(20));
+                assert_eq!(timeout, DAMAGE_PAIR_WINDOW);
                 Err(RecvTimeoutError::Timeout)
             }),
             None
