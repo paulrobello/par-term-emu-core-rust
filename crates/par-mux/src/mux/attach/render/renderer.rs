@@ -113,6 +113,7 @@ impl PaneRenderer {
             toast: None,
             popup: None,
             selection: None,
+            copy_cursor: None,
             overlay_highlights: Vec::new(),
             pane_borders: options.pane_borders,
             show_label_in_border: options.show_label_in_border,
@@ -601,11 +602,17 @@ impl PaneRenderer {
     /// from the daemon, and the daemon guarantees the captured grid
     /// strictly contains every chunk it broadcast (the PTY reader
     /// invokes the output sink under the terminal write lock —
-    /// `MuxPane::detach_output`'s contract, mux/pane.rs).
-    pub fn feed_output(&mut self, pane: u32, bytes: &[u8]) {
-        if let Some(emulator) = self.emulators.get_mut(&pane) {
-            emulator.feed(bytes);
-            self.dirty = true;
+    /// `MuxPane::detach_output`'s contract, mux/pane.rs). Returns the
+    /// lines pushed into scrollback while the pane's scroll hold is
+    /// set — copy mode's rebase delta.
+    pub fn feed_output(&mut self, pane: u32, bytes: &[u8]) -> usize {
+        match self.emulators.get_mut(&pane) {
+            Some(emulator) => {
+                let pushed = emulator.feed(bytes);
+                self.dirty = true;
+                pushed
+            }
+            None => 0,
         }
     }
 
@@ -657,19 +664,31 @@ impl PaneRenderer {
         }
     }
 
+    /// Enter copy mode on `pane`: hold the offset against pane output
+    /// and repaint, leaving the view at live — the cursor starts at the
+    /// pane's host cursor and every pane has something to roam (an
+    /// empty-scrollback or alt-screen pane roams its visible screen).
+    /// `false` only for an unknown pane id.
+    pub(crate) fn enter_copy_mode(&mut self, pane: u32) -> bool {
+        let Some(emulator) = self.emulators.get_mut(&pane) else {
+            return false;
+        };
+        emulator.set_scroll_hold(true);
+        self.dirty = true;
+        true
+    }
+
     /// Enter the keyboard scroll viewport on `pane`: hold the offset
-    /// against pane output, jump the view one viewport (the pane's row
-    /// count) up from live — the reading position a wheel-up would have
-    /// reached — and repaint. `false` when the pane is unknown or has no
-    /// scrollback (nothing to scroll).
-    pub fn enter_scroll_mode(&mut self, pane: u32) -> bool {
+    /// against pane output and jump the view one viewport (the pane's
+    /// row count) up from live. Kept for the engine tests (copy mode
+    /// reuses the same hold/offset machinery); no production caller —
+    /// prefix-[ enters copy mode.
+    #[cfg(test)]
+    pub(crate) fn enter_scroll_mode(&mut self, pane: u32) -> bool {
         let rows = {
             let Some(emulator) = self.emulators.get(&pane) else {
                 return false;
             };
-            if emulator.terminal().active_grid().scrollback_len() == 0 {
-                return false;
-            }
             emulator.terminal().active_grid().rows().max(1)
         };
         let Some(emulator) = self.emulators.get_mut(&pane) else {
@@ -681,24 +700,10 @@ impl PaneRenderer {
         true
     }
 
-    /// Why prefix `[` would refuse this pane: `None` = it would enter.
-    /// Alt-screen wins over the scrollback check — an alt grid never
-    /// carries scrollback, and naming it is the actionable reason.
-    pub fn scroll_mode_refusal(&self, pane: u32) -> Option<&'static str> {
-        let emulator = self.emulators.get(&pane)?;
-        let terminal = emulator.terminal();
-        if terminal.is_alt_screen_active() {
-            Some("alt-screen pane: no history")
-        } else if terminal.active_grid().scrollback_len() == 0 {
-            Some("no scrollback")
-        } else {
-            None
-        }
-    }
-
-    /// Whether `pane`'s scroll viewport is currently held (in scroll
-    /// mode). Unknown pane → false.
-    pub fn scroll_mode_active(&self, pane: u32) -> bool {
+    /// Whether `pane`'s scroll viewport is currently held (the pane is
+    /// in copy mode or wheel-held). Unknown pane → false.
+    #[cfg(test)]
+    pub(crate) fn scroll_mode_active(&self, pane: u32) -> bool {
         self.emulators
             .get(&pane)
             .is_some_and(|e| e.scroll_offset() > 0 || e.hold_scroll)
@@ -708,6 +713,14 @@ impl PaneRenderer {
     pub(crate) fn set_selection(&mut self, sel: Option<super::Selection>) {
         if self.selection != sel {
             self.selection = sel;
+            self.dirty = true;
+        }
+    }
+
+    /// Set (or clear) copy mode's painted cursor. Repaints on change.
+    pub(crate) fn set_copy_cursor(&mut self, cursor: Option<(u32, usize, usize)>) {
+        if self.copy_cursor != cursor {
+            self.copy_cursor = cursor;
             self.dirty = true;
         }
     }
@@ -764,6 +777,13 @@ impl PaneRenderer {
                 let ((a_line, a_col), (h_line, h_col)) = super::normalize_span(anchor, head);
                 (pane, a_line, h_line, a_col, h_col)
             }
+            Selection::Block {
+                pane,
+                top,
+                bottom,
+                left,
+                right,
+            } => (pane, top, bottom, left, right),
         };
         let emulator = self.emulators.get(&pane)?;
         let grid = emulator.terminal().active_grid();

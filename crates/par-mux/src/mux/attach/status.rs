@@ -861,11 +861,19 @@ impl StatusState {
 
     /// Compose the status line as styled segments, truncated to `cols`
     /// display columns. `scroll` is the focused pane's client scroll
-    /// offset when a scroll view is up. With the side panel open
-    /// (`sidebar`), the strip's roster replaces the all-workspaces and
-    /// sessions segments: the line leads with the ACTIVE workspace's
-    /// label, then the shown session's tabs — herdr's top bar.
-    pub(crate) fn compose(&self, cols: u16, scroll: Option<usize>, sidebar: bool) -> Vec<Segment> {
+    /// offset when a scrolled view is up; `copy` is copy mode's badge
+    /// (mode word plus cursor position) while the mode is open. With
+    /// the side panel open (`sidebar`), the strip's roster replaces the
+    /// all-workspaces and sessions segments: the line leads with the
+    /// ACTIVE workspace's label, then the shown session's tabs —
+    /// herdr's top bar.
+    pub(crate) fn compose(
+        &self,
+        cols: u16,
+        scroll: Option<usize>,
+        copy: Option<String>,
+        sidebar: bool,
+    ) -> Vec<Segment> {
         let mut segments: Vec<Segment> = Vec::new();
         let push =
             |segments: &mut Vec<Segment>, text: String, bold: bool, dim: bool, shaded: bool| {
@@ -965,6 +973,9 @@ impl StatusState {
                 false,
                 false,
             );
+        }
+        if let Some(badge) = copy {
+            push(&mut segments, format!(" | {badge}"), true, false, false);
         }
 
         // Truncate to the row width.
@@ -1546,7 +1557,7 @@ mod tests {
     /// a padded tab in id order, then the sessions segment.
     #[test]
     fn compose_carries_the_workspaces_segment_in_id_order() {
-        let text = joined(&state().compose(120, None, false));
+        let text = joined(&state().compose(120, None, None, false));
         assert!(
             text.starts_with(" alpha  |  beta  | "),
             "workspaces lead the line: {text}"
@@ -1557,7 +1568,7 @@ mod tests {
     /// The active workspace's tab is the shaded block; the others dim.
     #[test]
     fn compose_shades_the_active_workspace_only() {
-        let segments = state().compose(120, None, false);
+        let segments = state().compose(120, None, None, false);
         let shaded = joined(
             &segments
                 .iter()
@@ -1589,7 +1600,7 @@ mod tests {
     fn compose_shades_the_displayed_sessions_workspace() {
         let mut got = state();
         got.session_workspace = Some("+1".to_string());
-        let segments = got.compose(120, None, false);
+        let segments = got.compose(120, None, None, false);
         let shaded = joined(
             &segments
                 .iter()
@@ -1607,7 +1618,7 @@ mod tests {
         );
         let mut fallback = state();
         fallback.session_workspace = None;
-        let segments = fallback.compose(120, None, false);
+        let segments = fallback.compose(120, None, None, false);
         let shaded = joined(
             &segments
                 .iter()
@@ -1626,7 +1637,7 @@ mod tests {
     /// title — and NOT the agent roster, which lives in the side panel.
     #[test]
     fn compose_carries_sessions_windows_title_and_chips() {
-        let segments = state().compose(120, None, false);
+        let segments = state().compose(120, None, None, false);
         let text = joined(&segments);
         assert!(text.contains("$0:work"), "sessions: {text}");
         assert!(text.contains("$1:play"), "sessions: {text}");
@@ -1641,7 +1652,7 @@ mod tests {
     /// shaded, an inactive tab dim. A non-shown session is neither.
     #[test]
     fn compose_bolds_the_current_session_and_shades_the_active_window() {
-        let segments = state().compose(120, None, false);
+        let segments = state().compose(120, None, None, false);
         let bold_text = joined(
             &segments
                 .iter()
@@ -1681,7 +1692,7 @@ mod tests {
     /// (they live in the strip).
     #[test]
     fn compose_sidebar_mode_leads_with_the_active_workspace() {
-        let segments = state().compose(120, None, true);
+        let segments = state().compose(120, None, None, true);
         let text = joined(&segments);
         assert!(text.starts_with(" alpha "), "label leads: {text}");
         assert!(!text.contains("$1:play"), "sessions dropped: {text}");
@@ -1702,9 +1713,9 @@ mod tests {
     /// appends none.
     #[test]
     fn compose_appends_the_scroll_cue_when_offset() {
-        let text = joined(&state().compose(120, Some(7), false));
+        let text = joined(&state().compose(120, Some(7), None, false));
         assert!(text.contains("[scroll +7]"), "cue: {text}");
-        let text = joined(&state().compose(120, Some(0), false));
+        let text = joined(&state().compose(120, Some(0), None, false));
         assert!(!text.contains("scroll"), "no cue at live: {text}");
     }
 
@@ -1714,7 +1725,7 @@ mod tests {
     fn compose_truncates_to_the_row_width() {
         let mut wide = state();
         wide.pane_title = "x".repeat(200);
-        let segments = wide.compose(40, None, false);
+        let segments = wide.compose(40, None, None, false);
         assert_eq!(joined(&segments).chars().count(), 40);
     }
 
@@ -1723,7 +1734,7 @@ mod tests {
     /// changed cells.
     #[test]
     fn status_row_diffs_only_changes() {
-        let segments = state().compose(80, None, false);
+        let segments = state().compose(80, None, None, false);
         let mut row = StatusRow::new(80);
         row.paint(&segments, None);
         let first = row.diff();
@@ -1736,7 +1747,7 @@ mod tests {
         // state left the bar — the side panel renders it.)
         let mut next = state();
         next.pane_title = "~/src/other".to_string();
-        row.paint(&next.compose(80, None, false), None);
+        row.paint(&next.compose(80, None, None, false), None);
         let diff = row.diff();
         assert!(!diff.is_empty());
         assert!(diff.len() < 80, "a title change must not repaint the row");
@@ -1779,12 +1790,12 @@ mod tests {
         let mut long = state();
         long.pane_title = String::new();
         long.agents.clear();
-        row.paint(&long.compose(60, None, false), None);
+        row.paint(&long.compose(60, None, None, false), None);
         row.diff();
         let mut short = long.clone();
         short.pane_title = String::new();
         short.windows.clear();
-        row.paint(&short.compose(60, None, false), None);
+        row.paint(&short.compose(60, None, None, false), None);
         let diff = row.diff();
         assert!(
             diff.iter().any(|(_, _, cell)| cell.symbol() == " "),

@@ -27,6 +27,7 @@ use ratatui::style::Color as RtColor;
 use std::collections::HashMap;
 use std::io::Write as _;
 mod chrome;
+mod copy_mode;
 mod cursor;
 mod drag;
 mod geometry;
@@ -196,7 +197,7 @@ pub struct PaneEmulator {
     /// keystroke forwarded to the pane snaps it back to live.
     scroll: usize,
     /// Scroll hold: pane output does not snap the view back to live
-    /// while held (the prefix-[ keyboard viewport, or a wheel-scrolled
+    /// while held (the copy-mode viewport, or a wheel-scrolled
     /// view — the wheel arms the hold so a pane that keeps writing,
     /// like omp's streaming chat, cannot instantly swallow the scroll).
     /// The offset grows by the lines the pane pushes into scrollback so
@@ -268,8 +269,10 @@ impl PaneEmulator {
     /// the prefix-[ viewport or a wheel-scrolled view), the offset
     /// survives instead and tracks the lines the pane pushes into
     /// scrollback, so the view stays put relative to its CONTENT (tmux's
-    /// copy-mode behavior), clamped to the scrollback extent.
-    pub fn feed(&mut self, bytes: &[u8]) {
+    /// copy-mode behavior), clamped to the scrollback extent. Returns
+    /// the lines pushed into scrollback while held (0 otherwise) — the
+    /// copy-mode state's rebase delta.
+    pub fn feed(&mut self, bytes: &[u8]) -> usize {
         let sb_before = if self.hold_scroll {
             Some(self.term.active_grid().scrollback_len())
         } else {
@@ -281,13 +284,16 @@ impl PaneEmulator {
         // undrained queues would grow with the pane's output (SEC-207).
         let _ = self.term.drain_responses();
         let _ = self.term.drain_bell_events();
-        if self.hold_scroll {
+        let pushed = if self.hold_scroll {
             let max = self.term.active_grid().scrollback_len();
             let pushed = max.saturating_sub(sb_before.unwrap_or(max));
             self.scroll = (self.scroll + pushed).min(max);
+            pushed
         } else {
             self.scroll = 0;
-        }
+            0
+        };
+        pushed
     }
 
     /// Scroll this pane's client-side view by `delta` lines (positive =
@@ -426,10 +432,14 @@ pub struct PaneRenderer {
     /// The popup command window painted over the panes (above the
     /// side panel, under the toast and modal overlays).
     pub(super) popup: Option<popup::PopupView>,
-    /// The on-screen selection — scroll mode's whole lines or the mouse
-    /// drag's characters; see [`Selection`]. `None` when nothing is
-    /// selected.
+    /// The on-screen selection — scroll mode's whole lines, the mouse
+    /// drag's characters, or copy mode's block; see [`Selection`].
+    /// `None` when nothing is selected.
     pub(crate) selection: Option<Selection>,
+    /// Copy mode's cursor: the `(pane, absolute line, column)` whose
+    /// cell paints reversed (the mode's own cursor — the host cursor is
+    /// hidden while the mode is up). `None` outside copy mode.
+    copy_cursor: Option<(u32, usize, usize)>,
     /// Per-pane border boxes instead of shared dividers (config
     /// `pane-borders`); `show_label_in_border` embeds the pane's title in
     /// the top edge. Both default off.
@@ -837,11 +847,20 @@ pub(crate) enum Selection {
     Lines { pane: u32, a: usize, b: usize },
     /// The mouse drag's character selection: anchor and head are
     /// `(absolute line, column)`. Reading order between the two cells
-    /// defines the selection, whichever way the drag ran.
+    /// reverses whichever way the drag ran.
     Chars {
         pane: u32,
         anchor: (usize, usize),
         head: (usize, usize),
+    },
+    /// Copy mode's block selection: rows `top..=bottom`, columns
+    /// `left..=right` (the v Ctrl+V span's corners normalized).
+    Block {
+        pane: u32,
+        top: usize,
+        bottom: usize,
+        left: usize,
+        right: usize,
     },
 }
 
@@ -871,6 +890,13 @@ impl Selection {
                     (false, false) => true,
                 }
             }
+            Selection::Block {
+                pane: p,
+                top,
+                bottom,
+                left,
+                right,
+            } => p == pane && line >= top && line <= bottom && col >= left && col <= right,
         }
     }
 }
@@ -1048,16 +1074,14 @@ struct WindowSession {
     /// strip's motion/release can reorder — `None` when no drag is in
     /// flight.
     tab_drag_from: Option<usize>,
-    /// The scroll-mode line selection's anchor (the absolute line `v`
-    /// fixed); `None` when no selection is in progress.
-    copy_anchor: Option<usize>,
-    /// The scroll-mode search line's live typing (`/`); `None` when no
-    /// search is being typed. Enter commits it as the query.
-    scroll_query: Option<String>,
-    /// The committed search's matching absolute lines (n/N walk them).
-    scroll_matches: Vec<usize>,
+    /// Copy mode's committed search matches (n/N walk them): the
+    /// `(absolute line, column)` of every hit, in line order.
+    scroll_matches: Vec<(usize, usize)>,
     /// Where the match walk stands.
     scroll_match_ix: usize,
+    /// Whether a yank leaves copy mode ([`Modal::Copy`]; config
+    /// `copy-mode-auto-exit`). Default on.
+    copy_mode_auto_exit: bool,
     /// The daemon's last known (unzoomed) tree layout, so the
     /// prefix+arrow navigation can aim through a zoom.
     daemon_layout: Vec<PaneRect>,
@@ -1248,8 +1272,10 @@ enum Modal {
     /// No modal: input goes to the panes.
     #[default]
     None,
-    /// The prefix-[ keyboard scroll viewport on the focused pane.
-    Scroll,
+    /// The prefix-[ vi copy mode on the focused pane: an independent
+    /// cursor roams scrollback plus the frozen screen, selects, yanks
+    /// (OSC 52), and searches. State in [`copy_mode::CopyModeState`].
+    Copy(copy_mode::CopyModeState),
     /// The rename/create prompt.
     Prompt(PromptState),
     /// A context menu.
@@ -1270,8 +1296,9 @@ enum Modal {
 
 impl Modal {
     /// Whether the host cursor hides while this modal is up. Every modal
-    /// that paints an overlay or owns the keys hides it; the scroll
-    /// viewport keeps it (the pane's cursor maps through the scroll).
+    /// that paints an overlay or owns the keys hides it; copy mode does
+    /// too (its own cursor paints instead), the pane cursor would
+    /// otherwise map through the scroll.
     fn hides_cursor(&self) -> bool {
         matches!(
             self,
@@ -1282,6 +1309,7 @@ impl Modal {
                 | Modal::Settings(_)
                 | Modal::Layouts(_)
                 | Modal::Resize
+                | Modal::Copy(_)
         )
     }
 }
@@ -1416,10 +1444,9 @@ impl WindowSession {
             held: std::collections::HashMap::new(),
             join_source: None,
             tab_drag_from: None,
-            copy_anchor: None,
-            scroll_query: None,
             scroll_matches: Vec::new(),
             scroll_match_ix: 0,
+            copy_mode_auto_exit: chords.copy_mode_auto_exit,
             sidebar_on_launch: chords.sidebar_on_launch,
             session_picker: chords.session_picker,
             prefer_default_workspace: chords.prefer_default_workspace,

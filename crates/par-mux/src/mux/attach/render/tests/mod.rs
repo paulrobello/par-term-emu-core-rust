@@ -20,6 +20,7 @@ use ratatui::style::Modifier as RtModifier;
 use std::io::BufRead as _;
 
 mod chords;
+mod copy_mode_tests;
 mod kitty;
 mod popup;
 mod replay_retry;
@@ -789,8 +790,7 @@ fn scroll_mode_holds_view_against_output_and_snaps_on_exit() {
     }
     renderer.render_frame();
 
-    // A pane with no scrollback refuses scroll mode.
-    assert!(!renderer.enter_scroll_mode(2), "pane 2 has no history");
+    // The hold/offset machinery copy mode shares with the wheel path.
     assert!(renderer.enter_scroll_mode(1), "pane 1 has history");
     let history = renderer
         .pane_terminal(1)
@@ -1475,8 +1475,15 @@ impl WindowSession {
     fn is_resize(&self) -> bool {
         matches!(self.modal, Modal::Resize)
     }
-    fn is_scroll(&self) -> bool {
-        matches!(self.modal, Modal::Scroll)
+    fn is_copy(&self) -> bool {
+        matches!(self.modal, Modal::Copy(_))
+    }
+    /// Copy mode's state, for assertions.
+    fn copy_state(&self) -> &copy_mode::CopyModeState {
+        match &self.modal {
+            Modal::Copy(state) => state,
+            other => panic!("no copy mode up: {other:?}"),
+        }
     }
     fn menu(&self) -> Option<&MenuState> {
         match &self.modal {
@@ -1530,7 +1537,7 @@ fn modal_hides_cursor_per_variant() {
         selected: 0,
     });
     assert!(!Modal::None.hides_cursor());
-    assert!(!Modal::Scroll.hides_cursor());
+    assert!(Modal::Copy(Default::default()).hides_cursor());
     assert!(prompt.hides_cursor());
     assert!(menu.hides_cursor());
     assert!(Modal::Help(HelpState::default()).hides_cursor());
@@ -1551,13 +1558,13 @@ fn opening_a_modal_replaces_the_open_one() {
             .renderer
             .feed_output(1, format!("line{i}\r\n").as_bytes());
     }
-    assert!(session.renderer.enter_scroll_mode(1));
-    session.open_modal(Modal::Scroll);
+    assert!(session.renderer.enter_copy_mode(1));
+    session.open_modal(Modal::Copy(Default::default()));
     session.enter_help();
     assert!(session.is_help());
     assert!(
         !session.renderer.scroll_mode_active(1),
-        "the replaced viewport released its hold"
+        "the replaced mode released its hold"
     );
     session.enter_prompt(PromptTarget::Pane);
     assert!(session.is_prompt() && !session.is_help());

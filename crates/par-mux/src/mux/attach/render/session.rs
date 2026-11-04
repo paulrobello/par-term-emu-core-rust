@@ -3,8 +3,8 @@
 //! config-driven display setters.
 
 use super::{
-    DragState, FlushSink, Glyphs, Modal, PaneRect, RenderOptions, SessionStripMode, WindowSession,
-    RESTART_TOAST_WINDOW_SECS,
+    copy_mode, DragState, FlushSink, Glyphs, Modal, PaneRect, RenderOptions, SessionStripMode,
+    WindowSession, RESTART_TOAST_WINDOW_SECS,
 };
 use crate::mux::attach::status::{Segment, StatusRow};
 use crate::mux::attach::tabs::TabStrip;
@@ -339,6 +339,7 @@ impl WindowSession {
         self.set_show_label_in_border(chords.show_label_in_border);
         self.set_pane_gaps(chords.pane_gaps);
         self.set_scrollbar_gutter(chords.scrollbar_gutter);
+        self.copy_mode_auto_exit = chords.copy_mode_auto_exit;
         self.cursor.change_cursor_shape = chords.change_cursor_shape;
         self.set_kitty_enabled(chords.kitty_graphics);
         let eff = crate::mux::config::resolve(file, &crate::mux::config::Overrides::default());
@@ -972,7 +973,10 @@ impl WindowSession {
     pub(super) fn feed_pane(&mut self, pane_id: &str, data: &[u8]) {
         if let Some(n) = pane_id.strip_prefix('%').and_then(|n| n.parse().ok()) {
             super::trace_input(format_args!("feed pane %{n} {} bytes", data.len()));
-            self.renderer.feed_output(n, data);
+            let pushed = self.renderer.feed_output(n, data);
+            if pushed > 0 {
+                self.rebase_copy_state(n, pushed);
+            }
         }
     }
 
@@ -1078,6 +1082,25 @@ impl WindowSession {
         focused
     }
 
+    /// Copy mode's status-row badge: the mode word plus the cursor's
+    /// `absolute-line:column`, beside the scroll cue. `None` outside
+    /// copy mode.
+    fn copy_mode_badge(&self) -> Option<String> {
+        let Modal::Copy(state) = &self.modal else {
+            return None;
+        };
+        let mode = match state.visual_mode {
+            copy_mode::VisualMode::None => "COPY",
+            copy_mode::VisualMode::Char => "VISUAL",
+            copy_mode::VisualMode::Line => "V-LINE",
+            copy_mode::VisualMode::Block => "V-BLOCK",
+        };
+        Some(format!(
+            "-- {mode} -- {}:{}",
+            state.cursor_absolute_line, state.cursor_col
+        ))
+    }
+
     /// Draw the status row: fresh state composed and painted into the row
     /// buffer (the pump flushes the diff with the next frame). Hidden,
     /// nothing paints: the row belongs to the pane grid, and the refit's
@@ -1092,13 +1115,14 @@ impl WindowSession {
         if !self.chrome.status_bar_on {
             return;
         }
-        let scroll = if matches!(self.modal, Modal::Scroll) {
+        let scroll = if matches!(self.modal, Modal::Copy(_)) {
             self.renderer
                 .focused()
                 .map(|id| self.renderer.scroll_offset_of(id))
         } else {
             None
         };
+        let copy_badge = self.copy_mode_badge();
         // The flash cue, the prefix-armed cue, and the zoom marker lead
         // the line and the Help chip RIGHT-ALIGNS at the row's end: all
         // four reserve their widths up front so the composed state
@@ -1148,6 +1172,7 @@ impl WindowSession {
         let segments = self.status.compose(
             cols.saturating_sub(reserved as u16),
             scroll,
+            copy_badge,
             self.sidebar.is_on(),
         );
         let mut with_head = head;

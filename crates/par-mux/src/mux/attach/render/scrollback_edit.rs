@@ -146,7 +146,7 @@ impl WindowSession {
                 return;
             }
         };
-        self.leave_scroll_mode();
+        self.leave_copy_mode();
         // The script runs under /bin/sh whatever the pane shell is (fish
         // would reject a POSIX script). Since the parser's start-command
         // cut stops split-window's flags at the `--`, the script rides

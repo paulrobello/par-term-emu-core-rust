@@ -338,6 +338,12 @@ const GENERAL_ROWS: &[SettingSpec] = &[
         |v, _| FieldVal::Bool(v.change_cursor_shape),
     ),
     SettingSpec::new(
+        "copy-mode-auto-exit",
+        "yank exits copy mode",
+        SettingKind::Toggle,
+        |v, _| FieldVal::Bool(v.copy_mode_auto_exit),
+    ),
+    SettingSpec::new(
         "resize-step",
         "resize step",
         SettingKind::Number { min: 1, max: 99 },
@@ -609,6 +615,7 @@ pub(super) struct SettingsValues {
     pub border_color: String,
     pub theme: crate::mux::theme::ThemeSelection,
     pub scrollbar_gutter: bool,
+    pub copy_mode_auto_exit: bool,
     pub change_cursor_shape: bool,
     pub kitty_graphics: bool,
     pub session_picker: bool,
@@ -918,6 +925,7 @@ impl WindowSession {
             border_color: hex(self.render_opts.border_plain),
             theme: self.theme.clone(),
             scrollbar_gutter: self.render_opts.scrollbar_gutter,
+            copy_mode_auto_exit: self.copy_mode_auto_exit,
             change_cursor_shape: self.cursor.change_cursor_shape,
             kitty_graphics: self.kitty.enabled,
             session_picker: self.session_picker,
@@ -1361,6 +1369,7 @@ mod tests {
                 ..crate::mux::theme::ThemeSelection::default()
             },
             scrollbar_gutter: false,
+            copy_mode_auto_exit: true,
             change_cursor_shape: false,
             kitty_graphics: true,
             session_picker: false,

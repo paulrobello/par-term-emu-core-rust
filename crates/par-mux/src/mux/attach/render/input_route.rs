@@ -144,8 +144,11 @@ pub(super) enum PrefixChord {
     Picker,
     /// `d`: detach.
     Detach,
-    /// `[`: the scroll viewport on the focused pane.
-    Scroll,
+    /// `[`: vi copy mode on the focused pane.
+    CopyMode,
+    /// `e`: the scrollback in $VISUAL/$EDITOR (copy mode's old `e`;
+    /// the vi table owns that letter now).
+    EditScrollback,
     /// `n`/`p`/`(`/`)`/`o`: the window, session, and pane switches.
     Switch,
     /// The literal prefix key: send it through.
@@ -163,14 +166,12 @@ impl WindowSession {
         bytes: &[u8],
         conn: &mut crate::mux::attach::conn::AttachConn,
     ) -> bool {
-        // The scroll-mode search line owns the bytes while it is up —
-        // before every other router (the viewport's pane must see
-        // nothing of the query).
-        if self.scroll_query.is_some() {
+        // The copy-mode search line owns the bytes while it is up —
+        // before every other router (the pane must see nothing of the
+        // query).
+        if self.copy_search_line_up() {
             for &byte in bytes {
-                if !self.search_typing_byte(byte) {
-                    break;
-                }
+                self.copy_search_byte(byte);
             }
             return false;
         }
@@ -224,19 +225,18 @@ impl WindowSession {
                     PrefixChord::Help => self.enter_help(),
                     PrefixChord::Picker => self.enter_picker(conn),
                     PrefixChord::Detach => return true,
-                    PrefixChord::Scroll => {
-                        // prefix [ — the scroll viewport on the focused
-                        // pane. A pane with nothing to scroll is refused
-                        // with a flash naming why; the key is consumed
-                        // either way.
-                        if let Some(id) = self.renderer.focused() {
-                            if self.renderer.enter_scroll_mode(id) {
-                                self.open_modal(Modal::Scroll);
-                            } else if let Some(why) = self.renderer.scroll_mode_refusal(id) {
-                                self.chrome.flash(why);
-                                self.draw_status_row();
-                            }
-                        }
+                    PrefixChord::CopyMode => {
+                        // prefix [ — vi copy mode on the focused pane:
+                        // every pane enters (an empty-scrollback or
+                        // alt-screen pane roams its visible screen);
+                        // the key is consumed either way.
+                        self.enter_copy_mode();
+                    }
+                    PrefixChord::EditScrollback => {
+                        // prefix e — the scrollback in $VISUAL/$EDITOR
+                        // (formerly copy mode's `e`; the motion table
+                        // owns that letter now).
+                        self.edit_scrollback(conn);
                     }
                     PrefixChord::Switch => self.prefix_switch(byte, conn),
                     PrefixChord::Literal => to_send.push(byte),
@@ -252,20 +252,11 @@ impl WindowSession {
                 }
             } else if byte == self.prefix {
                 self.arm_prefix(true);
-            } else if self.scroll_query.is_some() {
-                // A `/` earlier in this run opened the search line: the
-                // rest of the run is the query.
-                self.search_typing_byte(byte);
-            } else if matches!(self.modal, Modal::Scroll) {
-                // Scroll mode's plain keys: q and Enter exit, the
-                // copy-mode letters (v y / n N e) reach the key handler
-                // (the viewport is a modal view — keys do not leak into
-                // the pane).
-                if byte == b'q' || byte == b'\r' {
-                    self.leave_scroll_mode();
-                } else if byte.is_ascii_graphic() {
-                    self.scroll_mode_input(conn, &TermKeyEvent::char_(byte as char, 0));
-                }
+            } else if matches!(self.modal, Modal::Copy(_)) {
+                // Copy mode's plain keys: q exits, everything graphic
+                // reaches the vi table (the mode owns the keys — nothing
+                // leaks into the pane).
+                self.copy_mode_byte(byte);
             } else {
                 to_send.push(byte);
             }
@@ -346,7 +337,7 @@ impl WindowSession {
         body: &[u8],
     ) {
         self.arm_prefix(false);
-        if self.feed_modal_run(body, conn) || matches!(self.modal, Modal::Scroll) {
+        if self.feed_modal_run(body, conn) || matches!(self.modal, Modal::Copy(_)) {
             return;
         }
         let Some(id) = self.renderer.focused() else {
@@ -384,7 +375,7 @@ impl WindowSession {
         // ends the run.
         let byte_handler: fn(&mut Self, &mut crate::mux::attach::conn::AttachConn, u8) -> bool =
             match &self.modal {
-                Modal::None | Modal::Scroll => return false,
+                Modal::None | Modal::Copy(_) => return false,
                 Modal::Resize => {
                     self.modal = Modal::None;
                     return true;
@@ -427,7 +418,8 @@ impl WindowSession {
         }
         match byte {
             b'd' => PrefixChord::Detach,
-            b'[' => PrefixChord::Scroll,
+            b'[' => PrefixChord::CopyMode,
+            b'e' => PrefixChord::EditScrollback,
             b'n' | b'p' | b'(' | b')' | b'o' => PrefixChord::Switch,
             b if b == self.literal => PrefixChord::Literal,
             _ => PrefixChord::Unbound,
@@ -489,7 +481,7 @@ impl WindowSession {
             return;
         }
         match &self.modal {
-            Modal::Scroll => return self.scroll_mode_input(conn, ev),
+            Modal::Copy(_) => return self.copy_mode_input(conn, ev),
             Modal::Prompt(_) => return self.prompt_key(conn, ev),
             Modal::Menu(_) => return self.menu_key(conn, ev),
             Modal::Help(_) => return self.help_key(ev),
@@ -926,7 +918,7 @@ impl WindowSession {
         // armed drag.
         if self.text_drag.is_some()
             && (mouse.release
-                || (mouse.is_motion() && matches!(self.modal, Modal::None | Modal::Scroll)))
+                || (mouse.is_motion() && matches!(self.modal, Modal::None | Modal::Copy(_))))
         {
             let (x, content_y) = self.geometry.host_to_content_clamped(x, y);
             return Hit::TextDrag {
@@ -996,7 +988,7 @@ impl WindowSession {
             Modal::Picker(picker) => return self.picker_hit(picker, mouse, x, y),
             Modal::Help(_) => return help_hit(mouse),
             Modal::None
-            | Modal::Scroll
+            | Modal::Copy(_)
             | Modal::Menu(_)
             | Modal::Settings(_)
             | Modal::Layouts(_)
@@ -1050,7 +1042,7 @@ impl WindowSession {
     /// agent's pane and dismisses the card. `None` when the report is not
     /// a press on the toast (or a modal other than scroll is up).
     fn toast_hit(&self, mouse: &SgrMouse, x: u16, y: u16) -> Option<Hit> {
-        if !matches!(self.modal, Modal::None | Modal::Scroll) || !mouse.is_press() {
+        if !matches!(self.modal, Modal::None | Modal::Copy(_)) || !mouse.is_press() {
             return None;
         }
         self.geometry
@@ -1262,7 +1254,7 @@ impl WindowSession {
                     release: mouse.release,
                 };
             }
-            if self.text_drag.is_some() && matches!(self.modal, Modal::None | Modal::Scroll) {
+            if self.text_drag.is_some() && matches!(self.modal, Modal::None | Modal::Copy(_)) {
                 return Hit::TextDrag {
                     x,
                     y: cy,

@@ -423,6 +423,14 @@ pub struct ClientSection {
         skip_serializing_if = "Option::is_none"
     )]
     pub scrollbar_gutter: Option<bool>,
+    /// Leave copy mode when a yank succeeds (config
+    /// `copy-mode-auto-exit`). Default on.
+    #[serde(
+        default,
+        rename = "copy-mode-auto-exit",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub copy_mode_auto_exit: Option<bool>,
     /// While the pointer is over a resize handle, and while a drag is
     /// live, shape the host cursor to the resize shape (best-effort
     /// DECSCUSR; restored on leave/drag end). Default on.
@@ -1244,6 +1252,7 @@ pub fn render(eff: &EffectiveConfig) -> String {
             tab_width_min: Some(defaults.tab_width_min),
             tab_width_max: Some(defaults.tab_width_max),
             scrollbar_gutter: Some(defaults.scrollbar_gutter),
+            copy_mode_auto_exit: Some(defaults.copy_mode_auto_exit),
             change_cursor_shape: Some(defaults.change_cursor_shape),
             kitty_graphics: Some(defaults.kitty_graphics),
             session_picker: Some(defaults.session_picker),
@@ -1366,6 +1375,9 @@ pub struct Chords {
     /// The reserved right-edge gutter column (config
     /// `scrollbar-gutter`). Default off.
     pub scrollbar_gutter: bool,
+    /// Whether a successful yank leaves copy mode (config
+    /// `copy-mode-auto-exit`). Default on.
+    pub copy_mode_auto_exit: bool,
     /// The cursor/pointer shaping (config `change-cursor-shape`): the
     /// resize pointer (OSC 22) over divider hovers/drags plus the
     /// DECSCUSR steady block during a live drag. Default on.
@@ -1521,6 +1533,7 @@ impl Chords {
             show_label_in_border: true,
             pane_gaps: 0,
             scrollbar_gutter: false,
+            copy_mode_auto_exit: true,
             change_cursor_shape: true,
             kitty_graphics: true,
             session_picker: false,
@@ -1830,6 +1843,10 @@ pub fn reload_client_chords(file: &ConfigFile, current: &Chords) -> Result<Chord
         .client
         .scrollbar_gutter
         .unwrap_or(current.scrollbar_gutter);
+    let copy_mode_auto_exit = file
+        .client
+        .copy_mode_auto_exit
+        .unwrap_or(current.copy_mode_auto_exit);
     let change_cursor_shape = file
         .client
         .change_cursor_shape
@@ -1904,6 +1921,7 @@ pub fn reload_client_chords(file: &ConfigFile, current: &Chords) -> Result<Chord
         show_label_in_border,
         pane_gaps,
         scrollbar_gutter,
+        copy_mode_auto_exit,
         change_cursor_shape,
         kitty_graphics,
         session_picker,

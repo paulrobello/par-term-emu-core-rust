@@ -239,9 +239,12 @@ pub(crate) fn help_rows(
                 format!("{p} arrows"),
                 "select the pane in that direction".to_string(),
             ),
-            (format!("{p} ["), "scroll the pane's history".to_string()),
             (
-                format!("{p} [ then e"),
+                format!("{p} ["),
+                "vi copy mode: roam, select, yank".to_string(),
+            ),
+            (
+                format!("{p} e"),
                 "open the scrollback in $VISUAL/$EDITOR".to_string(),
             ),
             (
@@ -285,7 +288,7 @@ pub(crate) fn help_rows(
     // spellings beside their entries above).
     for row in &mut rows {
         let key = row.text.trim();
-        if key == format!("{p} [") || key == format!("{p} [ then e") {
+        if key == format!("{p} [") || key == format!("{p} e") {
             row.render_only = true;
         }
     }

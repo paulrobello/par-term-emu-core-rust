@@ -291,8 +291,8 @@ impl WindowSession {
                 return;
             }
         };
-        if matches!(self.modal, super::Modal::Scroll) {
-            self.leave_scroll_mode();
+        if matches!(self.modal, super::Modal::Copy(_)) {
+            self.leave_copy_mode();
         }
         self.renderer.set_popup(Some(PopupView {
             outer: geometry.outer,

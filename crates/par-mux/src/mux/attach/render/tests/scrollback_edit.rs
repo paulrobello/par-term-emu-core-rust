@@ -67,8 +67,8 @@ fn scrollback_files_are_private_and_the_script_cleans_up() {
     assert!(!ran.text.exists(), "the text file is removed");
 }
 
-/// Without `$VISUAL`/`$EDITOR` the key is refused on the flash: copy
-/// mode stays up and nothing is sent to the daemon.
+/// Without `$VISUAL`/`$EDITOR` prefix-e is refused on the flash:
+/// nothing is sent to the daemon.
 #[test]
 fn edit_scrollback_refuses_without_an_editor() {
     let (rx, mut conn, mut session) = two_pane_session("editnone", FakeScript::default());
@@ -79,16 +79,14 @@ fn edit_scrollback_refuses_without_an_editor() {
             .feed_output(1, format!("l{i}\r\n").as_bytes());
     }
     session.renderer.focus(1);
-    chord(&mut session, &mut conn, b'[');
-    assert!(session.is_scroll());
     drained(&rx);
-    session.route_plain(b"e", &mut conn);
+    chord(&mut session, &mut conn, b'e');
     settle(&mut session, &mut conn);
     assert_eq!(
         session.chrome.flash_text(),
         Some("edit scrollback: set $VISUAL or $EDITOR")
     );
-    assert!(session.is_scroll(), "the refusal keeps copy mode up");
+    assert!(!session.is_copy(), "copy mode is not involved");
     assert!(
         rx.recv_timeout(std::time::Duration::from_millis(150))
             .is_err(),
@@ -97,8 +95,8 @@ fn edit_scrollback_refuses_without_an_editor() {
 }
 
 /// Off unix the launcher needs a POSIX shell that is not there: even
-/// with an editor set, `e` is refused on the flash, copy mode stays up,
-/// and no pane is split.
+/// with an editor set, prefix-e is refused on the flash and no pane is
+/// split.
 #[cfg(not(unix))]
 #[test]
 fn edit_scrollback_refuses_without_a_posix_shell() {
@@ -110,16 +108,14 @@ fn edit_scrollback_refuses_without_a_posix_shell() {
             .feed_output(1, format!("l{i}\r\n").as_bytes());
     }
     session.renderer.focus(1);
-    chord(&mut session, &mut conn, b'[');
-    assert!(session.is_scroll());
     drained(&rx);
-    session.route_plain(b"e", &mut conn);
+    chord(&mut session, &mut conn, b'e');
     settle(&mut session, &mut conn);
     assert_eq!(
         session.chrome.flash_text(),
         Some("edit scrollback: needs a POSIX shell (unix only)")
     );
-    assert!(session.is_scroll(), "the refusal keeps copy mode up");
+    assert!(!session.is_copy(), "copy mode is not involved");
     assert!(
         rx.recv_timeout(std::time::Duration::from_millis(150))
             .is_err(),
@@ -165,12 +161,9 @@ fn edit_scrollback_opens_a_zoomed_editor_pane_on_the_export() {
         "the export rejoins the wrapped line"
     );
     session.renderer.focus(1);
-    chord(&mut session, &mut conn, b'[');
-    assert!(session.is_scroll());
     drained(&rx);
 
-    session.route_plain(b"e", &mut conn);
-    assert!(!session.is_scroll(), "the key leaves copy mode");
+    chord(&mut session, &mut conn, b'e');
     let split = wait_recorded(&rx, "split-window");
     let script = split
         .strip_prefix("split-window -t %1 -- /bin/sh -c '")
@@ -221,9 +214,8 @@ fn edit_scrollback_failed_split_removes_the_files() {
             .feed_output(1, format!("l{i}\r\n").as_bytes());
     }
     session.renderer.focus(1);
-    chord(&mut session, &mut conn, b'[');
     drained(&rx);
-    session.route_plain(b"e", &mut conn);
+    chord(&mut session, &mut conn, b'e');
     let split = wait_recorded(&rx, "split-window");
     let script = split
         .strip_prefix("split-window -t %1 -- /bin/sh -c '")
@@ -263,7 +255,8 @@ fn copy_mode_letters_route_from_typed_bytes() {
     }
     session.renderer.focus(1);
     chord(&mut session, &mut conn, b'[');
-    assert!(session.is_scroll());
+    assert!(session.is_copy());
+    session.copy_mode_auto_exit = false;
     session.route_plain(b"v", &mut conn);
     assert!(session.renderer.selection.is_some(), "typed v anchors");
     session.route_plain(b"y", &mut conn);
@@ -273,19 +266,27 @@ fn copy_mode_letters_route_from_typed_bytes() {
         "the copy rode the outbox"
     );
     session.route_plain(b"/line 042\r", &mut conn);
-    assert!(session.scroll_query.is_none(), "Enter committed the query");
+    assert!(
+        !session.copy_state().is_searching,
+        "Enter committed the query"
+    );
     assert!(!session.scroll_matches.is_empty(), "the query matched");
-    assert!(session.is_scroll(), "still in copy mode");
+    assert!(session.is_copy(), "still in copy mode");
     assert!(drained(&rx).is_empty(), "no typed byte reached the pane");
 }
 
-/// The keybinds panel lists the copy-mode editor key.
+/// The keybinds panel lists the copy-mode chord and the editor chord.
 #[test]
 fn help_rows_list_the_scrollback_editor_key() {
     let rows = crate::mux::attach::help_rows(0x02, 0x12, Default::default(), 1);
     assert!(
         rows.iter()
-            .any(|r| r.text.contains("C-b [ then e") && r.text.contains("$EDITOR")),
+            .any(|r| r.text.contains("C-b [") && r.text.contains("copy mode")),
+        "the copy-mode chord is in the help: {rows:?}"
+    );
+    assert!(
+        rows.iter()
+            .any(|r| r.text.contains("C-b e") && r.text.contains("$EDITOR")),
         "the editor key is in the help"
     );
 }

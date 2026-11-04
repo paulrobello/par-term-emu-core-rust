@@ -1,24 +1,40 @@
 //! The modal switch itself plus the modes without a sibling file: resize
-//! mode and the scroll viewport's keys. Help, the pickers, the prompt, and
-//! the context menus live in their modal_* siblings.
+//! mode and copy mode's keys. Help, the pickers, the prompt, the context
+//! menus, and the settings/layouts dialogs live in their modal_* siblings.
 
 use super::renderer::{cols_overlap, rows_overlap};
-use super::{Modal, WindowSession};
+use super::{copy_mode, Modal, WindowSession};
+use par_term_emu_core::keyboard::TermKey;
 use par_term_emu_core::keyboard::TermKeyEvent;
 
+use copy_mode::{CopyModeState, SearchDirection, VisualMode};
+
 impl WindowSession {
+    /// Run `f` over copy mode's state, restoring it whatever `f` does.
+    /// `None` when copy mode is not the modal up (the caller then
+    /// treats the key as not its business).
+    fn with_copy_state<R>(&mut self, f: impl FnOnce(&mut CopyModeState) -> R) -> Option<R> {
+        let taken = std::mem::take(&mut self.modal);
+        let Modal::Copy(mut state) = taken else {
+            self.modal = taken;
+            return None;
+        };
+        let out = f(&mut state);
+        self.modal = Modal::Copy(state);
+        Some(out)
+    }
+
     /// Make `modal` the one that owns input, replacing any other. A
-    /// replaced scroll viewport releases its hold on the focused pane
+    /// replaced copy mode releases its hold on the focused pane
     /// (snapping it to live), since nothing would be left to exit it.
     pub(super) fn open_modal(&mut self, modal: Modal) {
-        if matches!(self.modal, Modal::Scroll) && !matches!(modal, Modal::Scroll) {
-            if let Some(id) = self.renderer.focused() {
-                self.renderer.exit_scroll_mode(id);
-            }
+        if matches!(self.modal, Modal::Copy(_)) && !matches!(modal, Modal::Copy(_)) {
+            self.exit_copy_state();
         }
         self.modal = modal;
         self.text_utf8 = Default::default();
     }
+
     /// Enter the sticky resize mode (the `resize` chord): arrows adjust
     /// the focused pane's edges until Enter/Escape/`q` — tmux's resize
     /// step with an explicit mode instead of repeat-time. The flash cue
@@ -30,6 +46,7 @@ impl WindowSession {
             self.resize_step
         ));
     }
+
     /// One key while resize mode is up: arrows send one resize step for
     /// the focused pane (`resize-pane -t <pane> -L|-R|-U|-D <step>`, the
     /// wire's relative form); Escape and `q` exit; every other key exits
@@ -40,7 +57,6 @@ impl WindowSession {
         conn: &mut crate::mux::attach::conn::AttachConn,
         ev: &TermKeyEvent,
     ) {
-        use par_term_emu_core::keyboard::TermKey;
         match ev.key() {
             TermKey::Up if ev.modifiers == 0 => self.send_resize(conn, "-U"),
             TermKey::Down if ev.modifiers == 0 => self.send_resize(conn, "-D"),
@@ -51,6 +67,7 @@ impl WindowSession {
             _ => self.modal = Modal::None,
         }
     }
+
     /// One resize step for the focused pane, the wire's relative form.
     /// Best-effort — the %layout-change broadcast the resize queues
     /// re-seeds the window through the pump's parked-layout path (PendingWork).
@@ -93,285 +110,639 @@ impl WindowSession {
         let command = format!("resize-pane -t {focused} {flag} {}", self.resize_step);
         let _ = conn.send_forget(&command);
     }
-    /// Leave scroll mode: clear the hold and snap the focused pane to
-    /// live.
-    pub(super) fn leave_scroll_mode(&mut self) {
-        if matches!(self.modal, Modal::Scroll) {
-            self.modal = Modal::None;
-        }
+
+    /// Release copy mode's pane plumbing without touching `self.modal`:
+    /// clear the selection and painted cursor, drop the match list, and
+    /// snap the focused pane's viewport to live (the hold drops).
+    pub(super) fn exit_copy_state(&mut self) {
         self.renderer.set_selection(None);
-        self.copy_anchor = None;
-        self.scroll_query = None;
+        self.renderer.set_copy_cursor(None);
         self.scroll_matches.clear();
         self.scroll_match_ix = 0;
         if let Some(id) = self.renderer.focused() {
             self.renderer.exit_scroll_mode(id);
         }
     }
-    /// One key while scroll mode is up, from either input path (a Key
-    /// token or a plain byte): `e` opens the scrollback in the editor
-    /// (it needs the connection), everything else is
-    /// [`Self::scroll_mode_key`]'s.
-    pub(super) fn scroll_mode_input(
-        &mut self,
-        conn: &mut crate::mux::attach::conn::AttachConn,
-        ev: &TermKeyEvent,
-    ) {
-        use par_term_emu_core::keyboard::TermKey;
-        if ev.key() == TermKey::Char && ev.modifiers == 0 && ev.codepoint == u32::from(b'e') {
-            self.edit_scrollback(conn);
-            return;
-        }
-        self.scroll_mode_key(ev);
-    }
 
-    /// One functional key while scroll mode is up: arrows line-scroll,
-    /// PgUp/PgDn page by the pane's height, Home jumps to the top of
-    /// history, End and q and Enter exit. Keys never reach the pane
-    /// while the viewport is up.
-    pub(super) fn scroll_mode_key(&mut self, ev: &TermKeyEvent) {
-        use par_term_emu_core::keyboard::TermKey;
-        let Some(id) = self.renderer.focused() else {
-            return;
-        };
-        let rows = self
-            .renderer
-            .pane_terminal(id)
-            .map(|t| t.active_grid().rows().max(1) as isize)
-            .unwrap_or(1);
-        match (ev.key(), ev.modifiers) {
-            (TermKey::Up, 0) => {
-                self.renderer.scroll_viewport(id, 1);
-            }
-            (TermKey::Down, 0) => {
-                self.renderer.scroll_viewport(id, -1);
-            }
-            (TermKey::PageUp, 0) => {
-                self.renderer.scroll_viewport(id, rows);
-            }
-            (TermKey::PageDown, 0) => {
-                self.renderer.scroll_viewport(id, -rows);
-            }
-            (TermKey::Home, 0) => {
-                let max = self
-                    .renderer
-                    .pane_terminal(id)
-                    .map(|t| t.active_grid().scrollback_len() as isize)
-                    .unwrap_or(0);
-                self.renderer.scroll_viewport(id, max);
-            }
-            (TermKey::End, 0) => self.leave_scroll_mode(),
-            (TermKey::Char, 0) if ev.codepoint == u32::from(b'q') => self.leave_scroll_mode(),
-            // The copy-mode extension (the TUI audit's R1): v anchors the
-            // line selection, y copies it (OSC 52), / types a search the
-            // committed query of which n/N walk.
-            (TermKey::Char, 0) if ev.codepoint == u32::from(b'v') => {
-                if let Some(id) = self.renderer.focused() {
-                    self.toggle_line_selection(id);
-                }
-            }
-            (TermKey::Char, 0) if ev.codepoint == u32::from(b'y') => self.copy_selection(),
-            (TermKey::Char, 0) if ev.codepoint == u32::from(b'/') => self.begin_scroll_search(),
-            (TermKey::Char, 0) if ev.codepoint == u32::from(b'n') => self.scroll_search(1),
-            (TermKey::Char, 0) if ev.codepoint == u32::from(b'N') => self.scroll_search(-1),
-            _ => {}
-        }
-        // The viewport moved: while a selection is up, its head follows.
-        if let Some(id) = self.renderer.focused() {
-            self.update_selection_head(id);
+    /// The pane's feed pushed `pushed` lines into scrollback while copy
+    /// mode is open on it: rebase every absolute-line coordinate by the
+    /// push (the frozen screen rides along, tmux's frozen-view rule).
+    pub(super) fn rebase_copy_state(&mut self, pane: u32, pushed: usize) {
+        if matches!(self.renderer.focused(), Some(focused) if focused == pane) {
+            self.with_copy_state(|s| s.rebase(pushed));
         }
     }
 
-    /// Toggle the line selection: `v` anchors at the viewport's top line
-    /// and the scrolling viewport extends it, a second `v` clears.
-    pub(super) fn toggle_line_selection(&mut self, pane: u32) {
-        if self.renderer.selection.is_some() {
-            self.renderer.set_selection(None);
-            self.copy_anchor = None;
-            self.chrome.flash("selection cleared".to_string());
-            self.draw_status_row();
-            return;
+    /// Leave copy mode: clear the hold and snap the focused pane to
+    /// live.
+    pub(super) fn leave_copy_mode(&mut self) {
+        if matches!(self.modal, Modal::Copy(_)) {
+            self.modal = Modal::None;
         }
-        let Some(top) = self.renderer.viewport_top_line(pane) else {
-            return;
-        };
-        self.copy_anchor = Some(top);
-        self.renderer.set_selection(Some(super::Selection::Lines {
-            pane,
-            a: top,
-            b: top,
-        }));
-        self.chrome
-            .flash("selecting lines — scroll, then y copies".to_string());
-        self.draw_status_row();
+        self.exit_copy_state();
     }
 
-    /// While a selection is up, the viewport's top line is its moving
-    /// head.
-    pub(super) fn update_selection_head(&mut self, pane: u32) {
-        let Some(super::Selection::Lines {
-            pane: p,
-            a: anchor,
-            b: _,
-        }) = self.renderer.selection
-        else {
-            return;
-        };
-        if p != pane {
-            return;
-        }
-        let Some(top) = self.renderer.viewport_top_line(pane) else {
-            return;
-        };
-        self.renderer.set_selection(Some(super::Selection::Lines {
-            pane: p,
-            a: anchor.min(top),
-            b: anchor.max(top),
-        }));
-    }
-
-    /// y: copy the selected lines' text as an OSC 52 clipboard write —
-    /// the host terminal's clipboard policy applies — and clear the
-    /// selection. The escape rides the frame's outbox with the
-    /// notifications.
-    pub(super) fn copy_selection(&mut self) {
-        let Some(text) = self.renderer.selection_text() else {
-            return;
-        };
-        use base64::Engine as _;
-        let encoded = base64::engine::general_purpose::STANDARD.encode(text.as_bytes());
-        let lines = text.lines().count();
-        self.notify
-            .outbox
-            .extend_from_slice(format!("\x1b]52;c;{encoded}\x1b\\").as_bytes());
-        self.renderer.set_selection(None);
-        self.copy_anchor = None;
-        self.chrome.flash(format!("copied {lines} lines"));
-        self.draw_status_row();
-    }
-
-    /// `/`: the search line lives on the status row's flash; typed bytes
-    /// route through [`Self::search_typing_byte`] until Enter or Escape.
-    pub(super) fn begin_scroll_search(&mut self) {
-        self.scroll_query = Some(String::new());
-        self.text_utf8 = Default::default();
-        self.chrome.flash("search: ".to_string());
-        self.draw_status_row();
-    }
-
-    /// One plain byte while the search line is up. Returns whether the
-    /// line is still up.
-    pub(super) fn search_typing_byte(&mut self, byte: u8) -> bool {
-        let Some(query) = self.scroll_query.as_mut() else {
-            return false;
-        };
-        match byte {
-            0x1b => {
-                self.scroll_query = None;
-                self.chrome.flash("search cancelled".to_string());
-                self.draw_status_row();
-                false
-            }
-            b'\r' => {
-                let query = std::mem::take(&mut self.scroll_query).unwrap_or_default();
-                self.run_scroll_search(&query, 1);
-                false
-            }
-            0x7f => {
-                query.pop();
-                self.chrome.flash(format!("search: {query}"));
-                self.draw_status_row();
-                true
-            }
-            b if b.is_ascii_graphic() || b == b' ' => {
-                query.push(b as char);
-                self.chrome.flash(format!("search: {query}"));
-                self.draw_status_row();
-                true
-            }
-            b if b >= 0x80 => {
-                if let Some(ch) = self.text_utf8.push_printable(b) {
-                    query.push(ch);
-                    self.chrome.flash(format!("search: {query}"));
-                    self.draw_status_row();
-                }
-                true
-            }
-            _ => true,
-        }
-    }
-
-    /// Find `query` in the focused pane's scrollback + live text and
-    /// walk it: `dir` 1 takes the next match at or after the viewport
-    /// top (wrapping), -1 the previous; the viewport lands on the match
-    /// and the flash names the index.
-    fn run_scroll_search(&mut self, query: &str, dir: i32) {
+    /// prefix-[: enter copy mode on the focused pane. Every pane has
+    /// something to roam — an empty-scrollback or alt-screen pane roams
+    /// its visible screen — so there is no refusal anymore; the view
+    /// stays at live and the cursor starts at the pane's host cursor.
+    pub(super) fn enter_copy_mode(&mut self) {
         let Some(pane) = self.renderer.focused() else {
             return;
         };
-        if query.is_empty() {
+        // Re-entering replaces the state; drop the previous mode's
+        // pane plumbing first.
+        self.exit_copy_state();
+        if !self.renderer.enter_copy_mode(pane) {
             return;
         }
-        // Collect the matches once per query; n/N re-walk them.
-        let mut matches: Vec<usize> = Vec::new();
-        if let Some(emulator) = self.renderer.pane_terminal(pane) {
-            let grid = emulator.active_grid();
-            let len = grid.scrollback_len();
-            for line in 0..len {
-                if let Some(cells) = grid.scrollback_line(line) {
-                    let text: String = cells.iter().map(|c| c.c()).collect();
-                    if text.to_lowercase().contains(&query.to_lowercase()) {
-                        matches.push(line);
-                    }
+        let Some(term) = self.renderer.pane_terminal(pane) else {
+            return;
+        };
+        let grid = term.active_grid();
+        let (cols, rows) = (grid.cols(), grid.rows());
+        let sb_len = grid.scrollback_len();
+        let mut state = CopyModeState::new();
+        state.enter(term.cursor().col, term.cursor().row, cols, rows, sb_len);
+        // The frozen screen: the visible live rows at entry.
+        state.live_rows = (0..rows).map(|row| grid.row_text(row)).collect();
+        self.open_modal(Modal::Copy(state));
+        self.draw_status_row();
+    }
+
+    /// The text of absolute line `line` under copy mode: scrollback
+    /// lines read the grid (immutable history), screen lines the frozen
+    /// entry snapshot.
+    pub(super) fn copy_line_text(&self, line: usize) -> String {
+        let Modal::Copy(state) = &self.modal else {
+            return String::new();
+        };
+        let Some(pane) = self.renderer.focused() else {
+            return String::new();
+        };
+        let renderer = &self.renderer;
+        let grid_text = |grid_line: usize| -> Option<String> {
+            renderer.pane_terminal(pane).and_then(|term| {
+                term.active_grid()
+                    .scrollback_line(grid_line)
+                    .map(|cells| cells.iter().map(|c| c.c()).collect())
+            })
+        };
+        state.line_text(grid_text, line)
+    }
+
+    /// The search line's live prompt on the status row.
+    fn flash_search_line(&mut self, query: &str) {
+        self.chrome.flash(format!("search: {query}"));
+        self.draw_status_row();
+    }
+
+    /// Whether copy mode's search line is up (its bytes own the run).
+    pub(super) fn copy_search_line_up(&self) -> bool {
+        matches!(&self.modal, Modal::Copy(state) if state.is_searching)
+    }
+
+    /// One key while copy mode is up, from either input path (a Key
+    /// token or a plain byte): the functional keys land here, the
+    /// character keys in [`Self::copy_mode_char`].
+    pub(super) fn copy_mode_input(
+        &mut self,
+        _conn: &mut crate::mux::attach::conn::AttachConn,
+        ev: &TermKeyEvent,
+    ) {
+        use par_term_emu_core::keyboard::modifiers::CTRL;
+        if self.copy_search_key(ev) {
+            return;
+        }
+        match (ev.key(), ev.modifiers) {
+            (TermKey::Up, 0) => self.copy_motion(|s| s.move_up()),
+            (TermKey::Down, 0) => self.copy_motion(|s| s.move_down()),
+            (TermKey::Left, 0) => self.copy_motion(|s| s.move_left()),
+            (TermKey::Right, 0) => self.copy_motion(|s| s.move_right()),
+            (TermKey::PageUp, 0) => self.copy_motion(CopyModeState::page_up),
+            (TermKey::PageDown, 0) => self.copy_motion(CopyModeState::page_down),
+            (TermKey::Home, 0) => self.copy_motion(CopyModeState::move_to_line_start),
+            (TermKey::End, 0) => self.copy_motion(CopyModeState::move_to_line_end),
+            (TermKey::Escape, _) => self.copy_escape(),
+            (TermKey::Char, m) if m & CTRL != 0 => match ev.codepoint {
+                c if c == u32::from(b'd') => self.copy_motion(CopyModeState::half_page_down),
+                c if c == u32::from(b'u') => self.copy_motion(CopyModeState::half_page_up),
+                c if c == u32::from(b'f') => self.copy_motion(CopyModeState::page_down),
+                c if c == u32::from(b'b') => self.copy_motion(CopyModeState::page_up),
+                c if c == u32::from(b'v') => self.copy_visual(VisualMode::Block),
+                _ => {}
+            },
+            (TermKey::Char, 0) => {
+                if let Some(ch) = char::from_u32(ev.codepoint) {
+                    self.copy_mode_char(ch);
                 }
             }
-            for row in 0..grid.rows() {
-                if grid
-                    .row_text(row)
-                    .to_lowercase()
-                    .contains(&query.to_lowercase())
-                {
-                    matches.push(len + row);
+            _ => {}
+        }
+    }
+
+    /// The search line's Key-token path: Enter commits, Escape cancels,
+    /// Backspace deletes, printable chars append. Returns whether the
+    /// search line consumed the key.
+    fn copy_search_key(&mut self, ev: &TermKeyEvent) -> bool {
+        if !self.with_copy_state(|s| s.is_searching).unwrap_or(false) {
+            return false;
+        }
+        match ev.key() {
+            TermKey::Escape => {
+                self.with_copy_state(|s| s.cancel_search());
+                self.chrome.flash("search cancelled".to_string());
+                self.draw_status_row();
+            }
+            TermKey::Enter => self.commit_copy_search(),
+            TermKey::Backspace => {
+                self.with_copy_state(|s| {
+                    s.search_query.pop();
+                });
+                self.flash_search_line("");
+            }
+            TermKey::Char if ev.modifiers == 0 => {
+                if let Some(ch) = char::from_u32(ev.codepoint) {
+                    self.with_copy_state(|s| s.search_query.push(ch));
+                    let query = self
+                        .with_copy_state(|s| s.search_query.clone())
+                        .unwrap_or_default();
+                    self.flash_search_line(&query);
+                    self.draw_status_row();
                 }
+            }
+            _ => {}
+        }
+        true
+    }
+
+    /// One plain byte while copy mode is up (the route_plain path).
+    /// Every byte is consumed: nothing leaks into the pane.
+    pub(super) fn copy_mode_byte(&mut self, byte: u8) {
+        if matches!(self.modal, Modal::Copy(_)) {
+            if self.copy_search_byte(byte) {
+                return;
+            }
+            match byte {
+                b'q' => self.leave_copy_mode(),
+                b if b.is_ascii_graphic() => self.copy_mode_char(b as char),
+                _ => {}
             }
         }
+    }
+
+    /// The search line's plain-byte path. Returns whether consumed.
+    pub(super) fn copy_search_byte(&mut self, byte: u8) -> bool {
+        if !self.with_copy_state(|s| s.is_searching).unwrap_or(false) {
+            return false;
+        }
+        match byte {
+            0x1b => {
+                self.with_copy_state(|s| s.cancel_search());
+                self.chrome.flash("search cancelled".to_string());
+                self.draw_status_row();
+            }
+            b'\r' | b'\n' => self.commit_copy_search(),
+            0x7f => {
+                self.with_copy_state(|s| {
+                    s.search_query.pop();
+                });
+                let query = self
+                    .with_copy_state(|s| s.search_query.clone())
+                    .unwrap_or_default();
+                self.flash_search_line(&query);
+                self.draw_status_row();
+            }
+            b if b.is_ascii_graphic() || b == b' ' => {
+                self.with_copy_state(|s| s.search_query.push(b as char));
+                let query = self
+                    .with_copy_state(|s| s.search_query.clone())
+                    .unwrap_or_default();
+                self.flash_search_line(&query);
+                self.draw_status_row();
+            }
+            b if b >= 0x80 => {
+                if let Some(ch) = self.text_utf8.push_printable(b) {
+                    self.with_copy_state(|s| s.search_query.push(ch));
+                    let query = self
+                        .with_copy_state(|s| s.search_query.clone())
+                        .unwrap_or_default();
+                    self.flash_search_line(&query);
+                    self.draw_status_row();
+                }
+            }
+            _ => {}
+        }
+        true
+    }
+
+    /// The pending two-key sequences first (`gg`, `m{a-z}`, `'{a-z}`),
+    /// then the character key table. Mirrors par-term's handler.
+    fn copy_mode_char(&mut self, ch: char) {
+        if self.with_copy_state(|s| s.pending_mark_set) == Some(true) {
+            self.with_copy_state(|s| {
+                s.pending_mark_set = false;
+                if ch.is_ascii_lowercase() {
+                    s.set_mark(ch);
+                }
+            });
+            return;
+        }
+        if self.with_copy_state(|s| s.pending_mark_goto) == Some(true) {
+            self.with_copy_state(|s| s.pending_mark_goto = false);
+            if ch.is_ascii_lowercase() {
+                let jumped = self.with_copy_state(|s| s.goto_mark(ch));
+                if jumped == Some(true) {
+                    self.after_copy_motion();
+                }
+            }
+            return;
+        }
+        if self.with_copy_state(|s| s.pending_g) == Some(true) {
+            self.with_copy_state(|s| {
+                s.pending_g = false;
+            });
+            if ch == 'g' {
+                self.copy_motion(CopyModeState::goto_top);
+            }
+            return;
+        }
+        match ch {
+            'h' => self.copy_motion(CopyModeState::move_left),
+            'j' => self.copy_motion(CopyModeState::move_down),
+            'k' => self.copy_motion(CopyModeState::move_up),
+            'l' => self.copy_motion(CopyModeState::move_right),
+            '0' => {
+                let counted = self.with_copy_state(|s| s.count.is_some()) == Some(true);
+                if counted {
+                    self.with_copy_state(|s| s.push_count_digit(0));
+                } else {
+                    self.copy_motion(CopyModeState::move_to_line_start);
+                }
+            }
+            '1' | '2' | '3' | '4' | '5' | '6' | '7' | '8' | '9' => {
+                if let Some(d) = ch.to_digit(10) {
+                    self.with_copy_state(|s| s.push_count_digit(d as u8));
+                }
+            }
+            '$' => self.copy_motion(CopyModeState::move_to_line_end),
+            '^' => self.copy_line_motion(CopyModeState::move_to_first_non_blank),
+            'w' => self.copy_line_motion(CopyModeState::move_word_forward),
+            'b' => self.copy_line_motion(CopyModeState::move_word_backward),
+            'e' => self.copy_line_motion(CopyModeState::move_word_end),
+            'W' => self.copy_line_motion(CopyModeState::move_big_word_forward),
+            'B' => self.copy_line_motion(CopyModeState::move_big_word_backward),
+            'E' => self.copy_line_motion(CopyModeState::move_big_word_end),
+            'G' => {
+                let count = self.with_copy_state(|s| s.count.take()).flatten();
+                match count {
+                    Some(n) => self.copy_motion(move |s: &mut CopyModeState| {
+                        s.goto_line(n.saturating_sub(1));
+                    }),
+                    None => self.copy_motion(CopyModeState::goto_bottom),
+                }
+            }
+            'g' => {
+                self.with_copy_state(|s| s.pending_g = true);
+            }
+            'v' => self.copy_visual(VisualMode::Char),
+            'V' => self.copy_visual(VisualMode::Line),
+            'y' => self.yank_copy_selection(),
+            '/' => self.begin_copy_search(true),
+            '?' => self.begin_copy_search(false),
+            'n' => self.copy_search_walk(false),
+            'N' => self.copy_search_walk(true),
+            'm' => {
+                self.with_copy_state(|s| s.pending_mark_set = true);
+            }
+            '\'' => {
+                self.with_copy_state(|s| s.pending_mark_goto = true);
+            }
+            'H' => self.copy_viewport_jump(0),
+            'M' => self.copy_viewport_jump_mid(),
+            'L' => self.copy_viewport_jump_bottom(),
+            'q' => self.leave_copy_mode(),
+            _ => {}
+        }
+    }
+
+    /// H/M/L: jump to the viewport's top/middle/bottom line — vi's
+    /// screen-relative jumps, the viewport follows.
+    fn copy_viewport_jump(&mut self, offset_rows: usize) {
+        let Some(pane) = self.renderer.focused() else {
+            return;
+        };
+        let Some(top) = self.renderer.viewport_top_line(pane) else {
+            return;
+        };
+        self.with_copy_state(|s| {
+            s.cursor_absolute_line = (top + offset_rows).min(s.max_line());
+        });
+        self.after_copy_motion();
+    }
+
+    /// M: the viewport's middle line.
+    fn copy_viewport_jump_mid(&mut self) {
+        let rows = self.with_copy_state(|s| s.rows).unwrap_or(0);
+        self.copy_viewport_jump(rows / 2);
+    }
+
+    /// L: the viewport's bottom line.
+    fn copy_viewport_jump_bottom(&mut self) {
+        let rows = self.with_copy_state(|s| s.rows).unwrap_or(0);
+        self.copy_viewport_jump(rows.saturating_sub(1));
+    }
+
+    /// One cursor-or-selection change that needs no line text.
+    fn copy_motion(&mut self, motion: impl FnOnce(&mut CopyModeState)) {
+        self.with_copy_state(motion);
+        self.after_copy_motion();
+    }
+
+    /// A motion over the cursor line's text (`^`, the word motions).
+    fn copy_line_motion(&mut self, motion: impl FnOnce(&mut CopyModeState, &str)) {
+        let line = self.with_copy_state(|s| s.cursor_absolute_line);
+        let text = self.copy_line_text(line.unwrap_or(0));
+        self.with_copy_state(|s| motion(s, &text));
+        self.after_copy_motion();
+    }
+
+    /// Enter or leave a visual mode; the selection syncs in
+    /// [`Self::after_copy_motion`].
+    fn copy_visual(&mut self, mode: VisualMode) {
+        self.with_copy_state(|s| s.toggle_visual(mode));
+        self.after_copy_motion();
+    }
+
+    /// Escape exits visual mode first, then copy mode (par-term's rule).
+    fn copy_escape(&mut self) {
+        let visual = self
+            .with_copy_state(|s| s.visual_mode != VisualMode::None)
+            .unwrap_or(false);
+        if visual {
+            self.with_copy_state(CopyModeState::clear_visual);
+            self.after_copy_motion();
+        } else {
+            self.leave_copy_mode();
+        }
+    }
+
+    /// Post-motion housekeeping: track a resize, sync the painted
+    /// selection and cursor, follow the cursor with the viewport, and
+    /// redraw the status row (the mode badge's position moved).
+    fn after_copy_motion(&mut self) {
+        let Some(pane) = self.renderer.focused() else {
+            return;
+        };
+        // A concurrent refit may have resized the pane; keep the state's
+        // dimensions current so clamps stay exact.
+        if let Some(term) = self.renderer.pane_terminal(pane) {
+            let grid = term.active_grid();
+            let (cols, rows) = (grid.cols(), grid.rows());
+            let sb_len = grid.scrollback_len();
+            self.with_copy_state(|s| s.update_dimensions(cols, rows, sb_len));
+        }
+        let Some((line, col)) = self.with_copy_state(|s| (s.cursor_absolute_line, s.cursor_col))
+        else {
+            return;
+        };
+        self.renderer.set_copy_cursor(Some((pane, line, col)));
+        let selection = self.with_copy_state(|s| s.selection(pane));
+        let offset = self.renderer.scroll_offset_of(pane);
+        let follow = self.with_copy_state(|s| s.required_scroll_offset(offset));
+        self.renderer.set_selection(selection.flatten());
+        if let Some(new_offset) = follow.flatten() {
+            let current = self.renderer.scroll_offset_of(pane) as isize;
+            let delta = new_offset as isize - current;
+            self.renderer.scroll_viewport(pane, delta);
+        }
+        self.draw_status_row();
+    }
+
+    /// y: yank the visual selection (or the cursor line when none is
+    /// up) as an OSC 52 clipboard write; with `copy-mode-auto-exit` on,
+    /// leave copy mode and flash the size; without, stay up with the
+    /// visual cleared.
+    fn yank_copy_selection(&mut self) {
+        let Some(text) = self.copy_yank_text() else {
+            return;
+        };
+        self.send_osc52(&text);
+        self.send_osc52(&text);
+        let lines = text.lines().count();
+        let chars = text.chars().count();
+        let auto_exit = self.copy_mode_auto_exit;
+        if auto_exit {
+            self.leave_copy_mode();
+        } else {
+            self.with_copy_state(CopyModeState::clear_visual);
+            self.renderer.set_selection(None);
+        }
+        let msg = if lines > 1 {
+            format!("{} lines yanked", lines)
+        } else {
+            format!("{} chars yanked", chars)
+        };
+        self.chrome.flash(msg);
+        self.draw_status_row();
+    }
+
+    /// The yank payload: the visual selection's rows/columns read
+    /// through the frozen-aware line accessor, per row trimmed and
+    /// newline joined (the mouse copy's text shape).
+    fn copy_yank_text(&mut self) -> Option<String> {
+        let (mode, anchor, cursor) = self.with_copy_state(|s| {
+            (
+                s.visual_mode,
+                s.selection_anchor,
+                (s.cursor_absolute_line, s.cursor_col),
+            )
+        })?;
+        let anchor = anchor?;
+        let (top, bottom, left, right) = match mode {
+            VisualMode::Char => {
+                let ((a_line, a_col), (b_line, b_col)) = super::normalize_span(anchor, cursor);
+                (a_line, b_line, a_col, b_col)
+            }
+            VisualMode::Line => {
+                let (a, b) = (anchor.0.min(cursor.0), anchor.0.max(cursor.0));
+                (a, b, 0, usize::MAX)
+            }
+            VisualMode::Block => {
+                let top = anchor.0.min(cursor.0);
+                let bottom = anchor.0.max(cursor.0);
+                let left = anchor.1.min(cursor.1);
+                let right = anchor.1.max(cursor.1);
+                (top, bottom, left, right)
+            }
+            VisualMode::None => (cursor.0, cursor.0, 0, usize::MAX),
+        };
+        let mut text = String::new();
+        for line in top..=bottom {
+            let row: Vec<char> = self.copy_line_text(line).chars().collect();
+            let to = if line == bottom && right != usize::MAX {
+                (right + 1).min(row.len())
+            } else {
+                row.len()
+            };
+            let slice: String = if left < to {
+                row[left.min(row.len())..to].iter().collect()
+            } else {
+                String::new()
+            };
+            text.push_str(slice.trim_end());
+            text.push('\n');
+        }
+        Some(text)
+    }
+
+    /// `/` and `?`: the search line rides the status row's flash; typed
+    /// bytes append to the state's query until Enter or Escape.
+    fn begin_copy_search(&mut self, forward: bool) {
+        self.with_copy_state(|s| {
+            s.start_search(if forward {
+                SearchDirection::Forward
+            } else {
+                SearchDirection::Backward
+            })
+        });
+        let dir = self
+            .with_copy_state(|s| s.search_direction)
+            .unwrap_or(SearchDirection::Forward);
+        let prompt = match dir {
+            SearchDirection::Backward => "? ",
+            SearchDirection::Forward => ": ",
+        };
+        self.chrome.flash(format!("search{prompt}"));
+        self.draw_status_row();
+    }
+
+    /// Enter on the search line: commit the query, collect the pane's
+    /// matches once, and land the cursor on the first at-or-after the
+    /// copy cursor.
+    fn commit_copy_search(&mut self) {
+        self.with_copy_state(|s| s.is_searching = false);
+        let query = self
+            .with_copy_state(|s| s.search_query.clone())
+            .unwrap_or_default();
+        if query.is_empty() {
+            self.chrome.flash("search cancelled".to_string());
+            self.draw_status_row();
+            return;
+        }
+        let matches = self.collect_copy_matches(&query);
         if matches.is_empty() {
             self.chrome.flash(format!("no matches: {query}"));
             self.draw_status_row();
             return;
         }
         self.scroll_matches = matches;
-        self.scroll_search(dir);
+        self.scroll_match_ix = 0;
+        self.copy_search_walk(false);
     }
 
-    /// Walk the committed match list (`n` forward, `N` back): land the
-    /// viewport on the match line.
-    pub(super) fn scroll_search(&mut self, dir: i32) {
-        if self.scroll_matches.is_empty() {
+    /// Every `(line, column)` where the query occurs (case-insensitive)
+    /// across scrollback + the frozen screen.
+    fn collect_copy_matches(&mut self, query: &str) -> Vec<(usize, usize)> {
+        let query_lower = query.to_lowercase();
+        let total = self.with_copy_state(|s| s.total_lines()).unwrap_or(0);
+        let mut matches = Vec::new();
+        for line in 0..total {
+            let text = self.copy_line_text(line);
+            let lowered = text.to_lowercase();
+            let mut from = 0;
+            while let Some(found) = lowered[from..].find(&query_lower) {
+                matches.push((line, from + found));
+                from += found + query_lower.chars().count();
+            }
+            let _ = text;
+        }
+        matches
+    }
+
+    /// n/N: walk the committed matches from the copy cursor.
+    fn copy_search_walk(&mut self, reverse: bool) {
+        let count = self.scroll_matches.len();
+        if count == 0 {
             self.chrome.flash("no search".to_string());
             self.draw_status_row();
             return;
         }
-        let count = self.scroll_matches.len();
-        let next = if dir > 0 {
-            (self.scroll_match_ix + 1).min(count.saturating_sub(1))
+        let cursor = self
+            .with_copy_state(|s| (s.cursor_absolute_line, s.cursor_col))
+            .unwrap_or((0, 0));
+        let backward = self
+            .with_copy_state(|s| {
+                let back = s.search_direction == SearchDirection::Backward;
+                back != reverse
+            })
+            .unwrap_or(false);
+        // The first match strictly after (or before) the cursor,
+        // wrapping. partition_point counts the prefix the predicate
+        // holds over — matches at-or-before (forward) / strictly-before
+        // (backward) the cursor.
+        let rank = self
+            .scroll_matches
+            .partition_point(|&(line, col)| match backward {
+                false => (line, col) <= cursor,
+                true => (line, col) < cursor,
+            });
+        let next = if backward {
+            if rank == 0 {
+                count - 1
+            } else {
+                rank - 1
+            }
         } else {
-            self.scroll_match_ix.saturating_sub(1)
+            if rank >= count {
+                0
+            } else {
+                rank
+            }
         };
-        self.scroll_match_ix = next;
-        let line = self.scroll_matches[next];
-        let Some(pane) = self.renderer.focused() else {
+        self.copy_search_jump(next);
+    }
+
+    /// Land the copy cursor on match `ix` and flash the position.
+    fn copy_search_jump(&mut self, ix: usize) {
+        let Some(&(line, col)) = self.scroll_matches.get(ix) else {
+            self.chrome.flash("no search".to_string());
+            self.draw_status_row();
             return;
         };
-        if let Some(emulator) = self.renderer.pane_terminal(pane) {
-            let len = emulator.active_grid().scrollback_len();
-            let offset = len.saturating_sub(line);
-            let current = self.renderer.scroll_offset_of(pane);
-            self.renderer
-                .scroll_viewport(pane, offset as isize - current as isize);
-        }
-        self.chrome
-            .flash(format!("match {} of {}", next + 1, count));
+        self.with_copy_state(|s| {
+            s.cursor_absolute_line = line;
+            s.cursor_col = col.min(s.cols.saturating_sub(1));
+        });
+        self.scroll_match_ix = ix;
+        let count = self.scroll_matches.len();
+        let msg = format!("match {} of {}", ix + 1, count);
+        self.chrome.flash(msg);
+        self.after_copy_motion();
+    }
+
+    /// The mouse drag's release copy: the dragged span as an OSC 52
+    /// write plus a "copied N lines" flash. Copy mode's y is
+    /// [`Self::yank_copy_selection`]'s.
+    pub(super) fn copy_selection(&mut self) {
+        let Some(text) = self.renderer.selection_text() else {
+            return;
+        };
+        self.send_osc52(&text);
+        let lines = text.lines().count();
+        self.renderer.set_selection(None);
+        self.chrome.flash(format!("copied {lines} lines"));
         self.draw_status_row();
+    }
+
+    /// `text` as an OSC 52 clipboard write — the host terminal's
+    /// clipboard policy applies. The escape rides the frame's outbox
+    /// with the notifications.
+    pub(super) fn send_osc52(&mut self, text: &str) {
+        use base64::Engine as _;
+        let encoded = base64::engine::general_purpose::STANDARD.encode(text.as_bytes());
+        self.notify
+            .outbox
+            .extend_from_slice(format!("\x1b]52;c;{encoded}\x1b\\").as_bytes());
     }
 }

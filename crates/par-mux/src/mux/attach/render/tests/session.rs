@@ -218,10 +218,10 @@ fn char_selection_text_slices_rows_in_reading_order() {
     );
 }
 
-/// The copy-mode extension (the TUI audit's R1): `v` anchors the line
-/// selection at the viewport top, scrolling extends it, `y` copies the
-/// selected lines as an OSC 52 write in the frame's outbox, and `/`
-/// searches the pane's text with the match landing in view.
+/// Copy mode (the TUI audit's R1, now the full vi form): `V` anchors a
+/// line selection the motions extend, `y` copies the selected lines as
+/// an OSC 52 write in the frame's outbox and exits, and `/` searches
+/// the pane's text with n walking the committed matches.
 #[test]
 fn copy_mode_selects_copies_and_searches() {
     let (rx, mut conn, mut session) = two_pane_session("copymode", FakeScript::default());
@@ -233,23 +233,27 @@ fn copy_mode_selects_copies_and_searches() {
             .feed_output(1, format!("line {i:03} marker\n").as_bytes());
     }
     session.renderer.focus(1);
-    // prefix [ enters the scroll viewport.
+    // prefix [ enters copy mode; a yank does not exit here.
     session.route_stdin_bytes(&mut conn, &[0x02, b'[']);
     drained(&rx);
-    // `v` anchors at the viewport top; scrolling extends the head.
-    session.toggle_line_selection(1);
+    session.copy_mode_auto_exit = false;
+    // gg to the buffer top first (entry lands at the pane's live
+    // cursor, the buffer's bottom row), then `V` anchors a line
+    // selection the motions extend.
+    session.route_plain(b"g", &mut conn);
+    session.route_plain(b"g", &mut conn);
+    session.route_plain(b"V", &mut conn);
     let Selection::Lines { pane, a, b } = session.renderer.selection.expect("selection up") else {
-        panic!("copy mode selects whole lines");
+        panic!("line mode paints whole lines");
     };
-    assert_eq!((pane, a, b), (1, a, a), "the anchor starts the span");
-    session.renderer.scroll_viewport(1, 6);
-    session.update_selection_head(1);
+    assert_eq!((pane, a, b), (1, 0, 0), "the anchor is the buffer top");
+    session.route_plain(b"jjj", &mut conn);
     let Selection::Lines { a, b, .. } = session.renderer.selection.expect("still up") else {
         panic!("still a line selection");
     };
-    assert!(b > a, "the head moved past the anchor: {a}..{b}");
+    assert_eq!((a, b), (0, 3), "three j extend the head");
     // `y` copies: an OSC 52 write rides the frame's outbox.
-    session.copy_selection();
+    session.route_plain(b"y", &mut conn);
     let osc = session
         .notify
         .outbox
@@ -262,19 +266,26 @@ fn copy_mode_selects_copies_and_searches() {
         session.notify.outbox
     );
     assert!(session.renderer.selection.is_none(), "copied clears");
-    // `/` searches; Enter commits; the match lands in the viewport.
-    session.begin_scroll_search();
-    for byte in b"line 042" {
-        assert!(session.search_typing_byte(*byte), "typing continues");
-    }
-    assert!(!session.search_typing_byte(b'\r'), "Enter closes the line");
+    assert!(session.is_copy(), "auto-exit off: the mode stays up");
+    // `/` searches; Enter commits; n walks the committed matches.
+    session.route_plain(b"/line 042\r", &mut conn);
+    assert!(
+        !session.copy_state().is_searching,
+        "Enter committed the query"
+    );
     assert!(
         !session.scroll_matches.is_empty(),
         "the query matched the fed scrollback"
     );
-    session.scroll_search(1);
-    let offset = session.renderer.scroll_offset_of(1);
-    assert!(offset > 0, "the viewport landed on the match");
+    session.route_plain(b"n", &mut conn);
+    let landed = session.copy_state().cursor_absolute_line;
+    let landed_text = session.copy_line_text(landed);
+    assert!(
+        landed_text.to_lowercase().contains("line 042"),
+        "n landed on a match: line {landed} {landed_text:?}"
+    );
+    session.route_plain(b"q", &mut conn);
+    assert!(!session.is_copy(), "q leaves");
     drained(&rx);
 }
 
@@ -2977,7 +2988,7 @@ fn settings_choice_rows_cycle_with_the_arrows() {
     // On the general tab's `resize step` (a Number row) ← keeps
     // switching sections instead of opening the prompt.
     session.route_stdin_bytes(&mut conn, b"h");
-    session.route_stdin_bytes(&mut conn, b"jjj");
+    session.route_stdin_bytes(&mut conn, b"jjjj");
     session.route_key(&mut conn, &TermKeyEvent::functional(TermKey::Right, 0));
     settle(&mut session, &mut conn);
     let Modal::Settings(state) = &session.modal else {
@@ -3011,9 +3022,9 @@ fn settings_prompt_rows_edit_numbers_hex_and_chords() {
     std::fs::write(&path, "[client]\n").unwrap();
     session.settings_path = Some(path.clone());
     session.enter_settings();
-    // General tab (two Tabs), `resize step` (row 3): Enter opens the
+    // General tab (two Tabs), `resize step` (row 4): Enter opens the
     // prompt seeded with 1.
-    session.route_stdin_bytes(&mut conn, b"\t\tjjj\r");
+    session.route_stdin_bytes(&mut conn, b"\t\tjjjj\r");
     let Modal::Prompt(prompt) = &session.modal else {
         panic!("prompt opened: {:?}", session.modal)
     };
@@ -4791,7 +4802,7 @@ fn snapshot_refresh_is_one_round_trip() {
     );
     let text: String = session
         .status
-        .compose(200, None, false)
+        .compose(200, None, None, false)
         .iter()
         .map(|s| s.text.as_str())
         .collect();
@@ -6698,7 +6709,7 @@ fn settings_row_toggles_the_session_picker() {
     session.enter_settings();
     session.route_stdin_bytes(&mut conn, b"\t\t");
     // The general tab scrolls — reach the picker row before asserting.
-    session.route_stdin_bytes(&mut conn, b"jjjjjjjjj");
+    session.route_stdin_bytes(&mut conn, b"jjjjjjjjjj");
     let rows = overlay_text(&session);
     assert!(
         rows.iter()
@@ -6725,10 +6736,10 @@ fn settings_row_toggles_the_git_badge() {
     session.settings_path = Some(path.clone());
     session.enter_settings();
     session.route_stdin_bytes(&mut conn, b"\t\t");
-    // The general tab now carries nine fixed rows (the tab-width rows
+    // The general tab now carries ten fixed rows (the tab-width rows
     // included) and the panel scrolls — reach the git row before
     // asserting on it.
-    session.route_stdin_bytes(&mut conn, b"jjjjjjjjjjj");
+    session.route_stdin_bytes(&mut conn, b"jjjjjjjjjjjj");
     let rows = overlay_text(&session);
     assert!(
         rows.iter()

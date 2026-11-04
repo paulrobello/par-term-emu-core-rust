@@ -1656,16 +1656,17 @@ fn cjk_text_reaches_the_prompt_and_commits_intact() {
     assert_eq!(session.prompt().text, "a");
 }
 
-/// The scroll-mode search takes CJK and the render status row paints
+/// The copy-mode search line takes CJK and the render status row paints
 /// it whole: each wide glyph two columns, the next glyph past its right
 /// half (one char per cell would let the buffer diff skip the glyph
 /// after every wide one).
 #[test]
 fn cjk_search_echo_paints_whole_in_the_status_row() {
     let (_rx, mut conn, mut session) = two_pane_session("cjk-search", FakeScript::default());
-    session.begin_scroll_search();
-    assert!(!session.route_plain("日本語".as_bytes(), &mut conn));
-    assert_eq!(session.scroll_query.as_deref(), Some("日本語"));
+    chord(&mut session, &mut conn, b'[');
+    assert!(session.is_copy());
+    assert!(!session.route_plain("/日本語".as_bytes(), &mut conn));
+    assert_eq!(session.copy_state().search_query, "日本語");
     let text = status_row_text(&mut session);
     assert!(text.contains("search: 日本語"), "{text:?}");
 }
@@ -1724,89 +1725,63 @@ fn prefix_arrows_navigate_swap_and_aim_through_a_zoom() {
     );
 }
 
-/// Scroll mode's keys: Up/PgUp scroll back, Down returns, Home jumps
-/// to the top of history, and End or q leave the mode back at live.
+/// Copy mode's functional keys: Up/PgUp roam back, Down/PgDn forward,
+/// Home/End jump the line's ends, and q (plain byte or key) leaves the
+/// mode back at live.
 #[test]
-fn scroll_mode_keys_move_the_viewport_and_exit() {
-    let (_rx, _conn, mut session) = two_pane_session("scrollkeys", FakeScript::default());
+fn copy_mode_keys_move_the_cursor_and_exit() {
+    let (_rx, mut conn, mut session) = two_pane_session("copykeys", FakeScript::default());
     for i in 0..60 {
         session
             .renderer
             .feed_output(1, format!("line{i}\r\n").as_bytes());
     }
-    let history = session
-        .renderer
-        .pane_terminal(1)
-        .expect("pane")
-        .active_grid()
-        .scrollback_len();
-    assert!(history > 0);
-    assert!(session.renderer.enter_scroll_mode(1));
-    session.modal = Modal::Scroll;
-    let start = session.renderer.scroll_offset_of(1);
-    session.scroll_mode_key(&TermKeyEvent::functional(TermKey::Up, 0));
-    assert_eq!(session.renderer.scroll_offset_of(1), start + 1);
-    session.scroll_mode_key(&TermKeyEvent::functional(TermKey::Down, 0));
-    assert_eq!(session.renderer.scroll_offset_of(1), start);
-    session.scroll_mode_key(&TermKeyEvent::functional(TermKey::PageDown, 0));
+    chord(&mut session, &mut conn, b'[');
+    assert!(session.is_copy());
+    let start = session.copy_state().cursor_absolute_line;
+    session.copy_mode_input(&mut conn, &TermKeyEvent::functional(TermKey::Up, 0));
+    assert_eq!(session.copy_state().cursor_absolute_line, start - 1);
+    session.copy_mode_input(&mut conn, &TermKeyEvent::functional(TermKey::Down, 0));
+    assert_eq!(session.copy_state().cursor_absolute_line, start);
+    session.copy_mode_input(&mut conn, &TermKeyEvent::functional(TermKey::PageDown, 0));
     assert_eq!(
-        session.renderer.scroll_offset_of(1),
-        0,
-        "a page down to live"
-    );
-    session.scroll_mode_key(&TermKeyEvent::functional(TermKey::PageUp, 0));
-    assert_eq!(
-        session.renderer.scroll_offset_of(1),
+        session.copy_state().cursor_absolute_line.min(start),
         start,
-        "a page is the pane height"
+        "a page down clamps at the buffer bottom"
     );
-    session.scroll_mode_key(&TermKeyEvent::functional(TermKey::Home, 0));
-    assert_eq!(
-        session.renderer.scroll_offset_of(1),
-        history,
-        "the top of history"
-    );
-    session.scroll_mode_key(&TermKeyEvent::functional(TermKey::End, 0));
-    assert!(!session.is_scroll());
-    assert!(!session.renderer.scroll_mode_active(1));
-    assert_eq!(session.renderer.scroll_offset_of(1), 0);
-
-    assert!(session.renderer.enter_scroll_mode(1));
-    session.modal = Modal::Scroll;
-    session.scroll_mode_key(&TermKeyEvent::char_('q', 0));
-    assert!(!session.is_scroll(), "q leaves too");
+    session.copy_mode_input(&mut conn, &TermKeyEvent::functional(TermKey::PageUp, 0));
+    session.copy_mode_input(&mut conn, &TermKeyEvent::functional(TermKey::Home, 0));
+    assert_eq!(session.copy_state().cursor_col, 0, "Home is line start");
+    session.copy_mode_input(&mut conn, &TermKeyEvent::functional(TermKey::End, 0));
+    assert!(session.copy_state().cursor_col > 0, "End is line end");
+    session.copy_mode_input(&mut conn, &TermKeyEvent::char_('q', 0));
+    assert!(!session.is_copy(), "q leaves too");
+    assert_eq!(session.renderer.scroll_offset_of(1), 0, "back at live");
 }
 
-/// prefix [ enters scroll mode only when the focused pane has
-/// history; a pane with nothing to scroll is refused with a flash
-/// naming why. In the mode, typed bytes never reach the pane and q
+/// prefix [ enters copy mode on EVERY pane — an empty-scrollback pane
+/// roams its visible screen. Typed bytes never reach the pane and q
 /// leaves it.
 #[test]
-fn scroll_chord_needs_history_and_owns_typed_bytes() {
-    let (rx, mut conn, mut session) = two_pane_session("scrollchord", FakeScript::default());
+fn scroll_chord_enters_copy_mode_on_every_pane() {
+    let (rx, mut conn, mut session) = two_pane_session("copychord", FakeScript::default());
     chord(&mut session, &mut conn, b'[');
-    assert!(!session.is_scroll(), "no history: nothing to scroll");
-    assert_eq!(session.chrome.flash_text(), Some("no scrollback"));
-    for i in 0..40 {
-        session
-            .renderer
-            .feed_output(1, format!("l{i}\r\n").as_bytes());
-    }
-    chord(&mut session, &mut conn, b'[');
-    assert!(session.is_scroll());
+    assert!(
+        session.is_copy(),
+        "an empty pane enters: it roams the screen"
+    );
     session.route_plain(b"abc", &mut conn);
-    assert!(session.is_scroll());
+    assert!(session.is_copy());
     assert!(drained(&rx).is_empty(), "typed bytes stay out of the pane");
     session.route_plain(b"q", &mut conn);
-    assert!(!session.is_scroll());
+    assert!(!session.is_copy());
 }
 
-/// An alt-screen pane refuses prefix [ with its own reason: an alt
-/// grid never carries scrollback, so the plain refusal would lie
-/// about the cause.
+/// An alt-screen pane enters copy mode too: the mode roams the alt
+/// screen's visible rows (the frozen snapshot).
 #[test]
-fn scroll_chord_refuses_alt_screen_with_distinct_flash() {
-    let (_rx, mut conn, mut session) = two_pane_session("scrollalt", FakeScript::default());
+fn scroll_chord_enters_copy_mode_on_alt_screen() {
+    let (_rx, mut conn, mut session) = two_pane_session("copyalt", FakeScript::default());
     session
         .renderer
         .feed_output(1, b"\x1b[?1049h".to_vec().as_slice());
@@ -1816,11 +1791,9 @@ fn scroll_chord_refuses_alt_screen_with_distinct_flash() {
         .expect("pane")
         .is_alt_screen_active());
     chord(&mut session, &mut conn, b'[');
-    assert!(!session.is_scroll());
-    assert_eq!(
-        session.chrome.flash_text(),
-        Some("alt-screen pane: no history")
-    );
+    assert!(session.is_copy(), "alt screen roams its visible rows");
+    session.route_plain(b"q", &mut conn);
+    assert!(!session.is_copy());
 }
 
 /// The help panel's key path: j/k and arrows scroll (clamped at the
@@ -3088,7 +3061,8 @@ fn prefix_chord_classifies_bytes_in_precedence_order() {
     assert_eq!(session.prefix_chord(b'?'), PrefixChord::Help);
     assert_eq!(session.prefix_chord(b'w'), PrefixChord::Picker);
     assert_eq!(session.prefix_chord(b'd'), PrefixChord::Detach);
-    assert_eq!(session.prefix_chord(b'['), PrefixChord::Scroll);
+    assert_eq!(session.prefix_chord(b'['), PrefixChord::CopyMode);
+    assert_eq!(session.prefix_chord(b'e'), PrefixChord::EditScrollback);
     for key in *b"np()o" {
         assert_eq!(session.prefix_chord(key), PrefixChord::Switch);
     }

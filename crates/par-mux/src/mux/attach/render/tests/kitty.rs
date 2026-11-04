@@ -273,7 +273,7 @@ fn settings_row_toggles_kitty_graphics_live() {
     session.enter_settings();
     session.route_stdin_bytes(&mut conn, b"\t\t");
     // The general tab scrolls — reach the kitty row before asserting.
-    session.route_stdin_bytes(&mut conn, b"jjjjjjjj");
+    session.route_stdin_bytes(&mut conn, b"jjjjjjjjj");
     let rows = overlay_text(&session);
     assert!(
         rows.iter()

@@ -714,6 +714,7 @@ impl WindowSession {
                 show_label_in_border: self.render_opts.show_label_in_border,
                 pane_gaps: self.render_opts.pane_gaps,
                 scrollbar_gutter: self.render_opts.scrollbar_gutter,
+                copy_mode_auto_exit: self.copy_mode_auto_exit,
                 change_cursor_shape: self.cursor.change_cursor_shape,
                 kitty_graphics: self.kitty.enabled,
                 session_picker: self.session_picker,
@@ -1048,8 +1049,8 @@ impl WindowSession {
         // The emulators survive the re-seed now, so leaving scroll mode
         // also clears the focused pane's hold rather than relying on a
         // fresh emulator.
-        if matches!(self.modal, Modal::Scroll) {
-            self.leave_scroll_mode();
+        if matches!(self.modal, Modal::Copy(_)) {
+            self.leave_copy_mode();
         }
         let (layout_event, race) = self.drain_around_layout(conn);
         let drain_installed = layout_event.is_some();
