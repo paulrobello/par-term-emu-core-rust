@@ -172,9 +172,10 @@ pub(super) fn handle_client(
 
 /// Start the connection's writer thread: it drains the client's queue to a
 /// clone of the socket until the queue closes, a write fails, eviction is
-/// flagged, or it has written a [`final_item`] — after which it aborts the
-/// connection's blocked I/O through its registry entry (`owner`), so a
-/// Windows reader parked in `ReadFile` wakes and the connection tears down
+/// flagged, or it has written a [`final_item`] — after which it raises the
+/// eviction flag and aborts the connection's blocked I/O through its
+/// registry entry (`owner`), so a Windows reader parked in `ReadFile` wakes
+/// (and the Unix reader's poll sees the flag) and the connection tears down
 /// without waiting for the client to hang up. Fails only when the socket
 /// cannot be cloned.
 fn spawn_writer(
@@ -194,6 +195,14 @@ fn spawn_writer(
     // filtered.
     let mut stream_pane: Option<String> = None;
     std::thread::spawn(move || loop {
+        // Test-only scripted writer delay (card 01a1a5c2's regression):
+        // while armed, the writer holds BEFORE dequeuing, so a test can
+        // land the %exit teardown item in the queue and observe the
+        // eviction flag still down. Released by the test or the deadline
+        // in test_writer_delay_wait, so a panicked test cannot wedge the
+        // suite's writers for longer than the deadline.
+        #[cfg(test)]
+        test_writer_delay_wait();
         match rx.recv_timeout(EVICTION_POLL) {
             Ok(line) => {
                 // Every line that leaves the queue passes here while the
@@ -220,8 +229,16 @@ fn spawn_writer(
                 };
                 // The cancel waits until the final line is written: it
                 // aborts every pending call on the pipe, the writer's own
-                // `WriteFile` included.
+                // `WriteFile` included. The eviction flag goes up HERE,
+                // after the bytes are on the wire — `end_connection_with`
+                // left it down while the line was only queued, so the
+                // writer's poll boundaries (the recv Timeout below,
+                // write_line's wake-abort on an earlier line) could not
+                // abandon the queue and drop the %exit (card 01a1a5c2: the
+                // flag going up at queue time lost the notification under
+                // load).
                 if last {
+                    evicted.store(true, Ordering::Relaxed);
                     cancel_connection_io(&owner.0, owner.1);
                     break;
                 }
@@ -323,18 +340,28 @@ pub(super) fn pane_stream_passes(line: &str, pane: &str) -> bool {
         || names_pane(line.strip_prefix("%pane-respawned "))
 }
 
-/// Queue `line` as `client_id`'s last item and flag the connection for
-/// teardown: its writer drains what is queued (this line included) and
-/// then aborts the connection's blocked I/O, so both connection threads
-/// exit — on Unix their poll sees the flag; on Windows the abort wakes the
-/// reader parked in `ReadFile` — and the socket closes.
+/// Queue `line` as `client_id`'s last item. Its writer drains what is
+/// queued (this line included), then aborts the connection's blocked I/O,
+/// so both connection threads exit — on Unix their poll sees the eviction
+/// flag the writer raises after the final write; on Windows the abort wakes
+/// the reader parked in `ReadFile` — and the socket closes.
+///
+/// The eviction flag stays DOWN while the final line is only queued (card
+/// 01a1a5c2): the writer's poll boundaries check it, and a writer delayed
+/// under load that crossed a boundary after the flag was raised abandoned
+/// the queue and dropped the `%exit` the queued line carries. Queuing it is
+/// the success case; the flag goes up when the writer has written the line
+/// ([`spawn_writer`]'s final-item branch). A queue that refused the line (a
+/// client stalled at its eviction bound) still flags immediately — there is
+/// nothing the writer can deliver anyway, and the entry must tear down.
 fn end_connection_with(clients: &Clients, client_id: u64, line: &str) {
     let guard = clients.lock();
     if let Some((_, tx, queued, evicted, _)) = guard.iter().find(|(id, ..)| *id == client_id) {
         if tx.try_send(final_item(line)).is_ok() {
             queued.fetch_add(1, Ordering::Relaxed);
+        } else {
+            evicted.store(true, Ordering::Relaxed);
         }
-        evicted.store(true, Ordering::Relaxed);
     }
 }
 
@@ -371,6 +398,16 @@ fn spawn_pane_stream_watch(
             let deadline = std::time::Instant::now() + STREAM_END_GRACE;
             while clients.lock().iter().any(|(id, ..)| *id == client_id) {
                 if std::time::Instant::now() >= deadline {
+                    // The wedged-client bound (a client too slow to drain
+                    // the %exit keeps the writer parked in its write):
+                    // raise the flag — the Unix writer's poll abandons the
+                    // connection — and abort the blocked pipe I/O the
+                    // Windows reader needs woken.
+                    if let Some((_, _, _, evicted, _)) =
+                        clients.lock().iter().find(|(id, ..)| *id == client_id)
+                    {
+                        evicted.store(true, Ordering::Relaxed);
+                    }
                     cancel_connection_io(&clients, client_id);
                     return;
                 }
@@ -887,4 +924,37 @@ mod flow_tests {
         assert_eq!(Flow::after_send::<()>(Ok(())), Flow::Continue);
         assert_eq!(Flow::after_send(Err(())), Flow::Close);
     }
+}
+
+/// Test-only scripted writer delay (card 01a1a5c2): while armed, every
+/// client writer holds BEFORE dequeuing its next queue item, so a test can
+/// land the `%exit` teardown item in a client's queue and assert the
+/// connection's eviction flag is still down — the fixed ordering
+/// `end_connection_with` now enforces. Global while armed; the regression
+/// test releases it through a drop guard so even a panic cannot leave the
+/// whole suite's writers parked past the 10 s deadline.
+#[cfg(test)]
+static TEST_WRITER_DELAY: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+#[cfg(test)]
+fn test_writer_delay_wait() {
+    use std::time::{Duration, Instant};
+    if TEST_WRITER_DELAY.load(Ordering::Relaxed) {
+        let deadline = Instant::now() + Duration::from_secs(10);
+        while TEST_WRITER_DELAY.load(Ordering::Relaxed) && Instant::now() < deadline {
+            std::thread::sleep(Duration::from_millis(2));
+        }
+    }
+}
+
+/// Arm the test-only writer delay. See [`TEST_WRITER_DELAY`].
+#[cfg(test)]
+pub(super) fn test_writer_delay_arm() {
+    TEST_WRITER_DELAY.store(true, Ordering::Relaxed);
+}
+
+/// Release the test-only writer delay. See [`TEST_WRITER_DELAY`].
+#[cfg(test)]
+pub(super) fn test_writer_delay_release() {
+    TEST_WRITER_DELAY.store(false, Ordering::Relaxed);
 }

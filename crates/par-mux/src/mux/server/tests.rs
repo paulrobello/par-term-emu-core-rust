@@ -2838,7 +2838,6 @@ fn an_evicted_clients_connection_closes() {
 /// `cancel_blocked_io` after `%exit` aborts it. Without that cancel this
 /// test fails on Windows only.
 #[test]
-#[ignore = "load-sensitive: the daemon's %exit write-vs-teardown-cancel race (card 01a1a5c2) surfaces under system load; covered include-ignored by checkall-ci's nextest legs"]
 fn a_pane_streams_exit_closes_the_connection_while_the_client_stays_silent() {
     use crate::mux::dispatch::{dispatch_command, Ctx};
     use crate::mux::ipc::connect_local_stream;
@@ -2987,6 +2986,204 @@ fn a_pane_streams_exit_closes_the_connection_while_the_client_stays_silent() {
             std::time::Instant::now() < deadline,
             "the ended stream's connection never left the registry (its reader \
              thread is still blocked); timeline: {timeline:#?}"
+        );
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    drop(client);
+}
+
+/// Card 01a1a5c2's deterministic regression: the `%exit` teardown item can
+/// sit in the client's queue while the writer is slow (here: held by the
+/// test-only writer delay), and the connection's eviction flag must stay
+/// DOWN until the writer has flushed it — the old code raised the flag at
+/// queue time, so a load-delayed writer crossing a poll boundary abandoned
+/// the queue and dropped the `%exit` (EOF with no `%exit`, seen once under
+/// system load). Released, the writer must still deliver `%exit` before
+/// EOF.
+#[test]
+fn exit_flush_survives_scripted_writer_delay() {
+    use super::client::{test_writer_delay_arm, test_writer_delay_release};
+    use crate::mux::dispatch::{dispatch_command, Ctx};
+    use crate::mux::ipc::connect_local_stream;
+    use std::io::{BufRead, BufReader, Write};
+
+    // The delay releases itself if its holder panics; the guard covers the
+    // assertion paths in between.
+    struct ReleaseGuard;
+    impl Drop for ReleaseGuard {
+        fn drop(&mut self) {
+            test_writer_delay_release();
+        }
+    }
+
+    let dir = temp_dir();
+    let socket_path = dir.path().join("stream-exit-delay.sock");
+    let listener = bind_local_listener(&socket_path).expect("binds the test listener");
+
+    let tree = Arc::new(Mutex::new(MuxTree::new(Box::new(
+        crate::mux::dispatch::tests::DeadPaneFactory,
+    ))));
+    let clients: Clients = Arc::new(Mutex::new(Vec::new()));
+    let __output_epoch: crate::mux::server::OutputEpoch = std::sync::Arc::default();
+    let created = dispatch_command(
+        parse_command("new-session -s s").expect("parses"),
+        &Ctx {
+            layouts_dir: None,
+            output_epoch: &__output_epoch,
+            tree: &tree,
+            clients: &clients,
+            command_number: 1,
+            shutdown: None,
+            config: None,
+            client_id: None,
+        },
+        None,
+        None,
+    );
+    assert!(!reply_is_error(&created), "new-session failed: {created}");
+
+    let (server_tree, registry) = (Arc::clone(&tree), Arc::clone(&clients));
+    std::thread::spawn(
+        move || match crate::mux::ipc::accept_connection(&listener) {
+            Ok((stream, abort)) => handle_client(
+                stream,
+                server_tree,
+                registry,
+                None,
+                None,
+                abort,
+                None,
+                std::sync::Arc::default(),
+                None,
+            ),
+            Err(err) => panic!("accept_connection failed: {err}"),
+        },
+    );
+
+    let mut client = connect_local_stream(&socket_path).expect("connects");
+    let reader_half = client.try_clone().expect("clones the client stream");
+    client
+        .write_all(b"observe-pane -t %0\n")
+        .expect("sends observe-pane");
+
+    let (line_tx, line_rx) = channel::<Option<String>>();
+    std::thread::spawn(move || {
+        let mut reader = BufReader::new(reader_half);
+        loop {
+            let mut line = String::new();
+            match reader.read_line(&mut line) {
+                Ok(0) | Err(_) => {
+                    let _ = line_tx.send(None);
+                    return;
+                }
+                Ok(_) => {
+                    if line_tx.send(Some(line)).is_err() {
+                        return;
+                    }
+                }
+            }
+        }
+    });
+    let next = |what: &str| -> Option<String> {
+        match line_rx.recv_timeout(Duration::from_secs(30)) {
+            Ok(next) => next,
+            Err(_) => panic!("no {what} within 30 s"),
+        }
+    };
+    loop {
+        match next("observe-pane reply") {
+            Some(line) if line.starts_with("%end") => break,
+            Some(line) if line.starts_with("%error") => {
+                panic!("observe-pane refused: {line:?}")
+            }
+            Some(_) => {}
+            None => panic!("EOF before the observe-pane reply"),
+        }
+    }
+    let client_id = clients
+        .lock()
+        .first()
+        .map(|(id, ..)| *id)
+        .expect("the stream registered");
+    let entry_state = || -> (usize, bool) {
+        clients
+            .lock()
+            .iter()
+            .find(|(id, ..)| *id == client_id)
+            .map(|(_, _, queued, evicted, _)| {
+                (
+                    queued.load(std::sync::atomic::Ordering::Relaxed),
+                    evicted.load(std::sync::atomic::Ordering::Relaxed),
+                )
+            })
+            .expect("the connection stays registered until its teardown")
+    };
+    // The reply is written and the queue empty before the delay arms, so
+    // every later queue entry is teardown-related.
+    let drained_by = std::time::Instant::now() + Duration::from_secs(5);
+    while entry_state().0 != 0 {
+        assert!(
+            std::time::Instant::now() < drained_by,
+            "the observe-pane reply never drained from the queue"
+        );
+        std::thread::sleep(Duration::from_millis(5));
+    }
+
+    test_writer_delay_arm();
+    let _guard = ReleaseGuard;
+    let __output_epoch: crate::mux::server::OutputEpoch = std::sync::Arc::default();
+    let killed = dispatch_command(
+        parse_command("kill-pane -t %0").expect("parses"),
+        &Ctx {
+            layouts_dir: None,
+            output_epoch: &__output_epoch,
+            tree: &tree,
+            clients: &clients,
+            command_number: 2,
+            shutdown: None,
+            config: None,
+            client_id: None,
+        },
+        None,
+        None,
+    );
+    assert!(!reply_is_error(&killed), "kill-pane failed: {killed}");
+
+    // With the writer held, the queued teardown items wait. The fixed
+    // ordering keeps the eviction flag DOWN — and the connection
+    // registered — for the whole window: the writer alone may raise the
+    // flag, and it is parked. The old queue-time flag ended the connection
+    // through the reader's poll within one EVICTION_POLL of the queueing,
+    // so a window of a few poll periods discriminates the two behaviors
+    // (the entry vanishing or the flag rising here means the %exit would
+    // have been dropped at the writer's next poll boundary).
+    let window_end = std::time::Instant::now() + Duration::from_millis(1500);
+    while std::time::Instant::now() < window_end {
+        let (_, evicted_while_delayed) = entry_state();
+        assert!(
+            !evicted_while_delayed,
+            "the eviction flag rose while the writer was still held — the \
+             %exit would be dropped at the writer's next poll boundary"
+        );
+        std::thread::sleep(Duration::from_millis(10));
+    }
+
+    test_writer_delay_release();
+    let mut saw_exit = false;
+    loop {
+        match next("%exit and EOF") {
+            Some(line) if line == "%exit\n" => saw_exit = true,
+            Some(_) => {}
+            None => break,
+        }
+    }
+    assert!(saw_exit, "%exit arrives before EOF");
+
+    let deadline = std::time::Instant::now() + Duration::from_secs(30);
+    while clients.lock().iter().any(|(id, ..)| *id == client_id) {
+        assert!(
+            std::time::Instant::now() < deadline,
+            "the ended stream's connection never left the registry"
         );
         std::thread::sleep(Duration::from_millis(10));
     }
