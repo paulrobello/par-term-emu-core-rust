@@ -913,11 +913,12 @@ fn render_mode_prefix_bracket_enters_scroll_mode_and_q_exits() {
     host.killer.kill().ok();
 }
 
-/// Copy mode's `e` against a live daemon (herdr's `edit_scrollback`):
-/// prefix [ then a typed `e` writes the pane's text to a private temp
-/// file and runs `$VISUAL` on it in a zoomed pane split off the focused
-/// one. The "editor" is a script that copies the file it was handed out;
-/// the launcher removes the temp files when the editor exits.
+/// The scrollback editor against a live daemon (herdr's `edit_scrollback`):
+/// the fixed prefix-e chord (the vi table owns `e` inside copy mode as
+/// word-end) writes the pane's text to a private temp file and runs
+/// `$VISUAL` on it in a zoomed pane split off the focused one. The
+/// "editor" is a script that copies the file it was handed out; the
+/// launcher removes the temp files when the editor exits.
 #[cfg(unix)]
 #[ignore = "load-sensitive: PTY/timing suite; run via make test-rust-sensitive or checkall-ci"]
 #[test]
@@ -976,11 +977,7 @@ fn render_mode_copy_mode_e_opens_the_scrollback_in_the_editor() {
         Duration::from_secs(10),
         "EDITLINE-40 on the host screen",
     );
-    host.to_child.write_all(&[0x02, b'[']).expect("prefix [");
-    host.to_child.flush().ok();
-    // input spacing: the chord and the copy-mode key are separate keypresses
-    std::thread::sleep(Duration::from_millis(200));
-    host.to_child.write_all(b"e").expect("e");
+    host.to_child.write_all(&[0x02, b'e']).expect("prefix e");
     host.to_child.flush().ok();
 
     let deadline = Instant::now() + Duration::from_secs(15);
