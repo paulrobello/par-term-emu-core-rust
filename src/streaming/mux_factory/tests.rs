@@ -2029,3 +2029,102 @@ fn streamed_damage_matches_dirty_rows_and_the_late_seed_carries_none() {
         );
     }
 }
+
+/// A bare BEL in one pane rings only that pane's mirror: the drain sends
+/// the Bell frame to the pane's own streaming session, so a viewer of a
+/// second pane receives nothing (and per-client EventType filters still
+/// apply in ws_session's should_send, covered in server/tests.rs).
+#[test]
+fn a_bare_bell_in_a_pane_bells_only_that_panes_mirror() {
+    let rt = runtime();
+    let _entered = rt.enter();
+    let (_dir, socket, _serving, mut control, pane_a) = daemon();
+
+    // A second pane with its own streaming session.
+    let pane_b = control
+        .send(&format!("split-window -h -t {pane_a}"))
+        .expect("split")
+        .join("")
+        .trim()
+        .to_string();
+
+    let server = streaming(&socket);
+    let session_a = mirror(&server, &pane_a);
+    let session_b = mirror(&server, &pane_b);
+    let mut frames_a = session_a.broadcast_tx.subscribe();
+    let mut frames_b = session_b.broadcast_tx.subscribe();
+
+    // Both mirrors live (echoed output visible) before anything is armed.
+    type_line(&session_a, "echo BELL-ARM-A");
+    wait_mirror(&session_a, "BELL-ARM-A");
+    type_line(&session_b, "echo BELL-ARM-B");
+    wait_mirror(&session_b, "BELL-ARM-B");
+
+    // Drop the replay buffers so later receives are only fresh frames.
+    while frames_a.try_recv().is_ok() {}
+    while frames_b.try_recv().is_ok() {}
+
+    // The bell rides paneA's OUTPUT (a bare BEL byte), not its input.
+    type_line(&session_a, r"printf '\a'; echo BELL-RANG");
+    wait_mirror(&session_a, "BELL-RANG");
+
+    wait("the Bell frame on paneA's session", || {
+        loop {
+            match frames_a.try_recv() {
+                Ok(ServerMessage::Bell) => return None,
+                Ok(_) => continue,
+                Err(_) => break,
+            }
+        }
+        Some("no Bell frame yet".to_string())
+    });
+
+    // paneB's subscription sees no Bell in the same window.
+    let stray_bell =
+        std::iter::from_fn(|| frames_b.try_recv().ok()).any(|m| matches!(m, ServerMessage::Bell));
+    assert!(!stray_bell, "paneB's viewer must not receive paneA's bell");
+}
+
+/// BEL terminating an OSC sequence (ESC ]0;title BEL) is consumed by the
+/// parser's OSC state machine and must NOT ring the mirror; a bare BEL
+/// right after does (positive control against a silently-passing filter).
+#[test]
+fn an_osc_terminated_by_bell_does_not_ring_the_mirror() {
+    let rt = runtime();
+    let _entered = rt.enter();
+    let (_dir, socket, _serving, _control, pane) = daemon();
+
+    let server = streaming(&socket);
+    let session = mirror(&server, &pane);
+    let mut frames = session.broadcast_tx.subscribe();
+
+    type_line(&session, "echo OSC-ARM");
+    wait_mirror(&session, "OSC-ARM");
+    while frames.try_recv().is_ok() {}
+
+    // OSC 0 title set, terminated by BEL: the terminator never reaches
+    // the parser's bell handler.
+    type_line(&session, r"printf '\033]0;OSC-TITLE\007'; echo OSC-DONE");
+    wait_mirror(&session, "OSC-DONE");
+
+    // Quiet window: no Bell frame while (and after) the OSC landed.
+    std::thread::sleep(Duration::from_millis(300));
+    let bells = std::iter::from_fn(|| frames.try_recv().ok())
+        .filter(|m| matches!(m, ServerMessage::Bell))
+        .count();
+    assert_eq!(bells, 0, "a BEL-terminated OSC must not ring the mirror");
+
+    // Positive control: the same pane, a bare BEL, one frame.
+    type_line(&session, r"printf '\a'; echo BARE-BELL");
+    wait_mirror(&session, "BARE-BELL");
+    wait("the Bell frame after a bare BEL", || {
+        loop {
+            match frames.try_recv() {
+                Ok(ServerMessage::Bell) => return None,
+                Ok(_) => continue,
+                Err(_) => break,
+            }
+        }
+        Some("no Bell frame yet".to_string())
+    });
+}

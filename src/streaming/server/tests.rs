@@ -20,7 +20,9 @@ fn should_send_passes_roster_messages_through_any_filter() {
         assert!(should_send(&roster_msg(), subs));
         assert!(should_send(&delta_msg(), subs));
     }
-    // Control: a filtered event type is still dropped.
+    // Control: a filtered event type is still dropped, and delivered when
+    // the client subscribes to Bell.
+    assert!(should_send(&ServerMessage::Bell, &only_bell));
     assert!(!should_send(&ServerMessage::Bell, &empty));
 }
 

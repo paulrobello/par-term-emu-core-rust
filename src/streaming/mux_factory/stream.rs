@@ -252,6 +252,19 @@ pub(super) fn spawn_drain(
                             dispatch_batch.deliver();
                             forward(&link, &data, damage);
                             for event in events {
+                                // A bare BEL in the pane rings THIS pane's
+                                // mirror only: the drain thread owns one
+                                // session_id per pane, so the frame reaches
+                                // exactly the clients subscribed to it
+                                // (per-client EventType filters apply in
+                                // ws_session's should_send).
+                                if matches!(event, TerminalEvent::BellRang(_)) {
+                                    if let Some(server) =
+                                        server.as_ref().and_then(std::sync::Weak::upgrade)
+                                    {
+                                        server.send_to_session(&session_id, ServerMessage::bell());
+                                    }
+                                }
                                 let TerminalEvent::GraphicsAdded { image_id, row } = event else {
                                     // Mirrors stream text via %output itself; only
                                     // the frame-bearing event needs converting.
