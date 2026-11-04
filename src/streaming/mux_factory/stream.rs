@@ -399,12 +399,28 @@ pub(super) fn forward(link: &MirrorLink, data: &[u8], damage: Option<(u64, Vec<(
         ),
         None => OutputChunk::plain(String::from_utf8_lossy(data).into_owned()),
     };
-    match &mut *link.sink.lock() {
-        Sink::Buffering(buffer) => buffer.push(chunk),
-        Sink::Live(sender) => {
-            let _ = sender.try_send(chunk);
+    let sender = {
+        let mut sink = link.sink.lock();
+        match &mut *sink {
+            Sink::Buffering(buffer) => {
+                buffer.push(chunk);
+                return;
+            }
+            Sink::Live(sender) => sender.clone(),
+            Sink::Closed => return,
         }
-        Sink::Closed => {}
+    };
+    // The send runs OUTSIDE the sink lock: the drain thread parks here
+    // while the broadcaster drains a full channel, and teardown_session
+    // must not be pinned behind that park. `try_send` here was the
+    // dropped-ESC corruption: a full channel silently discarded the
+    // chunk, and an escape byte riding it never reached the viewer,
+    // so the sequence tail painted as literal text. Blocking is the
+    // lossless contract: the broadcaster loop never stops consuming
+    // (its select polls recv alongside the flush timer), so the park
+    // ends. Only a dropped receiver errs, and that session is gone.
+    if sender.blocking_send(chunk).is_err() {
+        *link.sink.lock() = Sink::Closed;
     }
 }
 
@@ -452,6 +468,68 @@ fn adjacent_damage(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::terminal::Terminal;
+    use parking_lot::RwLock;
+    use std::collections::{HashMap, HashSet};
+    use std::sync::atomic::AtomicBool;
+
+    /// Regression for the dropped-ESC corruption: the old
+    /// `let _ = sender.try_send(chunk)` in [`forward`] silently discarded
+    /// a chunk whenever the session's output channel was full, and an
+    /// escape byte riding the dropped chunk never reached the viewer —
+    /// the next chunk's `[22Gth` painted as literal text. A saturated
+    /// channel with a consumer that starts draining only after production
+    /// has finished must still deliver every chunk, in order.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn forward_drops_nothing_when_the_output_channel_is_full() {
+        let link = Arc::new(MirrorLink {
+            pane: Arc::new(Mutex::new(3)),
+            window: Mutex::new("@0".to_string()),
+            follows_active: false,
+            terminal: Arc::new(RwLock::new(Terminal::with_scrollback(80, 24, 100))),
+            writer: Arc::new(Mutex::new(None)),
+            alive: AtomicBool::new(true),
+            closed: AtomicBool::new(false),
+            sink: Mutex::new(Sink::Closed),
+            sent_images: Mutex::new(HashSet::new()),
+            graphics_panes: Arc::new(Mutex::new(HashMap::new())),
+            status: Mutex::new(None),
+            process: Mutex::new(None),
+            session: RwLock::new(None),
+        });
+        let (tx, mut rx) = tokio::sync::mpsc::channel(2);
+        *link.sink.lock() = Sink::Live(tx);
+
+        // Capacity 2, six chunks, the consumer starts draining only after a
+        // delay: the producer must park, not drop. Every receive is bounded,
+        // so the pre-fix behavior (chunks silently dropped) fails the test
+        // on a timeout instead of hanging it.
+        const N: usize = 6;
+        let payloads: [&[u8]; N] = [b"m0", b"m1", b"pre \x1b", b"[22Gth", b"m4", b"m5"];
+        let producer = {
+            let link = Arc::clone(&link);
+            tokio::task::spawn_blocking(move || {
+                for payload in payloads {
+                    forward(&link, payload, None);
+                }
+            })
+        };
+        let mut got = Vec::new();
+        for _ in 0..N {
+            let chunk = tokio::time::timeout(std::time::Duration::from_secs(5), rx.recv())
+                .await
+                .expect("every chunk arrives within 5s (none dropped)")
+                .expect("channel stays open");
+            got.push(chunk);
+        }
+        producer.await.expect("producer thread");
+        assert_eq!(got.len(), N, "no chunk may be dropped");
+        let joined: String = got.iter().map(|c| c.data.as_str()).collect();
+        assert_eq!(joined, "m0m1pre \x1b[22Gthm4m5", "chunk order preserved");
+        // The corruption signature: the escape sequence survived a full
+        // channel intact.
+        assert!(joined.contains("pre \x1b[22G"), "escape sequence intact");
+    }
 
     #[test]
     fn damage_pair_delayed_matching_damage() {
