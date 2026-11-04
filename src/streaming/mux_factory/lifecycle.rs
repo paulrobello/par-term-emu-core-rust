@@ -16,7 +16,7 @@ use crate::streaming::protocol::ServerMessage;
 use crate::streaming::server::{
     SessionFactory, SessionFactoryResult, StreamingServer, UploadForwarder,
 };
-use crate::streaming::session::StreamSessionState;
+use crate::streaming::session::{OutputChunk, StreamSessionState};
 use crate::terminal::Terminal;
 use interprocess::TryClone as _;
 use parking_lot::{Mutex, RwLock};
@@ -150,6 +150,30 @@ pub(super) fn debug_log_active_workspace(session: &str, pane: u32) {
         "STREAMING",
         "workspace-active mirror resolves to session {session} pane %{pane}"
     )
+}
+
+/// Hand every attach-buffered chunk to the session's output channel.
+///
+/// `try_send` alone dropped the overflow past the channel's capacity
+/// (silently — a dropped attach-buffered chunk is the bare-ESC corruption
+/// par-term recorded), so a Full retry parks briefly and retries: the
+/// broadcaster loop is already running (sessions.rs spawns it before this
+/// call) and frees capacity as it drains. `Closed` means the session died
+/// mid-flush; the remaining chunks have no audience, so the flush stops.
+fn flush_buffered(sender: &tokio::sync::mpsc::Sender<OutputChunk>, chunks: Vec<OutputChunk>) {
+    for chunk in chunks {
+        let mut pending = Some(chunk);
+        while let Some(chunk) = pending.take() {
+            match sender.try_send(chunk) {
+                Ok(()) => break,
+                Err(tokio::sync::mpsc::error::TrySendError::Full(back)) => {
+                    pending = Some(back);
+                    std::thread::sleep(std::time::Duration::from_millis(1));
+                }
+                Err(tokio::sync::mpsc::error::TrySendError::Closed(_)) => return,
+            }
+        }
+    }
 }
 
 impl SessionFactory for MuxSessionFactory {
@@ -296,12 +320,15 @@ impl SessionFactory for MuxSessionFactory {
         let sender = session.get_output_sender();
         {
             let mut sink = link.sink.lock();
-            if let Sink::Buffering(chunks) = &*sink {
+            if let Sink::Buffering(chunks) = &mut *sink {
                 // Drain in order, each chunk with its own damage — the
-                // broadcaster merges per batch window.
-                for chunk in chunks {
-                    let _ = sender.try_send(chunk.clone());
-                }
+                // broadcaster merges per batch window. `try_send` alone
+                // dropped the overflow past the channel's capacity — a
+                // dropped attach-buffered chunk is the bare-ESC corruption
+                // par-term recorded — so retry on Full; the broadcaster
+                // loop is already running (spawned before this call) and
+                // frees capacity as it drains.
+                flush_buffered(&sender, std::mem::take(chunks));
             }
             *sink = Sink::Live(sender);
         }
@@ -441,5 +468,43 @@ mod tests {
         );
         assert_eq!(active_pane_from_listing(&["%8 1 -".to_string()]), None);
         assert_eq!(active_pane_from_listing(&[]), None);
+    }
+}
+
+/// Regression for the dropped-ESC corruption at attach: the old
+/// `let _ = sender.try_send(chunk.clone())` in `setup_session` silently
+/// dropped buffered chunks past the channel's capacity, so a pane that
+/// produced more than the capacity while unattached delivered a hole to
+/// the first viewer. `flush_buffered` parks and retries on Full; with a
+/// capacity-2 channel, five chunks and a consumer that starts draining
+/// only after the flush has finished, every chunk must land, in order.
+#[cfg(test)]
+mod flush_tests {
+    use super::*;
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn flush_buffered_drops_nothing_when_the_output_channel_is_full() {
+        let (tx, mut rx) = tokio::sync::mpsc::channel(2);
+        const N: usize = 5;
+        let chunks: Vec<OutputChunk> = (0..N)
+            .map(|i| OutputChunk::plain(format!("chunk{i} ")))
+            .collect();
+
+        // Capacity 2, five chunks, the consumer starts draining only after
+        // a delay: the flusher must park on Full, not drop. Every receive
+        // is bounded, so the pre-fix behavior (overflow dropped) fails the
+        // test on a timeout instead of hanging it.
+        let flusher = tokio::task::spawn_blocking(move || flush_buffered(&tx, chunks));
+        let mut got = Vec::new();
+        for _ in 0..N {
+            let chunk = tokio::time::timeout(std::time::Duration::from_secs(5), rx.recv())
+                .await
+                .expect("every buffered chunk arrives within 5s (none dropped)")
+                .expect("channel stays open");
+            got.push(chunk);
+        }
+        flusher.await.expect("flusher thread");
+        let joined: String = got.iter().map(|c| c.data.as_str()).collect();
+        assert_eq!(joined, "chunk0 chunk1 chunk2 chunk3 chunk4 ");
     }
 }

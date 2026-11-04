@@ -270,6 +270,20 @@ impl StreamingServer {
                     let msg = match output_msg {
                         Ok(msg) => msg,
                         Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => {
+                            // Dropped frames may include pane output, and a
+                            // lost output frame is the bare-ESC corruption:
+                            // an escape byte riding the dropped chunk never
+                            // reaches the client's parser, so the sequence
+                            // tail paints as literal text. Push the current
+                            // screen as an in-band resync (the same
+                            // screen-restore vehicle a workspace retarget
+                            // uses); frames still queued behind the lag
+                            // replay over it, which is the convergence shape
+                            // the roster/tree resync below already relies on.
+                            let resync = session.screen_resync_frame();
+                            if client.send(resync).await.is_err() {
+                                break;
+                            }
                             if let Some(status) = session.pane_size_status() {
                                 client.send(status).await?;
                             }

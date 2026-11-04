@@ -529,6 +529,25 @@ impl StreamSessionState {
             .build()
     }
 
+    /// The full-screen resync frame a client that lost broadcast frames
+    /// (`RecvError::Lagged`) applies to converge with the terminal again.
+    ///
+    /// The dropped frames may include pane output, and a lost frame is the
+    /// bare-ESC corruption: an escape byte that arrived inside the dropped
+    /// chunk never reaches the client's parser, and the next sequence's
+    /// tail (`22Gth`) paints as literal text. The screen-restore sequence
+    /// is the same in-band resync vehicle a workspace retarget pushes
+    /// (mux_factory mirror.rs); carried as an `Output` frame with no
+    /// damage generation, so the client full-scans instead of trusting a
+    /// stale row map.
+    pub fn screen_resync_frame(&self) -> ServerMessage {
+        ServerMessage::output_with_damage(
+            self.terminal.read().export_screen_restore_sequence(),
+            None,
+            Vec::new(),
+        )
+    }
+
     /// Build ModeChanged messages for all active (non-default) terminal modes.
     ///
     /// Used to sync terminal mode state to clients connecting to existing sessions.
@@ -1237,6 +1256,37 @@ mod tests {
 
         session.shutdown("done".to_string());
         broadcaster.await.expect("broadcaster task");
+    }
+
+    /// The Lagged recovery a ws client gets after losing broadcast frames:
+    /// an `Output` frame carrying the current screen-restore sequence, with
+    /// no damage generation so the client full-scans. A lost output frame
+    /// is the bare-ESC corruption, so the resync must carry the full
+    /// screen, not a delta.
+    #[test]
+    fn screen_resync_frame_carries_the_current_screen_without_damage() {
+        let mut terminal = Terminal::new(80, 24);
+        terminal.process(b"before resync\r\nresync marker");
+        let terminal = Arc::new(RwLock::new(terminal));
+        let session = StreamSessionState::new("resync".to_string(), terminal, None, true);
+
+        match session.screen_resync_frame() {
+            ServerMessage::Output {
+                data,
+                damage_generation,
+                ..
+            } => {
+                assert!(
+                    data.contains("resync marker"),
+                    "the resync replays the current screen, got {data:?}"
+                );
+                assert!(
+                    damage_generation.is_none(),
+                    "no damage generation: the client must full-scan"
+                );
+            }
+            other => panic!("expected an Output frame, got {other:?}"),
+        }
     }
 
     /// Card 01a0efb2: `initial_screen` carries the terminal's scrollback,

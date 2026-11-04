@@ -220,14 +220,21 @@ impl StreamingServer {
                 .insert(session_id.clone(), Arc::clone(&session))?;
             crate::streaming::metrics::Metrics::global().session_opened();
 
-            // Setup session (spawn background tasks, etc.)
-            factory.setup_session(session_id, &session)?;
-
-            // Spawn broadcaster loop for this session
+            // Spawn broadcaster loop BEFORE setup_session: the factory's
+            // Buffering→Live flush fills the output channel and only makes
+            // progress while a consumer drains it, so the consumer must
+            // already run. The loop's first chunks broadcast with no
+            // subscriber yet (this client subscribes later, in run_ws_session)
+            // and are covered by `Connected.initial_screen`, which is read
+            // after the flush has been applied — the same coverage the old
+            // spawn-after ordering relied on.
             let session_clone = Arc::clone(&session);
             tokio::spawn(async move {
                 session_clone.output_broadcaster_loop().await;
             });
+
+            // Setup session (spawn background tasks, etc.)
+            factory.setup_session(session_id, &session)?;
 
             return Ok(session);
         }
