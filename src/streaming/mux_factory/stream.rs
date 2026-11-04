@@ -118,6 +118,9 @@ impl Write for SendKeysWriter {
     }
 }
 
+// Bound lookahead when the socket reader has not delivered the adjacent damage line.
+const DAMAGE_PAIR_WINDOW: Duration = Duration::from_millis(20);
+
 /// Read the daemon connection in order: apply the pane's `%output` to the
 /// mirror and forward it to viewers, re-fit on `%layout-change`, and mark the
 /// link dead when the pane or the connection goes away.
@@ -230,13 +233,10 @@ pub(super) fn spawn_drain(
                             // iteration. An unpaired damage notification (the
                             // `_` arm) is dropped - its `%output` already
                             // applied, and absent fields just mean scan.
-                            let damage = match queue.front() {
-                                Some(next) => adjacent_damage(&mut parser, next, &id),
-                                None => None,
-                            };
-                            if damage.is_some() {
-                                queue.pop_front();
-                            }
+                            let damage =
+                                take_adjacent_damage(&mut parser, &mut queue, &id, |timeout| {
+                                    reader.rx.recv_timeout(timeout)
+                                });
                             let (dispatch_batch, events) = {
                                 let mut term = link.terminal.write();
                                 let batch = term.process_deferred(&data);
@@ -405,6 +405,26 @@ pub(super) fn forward(link: &MirrorLink, data: &[u8], damage: Option<(u64, Vec<(
     }
 }
 
+/// Look ahead one line, waiting only when the queue is empty. A nonmatching
+/// front stays in place so later notifications cannot overtake it.
+fn take_adjacent_damage(
+    parser: &mut TmuxControlParser,
+    queue: &mut VecDeque<String>,
+    pane_id: &str,
+    receive: impl FnOnce(Duration) -> Result<io::Result<String>, RecvTimeoutError>,
+) -> Option<(u64, Vec<(u32, u32)>)> {
+    if queue.is_empty() {
+        if let Ok(Ok(line)) = receive(DAMAGE_PAIR_WINDOW) {
+            queue.push_back(line);
+        }
+    }
+    let damage = adjacent_damage(parser, queue.front()?, pane_id);
+    if damage.is_some() {
+        queue.pop_front();
+    }
+    damage
+}
+
 /// Parse `line` as the adjacent `%pane-damage` notification for `pane_id`,
 /// through `parser` (same parser state, typed result). `None` when the line
 /// is anything else - it is left for the queue's next iteration.
@@ -429,6 +449,80 @@ fn adjacent_damage(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn damage_pair_delayed_matching_damage() {
+        let mut parser = TmuxControlParser::new(true);
+        let mut queue = VecDeque::new();
+        let (tx, rx) = std::sync::mpsc::channel();
+        let damage = take_adjacent_damage(&mut parser, &mut queue, "%3", |timeout| {
+            assert_eq!(timeout, Duration::from_millis(20));
+            // Deliver only after the helper has observed an empty queue.
+            tx.send(Ok("%pane-damage %3 42 0-5".to_string())).unwrap();
+            rx.recv_timeout(timeout)
+        });
+        assert_eq!(damage, Some((42, vec![(0, 5)])));
+        assert!(queue.is_empty());
+    }
+
+    #[test]
+    fn damage_pair_immediate_nonmatching_preserves_fifo() {
+        let mut parser = TmuxControlParser::new(true);
+        let mut queue = VecDeque::from([
+            "%pane-damage %4 41 1-2".to_string(),
+            "%pane-damage %3 42 0-5".to_string(),
+        ]);
+        let before = queue.clone();
+        assert_eq!(
+            take_adjacent_damage(&mut parser, &mut queue, "%3", |_| {
+                panic!("a nonempty queue must not receive or wait")
+            }),
+            None
+        );
+        assert_eq!(queue, before);
+    }
+
+    #[test]
+    fn damage_pair_unpaired_then_split_matching_recovers() {
+        let mut parser = TmuxControlParser::new(true);
+        let mut queue = VecDeque::new();
+        assert_eq!(
+            take_adjacent_damage(&mut parser, &mut queue, "%3", |_| {
+                Ok(Ok("%output %3 next".to_string()))
+            }),
+            None
+        );
+        assert_eq!(queue.pop_front().as_deref(), Some("%output %3 next"));
+        assert!(queue.is_empty());
+        assert_eq!(
+            take_adjacent_damage(&mut parser, &mut queue, "%3", |_| {
+                Ok(Ok("%pane-damage %3 43 2-3".to_string()))
+            }),
+            Some((43, vec![(2, 3)]))
+        );
+        assert!(queue.is_empty());
+    }
+
+    #[test]
+    fn damage_pair_timeout_falls_back_without_losing_future_hints() {
+        let mut parser = TmuxControlParser::new(true);
+        let mut queue = VecDeque::new();
+        assert_eq!(
+            take_adjacent_damage(&mut parser, &mut queue, "%3", |timeout| {
+                assert_eq!(timeout, Duration::from_millis(20));
+                Err(RecvTimeoutError::Timeout)
+            }),
+            None
+        );
+        assert!(queue.is_empty());
+        assert_eq!(
+            take_adjacent_damage(&mut parser, &mut queue, "%3", |_| {
+                Ok(Ok("%pane-damage %3 44".to_string()))
+            }),
+            Some((44, vec![]))
+        );
+        assert!(queue.is_empty());
+    }
 
     #[test]
     fn send_keys_line_matches_reference() {
