@@ -224,12 +224,15 @@ fn the_hook_speaks_at_top_level_and_stays_silent_for_a_nested_claude() {
         request["params"]["session_resume_argv"][2], "s-parent",
         "the resume argv is intact: {request}"
     );
-    // v5: the identity stamp rides the session report (the daemon
-    // tree-validates it; here only its presence and shape are pinned).
+    // No agent_pid here, BY DESIGN: the double-fork launcher severs the
+    // hook's ancestry (launchd above it), so the v5 stamp's ancestry walk
+    // finds no claude parent and the hook correctly sends none — the
+    // daemon falls back to label liveness, the documented degradation.
+    // Runtime-pinning the stamp needs a single-fork launcher mode with a
+    // claude-named parent (card 01a1a7d2 notes the harness gap).
     assert!(
-        request["params"]["agent_pid"].is_u64()
-            && request["params"]["agent_pid"].as_u64().unwrap_or(0) > 0,
-        "the session report stamps the agent pid: {request}"
+        request["params"].get("agent_pid").is_none(),
+        "a severed ancestry sends no stamp: {request}"
     );
 
     // Nested: the child's SessionStart sends nothing (the report that used
