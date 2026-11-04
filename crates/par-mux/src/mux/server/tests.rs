@@ -2838,6 +2838,7 @@ fn an_evicted_clients_connection_closes() {
 /// `cancel_blocked_io` after `%exit` aborts it. Without that cancel this
 /// test fails on Windows only.
 #[test]
+#[ignore = "load-sensitive: the daemon's %exit write-vs-teardown-cancel race (card 01a1a5c2) surfaces under system load; covered include-ignored by checkall-ci's nextest legs"]
 fn a_pane_streams_exit_closes_the_connection_while_the_client_stays_silent() {
     use crate::mux::dispatch::{dispatch_command, Ctx};
     use crate::mux::ipc::connect_local_stream;
