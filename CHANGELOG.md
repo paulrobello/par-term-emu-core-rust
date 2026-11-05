@@ -7,6 +7,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.78.1] - 2026-11-04
+
+### Fixed
+- **mux: the scrape fallback tests pin quiet `sleep` panes, not title-able shell fixtures** (`e716d44d`; `crates/par-mux/src/mux/scrape.rs`): the fresh-pane enrollment test failed on the ubuntu runner (deployment run 41934128317, gating the 0.78.0 crates.io publish) — the fixture's live shell emitted an OSC title, and codex's `osc_title_idle` rule (any non-empty title, priority 100) outranked the `idle_fallback` the test pins, flipping the rule label while the state stayed `idle`. Both rule-asserting tests (`a_fresh_pane_running_codex_enrolls_through_the_tick_without_hooks`, `idle_fallback_needs_the_agents_process_and_loses_to_a_rule`) now spawn a `sleep 300` split pane — no title source, empty screen — so the fallback path is the only reachable rule; the mechanism was reproduced locally by feeding the title escape before the fix. State-only assertions are unchanged (a title match yields the same state).
+
 ## [0.78.0] - 2026-11-04
 
 ### Added
@@ -2467,7 +2472,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Unicode Support**: Full Unicode including emoji and wide characters
 - **Python Integration**: PyO3 bindings for Python 3.12+
 
-[Unreleased]: https://github.com/paulrobello/par-term-emu-core-rust/compare/v0.78.0...HEAD
+[Unreleased]: https://github.com/paulrobello/par-term-emu-core-rust/compare/v0.78.1...HEAD
+[0.78.1]: https://github.com/paulrobello/par-term-emu-core-rust/compare/v0.78.0...v0.78.1
 [0.78.0]: https://github.com/paulrobello/par-term-emu-core-rust/compare/v0.77.0...v0.78.0
 [0.77.0]: https://github.com/paulrobello/par-term-emu-core-rust/compare/v0.76.0...v0.77.0
 [0.76.0]: https://github.com/paulrobello/par-term-emu-core-rust/compare/v0.75.0...v0.76.0
