@@ -2025,10 +2025,28 @@ contains = ["Override Idle"]
     /// A fresh pane nobody claimed (card 01a19ec3): the tick resolves the
     /// agent kind from its process tree and the codex set's idle_fallback
     /// lands the roster row, so a plain `new-session -- codex` is visible
-    /// without hooks and without a first turn.
+    /// without hooks and without a first turn. The pane is a quiet `sleep`
+    /// stand-in, not the shell fixture: a spawned shell can carry an OSC
+    /// title (runner .bashrc), and any non-empty title matches codex's
+    /// `osc_title_idle` rule (`\S`, priority 100), which outranks the
+    /// fallback this test pins (measured on the ubuntu CI runner, run
+    /// 41934128317).
     #[test]
+    #[cfg(unix)]
     fn a_fresh_pane_running_codex_enrolls_through_the_tick_without_hooks() {
-        let (tree, pane_id) = tree_with_pane();
+        let mut tree = MuxTree::new(Box::new(ShellPaneFactory::default()));
+        let session = tree.new_session("scrape", 80, 24).expect("session spawns");
+        let root = tree
+            .session(session)
+            .expect("session exists")
+            .windows
+            .iter()
+            .filter_map(|window| tree.window(*window))
+            .flat_map(|window| window.panes())
+            .next()
+            .expect("a new session has a pane");
+        let pane_id = split_pane_with_command(&mut tree, root, "sleep 300");
+        let tree = Arc::new(Mutex::new(tree));
         let child = fixture_child(&tree, pane_id);
         let table = table_running(child, &["codex"]);
         let (state, rule) = tick_state(&tree, pane_id, Some(&table));
@@ -2072,6 +2090,7 @@ contains = ["Override Idle"]
     }
 
     #[test]
+    #[cfg(unix)]
     fn idle_fallback_needs_the_agents_process_and_loses_to_a_rule() {
         let engine = ScrapeEngine::load(None);
         for agent in ["droid", "copilot", "cursor", "codex"] {
@@ -2081,7 +2100,23 @@ contains = ["Override Idle"]
             assert!(!engine.set_for(agent).unwrap().idle_fallback(), "{agent}");
         }
 
-        let (tree, pane_id) = tree_with_pane();
+        // The quiet `sleep` stand-in, not the shell fixture: a spawned
+        // shell can carry an OSC title, and a title match (osc_title_idle,
+        // priority 100) would outrank the fallback tuple this test pins —
+        // the exact CI-runner failure mode the codex test documents.
+        let mut tree = MuxTree::new(Box::new(ShellPaneFactory::default()));
+        let session = tree.new_session("scrape", 80, 24).expect("session spawns");
+        let root = tree
+            .session(session)
+            .expect("session exists")
+            .windows
+            .iter()
+            .filter_map(|window| tree.window(*window))
+            .flat_map(|window| window.panes())
+            .next()
+            .expect("a new session has a pane");
+        let pane_id = split_pane_with_command(&mut tree, root, "sleep 300");
+        let tree = Arc::new(Mutex::new(tree));
         tree.lock()
             .pane_mut(pane_id)
             .expect("pane exists")
