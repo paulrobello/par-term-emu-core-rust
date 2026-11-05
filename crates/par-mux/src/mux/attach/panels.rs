@@ -1,6 +1,6 @@
 //! Overlay and sidebar composition shared by passthrough and render
 //! modes: key spelling, help rows and filtering, prompt panels, the
-//! session/window picker, and the workspace sidebar.
+//! window picker, and the workspace sidebar.
 
 use super::ManagementKey;
 
@@ -144,7 +144,7 @@ pub(crate) fn help_rows(
             (format!("{p} ( / )"), "previous / next session".to_string()),
             (
                 format!("{p} {}", spell_key(m.picker)),
-                "session/window picker".to_string(),
+                "window picker".to_string(),
             ),
             (
                 format!("{p} {}", spell_key(m.rename_window)),
@@ -303,7 +303,7 @@ pub(crate) const HELP_FOOTER: &str = " search / · scroll j/k/arrows/pgup/pgdn �
 /// chrome embeds it in the top border, left-aligned).
 pub(crate) const HELP_OVERLAY_TITLE: &str = " keybinds ";
 
-/// The modal overlay's title for the session/window picker.
+/// The modal overlay's title for the window picker.
 pub(crate) const PICKER_OVERLAY_TITLE: &str = " picker ";
 
 /// The workspace picker modal's title.
@@ -495,12 +495,13 @@ pub(crate) struct PickerEntry {
     pub current: bool,
 }
 
-/// Where one picker display row came from: a session (its header row) or
-/// one of its windows. The compose returns these parallel to the
-/// filtered rows so a selection or a click maps back to a target.
+/// Where one picker display row came from: one session's window. The
+/// compose returns these parallel to the filtered rows so a selection
+/// or a click maps back to a target.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum PickerRef {
-    Session(usize),
+    /// A window row: the entry's index into the picker's queried
+    /// sessions and the window's index into that entry's windows.
     Window(usize, usize),
     /// One workspace row (the workspace picker): the workspace's index
     /// into the picker's queried workspace list.
@@ -585,31 +586,34 @@ pub(crate) fn palette_action_chord(
     Some(format!("{} {}", spell_key(prefix), spell_key(key)))
 }
 
-/// The picker's display rows from the queried entries: one accent
-/// header per session (` $N: name`, `>`-marked when the session is the
-/// one the view shows), its windows nested beneath it as `   @N: name`
-/// rows (`>`-marked for the shown window, `*` suffixed for the
-/// session's active window). The parallel refs list maps each row to
-/// its selection target.
+/// The picker's display rows from the queried entries: every session's
+/// windows as one flat, selectable row list (` @N: name`, `>`-marked
+/// for the shown window, `*` suffixed for its session's active
+/// window). A session is deliberately NOT a row — selecting one landed
+/// on its active (default) window — so a window NAME two sessions
+/// share is disambiguated by prefixing its session's name
+/// (`session/name`); a name one session owns stays bare. The parallel
+/// refs list maps each row to its selection target.
 pub(crate) fn picker_rows(
     entries: &[PickerEntry],
     current_window: Option<&str>,
 ) -> (Vec<HelpRow>, Vec<PickerRef>) {
+    // How many sessions each window name appears in: a name two
+    // sessions share needs its session spelled on the row.
+    let mut owners: std::collections::HashMap<&str, usize> = std::collections::HashMap::new();
+    for entry in entries {
+        let mut names: std::collections::HashSet<&str> = entry
+            .windows
+            .iter()
+            .map(|(_, name)| name.as_str())
+            .collect();
+        for name in names.drain() {
+            *owners.entry(name).or_default() += 1;
+        }
+    }
     let mut rows: Vec<HelpRow> = Vec::new();
     let mut refs: Vec<PickerRef> = Vec::new();
     for (i, entry) in entries.iter().enumerate() {
-        let marker = if entry.current { ">" } else { " " };
-        rows.push(HelpRow {
-            text: format!(
-                " {marker}{0}: {1}",
-                entry.session_id,
-                super::chrome_safe(&entry.session_name)
-            ),
-            accent: true,
-            footer: false,
-            render_only: false,
-        });
-        refs.push(PickerRef::Session(i));
         for (w, (window_id, name)) in entry.windows.iter().enumerate() {
             let marker = if current_window == Some(window_id.as_str()) {
                 ">"
@@ -618,8 +622,17 @@ pub(crate) fn picker_rows(
             };
             let active = entry.active_window.as_deref() == Some(window_id.as_str());
             let star = if active { " *" } else { "" };
+            let name = if owners.get(name.as_str()).is_some_and(|n| *n > 1) {
+                format!(
+                    "{}/{}",
+                    super::chrome_safe(&entry.session_name),
+                    super::chrome_safe(name)
+                )
+            } else {
+                super::chrome_safe(name).into_owned()
+            };
             rows.push(HelpRow {
-                text: format!(" {marker}  {window_id}: {}{star}", super::chrome_safe(name)),
+                text: format!(" {marker}  {window_id}: {name}{star}"),
                 accent: false,
                 footer: false,
                 render_only: false,
@@ -654,17 +667,16 @@ pub(crate) fn listbox_scroll(start: usize, selected: usize, visible: usize) -> u
 
 /// Compose the picker panel's CONTENT rows: the always-visible filter
 /// line (the same shape [`compose_help_panel`] draws — placeholder when
-/// inactive, ` /query▌` while typing), the filter's matching rows with
-/// headers hiding when nothing beneath them matches, the selection
-/// cursor `▸` prefixed to the selected row (clamped into range), the
-/// content windowed to `visible` rows at the panned `start`, and the
-/// footer controls line. Returns the panel rows, the FILTERED refs (the
-/// selection/click target for each content row, in content order), and
-/// the window's content start index, so a click at composed row `i`
-/// maps to content row `start + i - 1`. `footer` is the modal's
-/// controls line (the session/workspace pickers and the palette spell
-/// different ones). Pure over its inputs — the unit-test surface for
-/// the picker.
+/// inactive, ` /query▌` while typing), the filter's matching rows, the
+/// selection cursor `▸` prefixed to the selected row (clamped into
+/// range), the content windowed to `visible` rows at the panned
+/// `start`, and the footer controls line. Returns the panel rows, the
+/// FILTERED refs (the selection/click target for each content row, in
+/// content order), and the window's content start index, so a click at
+/// composed row `i` maps to content row `start + i - 1`. `footer` is
+/// the modal's controls line (the window/workspace pickers and the
+/// palette spell different ones). Pure over its inputs — the
+/// unit-test surface for the picker.
 #[allow(clippy::too_many_arguments)] // the pure compose's positional test surface
 pub(crate) fn compose_picker_panel(
     rows: &[HelpRow],
@@ -679,15 +691,8 @@ pub(crate) fn compose_picker_panel(
     let lower = filter.to_lowercase();
     let mut content: Vec<HelpRow> = Vec::new();
     let mut content_refs: Vec<PickerRef> = Vec::new();
-    let mut pending: Option<(HelpRow, PickerRef)> = None;
     for (row, r#ref) in rows.iter().zip(refs.iter()) {
-        if row.accent {
-            pending = Some((row.clone(), *r#ref));
-        } else if picker_row_matches(row, &lower) {
-            if let Some((header, header_ref)) = pending.take() {
-                content.push(header);
-                content_refs.push(header_ref);
-            }
+        if picker_row_matches(row, &lower) {
             content.push(row.clone());
             content_refs.push(*r#ref);
         }

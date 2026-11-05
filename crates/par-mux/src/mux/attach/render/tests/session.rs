@@ -1121,11 +1121,11 @@ fn help_chord_opens_filters_and_dismissal_restores_the_frame() {
     assert_eq!(left, "LEFT", "the prior frame's cells restore");
 }
 
-/// The picker chord: prefix w opens the modal live-filtered (sessions
-/// with nested windows, the current one emphasized), Down moves the
-/// cursor without leaving the filter, Enter
-/// activates — the select+resync contract's select-window rides the
-/// wire — and esc dismisses without selecting.
+/// The picker chord: prefix w opens the modal live-filtered (every
+/// session's windows as one flat list, the shown window emphasized,
+/// no session rows), Down moves the cursor without leaving the
+/// filter, Enter activates — the select+resync contract's
+/// select-window rides the wire — and esc dismisses without selecting.
 #[test]
 fn picker_chord_opens_navigates_and_selects_with_resync() {
     let replies = std::collections::HashMap::from([
@@ -1159,24 +1159,21 @@ fn picker_chord_opens_navigates_and_selects_with_resync() {
     assert_eq!(overlay, crate::mux::attach::PICKER_OVERLAY_TITLE);
     let joined = overlay_text(&session).join("\n");
     assert!(
-        joined.contains(">$0: work"),
-        "the current session is >-marked: {joined}"
+        joined.contains("▸ >  @0: main"),
+        "the shown window is selected and >-marked: {joined}"
+    );
+    assert!(
+        !joined.contains("$0:") && !joined.contains("$1:"),
+        "no session rows: {joined}"
     );
     assert!(
         joined.contains("@1: vim *"),
         "the active window carries *: {joined}"
     );
 
-    // Down Down moves the cursor to the second window row without
-    // leaving the live filter; Enter activates — the wire sees the
+    // Down moves the cursor to the second window row without leaving
+    // the live filter; Enter activates — the wire sees the
     // switch-client landing and the re-seed's queries (the resync).
-    session.picker_key(
-        &mut conn,
-        &par_term_emu_core::keyboard::TermKeyEvent::functional(
-            par_term_emu_core::keyboard::TermKey::Down,
-            0,
-        ),
-    );
     session.picker_key(
         &mut conn,
         &par_term_emu_core::keyboard::TermKeyEvent::functional(
@@ -1190,7 +1187,7 @@ fn picker_chord_opens_navigates_and_selects_with_resync() {
     assert_eq!(
         wait_recorded(&rx, "switch-client"),
         "switch-client -t @1",
-        "the session header's active window is the landing target"
+        "the picked window row is the landing target"
     );
     let _ = wait_recorded(&rx, "list-panes");
     let _ = wait_recorded(&rx, "refresh-client");

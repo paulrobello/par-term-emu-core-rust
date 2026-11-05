@@ -200,8 +200,9 @@ pub struct ClientSection {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub help: Option<String>,
     /// The picker chord: the key matched after the prefix that opens the
-    /// session/window picker modal (sessions with their windows nested,
-    /// the current one emphasized, keyboard and mouse navigable).
+    /// window picker modal (every session's windows as one flat list,
+    /// the shown one emphasized, a name two sessions share prefixed
+    /// with its session's name, keyboard and mouse navigable).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub picker: Option<String>,
     /// The zoom chord (tmux's `z`): the key matched after the prefix
@@ -1617,8 +1618,8 @@ pub struct Management {
     /// Open the bindings help panel — every chord at its effective
     /// binding, from the live config.
     pub help: u8,
-    /// Open the session/window picker modal — sessions with their
-    /// windows nested, the current one emphasized, keyboard and mouse
+    /// Open the window picker modal — every session's windows as one
+    /// flat list, the shown one emphasized, keyboard and mouse
     /// navigable.
     pub picker: u8,
     /// Toggle the focused pane between its layout rect and the full
@@ -1632,7 +1633,7 @@ pub struct Management {
     pub border_cycle: u8,
     /// Toggle pane titles embedded in the pane borders (render mode).
     pub label_toggle: u8,
-    /// Open the workspace picker modal — the session/window picker's
+    /// Open the workspace picker modal — the window picker's
     /// workspace sibling: the daemon's workspace roster, the current one
     /// marked, keyboard and mouse navigable, Enter lands on it.
     pub workspace_picker: u8,

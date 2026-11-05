@@ -2239,12 +2239,12 @@ fn compose_help_panel_filters_scrolls_and_chromes() {
     );
 }
 
-/// The picker's rows: one accent header per session with its windows
-/// nested beneath, the current session and the shown window
-/// `>`-marked, the session's active window `*`-suffixed, and the
-/// parallel refs mapping each row to its selection target.
+/// The picker's rows: every session's windows as one flat list — no
+/// session rows, a session not being a landing target — with the shown
+/// window `>`-marked, its session's active window `*`-suffixed, and
+/// the parallel refs mapping each row to its window.
 #[test]
-fn picker_rows_nest_windows_and_mark_current() {
+fn picker_rows_list_windows_flat_and_mark_current() {
     let entries = vec![
         super::PickerEntry {
             session_id: "$0".to_string(),
@@ -2266,60 +2266,103 @@ fn picker_rows_nest_windows_and_mark_current() {
     ];
     let (rows, refs) = super::picker_rows(&entries, Some("@0"));
     let text: Vec<&str> = rows.iter().map(|r| r.text.as_str()).collect();
-    assert_eq!(text.len(), 5, "two headers + three windows: {text:?}");
-    assert_eq!(
-        text[0], " >$0: work",
-        "the current session's header is >-marked"
+    assert_eq!(text.len(), 3, "three windows, no session rows: {text:?}");
+    assert_eq!(text[0], " >  @0: main", "the shown window is >-marked");
+    assert_eq!(text[1], "    @1: vim *", "the active window carries *");
+    assert_eq!(text[2], "    @2: logs *");
+    assert!(
+        rows.iter().all(|r| !r.accent),
+        "no row is an accent (header) row"
     );
-    assert!(rows[0].accent, "session headers are accent rows");
-    assert_eq!(text[1], " >  @0: main", "the shown window is >-marked");
-    assert_eq!(text[2], "    @1: vim *", "the active window carries *");
-    assert_eq!(text[3], "  $1: build", "a non-current header is unmarked");
-    assert!(rows[3].accent, "every session header is an accent row");
-    assert!(!rows[1].accent, "window rows are not accent rows");
-    assert_eq!(refs[0], super::PickerRef::Session(0));
-    assert_eq!(refs[1], super::PickerRef::Window(0, 0));
-    assert_eq!(refs[2], super::PickerRef::Window(0, 1));
-    assert_eq!(refs[3], super::PickerRef::Session(1));
-    assert_eq!(refs[4], super::PickerRef::Window(1, 0));
+    assert_eq!(
+        refs,
+        vec![
+            super::PickerRef::Window(0, 0),
+            super::PickerRef::Window(0, 1),
+            super::PickerRef::Window(1, 0),
+        ]
+    );
 }
 
-/// The picker compose: the filter line, the filtered content with
-/// headers hiding when nothing beneath them matches, the `▸` cursor
-/// on the selected row, the footer, and the refs/start return that
-/// maps a click at composed row `i` to content row `start + i - 1`.
+/// A window NAME two sessions share is prefixed with its session's
+/// name (`session/name`) so the flat list stays unambiguous; a name
+/// one session owns stays bare.
 #[test]
-fn compose_picker_panel_filters_marks_and_maps_clicks() {
+fn picker_rows_prefix_a_session_shared_window_name() {
     let entries = vec![
         super::PickerEntry {
             session_id: "$0".to_string(),
             session_name: "work".to_string(),
-            windows: vec![("@0".to_string(), "main".to_string())],
+            windows: vec![
+                ("@0".to_string(), "main".to_string()),
+                ("@1".to_string(), "vim".to_string()),
+            ],
             active_window: Some("@0".to_string()),
             current: true,
         },
         super::PickerEntry {
             session_id: "$1".to_string(),
             session_name: "build".to_string(),
-            windows: vec![("@1".to_string(), "vim".to_string())],
+            windows: vec![
+                ("@2".to_string(), "main".to_string()),
+                ("@3".to_string(), "logs".to_string()),
+            ],
+            active_window: Some("@2".to_string()),
+            current: false,
+        },
+    ];
+    let (rows, _refs) = super::picker_rows(&entries, None);
+    let text: Vec<&str> = rows.iter().map(|r| r.text.as_str()).collect();
+    assert_eq!(
+        text,
+        [
+            "    @0: work/main *",
+            "    @1: vim",
+            "    @2: build/main *",
+            "    @3: logs",
+        ],
+        "shared names carry their session, owned names stay bare"
+    );
+}
+
+/// The picker compose: the filter line, the filtered content, the `▸`
+/// cursor on the selected row, the footer, and the refs/start return
+/// that maps a click at composed row `i` to content row `start + i -
+/// 1`.
+#[test]
+fn compose_picker_panel_filters_marks_and_maps_clicks() {
+    let entries = vec![
+        super::PickerEntry {
+            session_id: "$0".to_string(),
+            session_name: "work".to_string(),
+            windows: vec![
+                ("@0".to_string(), "main".to_string()),
+                ("@1".to_string(), "vim".to_string()),
+            ],
             active_window: Some("@1".to_string()),
+            current: true,
+        },
+        super::PickerEntry {
+            session_id: "$1".to_string(),
+            session_name: "build".to_string(),
+            windows: vec![("@2".to_string(), "logs".to_string())],
+            active_window: Some("@2".to_string()),
             current: false,
         },
     ];
     let (rows, refs) = super::picker_rows(&entries, Some("@0"));
-    // Full panel: 4 content rows + footer — no idle placeholder (the
+    // Full panel: 3 content rows + footer — no idle placeholder (the
     // footer already advertises `filter /`).
     let (panel, refs2, start) =
         super::compose_picker_panel(&rows, &refs, "", false, 0, 100, 0, super::PICKER_FOOTER);
-    assert_eq!(panel.len(), 5, "content + footer: {panel:?}");
+    assert_eq!(panel.len(), 4, "content + footer: {panel:?}");
     assert_eq!(start, 0);
-    assert_eq!(refs2.len(), 4);
+    assert_eq!(refs2, refs);
     assert_eq!(
         panel.last().map(|r| r.text.as_str()),
         Some(super::PICKER_FOOTER)
     );
-    // Filter "vim" keeps only that window row and its header; the
-    // other session's header hides with no matching children.
+    // Filter "vim" keeps only that window row.
     let (filtered, frefs, fstart) =
         super::compose_picker_panel(&rows, &refs, "vim", false, 0, 100, 0, super::PICKER_FOOTER);
     let ftext = filtered
@@ -2328,29 +2371,18 @@ fn compose_picker_panel_filters_marks_and_maps_clicks() {
         .collect::<Vec<_>>()
         .join("\n");
     assert!(ftext.contains("vim"), "the matching row survives: {ftext}");
-    assert!(
-        ftext.contains("build"),
-        "the matching row's header survives"
-    );
-    assert!(
-        !ftext.contains("work"),
-        "an emptied session's header hides: {ftext}"
-    );
-    assert_eq!(
-        frefs,
-        vec![super::PickerRef::Session(1), super::PickerRef::Window(1, 0)]
-    );
+    assert_eq!(frefs, vec![super::PickerRef::Window(0, 1)]);
     assert_eq!(fstart, 0);
-    // The selection cursor: selected=2 marks the third content row.
+    // The selection cursor: selected=1 marks the second content row.
     let (marked, _, _) =
-        super::compose_picker_panel(&rows, &refs, "", false, 2, 100, 0, super::PICKER_FOOTER);
+        super::compose_picker_panel(&rows, &refs, "", false, 1, 100, 0, super::PICKER_FOOTER);
     assert!(
-        marked[2].text.starts_with('▸'),
+        marked[1].text.starts_with('▸'),
         "the selected row carries the cursor glyph: {}",
-        marked[2].text
+        marked[1].text
     );
     assert!(
-        !marked[1].text.starts_with('▸'),
+        !marked[0].text.starts_with('▸'),
         "only the selected row carries it"
     );
     // Click mapping: composed row 1 (content row 1) maps to content
@@ -2361,9 +2393,9 @@ fn compose_picker_panel_filters_marks_and_maps_clicks() {
     assert_eq!(small_start, 0);
     // Panning: a selected row below the window moves `start`.
     let (_panned, _, panned_start) =
-        super::compose_picker_panel(&rows, &refs, "", false, 3, 2, 0, super::PICKER_FOOTER);
+        super::compose_picker_panel(&rows, &refs, "", false, 2, 2, 0, super::PICKER_FOOTER);
     assert_eq!(
-        panned_start, 2,
+        panned_start, 1,
         "the window pans to keep the cursor visible"
     );
 }

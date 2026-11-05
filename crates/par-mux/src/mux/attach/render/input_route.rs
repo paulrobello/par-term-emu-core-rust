@@ -140,7 +140,7 @@ pub(super) enum PrefixChord {
     Resize,
     /// The bindings overlay.
     Help,
-    /// The session/window picker.
+    /// The window picker.
     Picker,
     /// `d`: detach.
     Detach,

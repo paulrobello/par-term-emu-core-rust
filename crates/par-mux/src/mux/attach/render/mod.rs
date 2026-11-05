@@ -1282,7 +1282,7 @@ enum Modal {
     Menu(MenuState),
     /// The bindings help panel.
     Help(HelpState),
-    /// The session/window picker or the workspace picker.
+    /// The window picker or the workspace picker.
     Picker(PickerState),
     /// The settings dialog (the command menu's `settings`).
     Settings(modal_settings::SettingsState),
@@ -1335,7 +1335,7 @@ struct HelpState {
     scroll: usize,
 }
 
-/// The picker's state: the session/window picker, or the workspace
+/// The picker's state: the window picker, or the workspace
 /// picker when `workspaces` is set.
 #[derive(Debug, Default, Clone, PartialEq, Eq)]
 struct PickerState {

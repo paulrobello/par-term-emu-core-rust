@@ -914,7 +914,7 @@ pub(crate) enum ManagementKey {
     BorderCycle,
     /// Toggle pane titles embedded in the pane borders (render mode).
     Labels,
-    /// Open the workspace picker modal (the session/window picker's
+    /// Open the workspace picker modal (the window picker's
     /// workspace sibling).
     WorkspacePicker,
     /// Toggle the workspace side panel (render mode).

@@ -254,9 +254,8 @@ fn join_pane_chord_picks_a_window_and_joins() {
     drained(&rx);
     settle(&mut session, &mut conn);
     // The picker is up with the join intent; walk to the @1 window row
-    // (refs: session header, @0, @1) with arrows (the filter is live,
-    // so typed letters filter) and activate it.
-    session.picker_key(&mut conn, &TermKeyEvent::functional(TermKey::Down, 0));
+    // (refs: @0, @1) with arrows (the filter is live, so typed letters
+    // filter) and activate it.
     session.picker_key(&mut conn, &TermKeyEvent::functional(TermKey::Down, 0));
     chord(&mut session, &mut conn, b'\r');
     settle(&mut session, &mut conn);
@@ -1870,8 +1869,11 @@ fn picker_opens_in_search_mode_filters_arrows_and_enter() {
         "the filter is live from the open"
     );
     let count = session.picker().refs.len();
-    assert_eq!(count, 4, "two sessions with one window each");
-    assert_eq!(session.picker().selected, 0, "opens on the current session");
+    assert_eq!(
+        count, 2,
+        "two sessions with one window each, no session rows"
+    );
+    assert_eq!(session.picker().selected, 0, "opens on the shown window");
 
     // Arrows move the selection without leaving the filter.
     session.picker_key(&mut conn, &TermKeyEvent::functional(TermKey::Up, 0));
@@ -1892,15 +1894,15 @@ fn picker_opens_in_search_mode_filters_arrows_and_enter() {
     assert!(session.picker().filtering);
     assert_eq!(
         session.picker().refs.len(),
-        2,
-        "the lab header and its logs window remain"
+        1,
+        "only the lab session's logs window remains"
     );
     let text = overlay_text(&session).join("\n");
     assert!(text.contains("logs") && !text.contains("main"), "{text}");
 
     // Enter activates the selected row straight from the live filter —
-    // the clamped selection sits on the lab header, whose active
-    // window (@2) is the landing target.
+    // the clamped selection sits on the logs window row (@2), the
+    // landing target.
     drained(&rx);
     session.picker_byte(&mut conn, b'\r');
     settle(&mut session, &mut conn);
@@ -2863,7 +2865,10 @@ fn mouse_hit_maps_drags_and_the_pointer_modals() {
     session.picker_mut().entries = vec![super::super::super::PickerEntry {
         session_id: "$0".to_string(),
         session_name: "work".to_string(),
-        windows: vec![("@0".to_string(), "main".to_string())],
+        windows: vec![
+            ("@0".to_string(), "main".to_string()),
+            ("@1".to_string(), "vim".to_string()),
+        ],
         active_window: Some("@0".to_string()),
         current: true,
     }];

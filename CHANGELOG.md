@@ -7,6 +7,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+- **mux: the attach TUI's window picker lists windows only — a session is no longer a selectable row** (`crates/par-mux/src/mux/attach/panels.rs`, `crates/par-mux/src/mux/attach/render/modal_picker.rs`, `docs/MUX.md`): prefix `w` used to show one accent header per session with its windows nested, and Enter on a header silently landed on that session's active (default) window — a confusing non-choice. The picker now shows every session's windows as one flat row list (no session rows anywhere: not selectable, not a filter result), the selection opens on the shown window's row, and a window NAME two sessions share is disambiguated by prefixing its session's name (`session/name`); a name one session owns stays bare. Join mode (`prefix J`) likewise offers windows only. Pinned by `picker_rows_list_windows_flat_and_mark_current`, `picker_rows_prefix_a_session_shared_window_name`, and the updated `compose_picker_panel_filters_marks_and_maps_clicks`, `picker_chord_opens_navigates_and_selects_with_resync`, `picker_opens_in_search_mode_filters_arrows_and_enter`.
+
 ## [0.78.1] - 2026-11-04
 
 ### Fixed

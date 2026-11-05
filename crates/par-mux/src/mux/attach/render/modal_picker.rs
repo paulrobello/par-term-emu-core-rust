@@ -12,15 +12,17 @@ use crate::mux::attach::targets::{parse_session_line, parse_workspace_line};
 use par_term_emu_core::keyboard::TermKeyEvent;
 
 impl WindowSession {
-    /// Open the session/window picker (the `picker` chord): the daemon\'s
-    /// session roster with each session\'s windows nested, composed into
-    /// the same themed modal the help panel uses (title `picker`, `esc
-    /// close` badge, footer controls line), the current session/window
-    /// `>`-marked. The filter is live from the open: typing filters
-    /// immediately (no `/` first); arrows move the selection without
-    /// leaving the filter; Enter selects through [`Self::picker_activate`];
-    /// esc dismisses and the prior frame repaints. Keys and the mouse
-    /// never reach the pane while it is up.
+    /// Open the window picker (the `picker` chord): every session\'s
+    /// windows as one flat row list, composed into the same themed
+    /// modal the help panel uses (title `picker`, `esc close` badge,
+    /// footer controls line), the shown window `>`-marked. A session is
+    /// not a row (landing on one meant its active window); a window
+    /// name two sessions share is prefixed with its session\'s name.
+    /// The filter is live from the open: typing filters immediately (no
+    /// `/` first); arrows move the selection without leaving the
+    /// filter; Enter selects through [`Self::picker_activate`]; esc
+    /// dismisses and the prior frame repaints. Keys and the mouse never
+    /// reach the pane while it is up.
     pub(super) fn enter_picker(&mut self, conn: &mut crate::mux::attach::conn::AttachConn) {
         self.send_then(conn, "list-sessions", |s, c, reply| {
             if !reply.ok {
@@ -83,12 +85,20 @@ impl WindowSession {
         if entries.is_empty() {
             return;
         }
-        // The selection opens on the current session's header row (or the
-        // first row when the view's session is unknown to the roster).
+        // The selection opens on the shown window's row — else the
+        // current session's first window — else the first row (the
+        // view's window is unknown to the roster).
         let (_rows, refs) = picker_rows(&entries, Some(&self.window));
         let selected = refs
             .iter()
-            .position(|r| matches!(r, PickerRef::Session(i) if entries[*i].current))
+            .position(|r| {
+                matches!(r, PickerRef::Window(i, w)
+                    if entries[*i].windows.get(*w).is_some_and(|(id, _)| id == &self.window))
+            })
+            .or_else(|| {
+                refs.iter()
+                    .position(|r| matches!(r, PickerRef::Window(i, _) if entries[*i].current))
+            })
             .unwrap_or(0);
         self.open_modal(Modal::Picker(PickerState {
             entries,
@@ -213,7 +223,7 @@ impl WindowSession {
     /// Open the workspace picker (the workspace-picker chord): the
     /// daemon's workspace roster — id, name, the active one `>`-marked —
     /// in the same themed modal, filter (live from the open), cursor,
-    /// and click handling the session/window picker runs. Enter lands on
+    /// and click handling the window picker runs. Enter lands on
     /// the workspace through the same select-then-resync every switch
     /// follows.
     pub(super) fn enter_ws_picker(&mut self, conn: &mut crate::mux::attach::conn::AttachConn) {
@@ -309,10 +319,9 @@ impl WindowSession {
         picker.selected = (picker.selected as isize + delta).rem_euclid(count as isize) as usize;
         self.refresh_picker();
     }
-    /// Activate the selected picker row: a session header lands on the
-    /// session\'s active window (the select-session-equivalent), a window
-    /// row lands on that window — daemon-side `select-window`, then the
-    /// select+resync re-seed every switch follows.
+    /// Activate the selected picker row: a window row lands on that
+    /// window — daemon-side `select-window`, then the select+resync
+    /// re-seed every switch follows.
     pub(super) fn picker_activate(&mut self, conn: &mut crate::mux::attach::conn::AttachConn) {
         let Modal::Picker(picker) = &self.modal else {
             return;
@@ -327,15 +336,10 @@ impl WindowSession {
             self.run_palette_action(conn, action);
             return;
         }
-        // Join mode: the picked window (a session header → its active
-        // window) receives the offered pane, instead of a landing.
+        // Join mode: the picked window receives the offered pane,
+        // instead of a landing.
         if let Some(source) = self.join_source.take() {
             let window = match item {
-                PickerRef::Session(i) => picker.entries.get(i).and_then(|e| {
-                    e.active_window
-                        .clone()
-                        .or_else(|| e.windows.first().map(|(_, id)| id.clone()))
-                }),
                 PickerRef::Window(i, w) => picker
                     .entries
                     .get(i)
@@ -364,32 +368,25 @@ impl WindowSession {
         self.leave_picker();
         self.land_on_workspace(conn, &id);
     }
-    /// Activate a session/window picker row: a session header lands on
-    /// the session's active window, a window row on that window.
+    /// Activate a window picker row: land the view on that window.
     pub(super) fn ws_picker_activate(
         &mut self,
         conn: &mut crate::mux::attach::conn::AttachConn,
         item: PickerRef,
     ) {
-        let entry_index = match item {
-            PickerRef::Session(i) | PickerRef::Window(i, _) => i,
-            PickerRef::Workspace(_) | PickerRef::Command(_) => return,
-        };
-        let Modal::Picker(picker) = &self.modal else {
+        let PickerRef::Window(entry_index, w) = item else {
             return;
         };
-        let entry = &picker.entries[entry_index];
-        let window = match item {
-            // Unreachable: ws_picker_activate returned early on Workspace.
-            PickerRef::Workspace(_) | PickerRef::Command(_) => None,
-            PickerRef::Session(_) => entry
-                .active_window
-                .clone()
-                .or_else(|| entry.windows.first().map(|(id, _)| id.clone())),
-            PickerRef::Window(_, w) => entry.windows.get(w).map(|(id, _)| id.clone()),
+        let window = {
+            let Modal::Picker(picker) = &self.modal else {
+                return;
+            };
+            picker
+                .entries
+                .get(entry_index)
+                .and_then(|e| e.windows.get(w).map(|(id, _)| id.clone()))
         };
         let Some(window) = window else {
-            // A session with no windows: nothing to land on; dismiss.
             self.leave_picker();
             return;
         };
