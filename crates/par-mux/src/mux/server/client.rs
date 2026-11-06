@@ -91,6 +91,65 @@ impl Registration {
 /// use — never receives pushed notifications. On disconnect, only this
 /// client's broadcast sender is removed — the accept loop and the tree are
 /// untouched.
+/// Peer attribution captured at accept: what the transport can say about
+/// the process on the other end. `pid` arrives from ucred transports
+/// (Linux/FreeBSD/Windows); xucred transports (macOS) expose only the
+/// effective uid — the kernel holds the pid there (LOCAL_PEEREID returns
+/// it on an accepted socket) but interprocess 2.x neither queries it nor
+/// exposes the fd a hand-rolled getsockopt would need (card 01a1b228).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) struct PeerAttribution {
+    pub pid: Option<i32>,
+    pub euid: Option<u32>,
+}
+
+/// Read the peer attribution off a freshly accepted stream. `None` when
+/// the transport refuses creds — attribution is best-effort and never
+/// gates the connection.
+pub(super) fn peer_attribution(stream: &LocalStream) -> Option<PeerAttribution> {
+    use interprocess::local_socket::traits::StreamCommon as _;
+    let creds = stream.peer_creds().ok()?;
+    Some(PeerAttribution {
+        pid: creds.pid(),
+        euid: creds.euid(),
+    })
+}
+
+/// The rejected-command log suffix naming who is on the other end: the
+/// pid plus the image path where the platform gives a pid, the euid
+/// otherwise, nothing when even the creds refused.
+pub(super) fn describe_peer(peer: Option<PeerAttribution>, exe: Option<&str>) -> String {
+    let Some(peer) = peer else {
+        return String::new();
+    };
+    match peer.pid {
+        Some(pid) => match exe {
+            Some(exe) => format!(" (pid {pid}, exe {exe})"),
+            None => format!(" (pid {pid})"),
+        },
+        None => match peer.euid {
+            Some(euid) => format!(" (uid {euid})"),
+            None => String::new(),
+        },
+    }
+}
+
+/// The peer's executable path from its pid. Best-effort: an exited pid or
+/// a platform that hides the mapping yields `None`.
+pub(super) fn exe_of_pid(pid: i32) -> Option<String> {
+    #[cfg(target_os = "linux")]
+    {
+        std::fs::read_link(format!("/proc/{pid}/exe"))
+            .ok()
+            .map(|p| p.to_string_lossy().into_owned())
+    }
+    #[cfg(not(target_os = "linux"))]
+    {
+        let _ = pid;
+        None
+    }
+}
+
 #[allow(clippy::too_many_arguments)]
 pub(super) fn handle_client(
     stream: LocalStream,
@@ -106,6 +165,7 @@ pub(super) fn handle_client(
     use interprocess::local_socket::traits::Stream as _;
 
     let client_id = CLIENT_SEQ.fetch_add(1, Ordering::Relaxed);
+    let peer = peer_attribution(&stream);
     crate::mux::metrics::Metrics::global().client_connected();
     // Bounded per ARC-011: a client that stops draining is evicted by
     // [`push_to_clients`] once its queue fills, rather than buffering every
@@ -165,6 +225,7 @@ pub(super) fn handle_client(
         command_number: 0,
         stream: None,
         output_epoch,
+        peer,
     };
     connection.serve(&mut reader);
     connection.teardown();
@@ -438,6 +499,8 @@ struct Connection {
     stream: Option<PaneStreamMode>,
     /// The daemon-wide output epoch — the seed export's race check.
     output_epoch: OutputEpoch,
+    /// What the transport said about the peer at accept (card 01a1b228).
+    peer: Option<PeerAttribution>,
 }
 
 impl Connection {
@@ -592,9 +655,10 @@ impl Connection {
             // both sides of the socket.
             par_term_emu_core::debug_error!(
                 "MUX",
-                "command #{} from client {} rejected: {}",
+                "command #{} from client {}{} rejected: {}",
                 command_number,
                 client_id,
+                self.peer_suffix(),
                 summarize_line(line)
             );
         }
@@ -796,13 +860,23 @@ impl Connection {
         }
     }
 
+    /// The rejection-log suffix naming the peer (" (pid 123, exe …)" /
+    /// " (uid …)") — creds captured at accept, the exe resolved from the
+    /// pid at log time so a reconnect storm is attributable in one line
+    /// (card 01a1b228).
+    fn peer_suffix(&self) -> String {
+        let exe = self.peer.and_then(|p| p.pid).and_then(exe_of_pid);
+        describe_peer(self.peer, exe.as_deref())
+    }
+
     fn on_parse_error(&mut self, err: &str, line: &str) -> Flow {
         let command_number = self.next_command();
         par_term_emu_core::debug_error!(
             "MUX",
-            "unparseable command #{} from client {}: {} ({})",
+            "unparseable command #{} from client {}{}: {} ({})",
             command_number,
             self.client_id,
+            self.peer_suffix(),
             summarize_line(line),
             err
         );
@@ -912,6 +986,76 @@ mod pane_stream_tests {
         let (last, line) = take_final_marker(marked.clone());
         assert!(!last, "a stream-marked reply is not a final item");
         assert_eq!(line, marked);
+    }
+}
+
+#[cfg(test)]
+mod peer_attribution_tests {
+    #[cfg(target_os = "linux")]
+    use super::exe_of_pid;
+    use super::{describe_peer, peer_attribution, PeerAttribution};
+
+    #[test]
+    fn the_suffix_names_each_attribution_shape() {
+        let full = PeerAttribution {
+            pid: Some(1234),
+            euid: Some(501),
+        };
+        assert_eq!(
+            describe_peer(Some(full), Some("/usr/bin/foo")),
+            " (pid 1234, exe /usr/bin/foo)"
+        );
+        assert_eq!(describe_peer(Some(full), None), " (pid 1234)");
+        let uid_only = PeerAttribution {
+            pid: None,
+            euid: Some(501),
+        };
+        assert_eq!(describe_peer(Some(uid_only), None), " (uid 501)");
+        let bare = PeerAttribution {
+            pid: None,
+            euid: None,
+        };
+        assert_eq!(describe_peer(Some(bare), None), "");
+        assert_eq!(describe_peer(None, None), "");
+    }
+
+    /// The capture path works against a real socket: the creds the
+    /// transport reports name this process — pid on ucred platforms
+    /// (Linux), euid on every unix platform. The positive control for the
+    /// rejection log's attribution suffix.
+    #[cfg(unix)]
+    #[test]
+    fn a_fresh_connection_reports_this_process_creds() {
+        use crate::mux::ipc::{accept_connection, bind_local_listener, connect_local_stream};
+        let dir = tempfile::Builder::new()
+            .prefix("par-mux-peer-creds-")
+            .tempdir()
+            .expect("tempdir");
+        let path = dir.path().join("creds.sock");
+        let listener = bind_local_listener(&path).expect("bind");
+        let client = connect_local_stream(&path).expect("connect");
+        let (server, _abort) = accept_connection(&listener).expect("accept");
+        let creds = peer_attribution(&server).expect("creds readable");
+        #[cfg(target_os = "linux")]
+        assert_eq!(
+            creds.pid,
+            Some(std::process::id() as i32),
+            "ucred pid names the client process"
+        );
+        #[cfg(not(target_os = "linux"))]
+        let _ = creds.pid; // xucred transports (macOS) carry no pid
+                           // SAFETY: geteuid takes no arguments and cannot fail.
+        let euid = unsafe { libc::geteuid() };
+        assert_eq!(creds.euid, Some(euid), "the euid rides the creds");
+        drop(client);
+    }
+
+    /// The exe lookup resolves a live pid's image path (Linux).
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn exe_of_pid_resolves_this_process_image() {
+        let exe = exe_of_pid(std::process::id() as i32).expect("live pid resolves");
+        assert!(exe.contains("par_mux") || exe.contains("deps"), "got {exe}");
     }
 }
 
