@@ -856,6 +856,7 @@ The sibling **`csp-allow-blob-connect`** (streamer option `--csp-allow-blob-conn
 | `PAR_MUX_SOCKET` | `par-mux` binary | unset | Socket path when neither `--socket` nor a name is given; set inside every mux pane |
 | `PAR_MUX_CONTROL_SOCKET` | `par-mux` client mode | unset | Full control socket; checked before `PAR_MUX_SOCKET`. Exported in panes only by a `--pane-endpoints --expose-control-socket` daemon, or under `--pane-endpoints` for a session whose env carries `PAR_MUX_CONTROL=1` |
 | `PAR_MUX_ENV` | par-mux nested-daemon guard | unset | Marks a process as running inside a mux pane; serve mode and auto-spawn refuse to start a nested daemon |
+| `PAR_MUX_NO_LAUNCHD` | `par-mux` daemon start (macOS) | unset | `1` opts a detached default-instance start out of the launchd job hand-off, so the daemon forks bare even when the `com.paulrobello.par-mux` job is loaded (skips the bundle's TCC-granted launchd ancestry); see [MUX.md](MUX.md) |
 | `PAR_MUX_NO_APP_WRAPPER` | `par-mux` daemon start (macOS) | unset | `1` opts a detached start out of the Par-mux.app wrapper hand-off, so the daemon forks from the invoking binary without the app bundle's TCC local-network grant; see [MUX.md](MUX.md) |
 | `PAR_MUX_MESH_BIN` | `par-mux agent-prompt --mesh` | unset | Overrides the par-mesh binary the daemon invokes for mesh delivery (default `~/.bun/bin/par-mesh`, then `PATH`); tests point it at a fake; see [MUX.md](MUX.md) |
 | `PAR_MUX_ALLOW_NESTED` | par-mux nested-daemon guard | unset | `1` allows a nested daemon despite `PAR_MUX_ENV` |
