@@ -968,9 +968,9 @@ static STDERR_LOG: StderrLog = StderrLog;
 #[cfg(test)]
 mod mode_group_tests {
     use super::*;
-    #[cfg(target_os = "macos")]
-    use crate::daemon::app_handoff_launcher;
     use crate::daemon::stop_inside_pane_guard;
+    #[cfg(target_os = "macos")]
+    use crate::daemon::{app_handoff_launcher, launchd_handoff_job};
 
     /// The app hand-off decision (card 01a17f9f15): a bare binary outside
     /// the bundle hands off to the installed wrapper's launcher; the
@@ -1048,6 +1048,44 @@ mod mode_group_tests {
             app_handoff_launcher(&bare_exe, &dir.path().join("Par-mux.app"), true),
             None,
             "the opt-out wins"
+        );
+    }
+
+    /// The launchd hand-off decision (card 01a1b21b): only the default
+    /// instance (default socket, unpinned state dir) hands off to the
+    /// installed Par-mux.app job; the wrapper marker, a pinned state dir,
+    /// and the PAR_MUX_NO_LAUNCHD opt-out keep the bare fork.
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn launchd_handoff_decision() {
+        let default = par_mux::mux::ipc::default_socket_path("default");
+        assert_eq!(
+            launchd_handoff_job(&default, false, false, false),
+            Some(format!("gui/{}/com.paulrobello.par-mux", unsafe {
+                libc::getuid()
+            })),
+            "the default instance hands off to the launchd job"
+        );
+        let other = std::env::temp_dir().join("par-mux-launchd-handoff-test.sock");
+        assert_eq!(
+            launchd_handoff_job(&other, false, false, false),
+            None,
+            "a non-default socket keeps the bare fork"
+        );
+        assert_eq!(
+            launchd_handoff_job(&default, true, false, false),
+            None,
+            "a pinned state dir keeps the bare fork"
+        );
+        assert_eq!(
+            launchd_handoff_job(&default, false, true, false),
+            None,
+            "the wrapper marker keeps the bare fork"
+        );
+        assert_eq!(
+            launchd_handoff_job(&default, false, false, true),
+            None,
+            "the PAR_MUX_NO_LAUNCHD opt-out keeps the bare fork"
         );
     }
 

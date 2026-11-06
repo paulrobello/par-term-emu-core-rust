@@ -317,6 +317,42 @@ impl DaemonLaunch {
             && nested.is_none()
             && par_mux::mux::connect_local_stream(&self.path).is_err()
         {
+            // The launchd hand-off (card 01a1b21b) comes first: when the
+            // installed Par-mux.app job supervises this default instance,
+            // a fresh start must land under launchd — the launcher serves
+            // in-process there, so the job's PID is the daemon and panes
+            // inherit the bundle's TCC grants from the launchd-rooted
+            // ancestry. The caller becomes the fork parent's
+            // wait-and-attach without a fork. A failure degrades to the
+            // app hand-off below, never blocking the start.
+            if let Some(job) = launchd_handoff_job(
+                &self.path,
+                self.state_dir_pinned,
+                self.cli.par_mux_in_app_wrapper,
+                std::env::var_os("PAR_MUX_NO_LAUNCHD").is_some_and(|v| v == "1"),
+            ) {
+                if launchd_job_loaded(&job) {
+                    log::info!("par-mux: handing the fresh daemon to launchd job {job}");
+                    match std::process::Command::new("launchctl")
+                        .args(["kickstart", "-k", job.as_str()])
+                        .status()
+                    {
+                        Ok(status) if status.success() => {
+                            return run_detached_parent(
+                                &self.cli,
+                                &self.path,
+                                &self.state_path,
+                                self.state_dir_pinned,
+                            )
+                            .map(Some);
+                        }
+                        other => log::warn!(
+                            "par-mux: launchd kickstart for {job} failed ({other:?}); \
+                             starting the bare daemon"
+                        ),
+                    }
+                }
+            }
             if let Ok(exe) = std::env::current_exe() {
                 let no_wrapper =
                     std::env::var_os("PAR_MUX_NO_APP_WRAPPER").is_some_and(|v| v == "1");
@@ -695,6 +731,57 @@ pub(super) fn app_handoff_launcher(
         return None;
     }
     Some(launcher)
+}
+
+/// The launchd job (label `com.paulrobello.par-mux`, installed with the
+/// Par-mux.app deploy) supervises the default daemon in-process through
+/// the bundle launcher (`par-mux --foreground --no-attach`), so the job's
+/// PID is the serving daemon and panes inherit the bundle's TCC grants
+/// from the launchd-rooted ancestry. A daemon forked from a
+/// terminal-rooted chain cannot hold those grants — pane LAN access dies
+/// and macOS re-prompts (card 01a1b21b).
+const LAUNCHD_JOB_LABEL: &str = "com.paulrobello.par-mux";
+
+/// Decide whether a fresh non-foreground daemon start may hand off to the
+/// installed Par-mux.app launchd job (card 01a1b21b) instead of forking a
+/// detached orphan: only the default instance (default socket, unpinned
+/// state dir) is the job's supervised target; the wrapper marker, a pinned
+/// state dir, or the PAR_MUX_NO_LAUNCHD=1 opt-out keeps the bare fork.
+/// Returns the kickstart job spec (`gui/<uid>/<label>`).
+#[cfg(target_os = "macos")]
+pub(super) fn launchd_handoff_job(
+    target_socket: &std::path::Path,
+    state_dir_pinned: bool,
+    in_app_wrapper: bool,
+    opt_out: bool,
+) -> Option<String> {
+    if opt_out || in_app_wrapper || state_dir_pinned {
+        return None;
+    }
+    if target_socket != par_mux::mux::ipc::default_socket_path("default") {
+        return None;
+    }
+    // SAFETY: getuid takes no arguments and cannot fail.
+    Some(format!("gui/{}/{LAUNCHD_JOB_LABEL}", unsafe {
+        libc::getuid()
+    }))
+}
+
+/// Whether `job` is currently loaded in the caller's gui domain
+/// (`launchctl print` exits 0). Best-effort: a missing launchctl or a
+/// probe failure reads as unloaded, and the start degrades to the app
+/// hand-off / bare fork below.
+#[cfg(target_os = "macos")]
+fn launchd_job_loaded(job: &str) -> bool {
+    matches!(
+        std::process::Command::new("launchctl")
+            .arg("print")
+            .arg(job)
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .status(),
+        Ok(status) if status.success()
+    )
 }
 
 #[cfg(unix)]
