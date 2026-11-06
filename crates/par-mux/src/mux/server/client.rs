@@ -109,6 +109,15 @@ pub(super) struct PeerAttribution {
 pub(super) fn peer_attribution(stream: &LocalStream) -> Option<PeerAttribution> {
     use interprocess::local_socket::traits::StreamCommon as _;
     let creds = stream.peer_creds().ok()?;
+    // Windows named-pipe transports expose only the pid, as u32; xucred
+    // transports (macOS) carry no pid at all — only the euid. ucred
+    // transports (Linux/FreeBSD) carry both as i32/u32.
+    #[cfg(windows)]
+    return Some(PeerAttribution {
+        pid: creds.pid().map(|p| p as i32),
+        euid: None,
+    });
+    #[cfg(not(windows))]
     Some(PeerAttribution {
         pid: creds.pid(),
         euid: creds.euid(),
@@ -993,7 +1002,9 @@ mod pane_stream_tests {
 mod peer_attribution_tests {
     #[cfg(target_os = "linux")]
     use super::exe_of_pid;
-    use super::{describe_peer, peer_attribution, PeerAttribution};
+    #[cfg(unix)]
+    use super::peer_attribution;
+    use super::{describe_peer, PeerAttribution};
 
     #[test]
     fn the_suffix_names_each_attribution_shape() {

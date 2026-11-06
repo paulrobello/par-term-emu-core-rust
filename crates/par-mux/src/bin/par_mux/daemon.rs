@@ -740,6 +740,7 @@ pub(super) fn app_handoff_launcher(
 /// from the launchd-rooted ancestry. A daemon forked from a
 /// terminal-rooted chain cannot hold those grants — pane LAN access dies
 /// and macOS re-prompts (card 01a1b21b).
+#[cfg(target_os = "macos")]
 const LAUNCHD_JOB_LABEL: &str = "com.paulrobello.par-mux";
 
 /// Decide whether a fresh non-foreground daemon start may hand off to the
