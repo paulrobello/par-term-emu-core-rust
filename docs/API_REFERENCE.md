@@ -927,7 +927,7 @@ Controls how character widths are calculated, particularly for East Asian Ambigu
 - `set_width_config(config: WidthConfig)`: Set the full width configuration (Unicode version + ambiguous-width treatment)
 - `set_ambiguous_width(width: AmbiguousWidth)`: Convenience method to set just the ambiguous-width treatment without changing the Unicode version
 - `set_unicode_version(version: UnicodeVersion)`: Convenience method to set just the Unicode version without changing the ambiguous-width treatment
-- `char_width(c: str, config: WidthConfig | None = None) -> int`: Get the display width of a single character (0, 1, or 2 cells); pass a `WidthConfig` to override the default width rules
+- `char_width(c: str) -> int`: Get the display width of a single character (0, 1, or 2 cells); the module-level `char_width` below adds a `WidthConfig` override
 
 **Module-level width functions** (call on the package, not a Terminal instance):
 
