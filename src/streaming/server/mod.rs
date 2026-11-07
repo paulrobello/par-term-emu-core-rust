@@ -512,8 +512,6 @@ pub struct StreamingServer {
     theme: Option<ThemeInfo>,
     /// Global shutdown signal
     shutdown: Arc<tokio::sync::Notify>,
-    /// The default session (for backward-compatible single-session mode)
-    default_session: Option<Arc<StreamSessionState>>,
     /// par-mux roster watcher; when set, every client receives the roster on connect
     #[cfg(feature = "mux")]
     roster: std::sync::OnceLock<Arc<crate::streaming::RosterWatcher>>,
@@ -571,7 +569,6 @@ impl StreamingServer {
             session_factory: None,
             theme: None,
             shutdown: Arc::new(tokio::sync::Notify::new()),
-            default_session: Some(default_session),
         }
     }
 
@@ -596,39 +593,36 @@ impl StreamingServer {
             session_factory: Some(factory),
             theme: None,
             shutdown: Arc::new(tokio::sync::Notify::new()),
-            default_session: None,
         }
     }
 
     /// Set the theme to be sent to clients on connection
     pub fn set_theme(&mut self, theme: ThemeInfo) {
         self.theme = Some(theme.clone());
-        // Also update theme on any existing sessions
-        if let Some(ref session) = self.default_session {
-            // We can't directly modify the theme on StreamSessionState without interior mutability,
-            // but new sessions created by the factory will pick up the theme from
-            // resolve_session. For the default session created in with_config, the theme
-            // is set at construction time. Since set_theme is called before start(), we
-            // need to recreate the default session with the theme.
-            // However, the simplest approach is to store theme on the server and use it
-            // when building connect messages from the default session.
-            // Theme is used via server.theme in build_connect_message fallback
-            let _session = session;
-        }
+        // We can't directly modify the theme on StreamSessionState without
+        // interior mutability, so theme lives on the server and is read when
+        // building connect messages (server.theme in build_connect_message).
     }
 
     // -- Backward-compatible single-session accessors --
 
+    /// The default session, when present. Single-session mode creates it in
+    /// [`StreamingServer::with_config`]; the session registry is its only
+    /// owner, so `close_session("default")` leaves no stale handle behind.
+    fn default_session(&self) -> Option<Arc<StreamSessionState>> {
+        self.sessions.get("default")
+    }
+
     /// Set the PTY writer for handling client input (routes to default session)
     pub fn set_pty_writer(&self, writer: Arc<Mutex<Box<dyn std::io::Write + Send>>>) {
-        if let Some(ref session) = self.default_session {
+        if let Some(session) = self.default_session() {
             session.set_pty_writer(writer);
         }
     }
 
     /// Get a clone of the output sender channel (routes to default session)
     pub fn get_output_sender(&self) -> mpsc::Sender<OutputChunk> {
-        if let Some(ref session) = self.default_session {
+        if let Some(session) = self.default_session() {
             session.get_output_sender()
         } else {
             // Create a dummy channel that will never be read
@@ -641,7 +635,7 @@ impl StreamingServer {
     pub fn get_resize_receiver(
         &self,
     ) -> Arc<tokio::sync::Mutex<mpsc::UnboundedReceiver<(u16, u16)>>> {
-        if let Some(ref session) = self.default_session {
+        if let Some(session) = self.default_session() {
             session.get_resize_receiver()
         } else {
             let (_tx, rx) = mpsc::unbounded_channel();

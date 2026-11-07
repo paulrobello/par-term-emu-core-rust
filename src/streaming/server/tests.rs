@@ -238,6 +238,37 @@ async fn test_resolve_nonexistent_session_no_factory() {
     ));
 }
 
+/// ARC-002: the registry is the default session's only owner. Closing it
+/// in single-session mode must leave no stale second handle: a later
+/// resolve is a clean `SessionNotFound` instead of a dead-session
+/// handout, and server broadcasts stop at the registry miss.
+#[tokio::test]
+async fn close_default_session_leaves_no_stale_owner() {
+    let terminal = Arc::new(RwLock::new(Terminal::new(80, 24)));
+    let server = Arc::new(StreamingServer::new(terminal, "127.0.0.1:0".to_string()));
+
+    let old = server
+        .get_session("default")
+        .expect("default session exists");
+    let mut rx = old.broadcast_tx.subscribe();
+
+    assert!(server.close_session("default", "test close".to_string()));
+    assert!(server.get_session("default").is_none());
+
+    // Drain the shutdown notice the close itself broadcast, then prove a
+    // server-level broadcast no longer reaches the dead session.
+    while rx.try_recv().is_ok() {}
+    server.broadcast(ServerMessage::output("after close".to_string()));
+    assert!(rx.try_recv().is_err());
+
+    // Reconnect path: a clean miss, never the dead session.
+    let params = ConnectionParams::from_uri_query(None);
+    assert!(matches!(
+        server.resolve_session(&params),
+        Err(StreamingError::SessionNotFound(_))
+    ));
+}
+
 /// Input against a session whose PTY writer is detached (never
 /// attached, or detached by [`StreamSessionState::shutdown`]) is dropped
 /// and counted in `dropped_messages`, and the connection stays open: a

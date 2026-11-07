@@ -1,7 +1,7 @@
 .PHONY: help build build-release build-streaming dev-streaming app test test-rust test-rust-streaming test-python test-pty coverage coverage-html coverage-python clean install install-force python-install python-uninstall par-mux-install par-mux-uninstall streamer-uninstall uninstall dev fmt lint check \
         examples examples-basic examples-pty examples-streaming examples-all setup-venv watch \
         typecheck clippy fmt-python lint-python lint-check checkall checkall-ci test-mux-ci test-python-streaming-ci cross-target-check check-features bench pre-commit-install pre-commit-uninstall \
-        caps-table caps-table-check gen-extensions extensions-check ffi-header ffi-header-check ffi-surface-check core-version-check doc-hidden-check api-surface-check terminal-fields-check mux-docs-check mux-schema mux-schema-check completions completions-check _completions-into env-docs-check pinned-tests-check stub-docs-check doc-links-check release-check derive-version-check set-version version-train-check audit-deps \
+        caps-table caps-table-check gen-extensions extensions-check ffi-header ffi-header-check ffi-surface-check core-version-check doc-hidden-check api-surface-check python-features-check terminal-fields-check mux-docs-check mux-schema mux-schema-check completions completions-check _completions-into env-docs-check pinned-tests-check stub-docs-check doc-links-check release-check derive-version-check set-version version-train-check audit-deps \
         mux-manual-seed mux-package-check rustdoc-check \
         pre-commit-run pre-commit-update deploy \
         proto-generate proto-rust proto-typescript proto-clean \
@@ -81,6 +81,7 @@ help:
 	@echo "  version-train-check - Self-test the set-version writer against a temp copy of the train (ARC-009)"
 	@echo "  doc-hidden-check - Fail when par-term-emu-core's #[doc(hidden)] pub set differs from the DESIGN.md baseline (ARC-005)"
 	@echo "  api-surface-check - Fail when Terminal/PtyTerminal method counts in _native.pyi leave the frozen baseline (ARC-001)"
+	@echo "  python-features-check - Fail when the python and python-test feature lists differ beyond the pyo3 activation entry (audit 2026-11-06 ARC-001)"
 	@echo "  terminal-fields-check - Fail when the core Terminal struct's field count leaves its frozen baseline (ARC-001)"
 	@echo "  stub-docs-check - Fail when a _native.pyi def lacks a docstring outside the accessor/__init__ allow-list (DOC-004)"
 	@echo "  doc-links-check - Fail on broken intra-repo links or heading anchors in docs/ and the top-level guides (lychee; needs: brew install lychee)"
@@ -644,6 +645,13 @@ api-surface-check:
 	python3 scripts/check_api_surface.py
 	python3 scripts/check_api_surface.py --self-test
 
+# python/python-test feature parity gate (audit 2026-11-06 ARC-001): the
+# two lists must differ only in the pyo3 activation entry, so cargo test
+# exercises the same surface the shipped wheel builds. Pure python3.
+python-features-check:
+	python3 scripts/check_python_features.py
+	python3 scripts/check_python_features.py --self-test
+
 # ARC-001: field-count ratchet on the core Terminal struct. New state goes
 # into a terminal/state.rs sub-struct, never a new top-level field.
 terminal-fields-check:
@@ -741,7 +749,7 @@ audit-deps:
 	uvx --python-preference only-system pip-audit --strict -r $$reqs; \
 	status=$$?; rm -f $$reqs; exit $$status
 
-checkall: extensions-check ffi-header-check ffi-surface-check derive-version-check core-version-check version-train-check doc-hidden-check api-surface-check terminal-fields-check mux-docs-check mux-schema-check completions-check env-docs-check otel-check mux-otel-check pinned-tests-check stub-docs-check mux-package-check rustdoc-check doc-links-check lint-check test-rust test-rust-streaming stub-check test-python test-web caps-table-check
+checkall: extensions-check ffi-header-check ffi-surface-check derive-version-check core-version-check version-train-check doc-hidden-check api-surface-check python-features-check terminal-fields-check mux-docs-check caps-table-check mux-schema-check completions-check env-docs-check otel-check mux-otel-check pinned-tests-check stub-docs-check mux-package-check rustdoc-check doc-links-check lint-check test-rust test-rust-streaming stub-check test-python test-web
 	@echo ""
 	@echo "======================================================================"
 	@echo "  All code quality checks passed!"
