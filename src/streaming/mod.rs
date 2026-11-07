@@ -80,6 +80,10 @@ mod roster_watcher;
 #[cfg(all(feature = "streaming", feature = "mux"))]
 mod tree_watcher;
 
+// The reconnect backoff policy both watchers above redial through.
+#[cfg(all(feature = "streaming", feature = "mux"))]
+mod watcher_common;
+
 #[cfg(feature = "streaming")]
 pub mod auth_hash;
 

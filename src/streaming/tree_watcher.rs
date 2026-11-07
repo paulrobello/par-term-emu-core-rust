@@ -18,9 +18,10 @@
 //! trigger one refetch: the updates ARE fresh full snapshots, never
 //! deltas — a burst folds into one refetch through a channel drain, so a
 //! resize storm costs one round of four small queries. Loss of the
-//! connection is answered with the roster watcher's backoff redial and a
-//! fresh broadcast, so no window or pane from before a daemon restart
-//! survives as a ghost. A client that wants the tree on demand sends
+//! connection is answered with the watchers' shared backoff redial
+//! ([`super::watcher_common`]) and a fresh broadcast, so no window or pane
+//! from before a daemon restart survives as a ghost. A client that wants
+//! the tree on demand sends
 //! `ClientMessage::MuxTreeRequest` and is served from the same cache —
 //! no daemon round trip, and no daemon selection or sizing touched.
 //!
@@ -32,6 +33,7 @@
 use super::protocol::{
     MuxTreePane, MuxTreeSession, MuxTreeWindow, MuxTreeWorkspace, ServerMessage,
 };
+use super::watcher_common::{next_backoff, BACKOFF_INITIAL, BACKOFF_STABLE};
 use crate::mux::MuxClient;
 use crate::tmux_control::TmuxNotification;
 use parking_lot::Mutex;
@@ -45,12 +47,6 @@ use std::time::{Duration, Instant};
 /// How long one connect attempt may block before the fetch cycle gives up
 /// and redials (the roster watcher's value).
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
-const BACKOFF_INITIAL: Duration = Duration::from_millis(100);
-const BACKOFF_MAX: Duration = Duration::from_secs(5);
-/// A connection must hold at least this long for its end to reset the
-/// redial backoff to [`BACKOFF_INITIAL`]; anything shorter is a flap that
-/// keeps the cumulative (capped) delay.
-const BACKOFF_STABLE: Duration = Duration::from_secs(30);
 
 /// The read-only queries the tree fetch runs, in fetch order. No
 /// `select-*`, no resize, no pane I/O: metadata browsing must not move
@@ -113,16 +109,6 @@ impl Drop for TreeWatcher {
 fn tree_message(workspaces: &[MuxTreeWorkspace]) -> ServerMessage {
     ServerMessage::MuxTreeSnapshot {
         workspaces: workspaces.to_vec(),
-    }
-}
-
-/// The `next_backoff` policy shared with the roster watcher: a connection
-/// that held [`BACKOFF_STABLE`] resets to the initial delay, anything
-/// shorter doubles the cumulative delay, capped at [`BACKOFF_MAX`].
-fn next_backoff(current: Duration, held: Option<Duration>) -> Duration {
-    match held {
-        Some(held) if held >= BACKOFF_STABLE => BACKOFF_INITIAL,
-        _ => (current * 2).min(BACKOFF_MAX),
     }
 }
 
@@ -1154,18 +1140,5 @@ mod tests {
                 "metadata query is not read-only: {query:?}"
             );
         }
-    }
-
-    #[test]
-    fn backoff_policy_matches_the_roster_watcher() {
-        assert_eq!(
-            next_backoff(BACKOFF_INITIAL, None),
-            Duration::from_millis(200)
-        );
-        assert_eq!(next_backoff(BACKOFF_MAX, None), BACKOFF_MAX);
-        assert_eq!(
-            next_backoff(BACKOFF_MAX, Some(BACKOFF_STABLE)),
-            BACKOFF_INITIAL
-        );
     }
 }
