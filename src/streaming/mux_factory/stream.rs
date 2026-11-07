@@ -390,6 +390,19 @@ pub(super) fn spawn_drain(
                 break;
             }
         }
+        // End of the pane's byte stream: flush a held partial sequence so a
+        // glyph severed at the final chunk edge surfaces as the replacement
+        // char instead of vanishing with the link (card 01a1b3c3). The tail
+        // goes out lossy DIRECTLY — a re-feed through `forward` would
+        // re-stash an incomplete lead sequence and the tail would never
+        // reach the viewer.
+        let tail = std::mem::take(&mut *link.pending_utf8.lock());
+        if !tail.is_empty() {
+            send_chunk(
+                &link,
+                OutputChunk::plain(String::from_utf8_lossy(&tail).into_owned()),
+            );
+        }
         link.alive.store(false, Ordering::Relaxed);
         if !link.closed.load(Ordering::Relaxed) {
             if let Some(server) = server.and_then(|weak| weak.upgrade()) {
@@ -399,19 +412,69 @@ pub(super) fn spawn_drain(
     });
 }
 
+/// Incrementally decode pane bytes into text, holding back a trailing
+/// incomplete UTF-8 sequence so a glyph severed at a relay chunk seam is
+/// completed by the next chunk instead of becoming U+FFFD on both sides of
+/// the seam (card 01a1b3c3). Genuinely invalid bytes keep
+/// `from_utf8_lossy` semantics: one replacement char per bad sequence.
+fn take_streaming_utf8(pending: &mut Vec<u8>, data: &[u8]) -> String {
+    pending.extend_from_slice(data);
+    let mut out = String::new();
+    while !pending.is_empty() {
+        match std::str::from_utf8(pending) {
+            Ok(_) => {
+                out.push_str(&String::from_utf8_lossy(pending));
+                pending.clear();
+            }
+            Err(e) => {
+                let up_to = e.valid_up_to();
+                if up_to > 0 {
+                    out.push_str(&String::from_utf8_lossy(&pending[..up_to]));
+                }
+                match e.error_len() {
+                    // Invalid bytes, not an incomplete tail: emit the
+                    // replacement char and rescan the remainder.
+                    Some(n) => {
+                        out.push('\u{FFFD}');
+                        pending.drain(..up_to + n);
+                    }
+                    // A lead byte announcing more continuation bytes than
+                    // the buffer holds: keep them for the next chunk.
+                    None => {
+                        pending.drain(..up_to);
+                        break;
+                    }
+                }
+            }
+        }
+    }
+    out
+}
+
 /// Hand pane output to the session broadcaster, or buffer it until
 /// `setup_session` connects one. `damage` is the chunk the daemon reported
 /// for these bytes (`None` = not supplied - the chunk goes out without
 /// damage fields, which every client reads as "full scan").
 pub(super) fn forward(link: &MirrorLink, data: &[u8], damage: Option<(u64, Vec<(u32, u32)>)>) {
-    let chunk = match damage {
-        Some((generation, ranges)) => OutputChunk::with_damage(
-            String::from_utf8_lossy(data).into_owned(),
-            generation,
-            ranges,
-        ),
-        None => OutputChunk::plain(String::from_utf8_lossy(data).into_owned()),
+    let text = {
+        let mut pending = link.pending_utf8.lock();
+        if pending.is_empty() && std::str::from_utf8(data).is_ok() {
+            String::from_utf8_lossy(data).into_owned()
+        } else {
+            take_streaming_utf8(&mut pending, data)
+        }
     };
+    let chunk = match damage {
+        Some((generation, ranges)) => OutputChunk::with_damage(text, generation, ranges),
+        None => OutputChunk::plain(text),
+    };
+    send_chunk(link, chunk);
+}
+
+/// Deliver one finished chunk: buffer it while no broadcaster is
+/// connected, block-send it while one is, mark the sink closed when the
+/// receiver is gone. Shared by `forward` and the stream-end flush.
+fn send_chunk(link: &MirrorLink, chunk: OutputChunk) {
     let sender = {
         let mut sink = link.sink.lock();
         match &mut *sink {
@@ -486,6 +549,86 @@ mod tests {
     use std::collections::{HashMap, HashSet};
     use std::sync::atomic::AtomicBool;
 
+    /// A mirror link whose sink is `Buffering`, so a test can read back
+    /// exactly the chunks `forward` produced.
+    fn buffering_link() -> Arc<MirrorLink> {
+        Arc::new(MirrorLink {
+            pane: Arc::new(Mutex::new(1)),
+            window: Mutex::new("@0".to_string()),
+            follows_active: false,
+            terminal: Arc::new(RwLock::new(Terminal::with_scrollback(80, 24, 100))),
+            writer: Arc::new(Mutex::new(None)),
+            pending_utf8: Mutex::new(Vec::new()),
+            alive: AtomicBool::new(true),
+            closed: AtomicBool::new(false),
+            sink: Mutex::new(Sink::Buffering(Vec::new())),
+            sent_images: Mutex::new(HashSet::new()),
+            graphics_panes: Arc::new(Mutex::new(HashMap::new())),
+            status: Mutex::new(None),
+            process: Mutex::new(None),
+            session: RwLock::new(None),
+        })
+    }
+
+    fn buffered_text(link: &MirrorLink) -> String {
+        match &*link.sink.lock() {
+            Sink::Buffering(v) => v.iter().map(|c| c.data.as_str()).collect(),
+            Sink::Live(_) | Sink::Closed => String::new(),
+        }
+    }
+
+    /// A glyph severed at a relay chunk seam must survive: the first chunk
+    /// ends mid-sequence, the second opens with its continuation bytes.
+    /// Pre-fix, `from_utf8_lossy` ran per chunk and stamped U+FFFD on both
+    /// sides of the seam (card 01a1b3c3).
+    #[test]
+    fn a_glyph_split_across_relay_chunks_stays_intact() {
+        let link = buffering_link();
+        let glyph = "\u{1F33F}"; // 🌿, F0 9F 8C BF
+        let b = glyph.as_bytes();
+        forward(&link, &b[..2], None);
+        forward(&link, &b[2..], None);
+        forward(&link, b" ok", None);
+        let joined = buffered_text(&link);
+        assert!(joined.contains(glyph), "split glyph lost: {joined:?}");
+        assert!(
+            !joined.contains('\u{FFFD}'),
+            "seam replacement injected: {joined:?}"
+        );
+    }
+
+    /// Seam buffering must not change lossy semantics: genuinely invalid
+    /// bytes still map to one replacement char each, and nothing stays
+    /// buffered behind them.
+    #[test]
+    fn an_invalid_byte_still_maps_to_one_replacement_char() {
+        let link = buffering_link();
+        forward(&link, b"a\xffb", None);
+        forward(&link, b"\xc0\xff", None);
+        let joined = buffered_text(&link);
+        assert_eq!(joined, "a\u{FFFD}b\u{FFFD}\u{FFFD}");
+    }
+
+    /// A partial sequence still held when the pane's byte stream ends
+    /// flushes as the replacement char at the seam instead of vanishing
+    /// with the link.
+    #[test]
+    fn a_final_partial_sequence_flushes_at_stream_end() {
+        let link = buffering_link();
+        let b = "\u{1F33F}".as_bytes();
+        forward(&link, &b[..2], None);
+        // The reader-loop exit takes the held bytes and sends their lossy
+        // form directly — a re-feed through `forward` would re-stash an
+        // incomplete lead sequence and the tail would never surface.
+        let tail = std::mem::take(&mut *link.pending_utf8.lock());
+        send_chunk(
+            &link,
+            OutputChunk::plain(String::from_utf8_lossy(&tail).into_owned()),
+        );
+        let joined = buffered_text(&link);
+        assert_eq!(joined, "\u{FFFD}");
+    }
+
     /// Regression for the dropped-ESC corruption: the old
     /// `let _ = sender.try_send(chunk)` in [`forward`] silently discarded
     /// a chunk whenever the session's output channel was full, and an
@@ -504,6 +647,7 @@ mod tests {
             alive: AtomicBool::new(true),
             closed: AtomicBool::new(false),
             sink: Mutex::new(Sink::Closed),
+            pending_utf8: Mutex::new(Vec::new()),
             sent_images: Mutex::new(HashSet::new()),
             graphics_panes: Arc::new(Mutex::new(HashMap::new())),
             status: Mutex::new(None),

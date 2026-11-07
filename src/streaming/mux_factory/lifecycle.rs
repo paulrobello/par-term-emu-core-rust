@@ -243,6 +243,7 @@ impl SessionFactory for MuxSessionFactory {
             alive: AtomicBool::new(true),
             closed: AtomicBool::new(false),
             sink: Mutex::new(Sink::Buffering(Vec::new())),
+            pending_utf8: Mutex::new(Vec::new()),
             sent_images: Mutex::new(HashSet::new()),
             graphics_panes: Arc::clone(&graphics_panes),
             status: Mutex::new(info.first().and_then(|line| parse_viewer_status(line))),

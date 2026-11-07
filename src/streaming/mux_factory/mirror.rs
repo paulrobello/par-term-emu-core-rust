@@ -42,6 +42,12 @@ pub(super) struct MirrorLink {
     /// Output chunks buffered until `setup_session` connects the
     /// broadcaster (`Buffering`), then the broadcaster's sender (`Live`).
     pub(super) sink: Mutex<Sink>,
+    /// Trailing bytes of a multi-byte UTF-8 sequence severed at a relay
+    /// chunk seam: `forward` holds them back until the sequence's
+    /// continuation bytes arrive with the next chunk, so `from_utf8_lossy`
+    /// never sees a half-glyph. Pane output is a byte stream — a glyph has
+    /// no obligation to align with the daemon's `%output` line boundaries.
+    pub(super) pending_utf8: Mutex<Vec<u8>>,
     /// Graphics ids already streamed as InlineImage frames. A placement
     /// raises `GraphicsAdded` exactly once per mirror, but re-fits re-seed
     /// and a future seed carrying graphics could re-raise an id — this is
