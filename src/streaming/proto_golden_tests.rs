@@ -13,7 +13,8 @@ use super::*;
 use crate::streaming::protocol::{
     CpuStats, DiskStats, InlineImageFrame, LoadAverage, MemoryStats, MuxTreePane as AppMuxTreePane,
     MuxTreeSession as AppMuxTreeSession, MuxTreeWindow as AppMuxTreeWindow,
-    MuxTreeWorkspace as AppMuxTreeWorkspace, NetworkInterfaceStats,
+    MuxTreeWorkspace as AppMuxTreeWorkspace, NetworkInterfaceStats, CLIENT_MESSAGE_VARIANT_NAMES,
+    SERVER_MESSAGE_VARIANT_NAMES,
 };
 use std::fmt::Write as _;
 
@@ -871,88 +872,42 @@ fn proto_golden_wire_conversions_are_unchanged() {
     );
 }
 
-/// Every variant appears in the fixtures: a new variant fails this match
-/// until a fixture (and a golden line) covers it.
+/// Every variant appears in the fixtures: the covered set (named per
+/// message via `variant_name`) must equal the enum's variant-name
+/// registry in protocol.rs EXACTLY - a fixture-less variant and a
+/// registry drift both fail here, naming the variant. The registry is
+/// compile-tied to the enum by `variant_name`'s no-wildcard match, so a
+/// new variant is a compile error there until named (QA-005).
 #[test]
 fn proto_golden_fixtures_cover_every_variant() {
-    use AppClientMessage as C;
-    use AppServerMessage as S;
-    let mut seen = std::collections::BTreeSet::new();
-    for msg in server_fixtures() {
-        seen.insert(match msg {
-            S::Output { .. } => "Output",
-            S::Resize { .. } => "Resize",
-            S::Title { .. } => "Title",
-            S::Connected { .. } => "Connected",
-            S::Refresh { .. } => "Refresh",
-            S::CursorPosition { .. } => "CursorPosition",
-            S::Bell => "Bell",
-            S::CwdChanged { .. } => "CwdChanged",
-            S::TriggerMatched { .. } => "TriggerMatched",
-            S::ActionNotify { .. } => "ActionNotify",
-            S::ActionMarkLine { .. } => "ActionMarkLine",
-            S::Error { .. } => "Error",
-            S::Shutdown { .. } => "Shutdown",
-            S::Pong => "Pong",
-            S::ModeChanged { .. } => "ModeChanged",
-            S::GraphicsAdded { .. } => "GraphicsAdded",
-            S::HyperlinkAdded { .. } => "HyperlinkAdded",
-            S::UserVarChanged { .. } => "UserVarChanged",
-            S::ProgressBarChanged { .. } => "ProgressBarChanged",
-            S::BadgeChanged { .. } => "BadgeChanged",
-            S::SelectionChanged { .. } => "SelectionChanged",
-            S::ClipboardSync { .. } => "ClipboardSync",
-            S::ShellIntegrationEvent { .. } => "ShellIntegrationEvent",
-            S::SystemStats { .. } => "SystemStats",
-            S::ZoneOpened { .. } => "ZoneOpened",
-            S::ZoneClosed { .. } => "ZoneClosed",
-            S::ZoneScrolledOut { .. } => "ZoneScrolledOut",
-            S::EnvironmentChanged { .. } => "EnvironmentChanged",
-            S::RemoteHostTransition { .. } => "RemoteHostTransition",
-            S::SubShellDetected { .. } => "SubShellDetected",
-            S::SemanticSnapshot { .. } => "SemanticSnapshot",
-            S::FileTransferStarted { .. } => "FileTransferStarted",
-            S::FileTransferProgress { .. } => "FileTransferProgress",
-            S::FileTransferCompleted { .. } => "FileTransferCompleted",
-            S::FileTransferFailed { .. } => "FileTransferFailed",
-            S::UploadRequested { .. } => "UploadRequested",
-            S::ScreenCleared { .. } => "ScreenCleared",
-            S::AgentRoster { .. } => "AgentRoster",
-            S::AgentStateChanged { .. } => "AgentStateChanged",
-            S::PointerShapeChanged { .. } => "PointerShapeChanged",
-            S::PaneSizeStatus { .. } => "PaneSizeStatus",
-            S::ViewerPresence { .. } => "ViewerPresence",
-            S::InlineImage { .. } => "InlineImage",
-            S::UploadStarted { .. } => "UploadStarted",
-            S::UploadFinished { .. } => "UploadFinished",
-            S::MuxTreeSnapshot { .. } => "MuxTreeSnapshot",
-            S::PaneProcessState { .. } => "PaneProcessState",
-            S::PaneCreated { .. } => "PaneCreated",
-        });
-    }
-    assert_eq!(seen.len(), 48, "server fixtures miss a variant");
-    let mut seen = std::collections::BTreeSet::new();
-    for msg in client_fixtures() {
-        seen.insert(match msg {
-            C::ViewerIdentity { .. } => "ViewerIdentity",
-            C::Input { .. } => "Input",
-            C::Resize { .. } => "Resize",
-            C::Ping => "Ping",
-            C::RequestRefresh => "RequestRefresh",
-            C::Subscribe { .. } => "Subscribe",
-            C::Mouse { .. } => "Mouse",
-            C::FocusChange { .. } => "FocusChange",
-            C::Paste { .. } => "Paste",
-            C::SelectionRequest { .. } => "SelectionRequest",
-            C::ClipboardRequest { .. } => "ClipboardRequest",
-            C::SnapshotRequest { .. } => "SnapshotRequest",
-            C::UploadBegin { .. } => "UploadBegin",
-            C::UploadChunk { .. } => "UploadChunk",
-            C::UploadCommit => "UploadCommit",
-            C::UploadAbort => "UploadAbort",
-            C::MuxTreeRequest => "MuxTreeRequest",
-            C::PaneCreateRequest { .. } => "PaneCreateRequest",
-        });
-    }
-    assert_eq!(seen.len(), 18, "client fixtures miss a variant");
+    use std::collections::BTreeSet;
+    let covered: BTreeSet<&'static str> = server_fixtures()
+        .iter()
+        .map(|msg| msg.variant_name())
+        .collect();
+    assert_eq!(
+        covered,
+        SERVER_MESSAGE_VARIANT_NAMES.iter().copied().collect(),
+        "server fixtures and the variant registry disagree"
+    );
+    assert_eq!(
+        SERVER_MESSAGE_VARIANT_NAMES.len(),
+        48,
+        "server variant registry count changed - keep registry, match and this count in one edit"
+    );
+
+    let covered: BTreeSet<&'static str> = client_fixtures()
+        .iter()
+        .map(|msg| msg.variant_name())
+        .collect();
+    assert_eq!(
+        covered,
+        CLIENT_MESSAGE_VARIANT_NAMES.iter().copied().collect(),
+        "client fixtures and the variant registry disagree"
+    );
+    assert_eq!(
+        CLIENT_MESSAGE_VARIANT_NAMES.len(),
+        18,
+        "client variant registry count changed - keep registry, match and this count in one edit"
+    );
 }
