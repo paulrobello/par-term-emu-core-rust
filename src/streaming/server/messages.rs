@@ -988,7 +988,7 @@ impl StreamingServer {
             }
         };
         if let Some(msg) = selection_msg {
-            self.broadcast_to_session(&session.id, msg);
+            self.send_to_session(&session.id, msg);
         }
     }
 
@@ -1026,7 +1026,7 @@ impl StreamingServer {
                         );
                     } else {
                         terminal.set_clipboard(Some(text.clone()));
-                        self.broadcast_to_session(
+                        self.send_to_session(
                             &session.id,
                             ServerMessage::clipboard_sync("set".to_string(), text.clone(), target),
                         );

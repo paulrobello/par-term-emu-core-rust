@@ -41,6 +41,9 @@ impl StreamingServer {
     }
 
     /// Broadcast a message to the clients of every session
+    ///
+    /// Iterates every session currently in the registry; sessions
+    /// removed mid-iteration are simply skipped.
     pub fn broadcast_all(&self, msg: ServerMessage) {
         for session in self.sessions.all() {
             session.broadcast(msg.clone());
@@ -87,18 +90,12 @@ impl StreamingServer {
     }
 
     /// Send a message to a specific session
+    ///
+    /// An unknown `session_id` is a miss: the message is dropped
+    /// silently, never rerouted to another session.
     pub fn send_to_session(&self, session_id: &str, msg: ServerMessage) {
         if let Some(session) = self.sessions.get(session_id) {
             session.broadcast(msg);
-        }
-    }
-
-    /// Broadcast a message to all clients of a specific session
-    pub fn broadcast_to_session(&self, session_id: &str, msg: ServerMessage) {
-        if let Some(session) = self.sessions.get(session_id) {
-            let _ = session.broadcast_tx.send(msg);
-        } else if let Some(ref session) = self.default_session {
-            let _ = session.broadcast_tx.send(msg);
         }
     }
 
