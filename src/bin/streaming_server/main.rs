@@ -364,7 +364,7 @@ use theme::Theme;
 
 #[tokio::main]
 async fn main() -> Result<()> {
-    let args = Args::parse();
+    let mut args = Args::parse();
     if args.check_update || args.self_update {
         run_self_update(args.check_update, &args.launchd_label).map_err(anyhow::Error::msg)?;
         return Ok(());
@@ -414,6 +414,11 @@ async fn main() -> Result<()> {
         .with_target(false)
         .with_thread_ids(false)
         .init();
+
+    // Resolve the API key before any consumer of args.api_key (the
+    // bind-security gate, config, and banner read it downstream) so the
+    // --api-key-file form behaves identically to an inline --api-key.
+    args.api_key = bootstrap::resolve_api_key(&args)?;
 
     // OpenTelemetry metrics (kanban 01a18331): installs the global meter
     // provider when --otel-enabled / PAR_TERM_STREAMER_OTEL_ENABLED is set;

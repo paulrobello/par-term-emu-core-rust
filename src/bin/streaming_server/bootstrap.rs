@@ -818,6 +818,49 @@ pub fn is_loopback_host(host: &str) -> bool {
         .is_ok_and(|ip| ip.is_loopback())
 }
 
+/// Resolve the WebSocket API key from CLI arguments
+///
+/// `--api-key-file` loads the secret from disk (first line, trimmed) so it
+/// never appears in `ps` output or shell history. A loose file mode warns
+/// (mirroring `--http-password-file`); error messages never echo the key
+/// (SEC-009/SEC-201).
+pub fn resolve_api_key(args: &Args) -> Result<Option<String>> {
+    let Some(path) = &args.api_key_file else {
+        return Ok(args.api_key.clone());
+    };
+
+    // Validate file permissions (should not be world/group readable)
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::MetadataExt;
+        if let Ok(metadata) = fs::metadata(path) {
+            let mode = metadata.mode();
+            if mode & 0o077 != 0 {
+                warn!(
+                    "API key file {} has insecure permissions {:o}. \
+                     Consider restricting to owner-only (chmod 600).",
+                    path,
+                    mode & 0o777
+                );
+            }
+        }
+    }
+
+    // Read key from file (first line)
+    let file = fs::File::open(path).context(format!("Failed to open API key file: {}", path))?;
+    let first_line = BufReader::new(file)
+        .lines()
+        .next()
+        .ok_or_else(|| anyhow::anyhow!("API key file is empty: {}", path))?
+        .context("Failed to read API key file")?;
+
+    let key = first_line.trim();
+    if key.is_empty() {
+        anyhow::bail!("API key file contains an empty first line: {}", path);
+    }
+    Ok(Some(key.to_string()))
+}
+
 /// Resolve HTTP Basic Auth configuration from CLI arguments
 ///
 /// Priority: password_file > password_hash > password
@@ -1140,5 +1183,60 @@ mod require_bcrypt_tests {
             resolve_http_basic_auth(&args(&["--http-password-file", path, "--require-bcrypt"]))
                 .expect_err("legacy hash in file must be refused");
         assert!(format!("{err:#}").contains("--require-bcrypt"));
+    }
+
+    #[test]
+    fn api_key_file_loads_first_line_trimmed() {
+        let mut file = tempfile::NamedTempFile::new().expect("tempfile");
+        writeln!(file, "streamer-secret\n").expect("write");
+        let path = file.path().to_str().expect("utf-8 path");
+        let key = resolve_api_key(&args(&["--api-key-file", path]))
+            .expect("file key resolves")
+            .expect("key present");
+        assert_eq!(key, "streamer-secret");
+    }
+
+    #[test]
+    fn api_key_without_file_form_passes_through() {
+        assert_eq!(
+            resolve_api_key(&args(&["--api-key", "inline"])).expect("inline key resolves"),
+            Some("inline".to_string())
+        );
+        assert_eq!(resolve_api_key(&args(&[])).expect("no key resolves"), None);
+    }
+
+    #[test]
+    fn api_key_file_missing_and_empty_are_refused() {
+        let err = format!(
+            "{:#}",
+            resolve_api_key(&args(&["--api-key-file", "/nonexistent/ptecr-key"]))
+                .expect_err("missing file refused")
+        );
+        assert!(err.contains("Failed to open API key file"), "{err}");
+
+        let mut file = tempfile::NamedTempFile::new().expect("tempfile");
+        writeln!(file).expect("write empty line");
+        let path = file.path().to_str().expect("utf-8 path");
+        let err = format!(
+            "{:#}",
+            resolve_api_key(&args(&["--api-key-file", path]))
+                .expect_err("empty first line refused")
+        );
+        assert!(err.contains("empty first line"), "{err}");
+    }
+
+    #[test]
+    fn api_key_file_conflicts_with_api_key() {
+        assert!(
+            Args::try_parse_from([
+                "par-term-streamer",
+                "--api-key",
+                "a",
+                "--api-key-file",
+                "/tmp/x"
+            ])
+            .is_err(),
+            "both forms must refuse at parse time"
+        );
     }
 }

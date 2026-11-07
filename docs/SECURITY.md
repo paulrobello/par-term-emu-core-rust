@@ -946,7 +946,10 @@ connected client can execute arbitrary commands as the user running the server.
   has been used in a URL. The key and password
   arguments declare `hide_env_values`, so values supplied through
   `PAR_TERM_API_KEY`, `PAR_TERM_HTTP_PASSWORD`, and
-  `PAR_TERM_HTTP_PASSWORD_HASH` are never echoed by `--help`.
+  `PAR_TERM_HTTP_PASSWORD_HASH` are never echoed by `--help`. Supply the
+  key via `--api-key-file <path>` / `PAR_TERM_API_KEY_FILE` (first line,
+  trimmed; loose file permissions warn) to keep it out of `ps` output and
+  shell history entirely.
 - **HTTP Basic Auth** (`--http-user` / `--http-password[-hash|-file]`):
   htpasswd-format hashes verified via maintained RustCrypto crates (bcrypt,
   `$apr1$`, `$1$` MD5-crypt, `{SHA}`). See `src/streaming/auth_hash.rs`.

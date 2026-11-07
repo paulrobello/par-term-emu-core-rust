@@ -328,6 +328,7 @@ par-term-streamer --enable-http
 | `PAR_TERM_ENABLE_HTTP` | `--enable-http` | Enable HTTP serving |
 | `PAR_TERM_WEB_ROOT` | `--web-root` | Static files directory |
 | `PAR_TERM_API_KEY` | `--api-key` | WebSocket API key |
+| `PAR_TERM_API_KEY_FILE` | `--api-key-file` | Read the WebSocket API key from a file (first line, trimmed; keeps the secret out of `ps`/shell history; mutually exclusive with `--api-key`) |
 | `PAR_TERM_MAX_SESSIONS` | `--max-sessions` | Maximum concurrent sessions |
 | `PAR_TERM_SESSION_IDLE_TIMEOUT` | `--session-idle-timeout` | Idle session timeout (seconds) |
 | `PAR_TERM_ENABLE_SYSTEM_STATS` | `--enable-system-stats` | Enable system stats collection |

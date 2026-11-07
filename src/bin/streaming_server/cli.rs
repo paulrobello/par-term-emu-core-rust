@@ -168,6 +168,18 @@ pub struct Args {
     #[arg(long, env = "PAR_TERM_API_KEY", hide_env_values = true)]
     pub api_key: Option<String>,
 
+    /// Load the API key from a file so the secret stays out of `ps` output
+    /// and shell history for the server's lifetime (the --api-key docstring's
+    /// warning). The file's first line is used, trimmed. Mutually exclusive
+    /// with --api-key.
+    #[arg(
+        long,
+        conflicts_with = "api_key",
+        env = "PAR_TERM_API_KEY_FILE",
+        value_name = "PATH"
+    )]
+    pub api_key_file: Option<String>,
+
     /// Allow API key authentication via query parameter (?api_key=...).
     /// Disabled by default because query params are logged by proxies and saved in browser history.
     /// Exists for browser WebSocket clients, which cannot set auth headers; the
