@@ -35,10 +35,13 @@
 //!
 //! ## WebSocket Authentication
 //!
-//! To enable WebSocket authentication, use the `--api-key` flag:
+//! To enable WebSocket authentication, set an API key. Prefer the
+//! environment variable — a CLI argument is visible in `ps` output and
+//! shell history for the server's lifetime:
 //!
 //! ```bash
-//! par-term-streamer --api-key my-secret-key
+//! export PAR_TERM_API_KEY=my-secret-key
+//! par-term-streamer
 //! ```
 //!
 //! Clients can then authenticate using either:
@@ -47,18 +50,26 @@
 //!
 //! ## HTTP Basic Authentication
 //!
-//! To enable HTTP Basic Auth for the web frontend:
+//! To enable HTTP Basic Auth for the web frontend, prefer the file or hash
+//! forms — a clear-text `--http-password` argument is visible in `ps`
+//! output and shell history:
 //!
 //! ```bash
-//! # With clear text password
-//! par-term-streamer --enable-http --http-user admin --http-password secret
+//! # With password from file (auto-detects hash vs clear text)
+//! par-term-streamer --enable-http --http-user admin --http-password-file /path/to/password
 //!
 //! # With htpasswd hash (bcrypt, apr1, sha1, md5crypt)
 //! par-term-streamer --enable-http --http-user admin --http-password-hash '$apr1$...'
 //!
-//! # With password from file (auto-detects hash vs clear text)
-//! par-term-streamer --enable-http --http-user admin --http-password-file /path/to/password
+//! # With clear text password (least safe: exposed on the command line)
+//! par-term-streamer --enable-http --http-user admin --http-password secret
 //! ```
+//!
+//! ## Non-loopback binds
+//!
+//! Binding a non-loopback host with no authentication, or with credentials
+//! but no TLS, refuses to start; pass `--allow-unauthenticated` or
+//! `--allow-cleartext-auth` (or configure auth/TLS) to proceed.
 //!
 //! ## Module layout (ARC-005 split)
 //!
@@ -206,6 +217,104 @@ mod update_target_tests {
     #[test]
     fn plain_build_tracks_plain_assets() {
         assert_eq!(super::streamer_update_binary(), Binary::Streamer);
+    }
+}
+
+/// SEC-001 / SEC-002: non-loopback binds refuse without an explicit
+/// `--allow-*` acknowledgment; loopback and TLS-protected starts are clean.
+#[cfg(test)]
+mod bind_security_tests {
+    use super::*;
+    use clap::Parser;
+
+    fn non_loopback(extra: &[&str]) -> Args {
+        Args::try_parse_from(
+            ["par-term-streamer", "--host", "0.0.0.0"]
+                .into_iter()
+                .chain(extra.iter().copied()),
+        )
+        .expect("args parse")
+    }
+
+    fn refusal_msg(extra: &[&str], http_basic_auth: bool, use_tls: bool) -> String {
+        match enforce_bind_security(
+            &non_loopback(extra),
+            "0.0.0.0:8099",
+            http_basic_auth,
+            use_tls,
+        ) {
+            Ok(()) => panic!("expected a non-loopback bind to be refused: {extra:?}"),
+            Err(e) => format!("{e:#}"),
+        }
+    }
+
+    #[test]
+    fn loopback_default_needs_no_acknowledgment() {
+        let args = Args::try_parse_from(["par-term-streamer"]).expect("args parse");
+        enforce_bind_security(&args, "127.0.0.1:8099", false, false)
+            .expect("loopback bind must start");
+        // Loopback also exempts the cleartext-credentials gate.
+        let args =
+            Args::try_parse_from(["par-term-streamer", "--host", "127.0.0.1", "--api-key", "k"])
+                .expect("args parse");
+        enforce_bind_security(&args, "127.0.0.1:8099", false, false)
+            .expect("loopback bind with credentials must start");
+    }
+
+    /// SEC-002: unauthenticated non-loopback refuses and names the override.
+    #[test]
+    fn unauthenticated_non_loopback_is_refused() {
+        let msg = refusal_msg(&[], false, false);
+        assert!(msg.contains("--allow-unauthenticated"), "{msg}");
+        assert!(msg.contains("0.0.0.0:8099"), "{msg}");
+    }
+
+    #[test]
+    fn unauthenticated_non_loopback_flag_allows_startup() {
+        enforce_bind_security(
+            &non_loopback(&["--allow-unauthenticated"]),
+            "0.0.0.0:8099",
+            false,
+            false,
+        )
+        .expect("--allow-unauthenticated must allow the bind");
+    }
+
+    /// SEC-001: credentials without TLS on a non-loopback bind refuse and
+    /// name the override, without echoing the credential.
+    #[test]
+    fn cleartext_credentials_on_non_loopback_are_refused() {
+        let fake_key = "testkey9";
+        for (label, extra, basic) in [
+            ("api-key", vec!["--api-key", fake_key], false),
+            ("http-basic", vec![] as Vec<&str>, true),
+        ] {
+            let msg = refusal_msg(&extra, basic, false);
+            assert!(msg.contains("--allow-cleartext-auth"), "{label}: {msg}");
+            assert!(!msg.contains(fake_key), "{label} leaked the key: {msg}");
+        }
+    }
+
+    #[test]
+    fn cleartext_credentials_flag_allows_startup() {
+        enforce_bind_security(
+            &non_loopback(&["--api-key", "k", "--allow-cleartext-auth"]),
+            "0.0.0.0:8099",
+            false,
+            false,
+        )
+        .expect("--allow-cleartext-auth must allow the bind");
+    }
+
+    #[test]
+    fn tls_protected_non_loopback_credentials_start_cleanly() {
+        enforce_bind_security(
+            &non_loopback(&["--api-key", "k"]),
+            "0.0.0.0:8099",
+            false,
+            true,
+        )
+        .expect("TLS-protected bind must start");
     }
 }
 
@@ -377,7 +486,7 @@ async fn main() -> Result<()> {
     let addr = format!("{}:{}", args.host, args.port);
     info!("Creating streaming server on {}", addr);
 
-    warn_if_unauthenticated(&args, &addr, http_basic_auth.is_some());
+    enforce_bind_security(&args, &addr, http_basic_auth.is_some(), use_tls)?;
     if args.enable_system_stats {
         info!(
             "System stats enabled (interval: {}s)",
@@ -544,28 +653,80 @@ fn build_config(
     }
 }
 
-/// SEC-002: warn loudly when binding a non-loopback interface without any
-/// authentication configured. A public bind with no auth exposes an
-/// interactive shell (the PTY) to anyone who can reach the port.
-fn warn_if_unauthenticated(args: &Args, addr: &str, http_basic_auth: bool) {
-    if bootstrap::is_loopback_host(&args.host) || args.api_key.is_some() || http_basic_auth {
-        return;
+/// Startup gate for the two ways a non-loopback bind goes wrong:
+///
+/// - SEC-002: no authentication at all — anyone who can reach the port gets
+///   an interactive shell. Refused unless `--allow-unauthenticated` is
+///   passed; the banner stays for the explicit-opt-in case.
+/// - SEC-001: authentication configured but TLS off — the API key and/or
+///   Basic Auth password cross the network in cleartext on every request.
+///   Refused unless `--allow-cleartext-auth` is passed.
+///
+/// The loopback default (and any loopback host) never trips either gate.
+/// Error messages name the fix and never echo credentials.
+fn enforce_bind_security(
+    args: &Args,
+    addr: &str,
+    http_basic_auth: bool,
+    use_tls: bool,
+) -> Result<()> {
+    if bootstrap::is_loopback_host(&args.host) {
+        return Ok(());
     }
-    eprintln!();
-    eprintln!("!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!");
-    eprintln!(
-        "!!  SECURITY WARNING: binding {} WITHOUT AUTHENTICATION       !!",
-        addr
-    );
-    eprintln!("!!  The standalone streamer exposes an interactive shell over !!");
-    eprintln!("!!  WebSocket. Anyone who can reach this port gets full shell !!");
-    eprintln!("!!  access with your privileges.                              !!");
-    eprintln!("!!  Fix one of:                                               !!");
-    eprintln!("!!    - bind loopback:  --host 127.0.0.1  (the default)       !!");
-    eprintln!("!!    - add an API key: --api-key <secret>                    !!");
-    eprintln!("!!    - add HTTP Basic: --http-user <user> --http-password ... !!");
-    eprintln!("!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!");
-    eprintln!();
+    let authenticated = args.api_key.is_some() || http_basic_auth;
+    if !authenticated {
+        eprintln!();
+        eprintln!("!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!");
+        eprintln!(
+            "!!  SECURITY WARNING: binding {} WITHOUT AUTHENTICATION       !!",
+            addr
+        );
+        eprintln!("!!  The standalone streamer exposes an interactive shell over !!");
+        eprintln!("!!  WebSocket. Anyone who can reach this port gets full shell !!");
+        eprintln!("!!  access with your privileges.                              !!");
+        eprintln!("!!  Fix one of:                                               !!");
+        eprintln!("!!    - bind loopback:  --host 127.0.0.1  (the default)       !!");
+        eprintln!("!!    - add an API key: --api-key <secret>                    !!");
+        eprintln!("!!    - add HTTP Basic: --http-user <user> --http-password ... !!");
+        eprintln!("!!    - accept the risk: --allow-unauthenticated              !!");
+        eprintln!("!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!");
+        eprintln!();
+        if args.allow_unauthenticated {
+            return Ok(());
+        }
+        anyhow::bail!(
+            "refusing to start: {addr} is not loopback and no authentication is configured, \
+             which would expose an interactive shell to anyone who can reach the port. Bind \
+             loopback (--host 127.0.0.1), configure --api-key or HTTP Basic Auth, or pass \
+             --allow-unauthenticated (PAR_TERM_ALLOW_UNAUTHENTICATED) to accept the risk"
+        );
+    }
+    if !use_tls {
+        eprintln!();
+        eprintln!("!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!");
+        eprintln!(
+            "!!  SECURITY WARNING: credentials on {} in CLEARTEXT       !!",
+            addr
+        );
+        eprintln!("!!  Auth is configured but TLS is off, so the API key and/or  !!");
+        eprintln!("!!  Basic Auth password cross the network unencrypted on      !!");
+        eprintln!("!!  every request, readable by anyone on the network path.    !!");
+        eprintln!("!!  Fix one of:                                               !!");
+        eprintln!("!!    - enable TLS: --tls-pem <combined.pem>                  !!");
+        eprintln!("!!    - enable TLS: --tls-cert <cert> --tls-key <key>         !!");
+        eprintln!("!!    - accept the risk: --allow-cleartext-auth                !!");
+        eprintln!("!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!");
+        eprintln!();
+        if !args.allow_cleartext_auth {
+            anyhow::bail!(
+                "refusing to start: authentication is configured but TLS is off and {addr} is \
+                 not loopback, so the credentials would cross the network in cleartext. Enable \
+                 TLS (--tls-pem, or --tls-cert/--tls-key) or pass --allow-cleartext-auth \
+                 (PAR_TERM_ALLOW_CLEARTEXT_AUTH) to accept the risk"
+            );
+        }
+    }
+    Ok(())
 }
 
 /// Load the macro file, start its playback task against the macro PTY, and
