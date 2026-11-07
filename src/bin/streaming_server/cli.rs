@@ -163,6 +163,8 @@ pub struct Args {
 
     /// API key for WebSocket authentication (optional)
     /// Clients must provide this via Authorization header or X-API-Key header
+    /// Prefer the PAR_TERM_API_KEY environment variable: a CLI argument is
+    /// visible in `ps` output and shell history for the server's lifetime.
     #[arg(long, env = "PAR_TERM_API_KEY", hide_env_values = true)]
     pub api_key: Option<String>,
 
@@ -186,6 +188,23 @@ pub struct Args {
     /// byte-identical. Security review: Paul, 2026-11-01 (card 01a19895bd).
     #[arg(long, env = "PAR_TERM_CSP_ALLOW_BLOB_CONNECT")]
     pub csp_allow_blob_connect: bool,
+
+    /// Acknowledge binding a non-loopback host with no authentication
+    /// (SEC-002). Without this flag the server refuses to start in that
+    /// configuration: anyone who can reach the port gets an interactive
+    /// shell with your privileges. Prefer --host 127.0.0.1 (the default),
+    /// --api-key, or HTTP Basic Auth over this flag.
+    #[arg(long, env = "PAR_TERM_ALLOW_UNAUTHENTICATED")]
+    pub allow_unauthenticated: bool,
+
+    /// Acknowledge sending authentication credentials over a non-loopback
+    /// cleartext bind (no TLS, SEC-001): the API key and HTTP Basic Auth
+    /// password cross the network unencrypted on every request, where any
+    /// listener on the path can read them. Without this flag the server
+    /// refuses to start in that configuration. Prefer --tls-pem or
+    /// --tls-cert/--tls-key over this flag.
+    #[arg(long, env = "PAR_TERM_ALLOW_CLEARTEXT_AUTH")]
+    pub allow_cleartext_auth: bool,
 
     /// Allowed browser origins for WebSocket and CORS (SEC-005).
     /// Repeatable, e.g. --allowed-origins https://app.example.com.
@@ -281,18 +300,18 @@ pub struct Args {
     #[arg(long, env = "PAR_TERM_HTTP_USER")]
     pub http_user: Option<String>,
 
-    /// Password for HTTP Basic Authentication (clear text)
-    /// Mutually exclusive with --http-password-hash
-    #[arg(
-        long,
-        env = "PAR_TERM_HTTP_PASSWORD",
-        conflicts_with = "http_password_hash",
-        hide_env_values = true
-    )]
-    pub http_password: Option<String>,
+    /// File containing password (reads first line)
+    /// If line starts with $ or {SHA}, treated as hash; otherwise as clear text
+    /// Overrides --http-password and --http-password-hash
+    /// Preferred over the inline forms: the value stays out of `ps` output
+    /// and shell history
+    #[arg(long, env = "PAR_TERM_HTTP_PASSWORD_FILE")]
+    pub http_password_file: Option<String>,
 
     /// Password hash for HTTP Basic Authentication (htpasswd format)
     /// Supports: bcrypt ($2y$), apr1 ($apr1$), SHA1 ({SHA}), MD5 crypt ($1$)
+    /// bcrypt is recommended: the others are fast hashes, brute-forceable if
+    /// the config leaks, and refused at startup unless --allow-legacy-hash
     /// Mutually exclusive with --http-password
     #[arg(
         long,
@@ -302,11 +321,17 @@ pub struct Args {
     )]
     pub http_password_hash: Option<String>,
 
-    /// File containing password (reads first line)
-    /// If line starts with $ or {SHA}, treated as hash; otherwise as clear text
-    /// Overrides --http-password and --http-password-hash
-    #[arg(long, env = "PAR_TERM_HTTP_PASSWORD_FILE")]
-    pub http_password_file: Option<String>,
+    /// Password for HTTP Basic Authentication (clear text)
+    /// Mutually exclusive with --http-password-hash
+    /// The value is visible in `ps` output and shell history for the
+    /// server's lifetime; prefer --http-password-file or --http-password-hash
+    #[arg(
+        long,
+        env = "PAR_TERM_HTTP_PASSWORD",
+        conflicts_with = "http_password_hash",
+        hide_env_values = true
+    )]
+    pub http_password: Option<String>,
 
     /// Refuse to start unless HTTP Basic Auth uses a bcrypt hash.
     /// Rejects cleartext passwords and legacy {SHA} / $1$ / $apr1$ hashes.

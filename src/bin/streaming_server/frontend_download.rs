@@ -306,9 +306,10 @@ pub async fn download_frontend(version: &str, web_root: &str, force: bool) -> Re
     let tar_gz = GzDecoder::new(archive_bytes.as_slice());
     let mut archive = Archive::new(tar_gz);
 
-    archive
-        .unpack(web_root_path)
-        .context("Failed to extract archive")?;
+    // SEC-006: the `.sha256` sidecar comes from the same release as the
+    // archive, so it cannot vouch against a compromised release — `unpack`
+    // would honor symlink/hardlink entries, writing outside the web root.
+    extract_regular_files(&mut archive, web_root_path)?;
 
     // Count extracted files
     let file_count = count_files(web_root_path)?;
@@ -325,6 +326,81 @@ pub async fn download_frontend(version: &str, web_root: &str, force: bool) -> Re
         println!("Frontend ready at: {}/index.html", web_root);
     }
 
+    Ok(())
+}
+
+/// A tar entry path that stays inside the extraction root: relative, with
+/// every component a normal name (rejects `..`, `.`, absolute paths, and
+/// Windows prefixes). Rejects rather than skips, so a tampered archive is
+/// loud instead of silently partial.
+fn safe_entry_path(path: &Path) -> Result<&Path> {
+    let normal = path
+        .components()
+        .all(|c| matches!(c, std::path::Component::Normal(_)));
+    if normal && !path.as_os_str().is_empty() {
+        Ok(path)
+    } else {
+        anyhow::bail!(
+            "Refusing to extract archive entry '{}': the path escapes the extraction root",
+            path.display()
+        );
+    }
+}
+
+/// Extract `archive` into `dest`, writing regular files and directories
+/// only (SEC-006). Link, device, and FIFO entries abort the extraction:
+/// `Archive::unpack` would honor a symlink/hardlink entry and write outside
+/// `dest` (or replace paths the release never shipped), and the checksum
+/// sidecar comes from the same release as the archive, so it cannot vouch
+/// against a compromised one. The bundle our release process publishes
+/// contains only regular files and directories, so a legitimate archive
+/// never trips this.
+fn extract_regular_files<R: std::io::Read>(archive: &mut Archive<R>, dest: &Path) -> Result<()> {
+    for entry in archive
+        .entries()
+        .context("Failed to read archive entries")?
+    {
+        let mut entry = entry.context("Failed to read archive entry")?;
+        let entry_type = entry.header().entry_type();
+        let path = entry
+            .path()
+            .context("Failed to read archive entry path")?
+            .into_owned();
+        if entry_type.is_file() {
+            let out_path = dest.join(safe_entry_path(&path)?);
+            if let Some(parent) = out_path.parent() {
+                fs::create_dir_all(parent).with_context(|| {
+                    format!("Failed to create directory for {}", path.display())
+                })?;
+            }
+            let mut out = fs::File::create(&out_path)
+                .with_context(|| format!("Failed to create {}", out_path.display()))?;
+            std::io::copy(&mut entry, &mut out)
+                .with_context(|| format!("Failed to write {}", out_path.display()))?;
+            // Match `Archive::unpack`'s default: apply the header's plain
+            // permission bits (never setuid/setgid/sticky).
+            #[cfg(unix)]
+            {
+                use std::os::unix::fs::PermissionsExt;
+                let mode = entry.header().mode().unwrap_or(0o644) & 0o777;
+                out.set_permissions(fs::Permissions::from_mode(mode))
+                    .with_context(|| {
+                        format!("Failed to set permissions on {}", out_path.display())
+                    })?;
+            }
+        } else if entry_type.is_dir() {
+            fs::create_dir_all(dest.join(safe_entry_path(&path)?))
+                .with_context(|| format!("Failed to create directory {}", path.display()))?;
+        } else {
+            anyhow::bail!(
+                "Refusing to extract archive entry '{}' with type byte {:#x}: only regular \
+                 files and directories are extracted; the frontend bundle never ships links, \
+                 devices, or FIFOs",
+                path.display(),
+                entry_type.as_byte()
+            );
+        }
+    }
     Ok(())
 }
 
@@ -522,5 +598,125 @@ mod tests {
         // Nonexistent path → allowed (fresh install).
         check_web_root_replaceable(&base.path().join("fresh"), false)
             .expect("nonexistent web root must be allowed");
+    }
+
+    /// A minimal frontend-shaped archive: a regular file, an assets
+    /// directory, and a nested regular file.
+    fn append_regular_bundle(builder: &mut tar::Builder<Vec<u8>>) {
+        let mut dir_header = tar::Header::new_gnu();
+        dir_header.set_entry_type(tar::EntryType::dir());
+        dir_header.set_size(0);
+        dir_header.set_mode(0o755);
+        builder
+            .append_data(&mut dir_header, "assets", std::io::empty())
+            .unwrap();
+        let mut header = tar::Header::new_gnu();
+        header.set_mode(0o644);
+        header.set_size(11);
+        builder
+            .append_data(&mut header, "assets/app.js", &b"console.log"[..])
+            .unwrap();
+        header.set_size(13);
+        builder
+            .append_data(&mut header, "index.html", &b"<html></html>"[..])
+            .unwrap();
+    }
+
+    fn regular_bundle() -> Vec<u8> {
+        let mut builder = tar::Builder::new(Vec::new());
+        append_regular_bundle(&mut builder);
+        builder.into_inner().unwrap()
+    }
+
+    #[test]
+    fn regular_files_and_directories_extract() {
+        let bytes = regular_bundle();
+        let dest = tempfile::tempdir().expect("tempdir");
+        let mut archive = Archive::new(bytes.as_slice());
+        extract_regular_files(&mut archive, dest.path()).expect("regular bundle must extract");
+        assert_eq!(
+            fs::read(dest.path().join("assets/app.js")).unwrap(),
+            b"console.log"
+        );
+        assert_eq!(
+            fs::read(dest.path().join("index.html")).unwrap(),
+            b"<html></html>"
+        );
+        assert!(dest.path().join("assets").is_dir());
+        // Header permission bits are applied, matching `Archive::unpack`.
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let mode = fs::metadata(dest.path().join("assets/app.js"))
+                .unwrap()
+                .permissions()
+                .mode();
+            assert_eq!(mode & 0o777, 0o644);
+        }
+    }
+
+    /// The same bundle plus one entry of a non-regular type, as a crafted
+    /// release archive would carry it (SEC-006).
+    fn bundle_with_entry(entry_type: tar::EntryType, name: &str) -> Vec<u8> {
+        let mut builder = tar::Builder::new(Vec::new());
+        append_regular_bundle(&mut builder);
+        if entry_type.is_hard_link() || entry_type.is_symlink() {
+            let mut link_header = tar::Header::new_gnu();
+            link_header.set_entry_type(entry_type);
+            link_header.set_size(0);
+            link_header.set_mode(0o777);
+            builder
+                .append_link(&mut link_header, name, "index.html")
+                .unwrap();
+        } else {
+            let mut header = tar::Header::new_gnu();
+            header.set_entry_type(entry_type);
+            header.set_size(0);
+            header.set_mode(0o644);
+            builder
+                .append_data(&mut header, name, std::io::empty())
+                .unwrap();
+        }
+        builder.into_inner().unwrap()
+    }
+
+    #[test]
+    fn symlink_entry_is_rejected() {
+        let bytes = bundle_with_entry(tar::EntryType::symlink(), "evil-link");
+        let dest = tempfile::tempdir().expect("tempdir");
+        let mut archive = Archive::new(bytes.as_slice());
+        let err = extract_regular_files(&mut archive, dest.path())
+            .expect_err("a symlink entry must be refused");
+        let msg = format!("{err:#}");
+        assert!(msg.contains("evil-link"), "{msg}");
+        assert!(
+            !dest.path().join("evil-link").exists(),
+            "no link may reach the web root"
+        );
+        // Extraction stops loudly at the hostile entry.
+        assert!(dest.path().join("index.html").exists());
+    }
+
+    #[test]
+    fn hardlink_entry_is_rejected() {
+        let bytes = bundle_with_entry(tar::EntryType::hard_link(), "hard-link");
+        let dest = tempfile::tempdir().expect("tempdir");
+        let mut archive = Archive::new(bytes.as_slice());
+        let err = extract_regular_files(&mut archive, dest.path())
+            .expect_err("a hard-link entry must be refused");
+        let msg = format!("{err:#}");
+        assert!(msg.contains("hard-link"), "{msg}");
+        assert!(!dest.path().join("hard-link").exists());
+    }
+
+    #[test]
+    fn escaping_entry_path_is_rejected() {
+        for path in ["../evil", "/etc/passwd", "a/../../b", ""] {
+            assert!(safe_entry_path(Path::new(path)).is_err(), "{path:?}");
+        }
+        assert_eq!(
+            safe_entry_path(Path::new("a/b.js")).unwrap(),
+            Path::new("a/b.js")
+        );
     }
 }

@@ -255,16 +255,27 @@ par-term-streamer --download-frontend --frontend-version 0.14.0 --web-root ./web
 par-term-streamer --macro-file demo.yaml --macro-loop --macro-speed 1.5
 
 # With HTTP Basic Authentication (password protection)
-par-term-streamer --enable-http --http-user admin --http-password secret
-par-term-streamer --enable-http --http-user admin --http-password-hash '$2y$...'
+# Prefer the file/hash forms: a clear-text --http-password is visible in
+# `ps` output and shell history for the server's lifetime
 par-term-streamer --enable-http --http-user admin --http-password-file /path/to/password
+par-term-streamer --enable-http --http-user admin --http-password-hash '$2y$...'
+par-term-streamer --enable-http --http-user admin --http-password secret
 
 # With API key authentication (protects API routes: /ws, /sessions, /stats)
+# Prefer the environment variable for the same ps/history reason:
+#   export PAR_TERM_API_KEY=my-secret-key
 par-term-streamer --enable-http --api-key my-secret-key
 
 # Combined: API key + HTTP Basic Auth (either satisfies auth)
-par-term-streamer --enable-http --http-user admin --http-password secret --api-key my-secret-key
+par-term-streamer --enable-http --http-user admin --http-password-file /path/to/password --api-key my-secret-key
 ```
+
+**Non-loopback binds (SEC-001/SEC-002):** a bind whose host is not loopback
+refuses to start when no authentication is configured
+(`--allow-unauthenticated` acknowledges that risk), and again when
+authentication is configured but TLS is off, since the credentials would
+cross the network in cleartext (`--allow-cleartext-auth` acknowledges that
+one). The loopback default never trips either gate.
 
 ### Command-Line Options and Environment Variables
 
@@ -324,6 +335,8 @@ par-term-streamer --enable-http
 | `PAR_TERM_ALLOW_API_KEY_IN_QUERY` | `--allow-api-key-in-query` | Allow API key in URL query param (not recommended) |
 | `PAR_TERM_ALLOW_PANE_CREATE` | `--allow-pane-create` | Let writable clients create panes on the mux daemon (`pane_create_request`; default off, fail-closed; read-only connections always refused) |
 | `PAR_TERM_CSP_ALLOW_BLOB_CONNECT` | `--csp-allow-blob-connect` | Add `blob:` to the CSP's connect-src so a custom web root's own assets can fetch blob URLs (default off; the ENH-059 policy stays byte-identical) |
+| `PAR_TERM_ALLOW_UNAUTHENTICATED` | `--allow-unauthenticated` | Let the server bind a non-loopback host with no authentication (SEC-002). Off by default: that configuration refuses to start; prefer `--host 127.0.0.1`, `--api-key`, or HTTP Basic Auth |
+| `PAR_TERM_ALLOW_CLEARTEXT_AUTH` | `--allow-cleartext-auth` | Let the server send auth credentials unencrypted on a non-loopback bind with no TLS (SEC-001). Off by default: that configuration refuses to start; prefer `--tls-pem` or `--tls-cert`/`--tls-key` |
 | `PAR_TERM_MAX_CLIENTS_PER_SESSION` | `--max-clients-per-session` | Maximum clients per session (0=unlimited) |
 | `PAR_TERM_INPUT_RATE_LIMIT` | `--input-rate-limit` | Per-client input rate limit (bytes/sec; default 1048576 = 1 MiB/s, 0=unlimited) |
 | `PAR_TERM_KITTY_FILE_MEDIA` | `--kitty-file-media` | Kitty graphics file media: `off` \| `temp_only` (default) \| `all` — see [SECURITY.md](SECURITY.md#kitty-graphics-protocol-file-transmission) |
@@ -373,7 +386,9 @@ Before extracting, the archive's SHA-256 is checked against the release's
 unreadable checksum file aborts without touching the web root. A release from
 v0.58.1 on that lacks the checksum asset is refused. Only releases published
 before v0.58.1, which predate the checksum asset, download with a warning
-(TLS-only integrity). Building the frontend into the web root with
+(TLS-only integrity). Extraction then writes regular files and directories
+only — an archive carrying symlink, hardlink, device, or FIFO entries is
+refused instead of unpacked. Building the frontend into the web root with
 `make web-build-static` avoids the download entirely.
 
 **Available Themes:**

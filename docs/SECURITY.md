@@ -959,7 +959,10 @@ connected client can execute arbitrary commands as the user running the server.
   credential is a bcrypt hash, rejecting cleartext too. The library-level
   `verify_htpasswd_hash` still verifies every format for embedders.
 - **Default**: auth is **disabled**. The binary binds to `127.0.0.1` by
-  default and warns loudly if binding a public interface without auth (SEC-002).
+  default; a non-loopback bind with no authentication **refuses to start**
+  (SEC-002) unless `--allow-unauthenticated`
+  (`PAR_TERM_ALLOW_UNAUTHENTICATED`) acknowledges that anyone who can reach
+  the port gets an interactive shell.
 
 ### Transport Security (TLS)
 
@@ -967,6 +970,11 @@ connected client can execute arbitrary commands as the user running the server.
   `rustls-pki-types` for PEM loading (replacing the unmaintained
   `rustls-pemfile` crate, RUSTSEC-2025-0134). Certificate verification is
   never disabled.
+- A non-loopback bind with authentication configured but TLS off **refuses
+  to start** (SEC-001): the API key / Basic Auth password would cross the
+  network in cleartext on every request. `--allow-cleartext-auth`
+  (`PAR_TERM_ALLOW_CLEARTEXT_AUTH`) acknowledges the risk. Loopback binds
+  are exempt.
 - Private key files are rejected on Unix when group or other can read them
   (owner-only `0600`/`0400` required, SEC-006).
 
