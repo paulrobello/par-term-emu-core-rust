@@ -41,6 +41,10 @@ pub mod keyboard;
 pub mod macros;
 /// Mouse tracking modes, encodings, and event types.
 pub mod mouse;
+
+// Always compiled (the OTLP grammar is plain std and the SDK-backed provider
+// is feature-gated inside); see otel.rs for the gate discipline.
+pub mod otel;
 /// Error type for PTY operations.
 pub mod pty_error;
 #[cfg(feature = "pty_session")]

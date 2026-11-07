@@ -5,6 +5,34 @@ members = [".", "derive", "crates/par-term-emu-core", "crates/par-mux"]
 # the library or derive crates.
 exclude = ["fuzz"]
 
+# Shared dependency versions (ARC-003): every dependency two or more members
+# name is declared ONCE here and referenced with `workspace = true` in the
+# member manifests, so a version bump is one edit instead of two or three
+# hand-repeated strings that silently diverge (the base64 lesson). Member-
+# unique dependencies and the version-train path pins
+# (`par-term-emu-core`/`par-mux`/`par-term-emu-derive`) stay in the member
+# manifests. `optional` stays member-side: the workspace entry carries the
+# version (and base features); a member may ADD features on top.
+[workspace.dependencies]
+base64 = "0.22.1"
+clap = { version = "4.6.1", features = ["derive", "env"] }
+flate2 = "1.1.9"
+interprocess = "2.4.2"
+libc = "0.2.186"
+log = "0.4"
+opentelemetry = { version = "0.33", default-features = false }
+opentelemetry_sdk = { version = "0.33", default-features = false, features = ["metrics"] }
+parking_lot = "0.13"
+pyo3 = "0.29"
+regex = "1.12.3"
+serde = { version = "1.0.228", features = ["derive"] }
+serde_json = "1.0.150"
+sha2 = "0.11.0"
+sysinfo = "0.39.3"
+tempfile = "3.27"
+unicode-width = "0.2.2"
+uuid = { version = "1.23.2", features = ["v4", "serde"] }
+
 [package]
 name = "par-term-emu-core-rust"
 version = "0.79.0"
@@ -56,8 +84,8 @@ path = "src/bin/streaming_server/main.rs"
 required-features = ["streaming-bin"]
 
 [dependencies]
-log = "0.4"
-pyo3 = { version = "0.29", optional = true, features = ["multiple-pymethods"] }
+log = { workspace = true }
+pyo3 = { workspace = true, optional = true, features = ["multiple-pymethods"] }
 # Proc-macro helpers (#[pyo3_get_all]) for the Python data classes (ARC-014).
 par-term-emu-derive = { path = "derive", version = "0.49.0", optional = true }
 # The terminal core (ARC-007 O2): every pre-split public path is re-exported
@@ -67,10 +95,10 @@ par-term-emu-core = { path = "crates/par-term-emu-core", version = "=0.79.0" }
 # The par-mux multiplexer (ARC-007 O2 Phase 2), re-exported as `crate::mux`
 # behind the `mux` feature. Same exact pin + lockstep version as the core.
 par-mux = { path = "crates/par-mux", version = "=0.79.0", optional = true }
-base64 = "0.22.1"
-serde = { version = "1.0.228", features = ["derive"] }
-serde_json = "1.0.150"
-uuid = { version = "1.23.2", features = ["v4", "serde"] }
+base64 = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+uuid = { workspace = true }
 
 # Streaming server dependencies
 tokio = { version = "1.52.3", features = ["rt-multi-thread", "net", "sync", "time", "macros", "io-util", "signal"], optional = true }
@@ -81,10 +109,10 @@ futures-util = { version = "0.3.32", optional = true }
 
 # Cross-platform local socket for the streaming server's MuxSessionFactory
 # (src/streaming/mux_factory.rs), which dials the par-mux daemon socket.
-interprocess = { version = "2.4.2", optional = true }
+interprocess = { workspace = true, optional = true }
 
 # CLI dependencies (for streaming server binary)
-clap = { version = "4.6.1", features = ["derive", "env"], optional = true }
+clap = { workspace = true, optional = true }
 
 anyhow = { version = "1.0.102", optional = true }
 tracing = { version = "0.1.44", optional = true }
@@ -94,12 +122,12 @@ tracing-subscriber = { version = "0.3.23", optional = true }
 reqwest = { version = "0.13.4", default-features = false, features = ["json", "rustls"], optional = true }
 
 # Compression (used for Kitty graphics o=z zlib decompression + archive extraction)
-flate2 = "1.1.9"
+flate2 = { workspace = true }
 
 # Archive extraction
 tar = { version = "0.4.46", optional = true }
 # SHA-256 verification of the downloaded web frontend archive (SEC-203)
-sha2 = { version = "0.11.0", optional = true }
+sha2 = { workspace = true, optional = true }
 
 # Protocol Buffers
 prost = { version = "0.14.3", optional = true }
@@ -119,29 +147,21 @@ sha1 = { version = "0.11.0", optional = true }
 headers = { version = "0.4.1", optional = true }
 
 # System resource monitoring
-sysinfo = { version = "0.39.3", optional = true }
+sysinfo = { workspace = true, optional = true }
 
 # OpenTelemetry OTLP metrics for the streamer (kanban 01a18331), following
 # par-rt-db ENH-018: feature-gated build (default off — the default build
 # carries no OpenTelemetry code or deps) with a second runtime env gate
 # (PAR_TERM_STREAMER_OTEL_ENABLED) so a feature-built binary still makes zero
-# OTLP calls unless an operator opts in. The opentelemetry / opentelemetry_sdk
-# / opentelemetry-otlp trio releases in lockstep and breaks across minors, so
-# all three pins must move together — verify with `cargo tree -d` (no
-# duplicate opentelemetry tree).
-opentelemetry = { version = "0.33", default-features = false, optional = true }
-opentelemetry_sdk = { version = "0.33", default-features = false, features = [
-    "metrics",
-], optional = true }
-opentelemetry-otlp = { version = "0.33", default-features = false, features = [
-    "metrics",
-    "grpc-tonic",
-    "http-proto",
-    "reqwest-blocking-client",
-    "reqwest-rustls",
-], optional = true }
+# OTLP calls unless an operator opts in. The shared OTLP layer (protocol
+# grammar, provider lifecycle, reporting exporter) lives in the core member's
+# `otel` feature (ARC-001); this crate keeps only the instrument facade
+# (`src/streaming/metrics/`), which names the plain `opentelemetry` crate
+# directly. The opentelemetry trio releases in lockstep and breaks across
+# minors — verify with `cargo tree -d` (no duplicate opentelemetry tree).
+opentelemetry = { workspace = true, optional = true }
 
-parking_lot = "0.13"
+parking_lot = { workspace = true }
 # Streaming-only: constant-time credential compares and zeroizing drops
 # (src/streaming/config.rs, auth paths). Optional so headless profiles
 # (sim/rust-only/mux) pull neither.
@@ -149,7 +169,7 @@ subtle = { version = "2.6.1", optional = true }
 zeroize = { version = "1.8.2", optional = true }
 
 [target.'cfg(unix)'.dependencies]
-libc = "0.2.186"
+libc = { workspace = true }
 
 # jemalloc for better server performance (5-15% throughput improvement)
 # Only available on non-Windows platforms
@@ -161,9 +181,9 @@ tikv-jemallocator = { version = "0.7.0", optional = true }
 prost-build = { version = "0.14.3", optional = true }
 
 [dev-dependencies]
-pyo3 = { version = "0.29", features = ["auto-initialize"] }
+pyo3 = { workspace = true, features = ["auto-initialize"] }
 tokio = { version = "1.52.3", features = ["full", "test-util"] }
-tempfile = "3.27"
+tempfile = { workspace = true }
 # axum already depends on tower/util; as a dev-dep it only adds ServiceExt
 # (.oneshot) for the in-process router tests in src/streaming/server.rs.
 tower = { version = "0.5", features = ["util"] }
@@ -175,7 +195,7 @@ criterion = { version = "0.7", features = ["html_reports"] }
 
 # Test-only: the SDK's InMemoryMetricExporter (feature `testing`) for the otel
 # metrics unit test — feature-unified into test builds only, never shipped.
-opentelemetry_sdk = { version = "0.33", features = ["testing"] }
+opentelemetry_sdk = { workspace = true, features = ["testing"] }
 
 # VTE throughput benchmarks (ENH-007). `required-features` keeps the target out
 # of everyday `cargo test` runs; run via `make bench`
@@ -246,7 +266,7 @@ streaming-bin = ["self-update", "streaming", "clap", "anyhow", "tracing", "traci
 # compiles no OpenTelemetry code. Implies `streaming` because the instrumented
 # paths live in the streaming server. The runtime gate is
 # PAR_TERM_STREAMER_OTEL_ENABLED (see src/streaming/metrics.rs).
-otel = ["streaming", "dep:opentelemetry", "dep:opentelemetry_sdk", "dep:opentelemetry-otlp"]
+otel = ["streaming", "par-term-emu-core/otel", "dep:opentelemetry"]
 
 # Terminal multiplexer (par-mux): the `par-mux` workspace member, re-exported
 # as `crate::mux` (ARC-007 O2 Phase 2). Needs real PTYs and a local socket, so

@@ -13,7 +13,7 @@ command or notification added without its doc row fails the gate:
   5. `#[arg(long…)]` fields (crates/par-mux/src/bin/par_mux/main.rs)
                                                  ↔ every `--flag` claimed in MUX.md,
                                                    CHANGELOG [Unreleased] par-mux
-                                                   bullets, config.rs rustdoc, and
+                                                   bullets, config/ rustdoc, and
                                                    the embedded agent skill SKILL.md
   6. the roster row grammar (`roster_row`, ARC-060) ↔ SKILL.md's
      `--cmd list-agents` comment line, which must show the key=value
@@ -61,7 +61,7 @@ SELF_TEST_FILES: tuple[str, ...] = (
     "docs/MUX.md",
     "docs/API_REFERENCE.md",
     "crates/par-mux/src/bin/par_mux/main.rs",
-    "crates/par-mux/src/mux/config.rs",
+    "crates/par-mux/src/mux/config/",
     "CHANGELOG.md",
     "crates/par-mux/skills/par-mux/SKILL.md",
     ROSTER_RS,
@@ -76,7 +76,10 @@ DOC_CMD_ROW_RE = re.compile(r"^\| `([a-z-]+)` \|", re.MULTILINE)
 DOC_NOTIF_ROW_RE = re.compile(r"^\| `%([a-z-]+)", re.MULTILINE)
 
 MAIN_RS = "crates/par-mux/src/bin/par_mux/main.rs"
-CONFIG_RS = "crates/par-mux/src/mux/config.rs"
+# The config module is a themed-file directory (ARC-004); the drift target is
+# the file carrying the `--state-dir` rustdoc (Overrides).
+CONFIG_DIR = "crates/par-mux/src/mux/config/"
+CONFIG_RESOLVE_RS = "crates/par-mux/src/mux/config/resolve.rs"
 # Embedded into the par-mux binary by include_str! (skill_installer.rs), so it
 # ships in every release and gets the same fail-closed contracts as MUX.md.
 SKILL_MD = "crates/par-mux/skills/par-mux/SKILL.md"
@@ -326,8 +329,10 @@ def unreleased_par_mux_bullets(changelog: str) -> str:
 
 
 def rustdoc_text(rs: str, where: str) -> str:
-    cut = rs.find("#[cfg(test)]")
-    code = rs[:cut] if cut >= 0 else rs
+    # Cut at an INLINE test module (`mod name { … }`) only: a bare
+    # `#[cfg(test)] mod tests;` declaration (config/mod.rs) owns no docs.
+    cut = re.search(r"#\[cfg\(test\)\]\s*mod\s+\w+\s*\{", rs)
+    code = rs[: cut.start()] if cut else rs
     docs = "\n".join(re.findall(r"^\s*//[/!][^\n]*", code, re.MULTILINE))
     if not docs:
         fail(f"parsed nothing from {where}: no rustdoc comments")
@@ -495,7 +500,7 @@ def collect_problems(root: Path) -> tuple[list[str], dict[str, int]]:
     mux_md = read(root, "docs/MUX.md")
     api_md = read(root, "docs/API_REFERENCE.md")
     main_rs = read(root, MAIN_RS)
-    config_rs = read(root, CONFIG_RS)
+    config_rs = read(root, CONFIG_DIR)
     changelog = read(root, "CHANGELOG.md")
     skill_md = read(root, SKILL_MD)
 
@@ -612,9 +617,9 @@ def collect_problems(root: Path) -> tuple[list[str], dict[str, int]]:
     mux_claims = set(FLAG_TOKEN_RE.findall(mux_md))
     if not mux_claims:
         fail("parsed nothing from docs/MUX.md: no --flag tokens")
-    config_claims = set(FLAG_TOKEN_RE.findall(rustdoc_text(config_rs, CONFIG_RS)))
+    config_claims = set(FLAG_TOKEN_RE.findall(rustdoc_text(config_rs, CONFIG_DIR)))
     if not config_claims:
-        fail(f"parsed nothing from {CONFIG_RS}: no --flag tokens in rustdoc")
+        fail(f"parsed nothing from {CONFIG_DIR}: no --flag tokens in rustdoc")
     changelog_claims = set(FLAG_TOKEN_RE.findall(unreleased_par_mux_bullets(changelog)))
     skill_claims = set(FLAG_TOKEN_RE.findall(skill_md))
     if not skill_claims:
@@ -622,7 +627,7 @@ def collect_problems(root: Path) -> tuple[list[str], dict[str, int]]:
     for where, claims in (
         ("docs/MUX.md", mux_claims),
         ("CHANGELOG.md [Unreleased] (par-mux bullets)", changelog_claims),
-        (f"{CONFIG_RS} rustdoc", config_claims),
+        (f"{CONFIG_DIR} rustdoc", config_claims),
         (SKILL_MD, skill_claims),
     ):
         for name in sorted(claims - known):
@@ -753,8 +758,8 @@ def run_self_test(root: Path) -> int:
             "frobnicate",
         ),
         (
-            "claim a nonexistent --border-color flag in config.rs rustdoc",
-            CONFIG_RS,
+            "claim a nonexistent --border-color flag in config/ rustdoc",
+            CONFIG_RESOLVE_RS,
             lambda t: t.replace(
                 "    /// `--state-dir`.\n",
                 "    /// `--state-dir`.\n    /// `--border-color` (attach).\n",

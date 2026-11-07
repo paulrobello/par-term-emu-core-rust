@@ -29,18 +29,18 @@ path = "src/bin/par_mux/main.rs"
 required-features = ["mux-bin"]
 
 [dependencies]
-unicode-width = "0.2.2"
+unicode-width = { workspace = true }
 # The terminal core. Exact pin + lockstep version (`make core-version-check`).
 par-term-emu-core = { path = "../par-term-emu-core", version = "=0.79.0", features = ["mux", "pty_session", "serde"] }
-log = "0.4"
-base64 = "0.22.1"
-regex = "1.12.3"
-serde = { version = "1.0.228", features = ["derive"] }
-serde_json = "1.0.150"
-parking_lot = "0.13"
+log = { workspace = true }
+base64 = { workspace = true }
+regex = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+parking_lot = { workspace = true }
 # Cross-platform local socket (Unix domain sockets / Windows named pipes) for
 # the control socket (par-mux.md D4).
-interprocess = { version = "2.4.2", optional = true }
+interprocess = { workspace = true, optional = true }
 # Multi-source pump wait (card 01a19d78): the render attach wait selects
 # over the daemon-push channel and the stdin reader channel, so a host
 # click wakes the tick instead of riding out the 16 ms poll remainder.
@@ -53,9 +53,9 @@ dirs = { version = "6.0", optional = true }
 # Agent-integration config merging (claude settings.json keeps the user comments and formatting).
 # `mux-bin` only: the installers back the binary's one-shot flags (ARC-143).
 jsonc-parser = { version = "0.33", default-features = false, features = ["serde"], optional = true }
-tempfile = { version = "3.27", optional = true }
+tempfile = { workspace = true, optional = true }
 # Daemon CLI parser (`mux-bin` only, ARC-106).
-clap = { version = "4.6.1", features = ["derive", "env"], optional = true }
+clap = { workspace = true, optional = true }
 # Shell-completion scripts generated from that CLI (`mux-bin` only).
 clap_complete = { version = "4.6", optional = true }
 # Attach client (feature `attach`): raw-mode terminal handling, size/keypress
@@ -69,21 +69,14 @@ toml_edit = { version = "0.25", optional = true }
 # Pane process-group CPU for pane-info (`process_cpu`); already a workspace
 # dependency of the root's `streaming` feature, so the lockfile resolves the
 # same version.
-sysinfo = { version = "0.39.3", optional = true }
-# Opt-in OTLP metrics (kanban 01a18d2606): same 0.33 trio and feature set as
-# the root's `otel` feature, so the workspace keeps a single dedup'd
-# opentelemetry tree (`cargo tree -d` must stay empty).
-opentelemetry = { version = "0.33", default-features = false, optional = true }
-opentelemetry_sdk = { version = "0.33", default-features = false, features = [
-    "metrics",
-], optional = true }
-opentelemetry-otlp = { version = "0.33", default-features = false, features = [
-    "metrics",
-    "grpc-tonic",
-    "http-proto",
-    "reqwest-blocking-client",
-    "reqwest-rustls",
-], optional = true }
+sysinfo = { workspace = true, optional = true }
+# Opt-in OTLP metrics (kanban 01a18d2606): the shared OTLP layer (protocol
+# grammar, provider lifecycle, reporting exporter) lives in the core member's
+# `otel` feature (ARC-001), which this crate's `otel` feature forwards to;
+# only the instrument facade below names the plain `opentelemetry` crate
+# directly, so the workspace keeps a single dedup'd opentelemetry tree
+# (`cargo tree -d` must stay empty).
+opentelemetry = { workspace = true, optional = true }
 
 [target.'cfg(target_os = "linux")'.dependencies]
 # logind inhibitor for the `shutdown-inhibit` feature (MUX_DECISIONS.md D9);
@@ -91,7 +84,7 @@ opentelemetry-otlp = { version = "0.33", default-features = false, features = [
 zbus = { version = "5", default-features = false, features = ["async-io", "blocking-api"], optional = true }
 
 [target.'cfg(unix)'.dependencies]
-libc = "0.2.186"
+libc = { workspace = true }
 nix = { version = "0.31.3", features = ["process", "term", "signal", "poll"], optional = true }
 
 # Windows-only: UTF-16 SDDL input for the named-pipe security descriptor
@@ -106,11 +99,11 @@ windows-sys = { version = "0.61", optional = true, features = [
 ] }
 
 [dev-dependencies]
-tempfile = "3.27"
+tempfile = { workspace = true }
 # The metrics module's in-memory-exporter test (feature `otel`) — the
 # exporter lives behind the SDK's test-only `testing` feature, mirroring the
 # root crate's dev-dependency.
-opentelemetry_sdk = { version = "0.33", features = ["testing"] }
+opentelemetry_sdk = { workspace = true, features = ["testing"] }
 # tests/mux_attach.rs drives the attach client through a real PTY.
 portable-pty = "0.9.0"
 # pane.rs unit test: a PNG round-trip through the kitty retention path.
@@ -141,7 +134,7 @@ shutdown-inhibit = ["dep:zbus"]
 # operator opts in at runtime (`--otel-enabled` / PAR_MUX_OTEL_ENABLED). The
 # runtime gate and instrument list live in `mux/metrics.rs`; gate:
 # `make mux-otel-check`.
-otel = ["dep:opentelemetry", "dep:opentelemetry_sdk", "dep:opentelemetry-otlp"]
+otel = ["par-term-emu-core/otel", "dep:opentelemetry"]
 
 # cargo-fuzz builds with `--cfg fuzzing` (the ENH-046 attach_input entry point).
 [lints.rust]
