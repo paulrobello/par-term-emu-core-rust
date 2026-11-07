@@ -2788,7 +2788,7 @@ impl ClientMessage {
 // the same order.
 
 /// Every [`ServerMessage`] variant name, in `variant_name` order.
-#[cfg(feature = "streaming")]
+#[cfg(all(test, feature = "streaming"))]
 pub(crate) const SERVER_MESSAGE_VARIANT_NAMES: &[&str] = &[
     "Output",
     "Resize",
@@ -2841,7 +2841,7 @@ pub(crate) const SERVER_MESSAGE_VARIANT_NAMES: &[&str] = &[
 ];
 
 /// Every [`ClientMessage`] variant name, in `variant_name` order.
-#[cfg(feature = "streaming")]
+#[cfg(all(test, feature = "streaming"))]
 pub(crate) const CLIENT_MESSAGE_VARIANT_NAMES: &[&str] = &[
     "ViewerIdentity",
     "Input",
@@ -2868,6 +2868,7 @@ impl ServerMessage {
     /// The variant's own name (`"Output"` for [`ServerMessage::Output`]),
     /// the fixture-coverage key. Exhaustive with no wildcard arm (repo
     /// rule), so an unnamed new variant fails to compile here.
+    #[cfg(all(test, feature = "streaming"))]
     pub(crate) fn variant_name(&self) -> &'static str {
         match self {
             Self::Output { .. } => "Output",
@@ -2927,6 +2928,7 @@ impl ClientMessage {
     /// The variant's own name (`"Input"` for [`ClientMessage::Input`]),
     /// the fixture-coverage key. Exhaustive with no wildcard arm (repo
     /// rule), so an unnamed new variant fails to compile here.
+    #[cfg(all(test, feature = "streaming"))]
     pub(crate) fn variant_name(&self) -> &'static str {
         match self {
             Self::ViewerIdentity { .. } => "ViewerIdentity",
