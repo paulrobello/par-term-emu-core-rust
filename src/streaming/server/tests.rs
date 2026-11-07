@@ -286,17 +286,23 @@ async fn input_without_pty_writer_is_counted_and_dropped() {
     assert!(!StreamingServer::session_has_writer(&session));
 
     let dispatch = |read_only: bool, msg: ClientMessage| {
-        server.handle_client_message(
-            &session,
-            super::ConnCtx {
-                transport_label: "ws-test",
-                client_id: uuid::Uuid::new_v4(),
-                read_only,
-            },
-            &mut None,
-            &mut None,
-            msg,
-        )
+        let server = Arc::clone(&server);
+        let session = Arc::clone(&session);
+        async move {
+            server
+                .handle_client_message(
+                    &session,
+                    super::ConnCtx {
+                        transport_label: "ws-test",
+                        client_id: uuid::Uuid::new_v4(),
+                        read_only,
+                    },
+                    &mut None,
+                    &mut None,
+                    msg,
+                )
+                .await
+        }
     };
 
     let inputs = [
@@ -318,7 +324,10 @@ async fn input_without_pty_writer_is_counted_and_dropped() {
         ClientMessage::FocusChange { focused: true },
     ];
     for (i, msg) in inputs.into_iter().enumerate() {
-        assert!(dispatch(false, msg).is_empty(), "input produces no reply");
+        assert!(
+            dispatch(false, msg).await.is_empty(),
+            "input produces no reply"
+        );
         assert_eq!(
             session.metrics.dropped_messages.load(Ordering::Relaxed),
             i + 1
@@ -326,7 +335,7 @@ async fn input_without_pty_writer_is_counted_and_dropped() {
     }
 
     // Non-input messages on the same writer-less session still reply.
-    let replies = dispatch(false, ClientMessage::Ping);
+    let replies = dispatch(false, ClientMessage::Ping).await;
     assert!(matches!(replies.as_slice(), [ServerMessage::Pong]));
     assert_eq!(
         session.metrics.dropped_messages.load(Ordering::Relaxed),
@@ -341,7 +350,8 @@ async fn input_without_pty_writer_is_counted_and_dropped() {
         ClientMessage::Input {
             data: "q".to_string(),
         },
-    );
+    )
+    .await;
     assert!(replies.is_empty());
     assert_eq!(
         session.metrics.dropped_messages.load(Ordering::Relaxed),
@@ -362,26 +372,34 @@ async fn upload_messages_without_a_mux_pipe_are_refused_inline() {
     let session = server.get_session("default").expect("default session");
 
     let dispatch = |read_only: bool, msg: ClientMessage| {
-        server.handle_client_message(
-            &session,
-            super::ConnCtx {
-                transport_label: "ws-test",
-                client_id: uuid::Uuid::new_v4(),
-                read_only,
-            },
-            &mut None,
-            &mut None,
-            msg,
-        )
+        let server = Arc::clone(&server);
+        let session = Arc::clone(&session);
+        async move {
+            server
+                .handle_client_message(
+                    &session,
+                    super::ConnCtx {
+                        transport_label: "ws-test",
+                        client_id: uuid::Uuid::new_v4(),
+                        read_only,
+                    },
+                    &mut None,
+                    &mut None,
+                    msg,
+                )
+                .await
+        }
     };
 
-    let refused = |msg: ClientMessage| match dispatch(false, msg).as_slice() {
-        [ServerMessage::UploadFinished {
-            upload_id: 0,
-            path: None,
-            error: Some(reason),
-        }] => reason.clone(),
-        other => panic!("expected one upload_finished refusal, got {other:?}"),
+    let refused = |msg: ClientMessage| async {
+        match dispatch(false, msg).await.as_slice() {
+            [ServerMessage::UploadFinished {
+                upload_id: 0,
+                path: None,
+                error: Some(reason),
+            }] => reason.clone(),
+            other => panic!("expected one upload_finished refusal, got {other:?}"),
+        }
     };
 
     assert!(
@@ -389,6 +407,7 @@ async fn upload_messages_without_a_mux_pipe_are_refused_inline() {
             filename: "x.png".into(),
             total_bytes: 5,
         })
+        .await
         .contains("mux-backed"),
         "no-pipe begin must refuse with the mux reason"
     );
@@ -396,15 +415,20 @@ async fn upload_messages_without_a_mux_pipe_are_refused_inline() {
         refused(ClientMessage::UploadChunk {
             data: b"xy".to_vec()
         })
+        .await
         .contains("mux-backed"),
         "no-pipe chunk must refuse with the mux reason"
     );
     assert!(
-        refused(ClientMessage::UploadCommit).contains("mux-backed"),
+        refused(ClientMessage::UploadCommit)
+            .await
+            .contains("mux-backed"),
         "no-pipe commit must refuse with the mux reason"
     );
     assert!(
-        refused(ClientMessage::UploadAbort).contains("mux-backed"),
+        refused(ClientMessage::UploadAbort)
+            .await
+            .contains("mux-backed"),
         "no-pipe abort must refuse with the mux reason"
     );
 
@@ -416,6 +440,7 @@ async fn upload_messages_without_a_mux_pipe_are_refused_inline() {
             total_bytes: 5,
         },
     )
+    .await
     .as_slice()
     {
         [ServerMessage::UploadFinished {
@@ -885,25 +910,28 @@ async fn snapshot_request_replies_with_semantic_snapshot() {
     let server = Arc::new(StreamingServer::new(terminal, "127.0.0.1:0".to_string()));
     let session = server.get_session("default").expect("default session");
 
-    let dispatch = |msg: ClientMessage| {
-        server.handle_client_message(
-            &session,
-            super::ConnCtx {
-                transport_label: "ws-test",
-                client_id: uuid::Uuid::new_v4(),
-                read_only: false,
-            },
-            &mut None,
-            &mut None,
-            msg,
-        )
+    let dispatch = |msg: ClientMessage| async {
+        server
+            .handle_client_message(
+                &session,
+                super::ConnCtx {
+                    transport_label: "ws-test",
+                    client_id: uuid::Uuid::new_v4(),
+                    read_only: false,
+                },
+                &mut None,
+                &mut None,
+                msg,
+            )
+            .await
     };
 
     for scope in ["visible", "recent", "full"] {
         let replies = dispatch(ClientMessage::SnapshotRequest {
             scope: scope.to_string(),
             max_commands: if scope == "recent" { Some(3) } else { None },
-        });
+        })
+        .await;
         let snapshot_json = match replies.as_slice() {
             [ServerMessage::SemanticSnapshot { snapshot_json }] => snapshot_json.clone(),
             other => panic!("scope {scope}: expected one SemanticSnapshot reply, got {other:?}"),
@@ -919,7 +947,8 @@ async fn snapshot_request_replies_with_semantic_snapshot() {
     let replies = dispatch(ClientMessage::SnapshotRequest {
         scope: "bogus".to_string(),
         max_commands: None,
-    });
+    })
+    .await;
     let message = match replies.as_slice() {
         [ServerMessage::Error { message, .. }] => message.clone(),
         other => panic!("invalid scope: expected one Error reply, got {other:?}"),
@@ -941,17 +970,23 @@ async fn pane_create_is_refused_when_the_flag_is_off() {
     let session = server.get_session("default").expect("default session");
 
     let dispatch = |read_only: bool, msg: ClientMessage| {
-        server.handle_client_message(
-            &session,
-            super::ConnCtx {
-                transport_label: "ws-test",
-                client_id: uuid::Uuid::new_v4(),
-                read_only,
-            },
-            &mut None,
-            &mut None,
-            msg,
-        )
+        let server = Arc::clone(&server);
+        let session = Arc::clone(&session);
+        async move {
+            server
+                .handle_client_message(
+                    &session,
+                    super::ConnCtx {
+                        transport_label: "ws-test",
+                        client_id: uuid::Uuid::new_v4(),
+                        read_only,
+                    },
+                    &mut None,
+                    &mut None,
+                    msg,
+                )
+                .await
+        }
     };
     let request = || ClientMessage::PaneCreateRequest {
         correlation_id: "corr-1".to_string(),
@@ -959,7 +994,7 @@ async fn pane_create_is_refused_when_the_flag_is_off() {
     };
 
     for read_only in [false, true] {
-        match dispatch(read_only, request()).as_slice() {
+        match dispatch(read_only, request()).await.as_slice() {
             [ServerMessage::Error { message, code }] => {
                 assert_eq!(
                     message, "pane creation is disabled on this server",
@@ -996,24 +1031,30 @@ async fn pane_create_is_refused_read_only_and_without_a_daemon_when_enabled() {
     let session = server.get_session("default").expect("default session");
 
     let dispatch = |read_only: bool, msg: ClientMessage| {
-        server.handle_client_message(
-            &session,
-            super::ConnCtx {
-                transport_label: "ws-test",
-                client_id: uuid::Uuid::new_v4(),
-                read_only,
-            },
-            &mut None,
-            &mut None,
-            msg,
-        )
+        let server = Arc::clone(&server);
+        let session = Arc::clone(&session);
+        async move {
+            server
+                .handle_client_message(
+                    &session,
+                    super::ConnCtx {
+                        transport_label: "ws-test",
+                        client_id: uuid::Uuid::new_v4(),
+                        read_only,
+                    },
+                    &mut None,
+                    &mut None,
+                    msg,
+                )
+                .await
+        }
     };
     let request = || ClientMessage::PaneCreateRequest {
         correlation_id: "corr-2".to_string(),
         session_id: "$0".to_string(),
     };
 
-    match dispatch(true, request()).as_slice() {
+    match dispatch(true, request()).await.as_slice() {
         [ServerMessage::Error { code, .. }] => {
             assert_eq!(
                 code.as_deref(),
@@ -1024,7 +1065,7 @@ async fn pane_create_is_refused_read_only_and_without_a_daemon_when_enabled() {
         other => panic!("expected the pane_create_read_only refusal, got {other:?}"),
     }
 
-    match dispatch(false, request()).as_slice() {
+    match dispatch(false, request()).await.as_slice() {
         [ServerMessage::Error { code, .. }] => {
             assert_eq!(
                 code.as_deref(),
@@ -1091,32 +1132,36 @@ fn wait_for_writer_bytes(
     }
 }
 
-fn dispatch_mouse(
+async fn dispatch_mouse(
     server: &std::sync::Arc<StreamingServer>,
     session: &std::sync::Arc<StreamSessionState>,
     read_only: bool,
     button: u8,
     event_type: crate::streaming::protocol::MouseEventType,
 ) {
-    server.handle_client_message(
-        session,
-        super::ConnCtx {
-            transport_label: "ws-test",
-            client_id: uuid::Uuid::new_v4(),
-            read_only,
-        },
-        &mut None,
-        &mut None,
-        crate::streaming::protocol::ClientMessage::Mouse {
-            col: 1,
-            row: 1,
-            button,
-            shift: false,
-            ctrl: false,
-            alt: false,
-            event_type,
-        },
-    );
+    let mut subscriptions = None;
+    let mut rate_limiter = None;
+    server
+        .handle_client_message(
+            session,
+            super::ConnCtx {
+                transport_label: "ws-test",
+                client_id: uuid::Uuid::new_v4(),
+                read_only,
+            },
+            &mut subscriptions,
+            &mut rate_limiter,
+            crate::streaming::protocol::ClientMessage::Mouse {
+                col: 1,
+                row: 1,
+                button,
+                shift: false,
+                ctrl: false,
+                alt: false,
+                event_type,
+            },
+        )
+        .await;
 }
 
 /// A server session with SGR any-event tracking armed and a capturing PTY
@@ -1156,7 +1201,7 @@ async fn mouse_move_normalizes_logical_button_to_raw_sgr_bits() {
         (32, &b"\x1b[<32;2;2M"[..]),
         (35, &b"\x1b[<35;2;2M"[..]),
     ] {
-        dispatch_mouse(&server, &session, false, button, MouseEventType::Move);
+        dispatch_mouse(&server, &session, false, button, MouseEventType::Move).await;
         wait_for_writer_bytes(&captured, expected);
     }
 }
@@ -1177,7 +1222,7 @@ async fn mouse_press_and_release_buttons_stay_verbatim() {
         (2, MouseEventType::Press, &b"\x1b[<2;2;2M"[..]),
         (32, MouseEventType::Press, &b"\x1b[<32;2;2M"[..]),
     ] {
-        dispatch_mouse(&server, &session, false, button, event_type);
+        dispatch_mouse(&server, &session, false, button, event_type).await;
         wait_for_writer_bytes(&captured, expected);
     }
 }
@@ -1190,7 +1235,7 @@ async fn read_only_mouse_move_sends_nothing() {
 
     let (server, session, captured) = mouse_session();
 
-    dispatch_mouse(&server, &session, true, 0, MouseEventType::Move);
+    dispatch_mouse(&server, &session, true, 0, MouseEventType::Move).await;
     std::thread::sleep(std::time::Duration::from_millis(100));
     assert!(
         captured.lock().is_empty(),
@@ -1212,26 +1257,34 @@ async fn mouse_move_rides_the_serialized_input_path_with_keystrokes() {
 
     let (server, session, captured) = mouse_session();
     let dispatch = |msg: ClientMessage| {
-        server.handle_client_message(
-            &session,
-            super::ConnCtx {
-                transport_label: "ws-test",
-                client_id: uuid::Uuid::new_v4(),
-                read_only: false,
-            },
-            &mut None,
-            &mut None,
-            msg,
-        )
+        let server = Arc::clone(&server);
+        let session = Arc::clone(&session);
+        async move {
+            server
+                .handle_client_message(
+                    &session,
+                    super::ConnCtx {
+                        transport_label: "ws-test",
+                        client_id: uuid::Uuid::new_v4(),
+                        read_only: false,
+                    },
+                    &mut None,
+                    &mut None,
+                    msg,
+                )
+                .await
+        }
     };
 
     dispatch(ClientMessage::Input {
         data: "q".to_string(),
-    });
-    dispatch_mouse(&server, &session, false, 0, MouseEventType::Move);
+    })
+    .await;
+    dispatch_mouse(&server, &session, false, 0, MouseEventType::Move).await;
     dispatch(ClientMessage::Input {
         data: "x".to_string(),
-    });
+    })
+    .await;
 
     wait_for_writer_bytes(&captured, b"q\x1b[<32;2;2Mx");
 }

@@ -144,6 +144,9 @@ pub(super) fn spawn_drain(
         let mut in_reply = false;
         let mut reply_body = Vec::new();
         let mut next_status = Instant::now();
+        // Reused scratch for the Output guard's live pane-id comparison so
+        // the per-notification check allocates nothing (QA-004).
+        let mut pane_guard_buf = String::new();
         loop {
             if link.closed.load(Ordering::Relaxed) {
                 break;
@@ -153,6 +156,9 @@ pub(super) fn spawn_drain(
             // happens mid-batch takes effect for the remaining lines.
             let pane_num = link.pane();
             let pane_id = format!("%{pane_num}");
+            // Reply-scan filter prefix, hoisted: the per-line comparison
+            // below must not allocate (QA-004).
+            let pane_prefix = format!("{pane_id} ");
             if Instant::now() >= next_status {
                 if query_viewer_status(&link).is_err() {
                     break;
@@ -209,7 +215,7 @@ pub(super) fn spawn_drain(
                             reply_body.join(" | ")
                         );
                     } else {
-                        if line.starts_with(&format!("{pane_id} ")) {
+                        if line.starts_with(&pane_prefix) {
                             apply_viewer_status(&link, &line);
                         }
                         reply_body.push(line);
@@ -226,7 +232,7 @@ pub(super) fn spawn_drain(
                         // pane must not survive the retarget that happened
                         // mid-batch.
                         TmuxNotification::Output { pane_id: id, data }
-                            if id == format!("%{}", link.pane()) =>
+                            if id == live_pane_id(&link, &mut pane_guard_buf) =>
                         {
                             // The damage line, when the daemon sent one, is the
                             // VERY next line (one fan-out write). Peek at the
@@ -500,6 +506,17 @@ fn send_chunk(link: &MirrorLink, chunk: OutputChunk) {
     }
 }
 
+/// The live pane-id prefix for the notification guards, written into a
+/// reused buffer so the per-notification comparison allocates nothing
+/// (QA-004). Reads the link live rather than the pass snapshot: a
+/// mid-batch retarget must drop the OLD pane's remaining output lines.
+fn live_pane_id<'a>(link: &MirrorLink, buf: &'a mut String) -> &'a str {
+    use std::fmt::Write as _;
+    buf.clear();
+    let _ = write!(buf, "%{}", link.pane());
+    buf
+}
+
 /// Look ahead one line, waiting only when the queue is empty. A nonmatching
 /// front stays in place so later notifications cannot overtake it.
 fn take_adjacent_damage(
@@ -528,7 +545,10 @@ fn adjacent_damage(
     line: &str,
     pane_id: &str,
 ) -> Option<(u64, Vec<(u32, u32)>)> {
-    if !line.starts_with(&format!("%pane-damage {pane_id} ")) {
+    // Hand-rolled prefix check instead of `format!`: this runs on the
+    // pane-output hot path once per line (QA-004).
+    let rest = line.strip_prefix("%pane-damage ")?.strip_prefix(pane_id)?;
+    if !rest.starts_with(' ') {
         return None;
     }
     let mut framed = line.as_bytes().to_vec();

@@ -3,6 +3,13 @@
 
 use super::*;
 
+/// The admission outcome shared by the four upload verbs: the session's
+/// pipe, or the refusal reply (read-only connection, or no mux backing).
+enum UploadAdmission {
+    Pipe(std::sync::Arc<dyn UploadForwarder>),
+    Refused(Box<ServerMessage>),
+}
+
 impl StreamingServer {
     /// Build a refresh message from the session's current visible terminal
     /// state. Pure (no side effects, no async) so the tungstenite and axum
@@ -75,7 +82,13 @@ impl StreamingServer {
     /// state, mutated in place. Returns the direct replies to send back to
     /// this client; messages that only write to the PTY or broadcast to the
     /// session produce no direct reply.
-    pub(super) fn handle_client_message(
+    ///
+    /// The function is async for exactly one reason: the four upload verbs
+    /// run their pipe ops on the blocking pool (`upload_op_off_runtime`)
+    /// so a wedged daemon stalls only that connection's loop, never a
+    /// tokio worker. Every other arm is synchronous work on terminal or
+    /// per-connection state.
+    pub(super) async fn handle_client_message(
         self: &Arc<Self>,
         session: &Arc<StreamSessionState>,
         ctx: ConnCtx<'_>,
@@ -218,31 +231,35 @@ impl StreamingServer {
                 filename,
                 total_bytes,
             } => {
-                self.handle_upload_begin(
-                    session,
-                    transport_label,
-                    client_id,
-                    read_only,
-                    &filename,
-                    total_bytes,
-                    &mut replies,
+                replies.extend(
+                    self.handle_upload_begin(
+                        session,
+                        transport_label,
+                        client_id,
+                        read_only,
+                        &filename,
+                        total_bytes,
+                    )
+                    .await,
                 );
             }
             crate::streaming::protocol::ClientMessage::UploadChunk { data } => {
-                self.handle_upload_chunk(
-                    session,
-                    transport_label,
-                    client_id,
-                    read_only,
-                    &data,
-                    &mut replies,
+                replies.extend(
+                    self.handle_upload_chunk(session, transport_label, client_id, read_only, &data)
+                        .await,
                 );
             }
             crate::streaming::protocol::ClientMessage::UploadCommit => {
-                self.handle_upload_commit(session, read_only, &mut replies);
+                replies.extend(
+                    self.handle_upload_commit(session, transport_label, client_id, read_only)
+                        .await,
+                );
             }
             crate::streaming::protocol::ClientMessage::UploadAbort => {
-                self.handle_upload_abort(session, read_only, &mut replies);
+                replies.extend(
+                    self.handle_upload_abort(session, transport_label, client_id, read_only)
+                        .await,
+                );
             }
             crate::streaming::protocol::ClientMessage::MuxTreeRequest => {
                 // Read-only by construction: the reply reads the tree
@@ -276,6 +293,11 @@ impl StreamingServer {
     }
 
     // --- Client uploads (mux-backed sessions) ---------------------------
+    // Module rule (QA-001): every blocking interaction with the mux
+    // session factory — session creation, metadata resolution, upload
+    // pipe ops — runs on the blocking pool, never on a tokio worker. The
+    // pipe's op queue is a std mpsc bounded by the reply deadline, so a
+    // wedged daemon must stall only that one connection's loop.
 
     /// The sync upload refusal reply: nothing was staged, so the daemon
     /// id is 0 and the reason rides `error`.
@@ -287,13 +309,60 @@ impl StreamingServer {
         }
     }
 
+    /// The read-only upload refusal shared by all four verbs.
+    fn upload_read_only_refusal() -> ServerMessage {
+        Self::upload_refusal("read-only connections cannot upload".to_string())
+    }
+
+    /// The shared pipe admission for the four upload verbs (QA-007):
+    /// resolve the session's `upload_pipe`, refusing through the shared
+    /// error-report shape when the session has no mux backing.
+    fn upload_pipe_or_refusal(
+        self: &Arc<Self>,
+        session: &Arc<StreamSessionState>,
+        transport_label: &str,
+        client_id: uuid::Uuid,
+        verb: &'static str,
+    ) -> UploadAdmission {
+        match self
+            .session_factory
+            .as_ref()
+            .and_then(|factory| factory.upload_pipe(&session.id))
+        {
+            Some(pipe) => UploadAdmission::Pipe(pipe),
+            None => {
+                crate::debug_error!(
+                    "STREAMING",
+                    "Upload{verb} from {} {} refused: session {} has no mux upload pipe",
+                    transport_label,
+                    client_id,
+                    session.id
+                );
+                UploadAdmission::Refused(Box::new(Self::upload_refusal(
+                    "uploads require a mux-backed pane session".to_string(),
+                )))
+            }
+        }
+    }
+
+    /// Run one upload pipe op on the blocking pool (QA-001). `op` owns
+    /// the pipe plus the verb's arguments and builds the replies; a join
+    /// failure becomes the shared error-report shape.
+    async fn upload_op_off_runtime<F>(op: F) -> Vec<ServerMessage>
+    where
+        F: FnOnce() -> Vec<ServerMessage> + Send + 'static,
+    {
+        match tokio::task::spawn_blocking(op).await {
+            Ok(replies) => replies,
+            Err(join_err) => vec![Self::upload_refusal(format!(
+                "upload worker join failed: {join_err}"
+            ))],
+        }
+    }
+
     /// `UploadBegin`: open the session's daemon-side staging and reply
-    /// `upload_started` (or an `upload_finished` error). The verb blocks
-    /// on the pipe's op queue — bounded by the reply deadline — because a
-    /// client cannot act on a begin whose outcome is unknown; a wedged
-    /// daemon stalls this one connection's loop, never other sessions.
-    #[allow(clippy::too_many_arguments)]
-    fn handle_upload_begin(
+    /// `upload_started` (or an `upload_finished` error).
+    async fn handle_upload_begin(
         self: &Arc<Self>,
         session: &Arc<StreamSessionState>,
         transport_label: &str,
@@ -301,63 +370,46 @@ impl StreamingServer {
         read_only: bool,
         filename: &str,
         total_bytes: u64,
-        replies: &mut Vec<ServerMessage>,
-    ) {
+    ) -> Vec<ServerMessage> {
         if read_only {
-            replies.push(Self::upload_refusal(
-                "read-only connections cannot upload".to_string(),
-            ));
-            return;
+            return vec![Self::upload_read_only_refusal()];
         }
-        let Some(pipe) = self
-            .session_factory
-            .as_ref()
-            .and_then(|factory| factory.upload_pipe(&session.id))
-        else {
-            crate::debug_error!(
-                "STREAMING",
-                "UploadBegin from {} {} refused: session {} has no mux upload pipe",
-                transport_label,
-                client_id,
-                session.id
-            );
-            replies.push(Self::upload_refusal(
-                "uploads require a mux-backed pane session".to_string(),
-            ));
-            return;
+        let pipe = match self.upload_pipe_or_refusal(session, transport_label, client_id, "Begin") {
+            UploadAdmission::Pipe(pipe) => pipe,
+            UploadAdmission::Refused(refusal) => return vec![*refusal],
         };
-        match pipe.begin(filename, total_bytes) {
-            Ok(upload_id) => replies.push(ServerMessage::UploadStarted { upload_id }),
+        let label = transport_label.to_string();
+        let filename = filename.to_string();
+        Self::upload_op_off_runtime(move || match pipe.begin(&filename, total_bytes) {
+            Ok(upload_id) => vec![ServerMessage::UploadStarted { upload_id }],
             Err(err) => {
                 crate::debug_error!(
                     "STREAMING",
                     "UploadBegin from {} {} failed: {}",
-                    transport_label,
+                    label,
                     client_id,
                     err
                 );
-                replies.push(Self::upload_refusal(err.to_string()));
+                vec![Self::upload_refusal(err.to_string())]
             }
-        }
+        })
+        .await
     }
 
     /// `UploadChunk`: cap-check and forward one chunk. A rejected chunk
     /// (daemon cap or wire cap) aborts the upload daemon-side and reports
-    /// `upload_finished`; silence is progress.
-    fn handle_upload_chunk(
+    /// `upload_finished`; silence is progress. The wire cap fires before
+    /// the pipe lookup so the refusal never depends on daemon state.
+    async fn handle_upload_chunk(
         self: &Arc<Self>,
         session: &Arc<StreamSessionState>,
         transport_label: &str,
         client_id: uuid::Uuid,
         read_only: bool,
         data: &[u8],
-        replies: &mut Vec<ServerMessage>,
-    ) {
+    ) -> Vec<ServerMessage> {
         if read_only {
-            replies.push(Self::upload_refusal(
-                "read-only connections cannot upload".to_string(),
-            ));
-            return;
+            return vec![Self::upload_read_only_refusal()];
         }
         if data.len() > MAX_UPLOAD_CHUNK_BYTES {
             crate::debug_error!(
@@ -368,113 +420,99 @@ impl StreamingServer {
                 data.len(),
                 MAX_UPLOAD_CHUNK_BYTES
             );
-            replies.push(Self::upload_refusal(format!(
+            return vec![Self::upload_refusal(format!(
                 "chunk of {} bytes exceeds the {}-byte per-chunk cap",
                 data.len(),
                 MAX_UPLOAD_CHUNK_BYTES
-            )));
-            return;
+            ))];
         }
-        let Some(pipe) = self
-            .session_factory
-            .as_ref()
-            .and_then(|factory| factory.upload_pipe(&session.id))
-        else {
-            replies.push(Self::upload_refusal(
-                "uploads require a mux-backed pane session".to_string(),
-            ));
-            return;
+        let pipe = match self.upload_pipe_or_refusal(session, transport_label, client_id, "Chunk") {
+            UploadAdmission::Pipe(pipe) => pipe,
+            UploadAdmission::Refused(refusal) => return vec![*refusal],
         };
-        if let Err(err) = pipe.chunk(data) {
-            crate::debug_error!(
-                "STREAMING",
-                "UploadChunk from {} {} failed: {}",
-                transport_label,
-                client_id,
-                err
-            );
-            replies.push(ServerMessage::UploadFinished {
-                upload_id: pipe.upload_id().unwrap_or(0),
-                path: None,
-                error: Some(err.to_string()),
-            });
-        }
+        let label = transport_label.to_string();
+        let data = data.to_vec();
+        Self::upload_op_off_runtime(move || {
+            if let Err(err) = pipe.chunk(&data) {
+                crate::debug_error!(
+                    "STREAMING",
+                    "UploadChunk from {} {} failed: {}",
+                    label,
+                    client_id,
+                    err
+                );
+                return vec![ServerMessage::UploadFinished {
+                    upload_id: pipe.upload_id().unwrap_or(0),
+                    path: None,
+                    error: Some(err.to_string()),
+                }];
+            }
+            Vec::new()
+        })
+        .await
     }
 
     /// `UploadCommit`: seal the staged file and paste its path into the
     /// session's pane. The path (or the failure) rides `upload_finished`.
-    fn handle_upload_commit(
+    async fn handle_upload_commit(
         self: &Arc<Self>,
         session: &Arc<StreamSessionState>,
+        transport_label: &str,
+        client_id: uuid::Uuid,
         read_only: bool,
-        replies: &mut Vec<ServerMessage>,
-    ) {
+    ) -> Vec<ServerMessage> {
         if read_only {
-            replies.push(Self::upload_refusal(
-                "read-only connections cannot upload".to_string(),
-            ));
-            return;
+            return vec![Self::upload_read_only_refusal()];
         }
-        let Some(pipe) = self
-            .session_factory
-            .as_ref()
-            .and_then(|factory| factory.upload_pipe(&session.id))
-        else {
-            replies.push(Self::upload_refusal(
-                "uploads require a mux-backed pane session".to_string(),
-            ));
-            return;
+        let pipe = match self.upload_pipe_or_refusal(session, transport_label, client_id, "Commit")
+        {
+            UploadAdmission::Pipe(pipe) => pipe,
+            UploadAdmission::Refused(refusal) => return vec![*refusal],
         };
-        match pipe.commit() {
-            Ok(path) => replies.push(ServerMessage::UploadFinished {
+        Self::upload_op_off_runtime(move || match pipe.commit() {
+            Ok(path) => vec![ServerMessage::UploadFinished {
                 upload_id: pipe.upload_id().unwrap_or(0),
                 path: Some(path),
                 error: None,
-            }),
-            Err(err) => replies.push(ServerMessage::UploadFinished {
+            }],
+            Err(err) => vec![ServerMessage::UploadFinished {
                 upload_id: pipe.upload_id().unwrap_or(0),
                 path: None,
                 error: Some(err.to_string()),
-            }),
-        }
+            }],
+        })
+        .await
     }
 
     /// `UploadAbort`: drop the staging slot (its spool file is deleted
     /// daemon-side) and report the settlement.
-    fn handle_upload_abort(
+    async fn handle_upload_abort(
         self: &Arc<Self>,
         session: &Arc<StreamSessionState>,
+        transport_label: &str,
+        client_id: uuid::Uuid,
         read_only: bool,
-        replies: &mut Vec<ServerMessage>,
-    ) {
+    ) -> Vec<ServerMessage> {
         if read_only {
-            replies.push(Self::upload_refusal(
-                "read-only connections cannot upload".to_string(),
-            ));
-            return;
+            return vec![Self::upload_read_only_refusal()];
         }
-        let Some(pipe) = self
-            .session_factory
-            .as_ref()
-            .and_then(|factory| factory.upload_pipe(&session.id))
-        else {
-            replies.push(Self::upload_refusal(
-                "uploads require a mux-backed pane session".to_string(),
-            ));
-            return;
+        let pipe = match self.upload_pipe_or_refusal(session, transport_label, client_id, "Abort") {
+            UploadAdmission::Pipe(pipe) => pipe,
+            UploadAdmission::Refused(refusal) => return vec![*refusal],
         };
-        match pipe.abort() {
-            Ok(()) => replies.push(ServerMessage::UploadFinished {
+        Self::upload_op_off_runtime(move || match pipe.abort() {
+            Ok(()) => vec![ServerMessage::UploadFinished {
                 upload_id: pipe.upload_id().unwrap_or(0),
                 path: None,
                 error: Some("aborted".to_string()),
-            }),
-            Err(err) => replies.push(ServerMessage::UploadFinished {
+            }],
+            Err(err) => vec![ServerMessage::UploadFinished {
                 upload_id: pipe.upload_id().unwrap_or(0),
                 path: None,
                 error: Some(err.to_string()),
-            }),
-        }
+            }],
+        })
+        .await
     }
 
     /// True when a PTY writer is attached to the session. Input-bearing
