@@ -386,7 +386,9 @@ Before extracting, the archive's SHA-256 is checked against the release's
 unreadable checksum file aborts without touching the web root. A release from
 v0.58.1 on that lacks the checksum asset is refused. Only releases published
 before v0.58.1, which predate the checksum asset, download with a warning
-(TLS-only integrity). Building the frontend into the web root with
+(TLS-only integrity). Extraction then writes regular files and directories
+only — an archive carrying symlink, hardlink, device, or FIFO entries is
+refused instead of unpacked. Building the frontend into the web root with
 `make web-build-static` avoids the download entirely.
 
 **Available Themes:**

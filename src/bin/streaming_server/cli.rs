@@ -310,6 +310,8 @@ pub struct Args {
 
     /// Password hash for HTTP Basic Authentication (htpasswd format)
     /// Supports: bcrypt ($2y$), apr1 ($apr1$), SHA1 ({SHA}), MD5 crypt ($1$)
+    /// bcrypt is recommended: the others are fast hashes, brute-forceable if
+    /// the config leaks, and refused at startup unless --allow-legacy-hash
     /// Mutually exclusive with --http-password
     #[arg(
         long,
