@@ -187,11 +187,12 @@ impl PyProgressState {
             PyProgressState::Error => "error",
         }
     }
-
-    fn __repr__(&self) -> String {
-        format!("ProgressState.{}", self.description().to_uppercase())
-    }
 }
+
+crate::python_bindings::common::impl_repr!(PyProgressState, |s| format!(
+    "ProgressState.{}",
+    s.description().to_uppercase()
+));
 
 impl From<crate::terminal::ProgressState> for PyProgressState {
     fn from(state: crate::terminal::ProgressState) -> Self {
@@ -268,14 +269,12 @@ impl PyUnicodeVersion {
     fn is_auto(&self) -> bool {
         matches!(self, PyUnicodeVersion::Auto)
     }
-
-    fn __repr__(&self) -> String {
-        format!(
-            "UnicodeVersion.{}",
-            self.version_string().replace('.', "_").to_uppercase()
-        )
-    }
 }
+
+crate::python_bindings::common::impl_repr!(PyUnicodeVersion, |s| format!(
+    "UnicodeVersion.{}",
+    s.version_string().replace('.', "_").to_uppercase()
+));
 
 bidirectional_from!(PyUnicodeVersion <=> CoreUnicodeVersion {
     Unicode9 => Unicode9,
@@ -322,14 +321,12 @@ impl PyAmbiguousWidth {
     fn is_wide(&self) -> bool {
         matches!(self, PyAmbiguousWidth::Wide)
     }
-
-    fn __repr__(&self) -> String {
-        match self {
-            PyAmbiguousWidth::Narrow => "AmbiguousWidth.NARROW".to_string(),
-            PyAmbiguousWidth::Wide => "AmbiguousWidth.WIDE".to_string(),
-        }
-    }
 }
+
+crate::python_bindings::common::impl_repr!(PyAmbiguousWidth, |s| match s {
+    PyAmbiguousWidth::Narrow => "AmbiguousWidth.NARROW".to_string(),
+    PyAmbiguousWidth::Wide => "AmbiguousWidth.WIDE".to_string(),
+});
 
 impl From<crate::unicode_width_config::AmbiguousWidth> for PyAmbiguousWidth {
     fn from(width: crate::unicode_width_config::AmbiguousWidth) -> Self {
@@ -406,15 +403,13 @@ impl PyWidthConfig {
             ambiguous_width: PyAmbiguousWidth::Narrow,
         }
     }
-
-    fn __repr__(&self) -> String {
-        format!(
-            "WidthConfig(unicode_version={}, ambiguous_width={})",
-            self.unicode_version.__repr__(),
-            self.ambiguous_width.__repr__()
-        )
-    }
 }
+
+crate::python_bindings::common::impl_repr!(PyWidthConfig, |s| format!(
+    "WidthConfig(unicode_version={}, ambiguous_width={})",
+    s.unicode_version.__repr__(),
+    s.ambiguous_width.__repr__()
+));
 
 impl From<crate::unicode_width_config::WidthConfig> for PyWidthConfig {
     fn from(config: crate::unicode_width_config::WidthConfig) -> Self {
@@ -479,14 +474,12 @@ impl PyNormalizationForm {
     fn is_none(&self) -> bool {
         matches!(self, PyNormalizationForm::Disabled)
     }
-
-    fn __repr__(&self) -> String {
-        match self {
-            PyNormalizationForm::Disabled => "NormalizationForm.Disabled".to_string(),
-            _ => format!("NormalizationForm.{}", self.name()),
-        }
-    }
 }
+
+crate::python_bindings::common::impl_repr!(PyNormalizationForm, |s| match s {
+    PyNormalizationForm::Disabled => "NormalizationForm.Disabled".to_string(),
+    _ => format!("NormalizationForm.{}", s.name()),
+});
 
 bidirectional_from!(PyNormalizationForm <=> CoreNormalizationForm {
     Disabled => None,

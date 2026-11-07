@@ -55,6 +55,25 @@ pub type ScrollbackCell = (
     crate::python_bindings::types::PyAttributes,
 );
 
+/// Emit a pyclass `__repr__` dunder from a body closure (QA-008: the six
+/// hand-written `fn __repr__(&self) -> String` impls differed only in the
+/// body). Generates its own `#[pymethods]` block — pyo3 rejects macro
+/// items inside an existing one — so invoke at module level, beside the
+/// pyclass's own block. The closure form is macro-hygiene: the body is
+/// written at the call site, so its receiver must be a closure parameter
+/// (`|s| ...s.field...`), not `self`. Bodies returning `PyResult`
+/// (PtyTerminal's live state read) stay hand-written.
+macro_rules! impl_repr {
+    ($ty:ty, |$slf:ident| $($body:tt)*) => {
+        #[pymethods]
+        impl $ty {
+            fn __repr__(&self) -> String {
+                (|$slf: &Self| $($body)*)(self)
+            }
+        }
+    };
+}
+
 /// Emit a small set of simple read-only getters for `$ty`, using
 /// [`TerminalAccess::term_ref`]. Validates the shared-method macro pattern
 /// (ARC-003/QA-001); the same shape scales to the full duplicated set.
@@ -2868,9 +2887,9 @@ macro_rules! impl_terminal_resize_pixels {
 // pub(crate) items (`TerminalAccess`). Invoke them as
 // `crate::python_bindings::common::impl_terminal_X!(Ty)`.
 pub(crate) use {
-    impl_terminal_badge_session, impl_terminal_cell_line_queries, impl_terminal_color_setters,
-    impl_terminal_content_misc, impl_terminal_debug_snapshots, impl_terminal_exports,
-    impl_terminal_file_transfer, impl_terminal_kitty_file_media,
+    impl_repr, impl_terminal_badge_session, impl_terminal_cell_line_queries,
+    impl_terminal_color_setters, impl_terminal_content_misc, impl_terminal_debug_snapshots,
+    impl_terminal_exports, impl_terminal_file_transfer, impl_terminal_kitty_file_media,
     impl_terminal_progress_notifications, impl_terminal_query_getters, impl_terminal_recording,
     impl_terminal_resize_pixels, impl_terminal_screenshot_methods, impl_terminal_search_select,
     impl_terminal_simple_getters, impl_terminal_sixel_graphics, impl_terminal_state_setters,

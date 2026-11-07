@@ -639,34 +639,6 @@ impl PyStreamingConfig {
         Ok(())
     }
 
-    fn __repr__(&self) -> String {
-        let tls_status = if self.inner.tls.is_some() {
-            ", tls=enabled"
-        } else {
-            ""
-        };
-        let api_key_status = if self.inner.api_key.is_some() {
-            ", api_key=***"
-        } else {
-            ""
-        };
-        format!(
-            "StreamingConfig(max_clients={}, send_initial_screen={}, keepalive_interval={}, default_read_only={}, initial_cols={}, initial_rows={}, enable_http={}, web_root='{}'{}{}, enable_system_stats={}, system_stats_interval_secs={})",
-            self.inner.max_clients,
-            self.inner.send_initial_screen,
-            self.inner.keepalive_interval,
-            self.inner.default_read_only,
-            self.inner.initial_cols,
-            self.inner.initial_rows,
-            self.inner.enable_http,
-            self.inner.web_root,
-            tls_status,
-            api_key_status,
-            self.inner.enable_system_stats,
-            self.inner.system_stats_interval_secs,
-        )
-    }
-
     /// Configure TLS from separate certificate and key files
     ///
     /// Args:
@@ -740,6 +712,35 @@ impl PyStreamingConfig {
         self.inner.tls = None;
     }
 }
+
+#[cfg(feature = "streaming")]
+crate::python_bindings::common::impl_repr!(PyStreamingConfig, |s| {
+    let tls_status = if s.inner.tls.is_some() {
+        ", tls=enabled"
+    } else {
+        ""
+    };
+    let api_key_status = if s.inner.api_key.is_some() {
+        ", api_key=***"
+    } else {
+        ""
+    };
+    format!(
+            "StreamingConfig(max_clients={}, send_initial_screen={}, keepalive_interval={}, default_read_only={}, initial_cols={}, initial_rows={}, enable_http={}, web_root='{}'{}{}, enable_system_stats={}, system_stats_interval_secs={})",
+            s.inner.max_clients,
+            s.inner.send_initial_screen,
+            s.inner.keepalive_interval,
+            s.inner.default_read_only,
+            s.inner.initial_cols,
+            s.inner.initial_rows,
+            s.inner.enable_http,
+            s.inner.web_root,
+            tls_status,
+            api_key_status,
+            s.inner.enable_system_stats,
+            s.inner.system_stats_interval_secs,
+        )
+});
 
 /// Python wrapper for StreamingServer
 #[cfg(feature = "streaming")]
