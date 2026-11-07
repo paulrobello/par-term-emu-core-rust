@@ -1,5 +1,8 @@
 # par-mux vs herdr — Feature Matrix
 
+> Snapshot as of par-mux 0.62.0, recorded 2026-10-19 — not maintained.
+> Current par-mux behavior is documented in [MUX.md](../MUX.md).
+
 Feature comparison of **par-mux 0.62.0** (this repository, main @ `dacba503`) and **herdr 0.9.5** (`~/Repos/herdr`, master @ `143bf5fd`), recorded 2026-10-19.
 
 - **par-mux** — the multiplexer shipped by this repo (`crates/par-mux/`): a daemon speaking the tmux control-mode protocol over a local socket, with PTY-backed panes, an attach TUI, and AI-agent awareness wired into the par-term ecosystem.

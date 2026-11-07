@@ -1,5 +1,6 @@
 # Par Term Emu Core Rust
 
+[![CI](https://github.com/paulrobello/par-term-emu-core-rust/actions/workflows/ci.yml/badge.svg)](https://github.com/paulrobello/par-term-emu-core-rust/actions/workflows/ci.yml)
 [![PyPI](https://img.shields.io/pypi/v/par_term_emu_core_rust)](https://pypi.org/project/par_term_emu_core_rust/)
 [![Crates.io](https://img.shields.io/crates/v/par-term-emu-core-rust)](https://crates.io/crates/par-term-emu-core-rust)
 [![PyPI - Python Version](https://img.shields.io/pypi/pyversions/par_term_emu_core_rust.svg)](https://pypi.org/project/par_term_emu_core_rust/)
@@ -33,8 +34,9 @@ Options: `--streamer` / `--streamer-mux` / `--mux` (PowerShell: `-Streamer` / `-
 
 ## What's New
 
-> **Note:** This section covers unreleased work on `main` and the last three
-> releases. The complete release history is in [CHANGELOG.md](CHANGELOG.md).
+> **Note:** This section covers unreleased work on `main` and the releases
+> from 0.63.0 through 0.79.0. The complete release history is in
+> [CHANGELOG.md](CHANGELOG.md).
 
 Version 0.79.0 makes **mux diagnostics and the daemon lifecycle cleaner**: rejected and unparseable control-command log lines now name the peer on the other end (pid plus image path where the platform exposes peer pids, uid on macOS), a fresh default-instance daemon start hands off to the com.paulrobello.par-mux launchd job when it is loaded — no more adhoc-binary orphans losing TCC identity and LAN grants; `PAR_MUX_NO_LAUNCHD=1` opts out — and the attach TUI's window picker lists windows only, a session no longer a selectable row, with a window name two sessions share disambiguated as `session/name`. See [CHANGELOG.md](CHANGELOG.md) for complete release notes.
 
