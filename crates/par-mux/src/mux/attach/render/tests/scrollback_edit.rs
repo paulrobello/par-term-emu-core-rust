@@ -290,3 +290,23 @@ fn help_rows_list_the_scrollback_editor_key() {
         "the editor key is in the help"
     );
 }
+
+/// The keybinds panel lists the copy-mode KEYS (the in-mode vi table),
+/// not just the entry chord — the motions, selection starters, yank,
+/// search, and marks the mode answers once entered.
+#[test]
+fn help_rows_list_the_copy_mode_keys() {
+    let rows = crate::mux::attach::help_rows(0x02, 0x12, Default::default(), 1);
+    for (keys, what) in [
+        ("v / V / C-v", "start character / line / block selection"),
+        ("y", "yank (copy) the selection"),
+        ("/ / ?", "search forward / backward"),
+        ("m key / ' key", "set / jump to a mark"),
+    ] {
+        assert!(
+            rows.iter()
+                .any(|r| r.text.contains(keys) && r.text.contains(what)),
+            "copy-mode keys `{keys}` must be listed: {rows:?}"
+        );
+    }
+}

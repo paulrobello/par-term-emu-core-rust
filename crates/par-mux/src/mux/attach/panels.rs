@@ -266,6 +266,46 @@ pub(crate) fn help_rows(
     );
     push_cat(
         &mut rows,
+        "copy mode",
+        vec![
+            (
+                "h j k l / arrows".to_string(),
+                "move the copy cursor".to_string(),
+            ),
+            (
+                "w b e / W B E".to_string(),
+                "word forward / back / end".to_string(),
+            ),
+            (
+                "0 / $ / ^".to_string(),
+                "line start / end / first non-blank".to_string(),
+            ),
+            (
+                "gg / G".to_string(),
+                "top / bottom of the buffer".to_string(),
+            ),
+            ("C-u / C-d".to_string(), "half page up / down".to_string()),
+            ("C-b / C-f".to_string(), "full page up / down".to_string()),
+            (
+                "v / V / C-v".to_string(),
+                "start character / line / block selection".to_string(),
+            ),
+            ("y".to_string(), "yank (copy) the selection".to_string()),
+            ("/ / ?".to_string(), "search forward / backward".to_string()),
+            ("n / N".to_string(), "next / previous match".to_string()),
+            (
+                "m key / ' key".to_string(),
+                "set / jump to a mark".to_string(),
+            ),
+            (
+                "H / M / L".to_string(),
+                "viewport top / middle / bottom".to_string(),
+            ),
+            ("q / Esc".to_string(), "leave copy mode".to_string()),
+        ],
+    );
+    push_cat(
+        &mut rows,
         "mouse",
         vec![
             (
