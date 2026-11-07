@@ -514,6 +514,9 @@ pub struct StreamingServer {
     shutdown: Arc<tokio::sync::Notify>,
     /// The default session (for backward-compatible single-session mode)
     default_session: Option<Arc<StreamSessionState>>,
+    /// Failed-auth throttle shared by the HTTP middleware and the WS
+    /// handshake callback (SEC-004)
+    auth_throttle: Arc<Mutex<http::AuthFailureThrottle>>,
     /// par-mux roster watcher; when set, every client receives the roster on connect
     #[cfg(feature = "mux")]
     roster: std::sync::OnceLock<Arc<crate::streaming::RosterWatcher>>,
@@ -572,6 +575,7 @@ impl StreamingServer {
             theme: None,
             shutdown: Arc::new(tokio::sync::Notify::new()),
             default_session: Some(default_session),
+            auth_throttle: Arc::new(Mutex::new(http::AuthFailureThrottle::default())),
         }
     }
 
@@ -597,6 +601,7 @@ impl StreamingServer {
             theme: None,
             shutdown: Arc::new(tokio::sync::Notify::new()),
             default_session: None,
+            auth_throttle: Arc::new(Mutex::new(http::AuthFailureThrottle::default())),
         }
     }
 

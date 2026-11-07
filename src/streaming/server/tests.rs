@@ -511,6 +511,7 @@ async fn test_validate_terminal_size_max_u16() {
 /// return the response.
 async fn auth_middleware_response(
     auth_config: ApiAuthConfig,
+    auth_throttle: Arc<Mutex<AuthFailureThrottle>>,
     target_uri: &str,
 ) -> axum::http::Response<axum::body::Body> {
     use axum::{routing::get, Router};
@@ -520,7 +521,8 @@ async fn auth_middleware_response(
         .route("/ok", get(|| async { "ok" }))
         .layer(axum::middleware::from_fn(move |req, next| {
             let auth_config = auth_config.clone();
-            api_auth_middleware(req, next, auth_config)
+            let auth_throttle = auth_throttle.clone();
+            api_auth_middleware(req, next, auth_config, auth_throttle)
         }));
     let req = axum::http::Request::builder()
         .uri(target_uri)
@@ -533,7 +535,12 @@ async fn auth_middleware_response(
 async fn unauthenticated_response(
     auth_config: ApiAuthConfig,
 ) -> axum::http::Response<axum::body::Body> {
-    auth_middleware_response(auth_config, "/ok").await
+    auth_middleware_response(
+        auth_config,
+        Arc::new(Mutex::new(AuthFailureThrottle::default())),
+        "/ok",
+    )
+    .await
 }
 
 #[tokio::test]
@@ -598,6 +605,7 @@ async fn test_auth_middleware_query_api_key_percent_decoded() {
             http_basic_auth: None,
             allow_api_key_in_query: true,
         },
+        Arc::new(Mutex::new(AuthFailureThrottle::default())),
         "/ok?api_key=s3cr%26t%3Dk%25y%2B",
     )
     .await;
@@ -610,6 +618,7 @@ async fn test_auth_middleware_query_api_key_percent_decoded() {
             http_basic_auth: None,
             allow_api_key_in_query: true,
         },
+        Arc::new(Mutex::new(AuthFailureThrottle::default())),
         "/ok?api_key=s3cr&t=k%y+",
     )
     .await;
@@ -721,6 +730,55 @@ async fn test_static_host_guard_rejects_non_loopback_host_on_loopback_bind() {
         .expect("static request parts are valid");
     let res = app.oneshot(req).await.expect("router is infallible");
     assert_eq!(res.status(), axum::http::StatusCode::OK);
+}
+
+// ─── Failed-auth throttling (2026-11-06 audit SEC-004) ─────────────────────
+
+#[test]
+fn test_auth_failure_throttle_escalates_and_caps() {
+    let mut throttle = AuthFailureThrottle::default();
+    let expected_ms = [50u64, 100, 200, 400, 800, 1600, 3200, 5000, 5000];
+    for (failures, ms) in expected_ms.iter().enumerate() {
+        assert_eq!(
+            throttle.record_failure(),
+            Duration::from_millis(*ms),
+            "delay after {failures} prior failures"
+        );
+        assert_eq!(throttle.consecutive_failures(), failures as u32 + 1);
+    }
+}
+
+#[test]
+fn test_auth_failure_throttle_decays_after_quiet_window() {
+    let mut throttle = AuthFailureThrottle::default();
+    let t0 = std::time::Instant::now();
+    assert_eq!(throttle.record_failure_at(t0), Duration::from_millis(50));
+    assert_eq!(
+        throttle.record_failure_at(t0 + Duration::from_secs(5)),
+        Duration::from_millis(100)
+    );
+    assert_eq!(throttle.consecutive_failures(), 2);
+    // A quiet window past DECAY restarts the escalation from the base.
+    let t2 = t0 + Duration::from_secs(5) + AuthFailureThrottle::DECAY + Duration::from_secs(1);
+    assert_eq!(throttle.record_failure_at(t2), Duration::from_millis(50));
+    assert_eq!(throttle.consecutive_failures(), 1);
+}
+
+#[tokio::test]
+async fn test_auth_middleware_failures_escalate_throttle_counter() {
+    // Assert the counter state, not wall-clock (the three sleeps total
+    // 350 ms of real time in this test).
+    let throttle = Arc::new(Mutex::new(AuthFailureThrottle::default()));
+    let auth_config = ApiAuthConfig {
+        api_key: Some("key".to_string()),
+        http_basic_auth: None,
+        allow_api_key_in_query: false,
+    };
+    for _ in 0..3 {
+        let res = auth_middleware_response(auth_config.clone(), Arc::clone(&throttle), "/ok").await;
+        assert_eq!(res.status(), axum::http::StatusCode::UNAUTHORIZED);
+    }
+    assert_eq!(throttle.lock().consecutive_failures(), 3);
 }
 
 // ─── ClipboardRequest set gating (SEC-003 follow-up) ──────────────────────

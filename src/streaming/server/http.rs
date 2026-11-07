@@ -38,6 +38,7 @@ pub(super) fn build_ws_header_callback(
     basic_auth: Option<HttpBasicAuthConfig>,
     allowed_origins: Option<Vec<String>>,
     allow_api_key_in_query: bool,
+    auth_throttle: Arc<Mutex<AuthFailureThrottle>>,
 ) -> (
     impl FnOnce(
         &WsHandshakeRequest,
@@ -74,6 +75,12 @@ pub(super) fn build_ws_header_callback(
                 allow_api_key_in_query,
             )
         {
+            // Record the failure into the shared throttle (SEC-004). The
+            // escalating delay itself is imposed on the async HTTP path
+            // only: this callback runs synchronously on a runtime worker,
+            // and sleeping here would let an attacker park every worker
+            // and stall the whole server.
+            auth_throttle.lock().record_failure();
             let reject = tokio_tungstenite::tungstenite::http::Response::builder()
                 .status(401)
                 .body(Some("Unauthorized".to_string()))
@@ -87,6 +94,59 @@ pub(super) fn build_ws_header_callback(
     (callback, uri_query)
 }
 
+/// Failed-auth throttle state (SEC-004): consecutive failed auth attempts
+/// escalate the delay imposed on the 401 response, so online guessing at an
+/// API key or Basic password costs wall-clock time even though every guess
+/// needs its own connection. One instance per server, shared by the HTTP
+/// middleware and the WS handshake callback — no per-peer bookkeeping. The
+/// counter decays after [`AuthFailureThrottle::DECAY`] without a failure
+/// (there is no reset-on-success: one shared counter reset by any client's
+/// successful request would let a legit client's traffic zero an attacker's
+/// escalation).
+#[derive(Debug, Default)]
+pub(super) struct AuthFailureThrottle {
+    /// Consecutive failures within the decay window.
+    consecutive_failures: u32,
+    /// When the last failure was recorded.
+    last_failure: Option<std::time::Instant>,
+}
+
+impl AuthFailureThrottle {
+    /// Delay imposed on the first failure; doubles per consecutive failure.
+    const BASE_DELAY_MS: u64 = 50;
+    /// Ceiling on the delay imposed on any single 401.
+    const MAX_DELAY_MS: u64 = 5_000;
+    /// Quiet period after which the escalation restarts from the base.
+    pub(super) const DECAY: Duration = Duration::from_secs(30);
+
+    /// Record a failure observed at `now` and return the delay to apply
+    /// before answering its 401.
+    pub(super) fn record_failure_at(&mut self, now: std::time::Instant) -> Duration {
+        if self
+            .last_failure
+            .is_some_and(|t| now.duration_since(t) > Self::DECAY)
+        {
+            self.consecutive_failures = 0;
+        }
+        self.last_failure = Some(now);
+        let delay_ms =
+            (Self::BASE_DELAY_MS << self.consecutive_failures.min(31)).min(Self::MAX_DELAY_MS);
+        self.consecutive_failures = self.consecutive_failures.saturating_add(1);
+        Duration::from_millis(delay_ms)
+    }
+
+    /// Record a failure observed now (see [`AuthFailureThrottle::record_failure_at`]).
+    pub(super) fn record_failure(&mut self) -> Duration {
+        self.record_failure_at(std::time::Instant::now())
+    }
+
+    /// Consecutive failures currently recorded.
+    #[cfg(test)]
+    pub(super) fn consecutive_failures(&self) -> u32 {
+        self.consecutive_failures
+    }
+}
+
 /// Unified API authentication middleware for Axum.
 /// Checks in order: Bearer header → X-API-Key header → ?api_key= query → Basic Auth header.
 /// When both API key and Basic Auth are configured, either one satisfies auth.
@@ -95,6 +155,7 @@ pub(super) async fn api_auth_middleware(
     req: axum::http::Request<axum::body::Body>,
     next: axum::middleware::Next,
     auth_config: ApiAuthConfig,
+    auth_throttle: Arc<Mutex<AuthFailureThrottle>>,
 ) -> axum::response::Response {
     use axum::http::{header, HeaderValue, StatusCode};
     use axum::response::IntoResponse;
@@ -170,6 +231,12 @@ pub(super) async fn api_auth_middleware(
             }
         }
     }
+
+    // Failed auth: escalate a delay on consecutive failures so online
+    // guessing costs wall-clock time (SEC-004). The sleep parks this task
+    // only; the connection holds a client slot while it waits.
+    let delay = auth_throttle.lock().record_failure();
+    tokio::time::sleep(delay).await;
 
     // Build 401 response
     let mut response = (StatusCode::UNAUTHORIZED, "Unauthorized").into_response();
