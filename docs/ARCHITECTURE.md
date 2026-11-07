@@ -221,6 +221,7 @@ The main terminal emulator that ties everything together, organized into submodu
 - `event.rs` - Terminal events (Bell, Cwd, Shell)
 - `event_broker.rs` - `EventBroker`: event and bell queues, observer registry, subscription filter, dispatch batches, queue cap (ARC-002)
 - `event_fields.rs` - Structured field view of a `TerminalEvent` (ARC-114)
+- `export_snapshot.rs` - Lock-light text export (ARC-004): `TextExportSnapshot` copies only the grids an export reads, so a shared lock is held for the clone, not the whole export
 - `file_transfer.rs` - File transfer tracking
 - `graphics.rs` - Unified graphics (Sixel, iTerm2, Kitty)
 - `image.rs` - Inline image handling
@@ -245,6 +246,8 @@ The main terminal emulator that ties everything together, organized into submodu
 - `trigger.rs` - Regex pattern matching (`TriggerEngine` service, `TriggerState`)
 - `write.rs` - Character writing logic
 - Themed `impl Terminal` files (ARC-003): `damage.rs`, `events_api.rs`, `host_config.rs`, `input.rs`, `keyboard_api.rs`, `modes_api.rs`, `notify_progress.rs`, `rect_api.rs`, `sixel_api.rs`, `title_badge.rs`, `tmux_api.rs`, `unicode_api.rs`, `zone_api.rs`
+
+**Rust-only surface:** `graphics_store()` / `graphics_store_mut()` (`terminal/graphics.rs`) hand the unified graphics store (`GraphicsStore`) to Rust embedders directly. They are not exposed to Python, which reaches graphics through the image-query and Sixel/Kitty APIs.
 
 **Features:**
 - Owns the grid and cursor
@@ -304,7 +307,23 @@ The main terminal emulator that ties everything together, organized into submodu
   - `tree/` - the session/window/pane tree, the server's single source of truth: `mod.rs` (types and lookups), `lifecycle.rs` (creation, respawn, renames, session environment, kill cascades), `layout_ops.rs` (splits, selection, zoom, moves, resizes, and the `mutate_layout` choke point, ARC-090), `worktrees.rs` (git-worktree workspace grouping, derived from each link's repo key)
   - `layout.rs` (a window's binary split tree and its geometry), `pane.rs` (PTY panes + env contract), `persist.rs` (save format, quarantine, restore, and the named-layout store), `uploads.rs` (bounded staging for client file uploads: `upload-commit` materializes the bytes under one staging directory and bracket-pastes the file's path into the target pane)
 - Agent layer: `hooks/` (hook-report grammar: `mod.rs` dispatch, `report.rs`, `telemetry.rs`, `seen.rs` (derived `done` state), `release.rs`), `scrape.rs` (fallback state tier, patterns in `patterns/*.toml`), `agent_resume.rs`, `foreground.rs` (process-table snapshot for `pane-info cmd=` and hook-claim liveness), `host_probe.rs` (30 s disk and git host-telemetry sweep, hardened git), `win_resume.rs` (Windows resume transport), `integrations/` (the agent-state integrations: claude/codex/grok session hooks merged into config-entry agents' settings files without disturbing user bytes, plus the pi/omp extension files — installed by the `--install-agent-*`/`--heal-agent-hooks` one-shot flags; compiled only with `mux-bin`), `skill_installer.rs` (`--install-skill` writes the SKILL.md embedded from `crates/par-mux/skills/par-mux/`; compiled only with `mux-bin`)
-- `attach/` - the `par-mux attach` client (feature `attach`). Shared by both phases: `mod.rs`, `conn.rs` (`AttachConn`, the connection layer), `panels.rs` (overlay and sidebar composition, help rows, prompts, pickers), `prefs.rs` (the persisted side-panel state, `client-state.json`), `targets.rs` (prefix/chord parsing and `-t` target resolution). Phase A (passthrough) keeps the host terminal as the emulator: `pump.rs`, `actions.rs`, `navigate.rs`, `status_row.rs`. Phase B (render mode) runs a core `Terminal` per pane and paints a ratatui buffer: `input.rs` (stdin parse and re-encode), `layout.rs` (client-side layout parser), `status.rs`, `tabs.rs`, and `render/`:
+- Daemon services and client configuration:
+  - `events.rs` - the durable pane lifecycle event ring (pushed notifications are lossy by design; the ring is not)
+  - `git_status.rs` - the sidebar git badge's daemon-side resolver: one background `git status -sb` read per displayed chain, served from cache so the reply path never spawns git
+  - `process_cpu.rs` - cumulative process-group CPU for a pane's child tree, behind pane-info's `cpu_ms=` token
+  - `pane_stream.rs` - raw pane streams for local clients: the client half of `observe-pane` (read-only) and `control-pane` (writable)
+  - `plugins.rs` - the plugin tier: manifests under `<state-dir>/par-mux/plugins/<name>/` whose hooks run shell commands when the daemon emits matching control notifications
+  - `metrics.rs` + `metrics/` - OpenTelemetry metrics behind two gates: the `otel` cargo feature (`metrics/stub.rs` compiles an identical-API no-op without it) and the runtime switch `--otel-enabled` / `PAR_MUX_OTEL_ENABLED`; thin per-binary config over the shared OTLP layer (ARC-001)
+  - `update.rs` - update channel selection for the CLI; fetching, verification, and replacement live in `self_update`
+  - `shutdown_inhibit.rs` - logind shutdown inhibitor (Linux, `shutdown-inhibit` feature): holds a delay lock and requests an immediate state save when logind announces `PrepareForShutdown`
+  - `machine_config.rs` - saved machines: SSH profiles under `[machines.<label>]` and the ssh invocation a `--machine` relay runs (credentials never enter the file)
+  - `worktree.rs` - git plumbing for the `worktree-*` control commands: argv-only git runs (no shell), one-line errors fit for a `%error` body
+  - `theme.rs` - render-mode color themes (`[client] theme` / `theme-dark` / `theme-light`): built-in presets resolved to the colors the attach chrome paints with
+  - `popup.rs` - the `[[client.popup]]` config shape, its validation, and the floating box geometry (the attach renderer's overlay lives in `attach/render/popup.rs`)
+  - `test_wait.rs` - load-independent test waits shared by the lib's unit tests and the `tests/` integration suites (test-only, never part of the published API)
+
+  The directory is authoritative: `ls crates/par-mux/src/mux/` for the current set.
+- `attach/` - the `par-mux attach` client (feature `attach`). Shared by both phases: `mod.rs`, `conn.rs` (`AttachConn`, the connection layer), `panels.rs` (overlay and sidebar composition, help rows, prompts, pickers), `prefs.rs` (the persisted side-panel state, `client-state.json`), `picker.rs` (the target-less session picker, `[client] session-picker`; runs before either attach mode), `settings_write.rs` (the settings dialog's in-place `config.toml` writes), `sound.rs` (agent state-change sounds, `[ui.sound]`), `text_input.rs` (IME/CJK input and display-width helpers for the client's own consumers), `targets.rs` (prefix/chord parsing and `-t` target resolution). Phase A (passthrough) keeps the host terminal as the emulator: `pump.rs`, `actions.rs`, `navigate.rs`, `status_row.rs`. Phase B (render mode) runs a core `Terminal` per pane and paints a ratatui buffer: `input.rs` (stdin parse and re-encode), `layout.rs` (client-side layout parser), `status.rs`, `tabs.rs`, and `render/`:
   - `render/mod.rs` - the pane renderer type and its frame-cadence damage diffing
   - `render/geometry.rs` - the frame chrome layout: the one owner of how the host grid divides into tab strip, status bar, side panel, and pane content area (host/frame/content coordinate spaces)
   - `render/renderer.rs` - painting: per-pane grids, dividers, pane boxes, the modal overlay, the stdout flush sink
@@ -335,8 +354,9 @@ The main terminal emulator that ties everything together, organized into submodu
   - `config.rs` - `StreamingConfig` and TLS/auth configuration (ARC-004)
   - `session.rs` - Multi-session lifecycle management and idle-session reaping (ARC-004); `build_connect_message()` assembles `Connected`
   - `rate_limit.rs` - Per-session input rate limiting (ARC-004)
-  - `mux_factory.rs` - `MuxSessionFactory`: streaming sessions that mirror a par-mux pane (`--mux-socket`; needs `streaming` + `mux`)
+  - `mux_factory.rs` + `mux_factory/` - `MuxSessionFactory`: streaming sessions that mirror a par-mux pane (`--mux-socket`; needs `streaming` + `mux`): `lifecycle.rs` (factory construction, pane selection, session create/setup/teardown), `stream.rs` (the drain thread applying `%output` and layout changes, and the `send-keys -H` input path back to the pane), `mirror.rs` (the `MirrorLink`, viewer-status protocol, seed, and re-seed), `control.rs` (the daemon connection's ordered line reader and request/reply helper), `upload.rs` (client uploads driven over the daemon's upload verbs)
   - `roster.rs` / `roster_watcher.rs` - par-mux agent roster: the `list-agents` parser, and a long-lived watcher that mirrors the roster to clients as `AgentRoster` snapshots plus `AgentStateChanged` deltas
+  - `tree_watcher.rs` / `watcher_common.rs` - the same watcher shape for the full workspace/session/window/pane tree (full-replacement snapshots), and the reconnect policy both watchers share
   - `client.rs` - Client connection management
   - `protocol.rs` - Streaming protocol definitions (app-level `ServerMessage`, `ClientMessage`, `EventType`); count the variants in the enums rather than trusting a number here
   - `proto.rs` - Protocol Buffers wire format with optional zlib compression, plus the `ToWire`/`FromWire` field rules the `ProtoConvert` derive calls (see below)
