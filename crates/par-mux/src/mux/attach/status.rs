@@ -1000,9 +1000,13 @@ impl StatusState {
 /// panel spells the same chord. The renderer reserves the chip's width
 /// before composing the rest of the bar, so it survives every
 /// truncation; with the bar hidden it is not drawn at all.
-pub(crate) fn help_chip(prefix: u8, help: u8) -> Segment {
+pub(crate) fn help_chip(prefix: u8, help: crate::mux::config::ChordKey) -> Segment {
     Segment {
-        text: format!(" {}{} Help ", spell_key(prefix), spell_key(help)),
+        text: format!(
+            " {}{} Help ",
+            spell_key(prefix),
+            crate::mux::config::spell_chord(&help)
+        ),
         bold: true,
         dim: false,
         shaded: false,
@@ -1809,11 +1813,13 @@ mod tests {
     /// composing the rest of the bar, so it survives every truncation.
     #[test]
     fn help_chip_spells_the_live_keybind() {
-        let chip = super::help_chip(0x02, b'?');
+        let chip = super::help_chip(0x02, crate::mux::config::ChordKey::plain(b'?'));
         assert_eq!(chip.text, " C-b? Help ");
         assert!(chip.bold);
-        let remapped = super::help_chip(0x02, b'h');
+        let remapped = super::help_chip(0x02, crate::mux::config::ChordKey::plain(b'h'));
         assert_eq!(remapped.text, " C-bh Help ");
+        let alt = super::help_chip(0x02, crate::mux::config::ChordKey::alt(b'h'));
+        assert_eq!(alt.text, " C-bM-h Help ");
     }
 
     /// The chip paints RIGHT-ALIGNED at the row's right edge and the
@@ -1828,7 +1834,7 @@ mod tests {
             dim: false,
             shaded: false,
         };
-        let chip = super::help_chip(0x02, b'?'); // " C-b? Help " = 11 cols
+        let chip = super::help_chip(0x02, crate::mux::config::ChordKey::plain(b'?')); // " C-b? Help " = 11 cols
         row.paint(&[long], Some(&chip));
         row.diff();
         // The chip's 11 chars end the row: cols 29..40.

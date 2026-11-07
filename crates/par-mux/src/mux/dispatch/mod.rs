@@ -262,6 +262,7 @@ fn route_command(
         | MuxCommand::ClearHistory { .. }
         | MuxCommand::ResizePane { .. }
         | MuxCommand::SwapPanes { .. }
+        | MuxCommand::SelectLayout { .. }
         | MuxCommand::BreakPane { .. }
         | MuxCommand::JoinPane { .. }
         | MuxCommand::RespawnPane { .. }) => route_pane_command(ctx, command, issuer),

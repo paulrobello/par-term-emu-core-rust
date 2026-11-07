@@ -48,6 +48,21 @@ fn the_settings_doc_row_enumerates_every_management_default() {
         ("help", "?", m.help, b'?'),
         ("picker", "w", m.picker, b'w'),
         ("zoom", "z", m.zoom, b'z'),
+        (
+            "layout-even-horizontal",
+            "M-1",
+            m.layout_even_horizontal,
+            b'1',
+        ),
+        ("layout-even-vertical", "M-2", m.layout_even_vertical, b'2'),
+        (
+            "layout-main-horizontal",
+            "M-3",
+            m.layout_main_horizontal,
+            b'3',
+        ),
+        ("layout-main-vertical", "M-4", m.layout_main_vertical, b'4'),
+        ("layout-tiled", "M-5", m.layout_tiled, b'5'),
         ("rename-window", ",", m.rename_window, b','),
         ("rename-pane", "$", m.rename_pane, b'$'),
         ("border-cycle", "B", m.border_cycle, b'B'),
@@ -61,7 +76,12 @@ fn the_settings_doc_row_enumerates_every_management_default() {
     let spellings: Vec<String> = expected
         .iter()
         .map(|(key, doc, field, byte)| {
-            assert_eq!(field, byte, "{key}'s documented default is wrong");
+            let chord = if doc.starts_with("M-") {
+                ChordKey::alt(*byte)
+            } else {
+                ChordKey::plain(*byte)
+            };
+            assert_eq!(*field, chord, "{key}'s documented default is wrong");
             (*doc).to_string()
         })
         .collect();
@@ -76,4 +96,15 @@ fn the_settings_doc_row_enumerates_every_management_default() {
             "the doc row lists the {key} chord"
         );
     }
+}
+
+/// The five layout presets default to tmux's Alt-digit chords.
+#[test]
+fn management_defaults_bind_m1_through_m5() {
+    let m = Management::default();
+    assert_eq!(m.layout_even_horizontal, ChordKey::alt(b'1'));
+    assert_eq!(m.layout_even_vertical, ChordKey::alt(b'2'));
+    assert_eq!(m.layout_main_horizontal, ChordKey::alt(b'3'));
+    assert_eq!(m.layout_main_vertical, ChordKey::alt(b'4'));
+    assert_eq!(m.layout_tiled, ChordKey::alt(b'5'));
 }

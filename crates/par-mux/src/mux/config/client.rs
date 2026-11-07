@@ -27,6 +27,41 @@ pub struct ClientSection {
         skip_serializing_if = "Option::is_none"
     )]
     pub split_right: Option<String>,
+    /// The `layout-even-horizontal` layout-preset chord (default `M-1`).
+    #[serde(
+        default,
+        rename = "layout-even-horizontal",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub layout_even_horizontal: Option<String>,
+    /// The `layout-even-vertical` layout-preset chord (default `M-2`).
+    #[serde(
+        default,
+        rename = "layout-even-vertical",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub layout_even_vertical: Option<String>,
+    /// The `layout-main-horizontal` layout-preset chord (default `M-3`).
+    #[serde(
+        default,
+        rename = "layout-main-horizontal",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub layout_main_horizontal: Option<String>,
+    /// The `layout-main-vertical` layout-preset chord (default `M-4`).
+    #[serde(
+        default,
+        rename = "layout-main-vertical",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub layout_main_vertical: Option<String>,
+    /// The `layout-tiled` layout-preset chord (default `M-5`).
+    #[serde(
+        default,
+        rename = "layout-tiled",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub layout_tiled: Option<String>,
     /// The split-down chord (tmux's `"`): the key matched after the
     /// prefix that splits the focused pane below and lands on the new pane.
     #[serde(

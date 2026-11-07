@@ -2,7 +2,7 @@
 //! re-read file) and the daemon-side per-setting `reload-config` report.
 
 use super::{
-    default_agent_rows, management_key, parse_prefix, reload_chord_key, Chords, ConfigFile,
+    default_agent_rows, management_chord, parse_prefix, reload_chord_key, Chords, ConfigFile,
     EffectiveConfig, ExitAction, Management, SoundSettings, AGENT_APPEND_KINDS,
 };
 
@@ -29,7 +29,7 @@ pub fn reload_client_chords(file: &ConfigFile, current: &Chords) -> Result<Chord
     macro_rules! chord {
         ($field:ident, $label:literal) => {
             match file.client.$field.as_deref() {
-                Some(chord) => management_key(chord, $label)?,
+                Some(chord) => management_chord(chord, $label)?,
                 None => current.management.$field,
             }
         };
@@ -63,6 +63,11 @@ pub fn reload_client_chords(file: &ConfigFile, current: &Chords) -> Result<Chord
         status_bar: chord!(status_bar, "status-bar"),
         respawn: chord!(respawn, "respawn"),
         notify_jump: chord!(notify_jump, "notify-jump"),
+        layout_even_horizontal: chord!(layout_even_horizontal, "layout-even-horizontal"),
+        layout_even_vertical: chord!(layout_even_vertical, "layout-even-vertical"),
+        layout_main_horizontal: chord!(layout_main_horizontal, "layout-main-horizontal"),
+        layout_main_vertical: chord!(layout_main_vertical, "layout-main-vertical"),
+        layout_tiled: chord!(layout_tiled, "layout-tiled"),
     };
     // A step the file names floors at 1 — a zero/negative step would make
     // every resize a no-op by construction.

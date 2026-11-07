@@ -2,6 +2,34 @@
 
 use super::*;
 
+/// The settings dialog's `prefix` row is a bare byte: `M-1` is rejected
+/// at the prompt (flash, nothing written) while a management chord row
+/// still accepts the Alt spelling.
+#[test]
+fn settings_prefix_row_rejects_alt_but_chord_rows_accept_it() {
+    let (_rx, mut conn, mut session) = command_menu_session("prefixalt");
+    let dir = tempfile::tempdir().expect("tempdir");
+    let path = dir.path().join("config.toml");
+    std::fs::write(&path, "[client]\n").unwrap();
+    session.settings_path = Some(path.clone());
+    session.enter_settings();
+    session.route_stdin_bytes(&mut conn, b"\t\t\t\t\t");
+    session.route_stdin_bytes(&mut conn, b"\r");
+    assert!(session.is_prompt(), "the prefix row opens the prompt");
+    type_and_commit(&mut session, &mut conn, "M-1");
+    assert!(session.is_prompt(), "an Alt prefix keeps the prompt up");
+    assert!(session.chrome.flash_text().is_some(), "and flashes");
+    let written = std::fs::read_to_string(&path).unwrap();
+    assert!(!written.contains("prefix"), "nothing written: {written}");
+    session.leave_prompt();
+
+    session.route_stdin_bytes(&mut conn, b"jj\r");
+    assert!(session.is_prompt(), "the split-right row opens the prompt");
+    type_and_commit(&mut session, &mut conn, "M-1");
+    let written = std::fs::read_to_string(&path).unwrap();
+    assert!(written.contains("split-right = \"M-1\""), "{written}");
+}
+
 /// A session whose status saw `$0` but whose session roster comes
 /// back EMPTY (another client killed the last session before the
 /// throttled refresh noticed): prefix `)` must be a no-op — no
@@ -3075,7 +3103,7 @@ fn prefix_chord_classifies_bytes_in_precedence_order() {
     assert_eq!(session.prefix_chord(b'q'), PrefixChord::Unbound);
 
     // A management key rebound onto a fixed-table byte wins over it.
-    session.management.zoom = b'n';
+    session.management.zoom = crate::mux::config::ChordKey::plain(b'n');
     assert_eq!(
         session.prefix_chord(b'n'),
         PrefixChord::Management(ManagementKey::Zoom)
@@ -3241,7 +3269,7 @@ fn exit_cue_and_respawn_chord_follow_the_held_pane() {
         pane_id: "%1".to_string(),
         exit_code: None,
     });
-    session.management.respawn = b'&';
+    session.management.respawn = crate::mux::config::ChordKey::plain(b'&');
     assert_eq!(
         session.exit_cue().as_deref(),
         Some("(exited ? — C-b & respawns)")
@@ -3385,4 +3413,58 @@ fn drag_selection_paints_the_swept_cells_reversed() {
     assert!(!reversed(5, 3), "past the head is untouched");
     assert!(!reversed(2, 4), "below the span is untouched");
     assert!(!reversed(2, 0), "above the span is untouched");
+}
+
+/// Committing a layout row's chord writes `layout-* = "M-1"`; a bogus
+/// chord flashes and writes nothing.
+#[test]
+fn settings_chord_prompt_accepts_m_keys() {
+    let (_rx, mut conn, mut session) = command_menu_session("layoutchord");
+    let dir = tempfile::tempdir().expect("tempdir");
+    let path = dir.path().join("config.toml");
+    std::fs::write(&path, "[client]\n").unwrap();
+    session.settings_path = Some(path.clone());
+    session.enter_settings();
+    session.route_stdin_bytes(&mut conn, b"\t\t\t\t\t");
+    // layout-even-horizontal sits five rows above the last (respawn).
+    let row = super::modal_settings::SettingsSection::Keys.row_count() - 6;
+    for _ in 0..row {
+        session.route_stdin_bytes(&mut conn, b"j");
+    }
+    session.route_stdin_bytes(&mut conn, b"\r");
+    assert!(session.is_prompt(), "the layout row opens the prompt");
+    type_and_commit(&mut session, &mut conn, "bogus");
+    assert!(session.is_prompt(), "a bogus chord keeps the prompt up");
+    assert!(session.chrome.flash_text().is_some(), "and flashes");
+    let written = std::fs::read_to_string(&path).unwrap();
+    assert!(!written.contains("layout-"), "nothing written: {written}");
+    type_and_commit(&mut session, &mut conn, "M-1");
+    let written = std::fs::read_to_string(&path).unwrap();
+    assert!(
+        written.contains("layout-even-horizontal = \"M-1\""),
+        "{written}"
+    );
+}
+
+/// The help panel and the palette both list the five layout chords at
+/// their live bindings.
+#[test]
+fn help_and_palette_list_the_layout_chords() {
+    let rows = crate::mux::attach::help_rows(0x02, 0x12, Default::default(), 1);
+    assert!(
+        rows.iter()
+            .any(|r| r.text.contains("C-b M-1 / M-2 / M-3 / M-4 / M-5")),
+        "help lists the layout chords"
+    );
+    let m = crate::mux::config::Management::default();
+    let chords: Vec<_> = crate::mux::attach::panels::PALETTE_ACTIONS
+        .iter()
+        .enumerate()
+        .filter(|(_, (_, l))| l.starts_with("layout "))
+        .map(|(i, _)| crate::mux::attach::panels::palette_action_chord(i, 0x02, 0x12, &m).unwrap())
+        .collect();
+    assert_eq!(
+        chords,
+        ["C-b M-1", "C-b M-2", "C-b M-3", "C-b M-4", "C-b M-5"]
+    );
 }

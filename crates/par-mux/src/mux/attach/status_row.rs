@@ -76,7 +76,7 @@ impl Session {
             let chord = format!(
                 "{} {}",
                 crate::mux::attach::panels::spell_key(self.prefix),
-                crate::mux::attach::panels::spell_key(self.management.respawn)
+                crate::mux::config::spell_chord(&self.management.respawn)
             );
             match code {
                 Some(code) => line.push_str(&format!(" | (exited {code} — {chord} respawns)")),

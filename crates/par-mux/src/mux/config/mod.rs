@@ -46,8 +46,8 @@ pub use file::{
     config_file_path, load_canonical, load_canonical_checked, load_file, render,
     socket_value_to_path, write_file,
 };
-pub use management::{management_key, Management};
-pub use parse::{parse_hex_color, parse_prefix};
+pub use management::{management_chord, management_key, Management};
+pub use parse::{parse_chord, parse_hex_color, parse_prefix, spell_chord, ChordKey};
 pub use reload::{reload_client_chords, reload_report};
 pub use resolve::{resolve, EffectiveConfig, Overrides, DEFAULT_AGENT_RESUME_PROMPT};
 

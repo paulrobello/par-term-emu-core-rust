@@ -1921,6 +1921,10 @@ fn mutates_marks_exactly_the_structural_commands() {
             target: Target::Id(PaneId(0)),
             source: Target::Id(PaneId(1)),
         },
+        MuxCommand::SelectLayout {
+            target: AnyTarget::Window(WindowId(0)),
+            preset: LayoutPreset::Tiled,
+        },
         MuxCommand::SetBuffer {
             content: String::new(),
         },

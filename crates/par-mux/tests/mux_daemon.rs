@@ -3540,3 +3540,127 @@ fn save_layout_lands_beside_the_state_file() {
     let listed = client.send("list-layouts").expect("list").join("\n");
     assert_eq!(listed, "d1");
 }
+
+/// `select-layout tiled` over the control socket: the leaf order survives
+/// and the broadcast layout is the tiled shape, a vertical stack whose
+/// first row holds two panes side by side and whose second row holds one.
+#[ignore = "load-sensitive: PTY/timing suite; run via make test-rust-sensitive or checkall-ci"]
+#[test]
+fn select_layout_e2e_tiled_via_control_socket() {
+    let fixture = MuxFixture::new("tiledwire");
+    let path = fixture.socket();
+    let server = MuxServer::bind(path).expect("bind");
+    let _handle = std::thread::spawn(move || server.run());
+
+    let mut client = par_mux::mux::MuxClient::connect(path).expect("connect");
+    client
+        .send("new-session -s tiledwire")
+        .expect("new-session");
+    client.send("split-window -h -t %0").expect("split");
+    client.send("split-window -h -t %1").expect("split");
+    let before = client.send("list-panes -t @0").expect("list").join("\n");
+    assert_eq!(before.lines().count(), 3, "three panes: {before}");
+
+    let reply = client
+        .send("select-layout tiled -t @0")
+        .expect("select-layout")
+        .join("\n");
+    assert!(!reply.contains("error"), "select-layout failed: {reply}");
+
+    let after = client.send("list-panes -t @0").expect("list").join("\n");
+    assert_eq!(after, before, "tiling never reorders the leaves");
+
+    // Tiled for three panes is a top-level stack `[row{p,p},p]`, while the
+    // earlier split frames are top-level `{...}`.
+    let deadline = Instant::now() + Duration::from_secs(15);
+    let mut tiled = None;
+    while Instant::now() < deadline && tiled.is_none() {
+        if let Ok(par_term_emu_core::tmux_control::TmuxNotification::LayoutChange {
+            window_layout,
+            ..
+        }) = client
+            .notifications()
+            .recv_timeout(Duration::from_millis(250))
+        {
+            let body = window_layout.split_once(',').map_or("", |(_, rest)| rest);
+            if body
+                .find(['[', '{'])
+                .is_some_and(|i| body.as_bytes()[i] == b'[')
+            {
+                tiled = Some(window_layout);
+            }
+        }
+    }
+    let layout = tiled.expect("a tiled %layout-change arrived within 15s");
+    // Tiled at three panes: two share the top row (y=0, half width each)
+    // and one sits below. main-horizontal at three panes keeps ONE pane
+    // at y=0 (the full-width main pane above the pair), so the pane count
+    // at y=0 discriminates. Pane entries in the layout string are spelled
+    // `WxH,X,Y[,id]`.
+    let bytes = layout.as_bytes();
+    let mut panes: Vec<(u32, u32, u32)> = Vec::new();
+    let mut i = 0;
+    while i < bytes.len() {
+        // Token boundary: never start inside a number or right after the
+        // WxH separator.
+        let token_start = i == 0 || !(bytes[i - 1].is_ascii_digit() || bytes[i - 1] == b'x');
+        let mut at = i;
+        let mut fields: [Option<u32>; 4] = [None; 4];
+        let mut ok = token_start;
+        // `WxH,X,Y`: three separators, four numbers. Window and group
+        // extents spell the same `WxH,X,Y` but close with '[' or '{';
+        // a real pane is followed by ',', '}', ']', or its id.
+        for (idx, sep) in b"x,,".iter().enumerate() {
+            let start = at;
+            while at < bytes.len() && bytes[at].is_ascii_digit() {
+                at += 1;
+            }
+            if at == start || at >= bytes.len() || bytes[at] != *sep {
+                ok = false;
+                break;
+            }
+            fields[idx] = std::str::from_utf8(&bytes[start..at])
+                .ok()
+                .and_then(|s| s.parse().ok());
+            at += 1;
+        }
+        if ok {
+            // The third leg consumed the comma after X, so the digits
+            // here are Y; any further `,id` tail stays unread.
+            let start = at;
+            while at < bytes.len() && bytes[at].is_ascii_digit() {
+                at += 1;
+            }
+            if at > start {
+                fields[3] = std::str::from_utf8(&bytes[start..at])
+                    .ok()
+                    .and_then(|s| s.parse().ok());
+            }
+            if matches!(bytes.get(at), Some(b'[' | b'{')) {
+                ok = false;
+            }
+        }
+        if ok {
+            if let [Some(w), Some(_h), Some(x), Some(y)] = fields {
+                panes.push((x, y, w));
+            }
+        }
+        i += 1;
+    }
+    assert_eq!(
+        panes.len(),
+        3,
+        "every pane appears as WxH,X,Y in the layout: {layout}"
+    );
+    assert_eq!(
+        panes.iter().filter(|&&(_, y, _)| y == 0).count(),
+        2,
+        "two panes share the top row: {layout}"
+    );
+    assert_eq!(
+        panes.iter().filter(|&&(_, y, _)| y > 0).count(),
+        1,
+        "the third pane sits below: {layout}"
+    );
+    client.send("kill-server").expect("kill-server");
+}

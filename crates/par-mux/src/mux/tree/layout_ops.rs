@@ -4,7 +4,7 @@
 
 use super::{kill_detached, ClientView, FocusSource, MuxTree, MuxWindow, SeenFocus, SplitSpawn};
 use crate::mux::ids::{PaneId, SessionId, WindowId, WorkspaceId};
-use crate::mux::layout::{LayoutTree, PaneChrome, ResizeDirection, SplitDirection};
+use crate::mux::layout::{LayoutPreset, LayoutTree, PaneChrome, ResizeDirection, SplitDirection};
 use crate::mux::pane::{MuxError, MuxPane};
 use par_term_emu_core::color::Color;
 use std::path::Path;
@@ -195,6 +195,22 @@ impl MuxTree {
                 .map_err(|_| MuxError::PanesInDifferentWindows(target, source))?;
             Ok(window_id)
         })
+    }
+
+    /// Rebuild `window`'s layout as `preset` over its panes in their
+    /// current order, returning the window — the dispatcher's
+    /// `%layout-change` target.
+    pub fn apply_layout_preset(
+        &mut self,
+        window: WindowId,
+        preset: LayoutPreset,
+    ) -> Result<WindowId, MuxError> {
+        self.mutate_layout(window, |w| {
+            let panes = w.layout.pane_ids();
+            w.layout = LayoutTree::for_preset(&panes, preset);
+            Ok(())
+        })?;
+        Ok(window)
     }
 
     /// Toggle `pane`'s zoom (`resize-pane -Z`): zooming resizes its

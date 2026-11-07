@@ -437,6 +437,14 @@
       "synopsis": "<name>"
     },
     {
+      "name": "select-layout",
+      "features": [],
+      "flags": [
+        "-t"
+      ],
+      "synopsis": "-t <window|session|pane> <preset> (required target resolves to a window: the window itself, a session's active window, or a pane's owning window)"
+    },
+    {
       "name": "select-pane",
       "features": [],
       "flags": [

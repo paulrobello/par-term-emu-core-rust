@@ -10,6 +10,7 @@ use crate::mux::attach::input::SgrMouse;
 use crate::mux::attach::layout::PaneRect;
 use crate::mux::attach::text_input::{fold_fullwidth_ascii, Utf8Assembler, Utf8Step};
 use crate::mux::attach::ManagementKey;
+use crate::mux::config::ChordKey;
 use par_term_emu_core::keyboard::TermKeyEvent;
 
 /// The status flash for a prefix chord typed as a non-ASCII character:
@@ -404,16 +405,16 @@ impl WindowSession {
         if byte == self.reload_key && byte != b'd' {
             return PrefixChord::Reload;
         }
-        if let Some(key) = self.management_key(byte) {
+        if let Some(key) = self.management_key(ChordKey::plain(byte)) {
             return PrefixChord::Management(key);
         }
-        if byte == self.management.resize {
+        if ChordKey::plain(byte) == self.management.resize {
             return PrefixChord::Resize;
         }
-        if byte == self.management.help {
+        if ChordKey::plain(byte) == self.management.help {
             return PrefixChord::Help;
         }
-        if byte == self.management.picker {
+        if ChordKey::plain(byte) == self.management.picker {
             return PrefixChord::Picker;
         }
         match byte {
@@ -428,7 +429,7 @@ impl WindowSession {
 
     /// The configurable management chord bound to `byte`, if any (first
     /// match wins when two keys share a byte).
-    fn management_key(&self, byte: u8) -> Option<ManagementKey> {
+    pub(super) fn management_key(&self, chord: ChordKey) -> Option<ManagementKey> {
         let m = &self.management;
         let table = [
             (m.split_right, ManagementKey::SplitRight),
@@ -456,10 +457,21 @@ impl WindowSession {
             (m.status_bar, ManagementKey::StatusBar),
             (m.respawn, ManagementKey::Respawn),
             (m.notify_jump, ManagementKey::NotifyJump),
+            (
+                m.layout_even_horizontal,
+                ManagementKey::LayoutEvenHorizontal,
+            ),
+            (m.layout_even_vertical, ManagementKey::LayoutEvenVertical),
+            (
+                m.layout_main_horizontal,
+                ManagementKey::LayoutMainHorizontal,
+            ),
+            (m.layout_main_vertical, ManagementKey::LayoutMainVertical),
+            (m.layout_tiled, ManagementKey::LayoutTiled),
         ];
         table
             .into_iter()
-            .find(|(bound, _)| *bound == byte)
+            .find(|(bound, _)| *bound == chord)
             .map(|(_, key)| key)
     }
 
@@ -477,6 +489,26 @@ impl WindowSession {
     ) {
         if self.prefix_pending {
             self.arm_prefix(false);
+            // An Alt+printable-ASCII key is an Alt chord: bound runs, unbound
+            // is consumed (tmux drops it too) rather than reaching the arrows.
+            if ev.modifiers & par_term_emu_core::keyboard::modifiers::ALT != 0
+                && ev.key() == par_term_emu_core::keyboard::TermKey::Char
+            {
+                if let Some(byte) = u8::try_from(ev.codepoint).ok().filter(u8::is_ascii_graphic) {
+                    if let Some(key) = self.management_key(ChordKey {
+                        key: byte,
+                        alt: true,
+                    }) {
+                        self.management_chord(key, conn);
+                    }
+                    return;
+                }
+                if let Some(ch) = char::from_u32(ev.codepoint) {
+                    self.chrome.flash(non_ascii_chord_hint(ch));
+                    self.draw_status_row();
+                }
+                return;
+            }
             self.prefix_pane_arrow(conn, ev);
             return;
         }

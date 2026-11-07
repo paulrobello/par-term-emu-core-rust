@@ -7,6 +7,7 @@ use crate::mux::attach::targets::{
     parse_session_line, session_active_window,
 };
 use crate::mux::attach::{layout, status, ManagementKey};
+use crate::mux::layout::LayoutPreset;
 
 impl WindowSession {
     /// Start a user navigation: the latest one wins. Every chain captures
@@ -77,6 +78,13 @@ impl WindowSession {
             ManagementKey::Sidebar => self.toggle_sidebar(conn),
             ManagementKey::Respawn => self.chord_respawn(conn),
             ManagementKey::NotifyJump => self.chord_notify_jump(conn),
+            key @ (ManagementKey::LayoutEvenHorizontal
+            | ManagementKey::LayoutEvenVertical
+            | ManagementKey::LayoutMainHorizontal
+            | ManagementKey::LayoutMainVertical
+            | ManagementKey::LayoutTiled) => {
+                self.chord_select_layout(conn, key.layout_preset().expect("layout key"));
+            }
         }
     }
 
@@ -342,6 +350,23 @@ impl WindowSession {
 
     fn chord_new_window(&mut self, _conn: &mut crate::mux::attach::conn::AttachConn) {
         self.enter_prompt(PromptTarget::NewWindow);
+    }
+
+    /// prefix M-1..M-5: apply a layout preset to the shown window
+    /// (`select-layout`). The daemon unzooms and broadcasts the new
+    /// `%layout-change`; a refusal flashes.
+    fn chord_select_layout(
+        &mut self,
+        conn: &mut crate::mux::attach::conn::AttachConn,
+        preset: LayoutPreset,
+    ) {
+        let command = format!("select-layout {} -t {}", preset.name(), self.window);
+        self.send_then(conn, &command, move |s, _c, reply| {
+            if !reply.ok {
+                s.chrome.flash(format!("layout {}: refused", preset.name()));
+                s.draw_status_row();
+            }
+        });
     }
 
     /// tmux's zoom: the daemon's `resize-pane -Z` toggle. The

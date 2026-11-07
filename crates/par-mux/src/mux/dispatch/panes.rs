@@ -3,6 +3,7 @@
 
 use super::*;
 use crate::mux::ids::SessionId;
+use crate::mux::layout::LayoutPreset;
 
 /// The pane group's router; `route_command` sends only this group's
 /// variants here. `issuer` is for `pane-exited-replay`, which answers on
@@ -40,6 +41,7 @@ pub(super) fn route_pane_command(
         MuxCommand::ClearHistory { pane } => cmd_clear_history(ctx, pane),
         MuxCommand::ResizePane { pane, adjustment } => cmd_resize_pane(ctx, pane, adjustment),
         MuxCommand::SwapPanes { target, source } => cmd_swap_panes(ctx, target, source),
+        MuxCommand::SelectLayout { target, preset } => cmd_select_layout(ctx, target, preset),
         MuxCommand::BreakPane { source, name } => cmd_break_pane(ctx, source, name),
         MuxCommand::JoinPane {
             source,
@@ -636,6 +638,18 @@ pub(super) fn cmd_swap_panes(
         }
     };
     match ctx.tree.lock().swap_panes(target, source) {
+        Ok(window_id) => Outcome::ok(ctx, "").with_layout(window_id),
+        Err(err) => Outcome::err(ctx, &err.to_string()),
+    }
+}
+
+pub(super) fn cmd_select_layout(ctx: &Ctx<'_>, target: AnyTarget, preset: LayoutPreset) -> Outcome {
+    let mut guard = ctx.tree.lock();
+    let outcome = guard
+        .resolve_pane_listing_target(target)
+        .and_then(|window| guard.apply_layout_preset(window, preset));
+    drop(guard);
+    match outcome {
         Ok(window_id) => Outcome::ok(ctx, "").with_layout(window_id),
         Err(err) => Outcome::err(ctx, &err.to_string()),
     }

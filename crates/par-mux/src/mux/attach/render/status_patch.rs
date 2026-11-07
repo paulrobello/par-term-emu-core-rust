@@ -96,7 +96,7 @@ impl WindowSession {
             let chord = format!(
                 "{} {}",
                 crate::mux::attach::panels::spell_key(self.prefix),
-                crate::mux::attach::panels::spell_key(self.management.respawn)
+                crate::mux::config::spell_chord(&self.management.respawn)
             );
             self.chrome.flash(format!(
                 "pane %{pane} exited ({code}) — {chord} respawns when [daemon] remain-on-exit holds the pane"
@@ -145,7 +145,7 @@ impl WindowSession {
         let chord = format!(
             "{} {}",
             crate::mux::attach::panels::spell_key(self.prefix),
-            crate::mux::attach::panels::spell_key(self.management.respawn)
+            crate::mux::config::spell_chord(&self.management.respawn)
         );
         if Some(held) == focused {
             Some(format!("(exited {code} — {chord} respawns)"))

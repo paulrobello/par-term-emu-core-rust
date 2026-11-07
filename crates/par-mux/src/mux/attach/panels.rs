@@ -3,15 +3,12 @@
 //! window picker, and the workspace sidebar.
 
 use super::ManagementKey;
+use crate::mux::config::{spell_chord, ChordKey};
 
 /// The tmux spelling of a chord byte: `C-x` for control bytes (0 = the
 /// Space spelling), the literal character otherwise.
 pub(crate) fn spell_key(byte: u8) -> String {
-    match byte {
-        0 => "C-Space".to_string(),
-        b if (1..27).contains(&b) => format!("C-{}", (b - 1 + b'a') as char),
-        other => (other as char).to_string(),
-    }
+    spell_chord(&ChordKey::plain(byte))
 }
 
 /// One help panel row: the text and whether it renders as an accent row
@@ -84,21 +81,24 @@ pub(crate) fn help_rows(
         vec![
             (format!("{p} {p}"), "type a literal prefix".to_string()),
             (format!("{p} d"), "detach".to_string()),
-            (format!("{p} {}", spell_key(m.help)), "keybinds".to_string()),
+            (
+                format!("{p} {}", spell_chord(&m.help)),
+                "keybinds".to_string(),
+            ),
             (
                 format!("{p} {}", spell_key(reload)),
                 "reload the config".to_string(),
             ),
             (
-                format!("{p} {}", spell_key(m.palette)),
+                format!("{p} {}", spell_chord(&m.palette)),
                 "command palette".to_string(),
             ),
             (
-                format!("{p} {}", spell_key(m.respawn)),
+                format!("{p} {}", spell_chord(&m.respawn)),
                 "respawn the held-dead pane".to_string(),
             ),
             (
-                format!("{p} {}", spell_key(m.notify_jump)),
+                format!("{p} {}", spell_chord(&m.notify_jump)),
                 "jump to the last notification's pane".to_string(),
             ),
         ],
@@ -108,23 +108,23 @@ pub(crate) fn help_rows(
         "workspaces",
         vec![
             (
-                format!("{p} {}", spell_key(m.workspace_next)),
+                format!("{p} {}", spell_chord(&m.workspace_next)),
                 "next workspace".to_string(),
             ),
             (
-                format!("{p} {}", spell_key(m.workspace_prev)),
+                format!("{p} {}", spell_chord(&m.workspace_prev)),
                 "previous workspace".to_string(),
             ),
             (
-                format!("{p} {}", spell_key(m.workspace_picker)),
+                format!("{p} {}", spell_chord(&m.workspace_picker)),
                 "workspace picker".to_string(),
             ),
             (
-                format!("{p} {}", spell_key(m.sidebar)),
+                format!("{p} {}", spell_chord(&m.sidebar)),
                 "toggle the workspace side panel".to_string(),
             ),
             (
-                format!("{p} {}", spell_key(m.status_bar)),
+                format!("{p} {}", spell_chord(&m.status_bar)),
                 "toggle the status bar".to_string(),
             ),
         ],
@@ -134,7 +134,7 @@ pub(crate) fn help_rows(
         "tabs / windows / sessions",
         vec![
             (
-                format!("{p} {}", spell_key(m.new_window)),
+                format!("{p} {}", spell_chord(&m.new_window)),
                 "new tab (window)".to_string(),
             ),
             (
@@ -143,11 +143,11 @@ pub(crate) fn help_rows(
             ),
             (format!("{p} ( / )"), "previous / next session".to_string()),
             (
-                format!("{p} {}", spell_key(m.picker)),
+                format!("{p} {}", spell_chord(&m.picker)),
                 "window picker".to_string(),
             ),
             (
-                format!("{p} {}", spell_key(m.rename_window)),
+                format!("{p} {}", spell_chord(&m.rename_window)),
                 "rename the tab (window)".to_string(),
             ),
         ],
@@ -157,47 +157,47 @@ pub(crate) fn help_rows(
         "panes",
         vec![
             (
-                format!("{p} {}", spell_key(m.split_right)),
+                format!("{p} {}", spell_chord(&m.split_right)),
                 "split right".to_string(),
             ),
             (
-                format!("{p} {}", spell_key(m.split_down)),
+                format!("{p} {}", spell_chord(&m.split_down)),
                 "split down".to_string(),
             ),
             (
-                format!("{p} {}", spell_key(m.kill_pane)),
+                format!("{p} {}", spell_chord(&m.kill_pane)),
                 "kill the focused pane".to_string(),
             ),
             (
-                format!("{p} {}", spell_key(m.break_pane)),
+                format!("{p} {}", spell_chord(&m.break_pane)),
                 "break the pane out to a new tab".to_string(),
             ),
             (
-                format!("{p} {}", spell_key(m.join_pane)),
+                format!("{p} {}", spell_chord(&m.join_pane)),
                 "join the pane into a picked tab".to_string(),
             ),
             (format!("{p} o"), "cycle panes".to_string()),
             (
                 format!(
                     "{p} {} / {}",
-                    spell_key(m.swap_prev),
-                    spell_key(m.swap_next)
+                    spell_chord(&m.swap_prev),
+                    spell_chord(&m.swap_next)
                 ),
                 "swap pane prev/next".to_string(),
             ),
             (
                 format!(
                     "{p} {} / {}",
-                    spell_key(m.move_window_left),
-                    spell_key(m.move_window_right)
+                    spell_chord(&m.move_window_left),
+                    spell_chord(&m.move_window_right)
                 ),
                 "move tab left/right".to_string(),
             ),
             (
                 format!(
                     "{p} {} / {}",
-                    spell_key(m.tab_strip_left),
-                    spell_key(m.tab_strip_right)
+                    spell_chord(&m.tab_strip_left),
+                    spell_chord(&m.tab_strip_right)
                 ),
                 "scroll tab strip left/right".to_string(),
             ),
@@ -206,24 +206,35 @@ pub(crate) fn help_rows(
                 "swap with the pane in that direction".to_string(),
             ),
             (
-                format!("{p} {} arrows", spell_key(m.resize)),
+                format!("{p} {} arrows", spell_chord(&m.resize)),
                 format!("resize mode, edge moves by {resize_step}"),
             ),
             (
-                format!("{p} {}", spell_key(m.zoom)),
+                format!("{p} {}", spell_chord(&m.zoom)),
                 "zoom the focused pane (toggle)".to_string(),
             ),
             (
-                format!("{p} {}", spell_key(m.border_cycle)),
+                format!("{p} {}", spell_chord(&m.border_cycle)),
                 "cycle the border style (herdr = per-pane boxes)".to_string(),
             ),
             (
-                format!("{p} {}", spell_key(m.label_toggle)),
+                format!("{p} {}", spell_chord(&m.label_toggle)),
                 "toggle pane labels".to_string(),
             ),
             (
-                format!("{p} {}", spell_key(m.rename_pane)),
+                format!("{p} {}", spell_chord(&m.rename_pane)),
                 "rename the focused pane".to_string(),
+            ),
+            (
+                format!(
+                    "{p} {} / {} / {} / {} / {}",
+                    spell_chord(&m.layout_even_horizontal),
+                    spell_chord(&m.layout_even_vertical),
+                    spell_chord(&m.layout_main_horizontal),
+                    spell_chord(&m.layout_main_vertical),
+                    spell_chord(&m.layout_tiled)
+                ),
+                "layout: even-h / even-v / main-h / main-v / tiled".to_string(),
             ),
         ],
     );
@@ -543,6 +554,23 @@ pub(crate) const PALETTE_ACTIONS: &[(Option<ManagementKey>, &str)] = &[
     (Some(ManagementKey::MoveWindowRight), "move tab right"),
     (None, "move tab to start"),
     (None, "move tab to end"),
+    (
+        Some(ManagementKey::LayoutEvenHorizontal),
+        "layout even horizontal",
+    ),
+    (
+        Some(ManagementKey::LayoutEvenVertical),
+        "layout even vertical",
+    ),
+    (
+        Some(ManagementKey::LayoutMainHorizontal),
+        "layout main horizontal",
+    ),
+    (
+        Some(ManagementKey::LayoutMainVertical),
+        "layout main vertical",
+    ),
+    (Some(ManagementKey::LayoutTiled), "layout tiled"),
 ];
 
 /// A palette action's chord at its EFFECTIVE binding, the help panel's
@@ -560,8 +588,8 @@ pub(crate) fn palette_action_chord(
         // keybinds opens at the help chord, reload at the reload chord,
         // detach at its fixed prefix chord.
         1 => m.help,
-        2 => reload,
-        3 => b'd',
+        2 => ChordKey::plain(reload),
+        3 => ChordKey::plain(b'd'),
         _ => match PALETTE_ACTIONS.get(action)?.0? {
             ManagementKey::SplitRight => m.split_right,
             ManagementKey::SplitDown => m.split_down,
@@ -580,10 +608,15 @@ pub(crate) fn palette_action_chord(
             ManagementKey::NotifyJump => m.notify_jump,
             ManagementKey::MoveWindowLeft => m.move_window_left,
             ManagementKey::MoveWindowRight => m.move_window_right,
+            ManagementKey::LayoutEvenHorizontal => m.layout_even_horizontal,
+            ManagementKey::LayoutEvenVertical => m.layout_even_vertical,
+            ManagementKey::LayoutMainHorizontal => m.layout_main_horizontal,
+            ManagementKey::LayoutMainVertical => m.layout_main_vertical,
+            ManagementKey::LayoutTiled => m.layout_tiled,
             _ => return None,
         },
     };
-    Some(format!("{} {}", spell_key(prefix), spell_key(key)))
+    Some(format!("{} {}", spell_key(prefix), spell_chord(&key)))
 }
 
 /// The picker's display rows from the queried entries: every session's

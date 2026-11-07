@@ -2,7 +2,9 @@
 
 use std::path::{Path, PathBuf};
 
-use super::{AgentAppendFile, Chords, ClientSection, ConfigFile, DaemonSection, EffectiveConfig};
+use super::{
+    spell_chord, AgentAppendFile, Chords, ClientSection, ConfigFile, DaemonSection, EffectiveConfig,
+};
 
 /// Environment override for the config file location (`PAR_MUX_CONFIG`),
 /// else `<config dir>/par-mux/config.toml` via `dirs::config_dir()`.
@@ -91,6 +93,11 @@ pub fn render(eff: &EffectiveConfig) -> String {
             session_strip: Some(defaults.session_strip.clone()),
             agent_state_dots: Some(defaults.agent_state_dots.clone()),
             split_right: None,
+            layout_even_horizontal: None,
+            layout_even_vertical: None,
+            layout_main_horizontal: None,
+            layout_main_vertical: None,
+            layout_tiled: None,
             split_down: None,
             kill_pane: None,
             break_pane: None,
@@ -108,7 +115,7 @@ pub fn render(eff: &EffectiveConfig) -> String {
             workspace_next: None,
             workspace_prev: None,
             help: None,
-            picker: Some(char::from(defaults.management.picker).to_string()),
+            picker: Some(spell_chord(&defaults.management.picker)),
             zoom: None,
             rename_window: None,
             rename_pane: None,

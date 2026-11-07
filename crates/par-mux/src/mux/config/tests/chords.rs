@@ -224,6 +224,57 @@ fn change_cursor_shape_renamed_key_and_merge() {
 }
 
 #[test]
+fn parse_chord_understands_m_keys() {
+    assert_eq!(parse_chord("M-1"), Some(ChordKey::alt(b'1')));
+    assert_eq!(parse_chord("m-a"), Some(ChordKey::alt(b'a')));
+    assert_eq!(parse_chord("M-A"), Some(ChordKey::alt(b'A')));
+    assert_eq!(parse_chord("M-%"), Some(ChordKey::alt(b'%')));
+    assert_eq!(parse_chord("M-"), None);
+    assert_eq!(parse_chord("M-12"), None);
+    assert_eq!(parse_chord("M-C-a"), None);
+}
+
+#[test]
+fn parse_chord_keeps_plain_and_c_keys() {
+    assert_eq!(parse_chord("%"), Some(ChordKey::plain(b'%')));
+    assert_eq!(parse_chord("C-a"), Some(ChordKey::plain(0x01)));
+    assert_eq!(parse_chord("C-Space"), Some(ChordKey::plain(0x00)));
+    assert_eq!(parse_chord("M"), Some(ChordKey::plain(b'M')));
+    assert_eq!(parse_chord("Mx"), None);
+    assert_eq!(parse_chord("ab"), None);
+    assert_eq!(parse_chord(""), None);
+}
+
+#[test]
+fn spell_chord_round_trips_parse_chord() {
+    for spec in ["M-1", "%", "C-a", "C-Space", "x", "M-x", "M-%"] {
+        let parsed = parse_chord(spec).expect(spec);
+        assert_eq!(spell_chord(&parsed), spec);
+    }
+}
+
+#[test]
+fn config_file_layout_keys_round_trip() {
+    let defaults = Chords::with_defaults();
+    let file: ConfigFile =
+        toml::from_str("[client]\nlayout-even-horizontal = \"M-x\"\nlayout-tiled = \"t\"\n")
+            .unwrap();
+    let m = reload_client_chords(&file, &defaults).unwrap().management;
+    assert_eq!(m.layout_even_horizontal, ChordKey::alt(b'x'));
+    assert_eq!(m.layout_tiled, ChordKey::plain(b't'));
+    assert_eq!(
+        m.layout_even_vertical,
+        ChordKey::alt(b'2'),
+        "unstated keeps default"
+    );
+    let bad: ConfigFile = toml::from_str("[client]\nlayout-tiled = \"M-\"\n").unwrap();
+    assert!(reload_client_chords(&bad, &defaults).is_err());
+    // The generated file does not emit the layout keys (defaults stand).
+    let eff = resolve(&ConfigFile::default(), &Overrides::default());
+    assert!(!render(&eff).contains("layout-"));
+}
+
+#[test]
 fn management_chords_parse_route_and_error() {
     let defaults = Chords {
         prefix: 0x02,
@@ -235,34 +286,35 @@ fn management_chords_parse_route_and_error() {
     assert_eq!(
         reload_client_chords(&file, &defaults).unwrap().management,
         Management {
-            split_right: b'%',
-            split_down: b'"',
-            kill_pane: b'x',
-            break_pane: b'!',
-            join_pane: b'J',
-            palette: b':',
-            new_window: b'c',
-            resize: b'R',
-            swap_prev: b'{',
-            swap_next: b'}',
-            move_window_left: b'<',
-            move_window_right: b'>',
-            tab_strip_left: b'H',
-            tab_strip_right: b'L',
-            workspace_next: b'W',
-            workspace_prev: 0x17,
-            help: b'?',
-            picker: b'w',
-            zoom: b'z',
-            rename_window: b',',
-            rename_pane: b'$',
-            border_cycle: b'B',
-            label_toggle: b'l',
-            workspace_picker: b'g',
-            sidebar: b's',
-            status_bar: b'S',
-            respawn: b'r',
-            notify_jump: b'j',
+            split_right: ChordKey::plain(b'%'),
+            split_down: ChordKey::plain(b'"'),
+            kill_pane: ChordKey::plain(b'x'),
+            break_pane: ChordKey::plain(b'!'),
+            join_pane: ChordKey::plain(b'J'),
+            palette: ChordKey::plain(b':'),
+            new_window: ChordKey::plain(b'c'),
+            resize: ChordKey::plain(b'R'),
+            swap_prev: ChordKey::plain(b'{'),
+            swap_next: ChordKey::plain(b'}'),
+            move_window_left: ChordKey::plain(b'<'),
+            move_window_right: ChordKey::plain(b'>'),
+            tab_strip_left: ChordKey::plain(b'H'),
+            tab_strip_right: ChordKey::plain(b'L'),
+            workspace_next: ChordKey::plain(b'W'),
+            workspace_prev: ChordKey::plain(0x17),
+            help: ChordKey::plain(b'?'),
+            picker: ChordKey::plain(b'w'),
+            zoom: ChordKey::plain(b'z'),
+            rename_window: ChordKey::plain(b','),
+            rename_pane: ChordKey::plain(b'$'),
+            border_cycle: ChordKey::plain(b'B'),
+            label_toggle: ChordKey::plain(b'l'),
+            workspace_picker: ChordKey::plain(b'g'),
+            sidebar: ChordKey::plain(b's'),
+            status_bar: ChordKey::plain(b'S'),
+            respawn: ChordKey::plain(b'r'),
+            notify_jump: ChordKey::plain(b'j'),
+            ..Management::default()
         }
     );
     // Full override, tmux spellings and literals alike.
@@ -271,28 +323,40 @@ fn management_chords_parse_route_and_error() {
         )
         .unwrap();
     let m = reload_client_chords(&file, &defaults).unwrap().management;
-    assert_eq!(m.split_right, 0x13);
-    assert_eq!(m.split_down, b'v');
-    assert_eq!(m.kill_pane, 0x18);
-    assert_eq!(m.new_window, b'W');
+    assert_eq!(m.split_right, ChordKey::plain(0x13));
+    assert_eq!(m.split_down, ChordKey::plain(b'v'));
+    assert_eq!(m.kill_pane, ChordKey::plain(0x18));
+    assert_eq!(m.new_window, ChordKey::plain(b'W'));
     // A partial override keeps the untouched keys.
     let partial: ConfigFile = toml::from_str("[client]\nnew-window = \"n\"\n").unwrap();
     let m = reload_client_chords(&partial, &defaults)
         .unwrap()
         .management;
-    assert_eq!(m.split_right, b'%', "unstated keeps the current/default");
-    assert_eq!(m.new_window, b'n');
+    assert_eq!(
+        m.split_right,
+        ChordKey::plain(b'%'),
+        "unstated keeps the current/default"
+    );
+    assert_eq!(m.new_window, ChordKey::plain(b'n'));
     // The workspace chords parse through the same grammar; unstated
     // keeps the defaults (W / C-w).
     let file: ConfigFile =
         toml::from_str("[client]\nworkspace-next = \"C-n\"\nworkspace-prev = \"C-p\"\n").unwrap();
     let m = reload_client_chords(&file, &defaults).unwrap().management;
-    assert_eq!(m.workspace_next, 0x0e, "C-n overrides the W default");
-    assert_eq!(m.workspace_prev, 0x10, "C-p overrides the C-w default");
+    assert_eq!(
+        m.workspace_next,
+        ChordKey::plain(0x0e),
+        "C-n overrides the W default"
+    );
+    assert_eq!(
+        m.workspace_prev,
+        ChordKey::plain(0x10),
+        "C-p overrides the C-w default"
+    );
     let empty: ConfigFile = toml::from_str("[client]\n").unwrap();
     let m = reload_client_chords(&empty, &defaults).unwrap().management;
-    assert_eq!(m.workspace_next, b'W');
-    assert_eq!(m.workspace_prev, 0x17, "C-w");
+    assert_eq!(m.workspace_next, ChordKey::plain(b'W'));
+    assert_eq!(m.workspace_prev, ChordKey::plain(0x17), "C-w");
     // Malformed spellings error, naming the key.
     for (key, spec) in [
         ("split-right", "C-"),
@@ -315,19 +379,23 @@ fn tab_strip_chords_parse_and_rebind() {
     // Defaults.
     let file: ConfigFile = toml::from_str("[client]\n").unwrap();
     let m = reload_client_chords(&file, &defaults).unwrap().management;
-    assert_eq!(m.tab_strip_left, b'H');
-    assert_eq!(m.tab_strip_right, b'L');
+    assert_eq!(m.tab_strip_left, ChordKey::plain(b'H'));
+    assert_eq!(m.tab_strip_right, ChordKey::plain(b'L'));
     // A rebind parses with the tmux spelling.
     let file: ConfigFile =
         toml::from_str("[client]\ntab-strip-left = \"C-j\"\ntab-strip-right = \"C-l\"\n").unwrap();
     let m = reload_client_chords(&file, &defaults).unwrap().management;
-    assert_eq!(m.tab_strip_left, 0x0a, "C-j");
-    assert_eq!(m.tab_strip_right, 0x0c, "C-l");
+    assert_eq!(m.tab_strip_left, ChordKey::plain(0x0a), "C-j");
+    assert_eq!(m.tab_strip_right, ChordKey::plain(0x0c), "C-l");
     // A partial override keeps the sibling's default.
     let file: ConfigFile = toml::from_str("[client]\ntab-strip-left = \"h\"\n").unwrap();
     let m = reload_client_chords(&file, &defaults).unwrap().management;
-    assert_eq!(m.tab_strip_left, b'h');
-    assert_eq!(m.tab_strip_right, b'L', "unstated keeps the default");
+    assert_eq!(m.tab_strip_left, ChordKey::plain(b'h'));
+    assert_eq!(
+        m.tab_strip_right,
+        ChordKey::plain(b'L'),
+        "unstated keeps the default"
+    );
     // Malformed spellings error, naming the key.
     let file: ConfigFile = toml::from_str("[client]\ntab-strip-left = \"C-]\"\n").unwrap();
     let err = reload_client_chords(&file, &defaults).unwrap_err();
@@ -364,13 +432,13 @@ fn resize_chord_and_step_parse_with_the_step_floored() {
     // Unstated keys keep their current values.
     let file: ConfigFile = toml::from_str("[client]\n").unwrap();
     let chords = reload_client_chords(&file, &defaults).unwrap();
-    assert_eq!(chords.management.resize, b'R');
+    assert_eq!(chords.management.resize, ChordKey::plain(b'R'));
     assert_eq!(chords.resize_step, 1);
     // Full override: the chord through the shared grammar, the step
     // through the file tier.
     let file: ConfigFile = toml::from_str("[client]\nresize = \"C-z\"\nresize-step = 3\n").unwrap();
     let chords = reload_client_chords(&file, &defaults).unwrap();
-    assert_eq!(chords.management.resize, 0x1a);
+    assert_eq!(chords.management.resize, ChordKey::plain(0x1a));
     assert_eq!(chords.resize_step, 3);
     // Zero and unstated-file floors: 0 clamps to 1.
     let file: ConfigFile = toml::from_str("[client]\nresize-step = 0\n").unwrap();

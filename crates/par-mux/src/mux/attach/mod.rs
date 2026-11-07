@@ -72,6 +72,8 @@ pub(crate) mod text_input;
 use panels::*;
 use targets::*;
 
+use crate::mux::config::ChordKey;
+use crate::mux::layout::LayoutPreset;
 use crate::mux::resolve_socket_path;
 use par_term_emu_core::tmux_control::TmuxNotification;
 use std::io::Write as _;
@@ -676,6 +678,20 @@ impl Session {
             return false;
         }
         if byte == 0x1b {
+            // ESC + a printable that is not a CSI/SS3 opener (or `<`) is an
+            // Alt chord: bound runs, unbound is consumed.
+            if let Some(&alt) = rest.get(*index) {
+                if alt.is_ascii_graphic() && !matches!(alt, b'[' | b'O' | b'<') {
+                    *index += 1;
+                    if let Some(key) = self.management_command(ChordKey {
+                        key: alt,
+                        alt: true,
+                    }) {
+                        self.passthrough_management(key);
+                    }
+                    return false;
+                }
+            }
             // An arrow chord: collect the rest of the CSI sequence.
             let taken = rest[*index..].iter().take(2).copied().collect::<Vec<u8>>();
             *index += taken.len();
@@ -694,20 +710,20 @@ impl Session {
         // command table: they are configurable, so they cannot be
         // static arms, and the defaults (`%`, `"`, `x`, `c`) are
         // consumed unbound by the table today.
-        if let Some(key) = self.management_command(byte) {
+        if let Some(key) = self.management_command(ChordKey::plain(byte)) {
             self.passthrough_management(key);
             return false;
         }
         // The resize chord: a sticky mode — arrows adjust
         // the focused pane's edges until Enter/Escape/q.
-        if byte == self.management.resize {
+        if ChordKey::plain(byte) == self.management.resize {
             self.enter_resize_mode();
             return false;
         }
         // The help chord: the bindings panel, printed as
         // plain text (passthrough has no overlay surface;
         // the pane's next output redraws over it).
-        if byte == self.management.help {
+        if ChordKey::plain(byte) == self.management.help {
             self.show_help();
             return false;
         }
@@ -765,6 +781,13 @@ impl Session {
             | ManagementKey::Sidebar
             | ManagementKey::StatusBar
             | ManagementKey::NotifyJump => {}
+            key @ (ManagementKey::LayoutEvenHorizontal
+            | ManagementKey::LayoutEvenVertical
+            | ManagementKey::LayoutMainHorizontal
+            | ManagementKey::LayoutMainVertical
+            | ManagementKey::LayoutTiled) => {
+                self.select_layout(key.layout_preset().expect("layout key"))
+            }
         }
     }
 
@@ -926,6 +949,54 @@ pub(crate) enum ManagementKey {
     /// Focus the pane behind the most recent agent notification this
     /// client delivered (render mode).
     NotifyJump,
+    /// Apply the even-horizontal layout preset to the window.
+    LayoutEvenHorizontal,
+    /// Apply the even-vertical layout preset to the window.
+    LayoutEvenVertical,
+    /// Apply the main-horizontal layout preset to the window.
+    LayoutMainHorizontal,
+    /// Apply the main-vertical layout preset to the window.
+    LayoutMainVertical,
+    /// Apply the tiled layout preset to the window.
+    LayoutTiled,
+}
+
+impl ManagementKey {
+    /// The window preset selected by a layout action.
+    pub(crate) fn layout_preset(self) -> Option<LayoutPreset> {
+        match self {
+            Self::LayoutEvenHorizontal => Some(LayoutPreset::EvenHorizontal),
+            Self::LayoutEvenVertical => Some(LayoutPreset::EvenVertical),
+            Self::LayoutMainHorizontal => Some(LayoutPreset::MainHorizontal),
+            Self::LayoutMainVertical => Some(LayoutPreset::MainVertical),
+            Self::LayoutTiled => Some(LayoutPreset::Tiled),
+            Self::SplitRight
+            | Self::SplitDown
+            | Self::KillPane
+            | Self::BreakPane
+            | Self::JoinPane
+            | Self::Palette
+            | Self::NewWindow
+            | Self::SwapPrev
+            | Self::SwapNext
+            | Self::MoveWindowLeft
+            | Self::MoveWindowRight
+            | Self::TabStripLeft
+            | Self::TabStripRight
+            | Self::WorkspaceNext
+            | Self::WorkspacePrev
+            | Self::Zoom
+            | Self::RenameWindow
+            | Self::RenamePane
+            | Self::BorderCycle
+            | Self::Labels
+            | Self::WorkspacePicker
+            | Self::Sidebar
+            | Self::StatusBar
+            | Self::Respawn
+            | Self::NotifyJump => None,
+        }
+    }
 }
 
 /// The prefix command table: d detach; o / arrows cycle panes; n/p

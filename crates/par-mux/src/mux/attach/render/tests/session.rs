@@ -3131,10 +3131,10 @@ fn settings_keys_section_scrolls_to_every_row() {
     assert_eq!(state.selected, 0);
     assert_eq!(state.top, 0);
     // Down to the last row: the window follows the selection (the keys
-    // section holds every management chord plus prefix and reload — 29
+    // section holds every management chord plus prefix and reload — 35
     // rows with break-pane, join-pane, the move-tab and tab-strip
-    // chords, and notify-jump aboard).
-    session.route_stdin_bytes(&mut conn, &[b'j'; 29][..]);
+    // chords, notify-jump, and the five layout chords aboard).
+    session.route_stdin_bytes(&mut conn, &[b'j'; 34][..]);
     let Modal::Settings(state) = &session.modal else {
         panic!("open")
     };
@@ -3147,7 +3147,7 @@ fn settings_keys_section_scrolls_to_every_row() {
     assert!(last_row.contains("respawn dead pane"), "{last_row}");
     assert!(last_row.trim_end().ends_with(" r"), "{last_row}");
     // Up to the first: the window snaps back.
-    session.route_stdin_bytes(&mut conn, &[b'k'; 29][..]);
+    session.route_stdin_bytes(&mut conn, &[b'k'; 34][..]);
     let Modal::Settings(state) = &session.modal else {
         panic!("open")
     };
@@ -5810,7 +5810,10 @@ fn notify_jump_chord_focuses_the_last_notified_pane() {
     session.notify.states = vec!["blocked".to_string()];
     session.refresh_status_facts(&mut conn).expect("seed");
     drained(&rx);
-    assert_eq!(session.management.notify_jump, b'j');
+    assert_eq!(
+        session.management.notify_jump,
+        crate::mux::config::ChordKey::plain(b'j')
+    );
     // Nothing delivered yet: a flash, no command.
     chord(&mut session, &mut conn, b'j');
     assert_eq!(
@@ -7247,4 +7250,150 @@ fn layouts_escape_from_load_confirm_backs_out_without_sending() {
     );
     settle(&mut session, &mut conn);
     assert!(!drained(&rx).iter().any(|l| l.starts_with("load-layout")));
+}
+
+/// A session on the three-pane snapshot layout, wire drained.
+fn layout_chord_session(
+    tag: &str,
+) -> (
+    std::sync::mpsc::Receiver<(String, String)>,
+    crate::mux::attach::conn::AttachConn,
+    WindowSession,
+) {
+    let (rx, conn) = fake_daemon(tag, FakeScript::default());
+    let mut session = WindowSession::new(90, 26);
+    session
+        .renderer
+        .apply_layout(parse_layout(THREE_PANE).expect("parses"));
+    session.window = "@0".to_string();
+    drained(&rx);
+    (rx, conn, session)
+}
+
+/// prefix + M-1..M-5 each send `select-layout <preset> -t <shown window>`.
+#[test]
+fn alt_digit_chords_send_select_layout_per_preset() {
+    let presets = [
+        (b'1', "even-horizontal"),
+        (b'2', "even-vertical"),
+        (b'3', "main-horizontal"),
+        (b'4', "main-vertical"),
+        (b'5', "tiled"),
+    ];
+    for (digit, name) in presets {
+        let (rx, mut conn, mut session) = layout_chord_session("altlayout");
+        session.route_stdin_bytes(&mut conn, &[0x02, 0x1b, digit]);
+        assert_eq!(
+            received_within_300ms(&rx),
+            vec![format!("select-layout {name} -t @0")],
+            "M-{}",
+            digit as char
+        );
+    }
+}
+
+#[test]
+fn m1_chord_sends_select_layout_even_horizontal() {
+    let (rx, mut conn, mut session) = layout_chord_session("m1layout");
+    session.route_stdin_bytes(&mut conn, &[0x02, 0x1b, b'1']);
+    assert_eq!(
+        received_within_300ms(&rx),
+        vec!["select-layout even-horizontal -t @0".to_string()]
+    );
+}
+
+/// An unbound Alt chord after the prefix is consumed: nothing on the wire,
+/// nothing forwarded to the pane.
+#[test]
+fn unbound_alt_chord_with_prefix_armed_is_consumed() {
+    let (rx, mut conn, mut session) = layout_chord_session("altunbound");
+    session.route_stdin_bytes(&mut conn, &[0x02, 0x1b, b'7']);
+    assert!(received_within_300ms(&rx).is_empty());
+    assert!(!session.prefix_pending, "the prefix is spent");
+}
+
+/// Without the prefix an Alt key still reaches the pane program.
+#[test]
+fn alt_key_without_prefix_still_forwards() {
+    let (rx, mut conn, mut session) = layout_chord_session("altfwd");
+    session.route_stdin_bytes(&mut conn, &[0x1b, b'1']);
+    let lines = received_within_300ms(&rx);
+    assert!(
+        lines.iter().any(|l| l.starts_with("send-keys")),
+        "Alt+1 forwards to the pane: {lines:?}"
+    );
+    assert!(!lines.iter().any(|l| l.starts_with("select-layout")));
+}
+
+/// M-5 on a zoomed window still sends the command; the daemon-side
+/// unzoom and the %layout-change reseed clear the cue.
+#[test]
+fn m5_on_zoomed_window_sends_select_layout_tiled() {
+    let (rx, mut conn, mut session) = layout_chord_session("m5zoom");
+    session.zoomed = true;
+    session.route_stdin_bytes(&mut conn, &[0x02, 0x1b, b'5']);
+    assert_eq!(
+        received_within_300ms(&rx),
+        vec!["select-layout tiled -t @0".to_string()]
+    );
+}
+
+#[test]
+fn select_layout_refusal_flashes() {
+    let script = FakeScript {
+        failing: ["select-layout tiled -t @0".to_string()].into(),
+        ..FakeScript::default()
+    };
+    let (rx, mut conn, mut session) = two_pane_session("layout-refused", script);
+    session.route_stdin_bytes(&mut conn, &[0x02, 0x1b, b'5']);
+    settle(&mut session, &mut conn);
+    assert_eq!(drained(&rx), vec!["select-layout tiled -t @0"]);
+    assert_eq!(session.chrome.flash_text(), Some("layout tiled: refused"));
+}
+
+#[test]
+fn plain_byte_lookup_does_not_resolve_an_alt_bound_layout_chord() {
+    let session = WindowSession::new(90, 26);
+    assert_eq!(
+        session.management_key(crate::mux::config::ChordKey::alt(b'1')),
+        Some(ManagementKey::LayoutEvenHorizontal)
+    );
+    assert_eq!(
+        session.management_key(crate::mux::config::ChordKey::plain(b'1')),
+        None
+    );
+    assert!(crate::mux::config::management_key("M-1", "popup[0].key").is_err());
+    assert_eq!(
+        crate::mux::config::management_key("1", "popup[0].key"),
+        Ok(b'1')
+    );
+}
+
+#[test]
+fn alt_non_ascii_chord_with_prefix_flashes_the_ascii_hint() {
+    let (rx, mut conn, mut session) = layout_chord_session("altnonascii");
+    for ch in ['中', ' '] {
+        session.route_plain(&[0x02], &mut conn);
+        session.route_key(
+            &mut conn,
+            &TermKeyEvent::char_(ch, par_term_emu_core::keyboard::modifiers::ALT),
+        );
+        assert_eq!(
+            session.chrome.flash_text(),
+            Some(non_ascii_chord_hint(ch).as_str())
+        );
+        assert!(!session.prefix_pending);
+    }
+    assert!(received_within_300ms(&rx).is_empty());
+}
+
+#[test]
+fn palette_layout_row_sends_select_layout() {
+    let (rx, mut conn, mut session) = two_pane_session("palette-layout", FakeScript::default());
+    chord(&mut session, &mut conn, b':');
+    drained(&rx);
+    session.route_plain(b"layout tiled", &mut conn);
+    session.route_plain(b"\r", &mut conn);
+    settle(&mut session, &mut conn);
+    assert_eq!(drained(&rx), vec!["select-layout tiled -t @0"]);
 }

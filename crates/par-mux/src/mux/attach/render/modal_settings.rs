@@ -219,8 +219,8 @@ impl SettingSpec {
 }
 
 /// A chord row's value: the bound byte in the tmux spelling.
-fn chord(byte: u8) -> FieldVal {
-    FieldVal::Text(spell_key(byte))
+fn chord(key: crate::mux::config::ChordKey) -> FieldVal {
+    FieldVal::Text(crate::mux::config::spell_chord(&key))
 }
 
 /// The sidebar section's rows.
@@ -433,7 +433,7 @@ const NOTIFY_ROWS: &[SettingSpec] = &[
 /// management chord.
 const KEYS_ROWS: &[SettingSpec] = &[
     SettingSpec::new("prefix", "prefix", SettingKind::Chord, |v, _| {
-        chord(v.prefix)
+        chord(crate::mux::config::ChordKey::plain(v.prefix))
     }),
     SettingSpec::new(
         "reload",
@@ -563,6 +563,36 @@ const KEYS_ROWS: &[SettingSpec] = &[
         "jump to notification",
         SettingKind::Chord,
         |v, _| chord(v.management.notify_jump),
+    ),
+    SettingSpec::new(
+        "layout-even-horizontal",
+        "layout even horizontal",
+        SettingKind::Chord,
+        |v, _| chord(v.management.layout_even_horizontal),
+    ),
+    SettingSpec::new(
+        "layout-even-vertical",
+        "layout even vertical",
+        SettingKind::Chord,
+        |v, _| chord(v.management.layout_even_vertical),
+    ),
+    SettingSpec::new(
+        "layout-main-horizontal",
+        "layout main horizontal",
+        SettingKind::Chord,
+        |v, _| chord(v.management.layout_main_horizontal),
+    ),
+    SettingSpec::new(
+        "layout-main-vertical",
+        "layout main vertical",
+        SettingKind::Chord,
+        |v, _| chord(v.management.layout_main_vertical),
+    ),
+    SettingSpec::new(
+        "layout-tiled",
+        "layout tiled",
+        SettingKind::Chord,
+        |v, _| chord(v.management.layout_tiled),
     ),
     SettingSpec::new(
         "respawn",
@@ -1185,11 +1215,18 @@ impl WindowSession {
                 }
             },
             SettingKind::Chord => {
-                if crate::mux::config::parse_prefix(text).is_some() {
+                // The prefix is a bare byte (no Alt); every other chord row
+                // accepts the full chord grammar.
+                let valid = if edit.key == "prefix" {
+                    crate::mux::config::parse_prefix(text).is_some()
+                } else {
+                    crate::mux::config::parse_chord(text).is_some()
+                };
+                if valid {
                     Some(SettingValue::Str(text.to_string()))
                 } else {
                     self.chrome.flash(format!(
-                        "{}: expected one key, tmux spelling (e.g. x or C-x)",
+                        "{}: expected one key, tmux spelling (e.g. x, C-x or M-1)",
                         edit.label
                     ));
                     None
@@ -1459,11 +1496,11 @@ mod tests {
         let m = Management::default();
         assert_eq!(
             lookup("split-right").value(&values, "render"),
-            FieldVal::Text(spell_key(m.split_right))
+            FieldVal::Text(crate::mux::config::spell_chord(&m.split_right))
         );
         assert_eq!(
             lookup("notify-jump").value(&values, "render"),
-            FieldVal::Text(spell_key(m.notify_jump))
+            FieldVal::Text(crate::mux::config::spell_chord(&m.notify_jump))
         );
     }
 
@@ -1640,6 +1677,38 @@ mod tests {
         let last = composed.rows[5 + BODY_ROWS - 1].text.clone();
         assert!(last.contains("respawn dead pane"), "{last}");
         assert!(last.trim_end().ends_with(" r"), "{last}");
+    }
+
+    /// The five layout-preset chords each get a keys row, spelled
+    /// `M-1`..`M-5` by default.
+    #[test]
+    fn settings_keys_tab_lists_the_five_layout_chords() {
+        let expected = [
+            ("layout even horizontal", "M-1"),
+            ("layout even vertical", "M-2"),
+            ("layout main horizontal", "M-3"),
+            ("layout main vertical", "M-4"),
+            ("layout tiled", "M-5"),
+        ];
+        let mut seen = Vec::new();
+        for i in 0..SettingsSection::Keys.row_count() {
+            let mut st = state(SettingsSection::Keys);
+            st.selected = i;
+            st.top = i;
+            let row = compose_settings(&st, &values()).rows[5].text.clone();
+            // The row's selection pointer and padding lead the label.
+            let text = row.trim_start_matches(['\u{25B8}', ' ']);
+            for (label, value) in expected {
+                if text.starts_with(label) {
+                    assert!(
+                        text.trim_end().ends_with(value),
+                        "{label} spells {value}: {row}"
+                    );
+                    seen.push((label, value));
+                }
+            }
+        }
+        assert_eq!(seen, expected);
     }
 
     /// The preset mapping round-trips: a live default reads `default`,
