@@ -1,15 +1,16 @@
 name: CI
 
 # ARC-004: pull requests run the cheap gates (version check, lint, FFI
-# drift) and single-OS Rust/Python test + mux legs. The full OS x Python
-# matrix, Windows mux, wheels, feature matrix, web_term/ drift, and the
-# xcframework stay manual (workflow_dispatch) for runner cost.
+# drift) and single-OS Rust/Python test + mux legs. The web_term/ drift gate
+# also runs on PRs (ARC-007). The full OS x Python matrix, Windows mux,
+# wheels, feature matrix, and the xcframework stay manual
+# (workflow_dispatch) for runner cost.
 on:
   pull_request:
   workflow_dispatch:
     inputs:
       os-scope:
-        description: "Runner scope for the test/mux matrices (verification runs); 'all' runs the full matrix. Wheels, features, xcframework, and web-term-drift run only on 'all'."
+        description: "Runner scope for the test/mux matrices (verification runs); 'all' runs the full matrix. Wheels, features, and xcframework run only on 'all' (web-term-drift runs on every PR and on ''/'all' dispatches)."
         type: choice
         default: all
         options: [all, ubuntu-latest, macos-latest, windows-latest]
@@ -356,7 +357,11 @@ jobs:
   # default build IDs made rebuilds of identical source differ).
   web-term-drift:
     name: web_term/ drift gate
-    if: github.event_name == 'workflow_dispatch' && (inputs.os-scope == '' || inputs.os-scope == 'all')
+    # ARC-007 (audit 2026-11-06): runs on every PR (like ffi-drift) so a
+    # frontend edit without `make web-build-static` fails review instead of
+    # shipping stale assets until the next manual dispatch; dispatch keeps
+    # the os-scope carve-outs (skipped for a single-OS verification run).
+    if: github.event_name == 'pull_request' || (github.event_name == 'workflow_dispatch' && (inputs.os-scope == '' || inputs.os-scope == 'all'))
     runs-on: ubuntu-latest
     timeout-minutes: 10
     needs: [version-check]
