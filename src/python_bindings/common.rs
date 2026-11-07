@@ -2511,6 +2511,23 @@ macro_rules! impl_terminal_exports {
     };
 }
 
+/// Render one snapshot to encoded bytes with the GIL released (QA-003): the
+/// render can process an entire grid plus scrollback, and no Python object
+/// is touched during it — the same contract the PTY write paths hold
+/// (`write_pty_detached`). A free function, not a helper method: every fn
+/// in a `#[pymethods]` block is exported to Python.
+pub(crate) fn render_snapshot_detached(
+    py: pyo3::Python<'_>,
+    snap: &crate::screenshot::TerminalRenderSnapshot,
+    config: crate::screenshot::ScreenshotConfig,
+) -> pyo3::PyResult<Vec<u8>> {
+    py.detach(move || {
+        crate::screenshot::render_terminal_from_snapshot(snap, config).map_err(|e| {
+            pyo3::exceptions::PyRuntimeError::new_err(format!("Screenshot error: {}", e))
+        })
+    })
+}
+
 /// Emit the screenshot surface for `$ty` (QA-004).
 ///
 /// `screenshot`/`screenshot_to_file`/`screenshot_config`/
@@ -2576,6 +2593,7 @@ macro_rules! impl_terminal_screenshot_methods {
             )]
             fn screenshot(
                 &self,
+                py: pyo3::Python<'_>,
                 format: &str,
                 font_path: Option<String>,
                 font_size: f32,
@@ -2644,9 +2662,7 @@ macro_rules! impl_terminal_screenshot_methods {
                     ..Default::default()
                 };
 
-                $crate::screenshot::render_terminal_from_snapshot(&snap, config).map_err(|e| {
-                    pyo3::exceptions::PyRuntimeError::new_err(format!("Screenshot error: {}", e))
-                })
+                $crate::python_bindings::common::render_snapshot_detached(py, &snap, config)
             }
 
             /// Take a screenshot and save to file
@@ -2705,6 +2721,7 @@ macro_rules! impl_terminal_screenshot_methods {
             )]
             fn screenshot_to_file(
                 &self,
+                py: pyo3::Python<'_>,
                 path: &str,
                 format: Option<&str>,
                 font_path: Option<String>,
@@ -2732,6 +2749,7 @@ macro_rules! impl_terminal_screenshot_methods {
                     .unwrap_or("png");
 
                 let bytes = self.screenshot(
+                    py,
                     detected_format,
                     font_path,
                     font_size,
@@ -2771,6 +2789,7 @@ macro_rules! impl_terminal_screenshot_methods {
             #[pyo3(signature = (config, scrollback_offset=0))]
             fn screenshot_config(
                 &self,
+                py: pyo3::Python<'_>,
                 config: &$crate::python_bindings::screenshot_config::PyScreenshotConfig,
                 scrollback_offset: usize,
             ) -> pyo3::PyResult<Vec<u8>> {
@@ -2779,20 +2798,19 @@ macro_rules! impl_terminal_screenshot_methods {
                     let t = $crate::python_bindings::common::TerminalAccess::term_ref(self);
                     t.render_snapshot(scrollback_offset)
                 };
-                $crate::screenshot::render_terminal_from_snapshot(&snap, cfg).map_err(|e| {
-                    pyo3::exceptions::PyRuntimeError::new_err(format!("Screenshot error: {}", e))
-                })
+                $crate::python_bindings::common::render_snapshot_detached(py, &snap, cfg)
             }
 
             /// Take a screenshot to a file using a reusable `ScreenshotConfig` (QA-005).
             #[pyo3(signature = (path, config, scrollback_offset=0))]
             fn screenshot_to_file_config(
                 &self,
+                py: pyo3::Python<'_>,
                 path: &str,
                 config: &$crate::python_bindings::screenshot_config::PyScreenshotConfig,
                 scrollback_offset: usize,
             ) -> pyo3::PyResult<()> {
-                let bytes = self.screenshot_config(config, scrollback_offset)?;
+                let bytes = self.screenshot_config(py, config, scrollback_offset)?;
                 std::fs::write(path, bytes).map_err(|e| {
                     pyo3::exceptions::PyIOError::new_err(format!("Failed to write file: {}", e))
                 })
