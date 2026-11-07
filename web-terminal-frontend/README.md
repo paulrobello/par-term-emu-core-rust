@@ -4,7 +4,7 @@ A modern, sleek web-based terminal emulator built with Next.js, TypeScript, Tail
 
 ## Features
 
-- 🚀 **Modern Stack**: Built with Next.js 14, React 18, and TypeScript
+- 🚀 **Modern Stack**: Built with Next.js (App Router), React, and TypeScript
 - 🎨 **Beautiful UI**: Sleek design with Tailwind CSS and glass morphism effects
 - 💻 **Full Terminal Emulation**: Powered by xterm.js with WebGL rendering
 - 🔌 **WebSocket Streaming**: Real-time bidirectional communication
@@ -88,7 +88,7 @@ npm run start
 
 ### WebSocket URL
 
-By default, the application connects to `ws://127.0.0.1:8080`. You can change this in the UI or by modifying the default value in `app/page.tsx`.
+By default, the application connects to `ws://localhost:8099/ws` (the streaming server's default port), in both development and production. You can change this in the UI or by modifying the default value in `app/page.tsx`.
 
 ### Terminal Theme
 
@@ -125,7 +125,7 @@ web-terminal-frontend/
 
 ## Technologies Used
 
-- **Next.js 14**: React framework with App Router
+- **Next.js**: React framework with App Router (see `package.json` for the version)
 - **TypeScript**: Type-safe JavaScript
 - **Tailwind CSS**: Utility-first CSS framework
 - **xterm.js**: Terminal emulator for the browser
