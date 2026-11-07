@@ -235,17 +235,19 @@ impl StreamingServer {
                         }
                         Ok(msg_opt) => match msg_opt {
                         Some(client_msg) => {
-                            let replies = self.handle_client_message(
-                                &session,
-                                ConnCtx {
-                                    transport_label,
-                                    client_id,
-                                    read_only,
-                                },
-                                &mut subscriptions,
-                                &mut rate_limiter,
-                                client_msg,
-                            );
+                            let replies = self
+                                .handle_client_message(
+                                    &session,
+                                    ConnCtx {
+                                        transport_label,
+                                        client_id,
+                                        read_only,
+                                    },
+                                    &mut subscriptions,
+                                    &mut rate_limiter,
+                                    client_msg,
+                                )
+                                .await;
                             for reply in replies {
                                 if let Err(e) = client.send(reply).await {
                                     crate::debug_error!(
