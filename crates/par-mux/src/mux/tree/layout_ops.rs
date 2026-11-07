@@ -655,9 +655,9 @@ impl MuxTree {
     /// `refresh-client -p WxH`'s landing point: the cell size is the one
     /// renderer metric every pane shares (grid extents differ per pane, the
     /// font does not), so it is held daemon-wide and every pane's terminal,
-    /// PTY `TIOCGWINSZ`, and image cell-span math re-derive from it — see
-    /// [`MuxPane::resize_with_cell_pixels`]. Latest report wins, matching
-    /// the `-C` grid-size policy.
+    /// PTY `TIOCGWINSZ`, and image cell-span math re-derive from it (the
+    /// cell-pixel resize `sync_pane_sizes` drives per pane). Latest report
+    /// wins, matching the `-C` grid-size policy.
     pub fn set_client_cell_pixels(&mut self, cell_w: u16, cell_h: u16) {
         self.client_cell_pixels = Some((cell_w, cell_h));
         let window_ids: Vec<WindowId> = self.windows.keys().copied().collect();

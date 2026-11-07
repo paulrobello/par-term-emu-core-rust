@@ -797,30 +797,6 @@ impl MuxPane {
         self.session.resize(cols, rows).map_err(MuxError::from)
     }
 
-    /// [`Self::resize`] with the client's per-cell pixel size, so
-    /// XTWINOPS reports (`CSI 14 t`/`16 t`), `TIOCGWINSZ`, and image
-    /// cell-span math all carry the size the client actually renders
-    /// cells at instead of the 10×20 construction default. Total text-area
-    /// pixels are derived per pane (`cols × cell_w`) because the protocol
-    /// carries the cell size — the one renderer-metric every pane shares —
-    /// while grid extents differ per pane.
-    pub fn resize_with_cell_pixels(
-        &mut self,
-        cols: u16,
-        rows: u16,
-        cell_w: u16,
-        cell_h: u16,
-    ) -> Result<(), MuxError> {
-        self.session
-            .resize_with_pixels(
-                cols,
-                rows,
-                par_term_emu_core::pty_session::pixel_extent(cols, cell_w),
-                par_term_emu_core::pty_session::pixel_extent(rows, cell_h),
-            )
-            .map_err(MuxError::from)
-    }
-
     /// [`Self::resize`] with observer delivery left to the caller: the
     /// returned batch is delivered once the caller's tree lock drops, so an
     /// observer callback never runs under it. The batch returns even when
@@ -834,8 +810,15 @@ impl MuxPane {
         (result.map_err(MuxError::from), batch)
     }
 
-    /// [`Self::resize_with_cell_pixels`] with observer delivery left to the
-    /// caller, as [`Self::resize_deferred`].
+    /// [`Self::resize`] with the client's per-cell pixel size and observer
+    /// delivery left to the caller, as [`Self::resize_deferred`]: the
+    /// derived text-area pixels make XTWINOPS reports (`CSI 14 t`/`16 t`),
+    /// `TIOCGWINSZ`, and image cell-span math carry the size the client
+    /// actually renders cells at instead of the 10×20 construction default.
+    /// Total text-area pixels are derived per pane (`cols × cell_w`)
+    /// because the protocol carries the cell size — the one
+    /// renderer-metric every pane shares — while grid extents differ per
+    /// pane.
     pub(crate) fn resize_with_cell_pixels_deferred(
         &mut self,
         cols: u16,
