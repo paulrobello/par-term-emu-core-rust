@@ -538,9 +538,12 @@ async fn test_validate_terminal_size_max_u16() {
 // =========================================================================
 
 /// Send one credential-less GET through `api_auth_middleware` (wired the
-/// same way `build_http_app` wires it) and return the response.
-async fn unauthenticated_response(
+/// same way `build_http_app` wires it) against the given target URI and
+/// return the response.
+async fn auth_middleware_response(
     auth_config: ApiAuthConfig,
+    auth_throttle: Arc<Mutex<AuthFailureThrottle>>,
+    target_uri: &str,
 ) -> axum::http::Response<axum::body::Body> {
     use axum::{routing::get, Router};
     use tower::ServiceExt;
@@ -549,13 +552,26 @@ async fn unauthenticated_response(
         .route("/ok", get(|| async { "ok" }))
         .layer(axum::middleware::from_fn(move |req, next| {
             let auth_config = auth_config.clone();
-            api_auth_middleware(req, next, auth_config)
+            let auth_throttle = auth_throttle.clone();
+            api_auth_middleware(req, next, auth_config, auth_throttle)
         }));
     let req = axum::http::Request::builder()
-        .uri("/ok")
+        .uri(target_uri)
         .body(axum::body::Body::empty())
         .expect("static request parts are valid");
     app.oneshot(req).await.expect("router is infallible")
+}
+
+/// Send one credential-less GET to `/ok` through `api_auth_middleware`.
+async fn unauthenticated_response(
+    auth_config: ApiAuthConfig,
+) -> axum::http::Response<axum::body::Body> {
+    auth_middleware_response(
+        auth_config,
+        Arc::new(Mutex::new(AuthFailureThrottle::default())),
+        "/ok",
+    )
+    .await
 }
 
 #[tokio::test]
@@ -590,6 +606,210 @@ async fn test_auth_middleware_api_key_only_401_has_no_challenge() {
     assert!(!res
         .headers()
         .contains_key(axum::http::header::WWW_AUTHENTICATE));
+}
+
+// ─── Query API-key percent-decoding (SEC-002) ─────────────────────────────
+
+#[test]
+fn test_percent_decode_query_component() {
+    assert_eq!(
+        percent_decode_query_component("plain-key_42"),
+        "plain-key_42"
+    );
+    assert_eq!(percent_decode_query_component("a%26b%3Dc%25d"), "a&b=c%d");
+    // Encoded plus decodes; a raw plus passes through unchanged.
+    assert_eq!(percent_decode_query_component("%2B"), "+");
+    assert_eq!(percent_decode_query_component("a+b"), "a+b");
+    // Malformed escapes are left as-is (the comparison then fails safely).
+    assert_eq!(percent_decode_query_component("100%"), "100%");
+    assert_eq!(percent_decode_query_component("%zz"), "%zz");
+    assert_eq!(percent_decode_query_component("%2"), "%2");
+}
+
+#[tokio::test]
+async fn test_auth_middleware_query_api_key_percent_decoded() {
+    // A key containing characters a raw query cannot carry must match via
+    // the query channel once URL-encoded (SEC-002).
+    let res = auth_middleware_response(
+        ApiAuthConfig {
+            api_key: Some("s3cr&t=k%y+".to_string()),
+            http_basic_auth: None,
+            allow_api_key_in_query: true,
+        },
+        Arc::new(Mutex::new(AuthFailureThrottle::default())),
+        "/ok?api_key=s3cr%26t%3Dk%25y%2B",
+    )
+    .await;
+    assert_eq!(res.status(), axum::http::StatusCode::OK);
+
+    // The same key sent raw cannot match: the `&` splits the query.
+    let res = auth_middleware_response(
+        ApiAuthConfig {
+            api_key: Some("s3cr&t=k%y+".to_string()),
+            http_basic_auth: None,
+            allow_api_key_in_query: true,
+        },
+        Arc::new(Mutex::new(AuthFailureThrottle::default())),
+        "/ok?api_key=s3cr&t=k%y+",
+    )
+    .await;
+    assert_eq!(res.status(), axum::http::StatusCode::UNAUTHORIZED);
+}
+
+#[test]
+fn test_validate_ws_handshake_auth_query_api_key_percent_decoded() {
+    let req = tokio_tungstenite::tungstenite::http::Request::builder()
+        .uri("ws://127.0.0.1:8099/ws?api_key=a%26b%3Dc")
+        .body(())
+        .expect("static request parts are valid");
+    assert!(validate_ws_handshake_auth(&req, Some("a&b=c"), None, true));
+}
+
+// ─── Static-route Host allowlist (2026-11-06 audit SEC-003) ────────────────
+
+#[test]
+fn test_static_host_guard_bind_classification() {
+    for loopback in [
+        "127.0.0.1:8099",
+        "localhost:8099",
+        "[::1]:8099",
+        "127.0.0.5:9000",
+    ] {
+        assert!(
+            StaticHostGuard::from_bind_addr(loopback).is_enabled(),
+            "{loopback} is a loopback bind and must enable the guard"
+        );
+    }
+    for remote in [
+        "0.0.0.0:8099",
+        "192.168.1.5:8099",
+        "[::]:8099",
+        "example.com:8099",
+    ] {
+        assert!(
+            !StaticHostGuard::from_bind_addr(remote).is_enabled(),
+            "{remote} is not a loopback bind; the guard must stay inactive"
+        );
+    }
+}
+
+#[tokio::test]
+async fn test_static_host_guard_rejects_non_loopback_host_on_loopback_bind() {
+    use axum::{routing::get, Router};
+    use tower::ServiceExt;
+
+    // Same shape as build_http_app: the guard layers the static fallback
+    // only; the API routes keep their own checks.
+    let api_routes = Router::new().route("/ws", get(|| async { "ws" }));
+    let static_routes =
+        Router::new()
+            .fallback(|| async { "static" })
+            .layer(axum::middleware::from_fn_with_state(
+                StaticHostGuard::from_bind_addr("127.0.0.1:8099"),
+                static_host_guard_middleware,
+            ));
+    let app = api_routes.merge(static_routes);
+
+    // A rebinding attack sends its own Host: refused on the static route.
+    let req = axum::http::Request::builder()
+        .uri("/index.html")
+        .header("host", "attacker.example")
+        .body(axum::body::Body::empty())
+        .expect("static request parts are valid");
+    let res = app
+        .clone()
+        .oneshot(req)
+        .await
+        .expect("router is infallible");
+    assert_eq!(res.status(), axum::http::StatusCode::FORBIDDEN);
+
+    // Loopback Hosts (with or without port, IPv6 brackets) pass.
+    for host in ["localhost:8099", "127.0.0.1", "[::1]:8099"] {
+        let req = axum::http::Request::builder()
+            .uri("/index.html")
+            .header("host", host)
+            .body(axum::body::Body::empty())
+            .expect("static request parts are valid");
+        let res = app
+            .clone()
+            .oneshot(req)
+            .await
+            .expect("router is infallible");
+        assert_eq!(res.status(), axum::http::StatusCode::OK, "Host {host}");
+    }
+
+    // A missing Host header is a non-browser client and passes, mirroring
+    // check_ws_origin's absent-Origin rule (a rebinding page always names
+    // its own host).
+    let req = axum::http::Request::builder()
+        .uri("/index.html")
+        .body(axum::body::Body::empty())
+        .expect("static request parts are valid");
+    let res = app
+        .clone()
+        .oneshot(req)
+        .await
+        .expect("router is infallible");
+    assert_eq!(res.status(), axum::http::StatusCode::OK);
+
+    // The API routes are outside the guard: a non-loopback Host still
+    // reaches them (their own auth/origin checks apply).
+    let req = axum::http::Request::builder()
+        .uri("/ws")
+        .header("host", "attacker.example")
+        .body(axum::body::Body::empty())
+        .expect("static request parts are valid");
+    let res = app.oneshot(req).await.expect("router is infallible");
+    assert_eq!(res.status(), axum::http::StatusCode::OK);
+}
+
+// ─── Failed-auth throttling (2026-11-06 audit SEC-004) ─────────────────────
+
+#[test]
+fn test_auth_failure_throttle_escalates_and_caps() {
+    let mut throttle = AuthFailureThrottle::default();
+    let expected_ms = [50u64, 100, 200, 400, 800, 1600, 3200, 5000, 5000];
+    for (failures, ms) in expected_ms.iter().enumerate() {
+        assert_eq!(
+            throttle.record_failure(),
+            Duration::from_millis(*ms),
+            "delay after {failures} prior failures"
+        );
+        assert_eq!(throttle.consecutive_failures(), failures as u32 + 1);
+    }
+}
+
+#[test]
+fn test_auth_failure_throttle_decays_after_quiet_window() {
+    let mut throttle = AuthFailureThrottle::default();
+    let t0 = std::time::Instant::now();
+    assert_eq!(throttle.record_failure_at(t0), Duration::from_millis(50));
+    assert_eq!(
+        throttle.record_failure_at(t0 + Duration::from_secs(5)),
+        Duration::from_millis(100)
+    );
+    assert_eq!(throttle.consecutive_failures(), 2);
+    // A quiet window past DECAY restarts the escalation from the base.
+    let t2 = t0 + Duration::from_secs(5) + AuthFailureThrottle::DECAY + Duration::from_secs(1);
+    assert_eq!(throttle.record_failure_at(t2), Duration::from_millis(50));
+    assert_eq!(throttle.consecutive_failures(), 1);
+}
+
+#[tokio::test]
+async fn test_auth_middleware_failures_escalate_throttle_counter() {
+    // Assert the counter state, not wall-clock (the three sleeps total
+    // 350 ms of real time in this test).
+    let throttle = Arc::new(Mutex::new(AuthFailureThrottle::default()));
+    let auth_config = ApiAuthConfig {
+        api_key: Some("key".to_string()),
+        http_basic_auth: None,
+        allow_api_key_in_query: false,
+    };
+    for _ in 0..3 {
+        let res = auth_middleware_response(auth_config.clone(), Arc::clone(&throttle), "/ok").await;
+        assert_eq!(res.status(), axum::http::StatusCode::UNAUTHORIZED);
+    }
+    assert_eq!(throttle.lock().consecutive_failures(), 3);
 }
 
 // ─── ClipboardRequest set gating (SEC-003 follow-up) ──────────────────────

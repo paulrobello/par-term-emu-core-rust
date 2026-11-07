@@ -512,6 +512,9 @@ pub struct StreamingServer {
     theme: Option<ThemeInfo>,
     /// Global shutdown signal
     shutdown: Arc<tokio::sync::Notify>,
+    /// Failed-auth throttle shared by the HTTP middleware and the WS
+    /// handshake callback (SEC-004)
+    auth_throttle: Arc<Mutex<http::AuthFailureThrottle>>,
     /// par-mux roster watcher; when set, every client receives the roster on connect
     #[cfg(feature = "mux")]
     roster: std::sync::OnceLock<Arc<crate::streaming::RosterWatcher>>,
@@ -569,6 +572,7 @@ impl StreamingServer {
             session_factory: None,
             theme: None,
             shutdown: Arc::new(tokio::sync::Notify::new()),
+            auth_throttle: Arc::new(Mutex::new(http::AuthFailureThrottle::default())),
         }
     }
 
@@ -593,6 +597,7 @@ impl StreamingServer {
             session_factory: Some(factory),
             theme: None,
             shutdown: Arc::new(tokio::sync::Notify::new()),
+            auth_throttle: Arc::new(Mutex::new(http::AuthFailureThrottle::default())),
         }
     }
 

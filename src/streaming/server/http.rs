@@ -38,6 +38,7 @@ pub(super) fn build_ws_header_callback(
     basic_auth: Option<HttpBasicAuthConfig>,
     allowed_origins: Option<Vec<String>>,
     allow_api_key_in_query: bool,
+    auth_throttle: Arc<Mutex<AuthFailureThrottle>>,
 ) -> (
     impl FnOnce(
         &WsHandshakeRequest,
@@ -74,6 +75,12 @@ pub(super) fn build_ws_header_callback(
                 allow_api_key_in_query,
             )
         {
+            // Record the failure into the shared throttle (SEC-004). The
+            // escalating delay itself is imposed on the async HTTP path
+            // only: this callback runs synchronously on a runtime worker,
+            // and sleeping here would let an attacker park every worker
+            // and stall the whole server.
+            auth_throttle.lock().record_failure();
             let reject = tokio_tungstenite::tungstenite::http::Response::builder()
                 .status(401)
                 .body(Some("Unauthorized".to_string()))
@@ -87,6 +94,59 @@ pub(super) fn build_ws_header_callback(
     (callback, uri_query)
 }
 
+/// Failed-auth throttle state (SEC-004): consecutive failed auth attempts
+/// escalate the delay imposed on the 401 response, so online guessing at an
+/// API key or Basic password costs wall-clock time even though every guess
+/// needs its own connection. One instance per server, shared by the HTTP
+/// middleware and the WS handshake callback — no per-peer bookkeeping. The
+/// counter decays after [`AuthFailureThrottle::DECAY`] without a failure
+/// (there is no reset-on-success: one shared counter reset by any client's
+/// successful request would let a legit client's traffic zero an attacker's
+/// escalation).
+#[derive(Debug, Default)]
+pub(super) struct AuthFailureThrottle {
+    /// Consecutive failures within the decay window.
+    consecutive_failures: u32,
+    /// When the last failure was recorded.
+    last_failure: Option<std::time::Instant>,
+}
+
+impl AuthFailureThrottle {
+    /// Delay imposed on the first failure; doubles per consecutive failure.
+    const BASE_DELAY_MS: u64 = 50;
+    /// Ceiling on the delay imposed on any single 401.
+    const MAX_DELAY_MS: u64 = 5_000;
+    /// Quiet period after which the escalation restarts from the base.
+    pub(super) const DECAY: Duration = Duration::from_secs(30);
+
+    /// Record a failure observed at `now` and return the delay to apply
+    /// before answering its 401.
+    pub(super) fn record_failure_at(&mut self, now: std::time::Instant) -> Duration {
+        if self
+            .last_failure
+            .is_some_and(|t| now.duration_since(t) > Self::DECAY)
+        {
+            self.consecutive_failures = 0;
+        }
+        self.last_failure = Some(now);
+        let delay_ms =
+            (Self::BASE_DELAY_MS << self.consecutive_failures.min(31)).min(Self::MAX_DELAY_MS);
+        self.consecutive_failures = self.consecutive_failures.saturating_add(1);
+        Duration::from_millis(delay_ms)
+    }
+
+    /// Record a failure observed now (see [`AuthFailureThrottle::record_failure_at`]).
+    pub(super) fn record_failure(&mut self) -> Duration {
+        self.record_failure_at(std::time::Instant::now())
+    }
+
+    /// Consecutive failures currently recorded.
+    #[cfg(test)]
+    pub(super) fn consecutive_failures(&self) -> u32 {
+        self.consecutive_failures
+    }
+}
+
 /// Unified API authentication middleware for Axum.
 /// Checks in order: Bearer header → X-API-Key header → ?api_key= query → Basic Auth header.
 /// When both API key and Basic Auth are configured, either one satisfies auth.
@@ -95,6 +155,7 @@ pub(super) async fn api_auth_middleware(
     req: axum::http::Request<axum::body::Body>,
     next: axum::middleware::Next,
     auth_config: ApiAuthConfig,
+    auth_throttle: Arc<Mutex<AuthFailureThrottle>>,
 ) -> axum::response::Response {
     use axum::http::{header, HeaderValue, StatusCode};
     use axum::response::IntoResponse;
@@ -139,7 +200,10 @@ pub(super) async fn api_auth_middleware(
             if let Some(query) = req.uri().query() {
                 for pair in query.split('&') {
                     if let Some(value) = pair.strip_prefix("api_key=") {
-                        if bool::from(value.as_bytes().ct_eq(expected_key.as_bytes())) {
+                        // SEC-002: the value may be URL-encoded — decode
+                        // before the constant-time comparison.
+                        let decoded = percent_decode_query_component(value);
+                        if bool::from(decoded.as_bytes().ct_eq(expected_key.as_bytes())) {
                             return next.run(req).await;
                         }
                     }
@@ -167,6 +231,12 @@ pub(super) async fn api_auth_middleware(
             }
         }
     }
+
+    // Failed auth: escalate a delay on consecutive failures so online
+    // guessing costs wall-clock time (SEC-004). The sleep parks this task
+    // only; the connection holds a client slot while it waits.
+    let delay = auth_throttle.lock().record_failure();
+    tokio::time::sleep(delay).await;
 
     // Build 401 response
     let mut response = (StatusCode::UNAUTHORIZED, "Unauthorized").into_response();
@@ -227,6 +297,44 @@ pub(super) fn host_of_authority(authority: &str) -> &str {
     }
 }
 
+/// Percent-decode one query-string value (SEC-002).
+///
+/// The `?api_key=` channel cannot carry `&`, `=`, `%`, or `+` raw (the
+/// `&`-split of the query breaks first), so clients must URL-encode such
+/// keys; decode `%XX` escapes before the constant-time comparison. This is
+/// RFC 3986 percent-decoding, not form decoding: a raw `+` passes through
+/// unchanged so it still matches a key containing `+`. A malformed escape
+/// is left as-is and the comparison simply fails.
+pub(super) fn percent_decode_query_component(s: &str) -> String {
+    fn hex_val(b: u8) -> Option<u8> {
+        match b {
+            b'0'..=b'9' => Some(b - b'0'),
+            b'a'..=b'f' => Some(b - b'a' + 10),
+            b'A'..=b'F' => Some(b - b'A' + 10),
+            _ => None,
+        }
+    }
+
+    let bytes = s.as_bytes();
+    if !bytes.contains(&b'%') {
+        return s.to_string();
+    }
+    let mut out = Vec::with_capacity(bytes.len());
+    let mut i = 0;
+    while i < bytes.len() {
+        if bytes[i] == b'%' && i + 2 < bytes.len() {
+            if let (Some(h), Some(l)) = (hex_val(bytes[i + 1]), hex_val(bytes[i + 2])) {
+                out.push(h * 16 + l);
+                i += 3;
+                continue;
+            }
+        }
+        out.push(bytes[i]);
+        i += 1;
+    }
+    String::from_utf8_lossy(&out).into_owned()
+}
+
 /// Build a CORS layer for the HTTP server reflecting the `allowed_origins`
 /// policy (SEC-005). When an allowlist is configured, only those origins may
 /// make cross-origin browser requests; otherwise only local (loopback)
@@ -255,6 +363,95 @@ pub(super) fn build_cors_layer(
             .allow_methods(Any)
             .allow_headers(Any),
     }
+}
+
+/// Static-route Host allowlist (SEC-003, DNS-rebinding defense).
+///
+/// When the server binds a loopback address, the browser-reachable static
+/// bundle under `web_root` is served only to requests whose `Host` header
+/// names a loopback literal or the bind host itself. A page on
+/// `attacker.com` that rebinds its DNS to 127.0.0.1 sends
+/// `Host: attacker.com` and is refused here; the WS and API routes keep
+/// their own origin/auth checks. Not gated behind a flag: loopback Host
+/// values are a closed set, so this cannot break legitimate loopback use.
+#[derive(Debug, Clone)]
+pub(super) struct StaticHostGuard {
+    /// Guard active (the bind address is loopback)
+    enabled: bool,
+    /// Lowercased host names allowed in the Host header
+    allowed_hosts: Vec<String>,
+}
+
+impl StaticHostGuard {
+    /// Build the guard for a bind address string (`host:port`). Active
+    /// only when that address is loopback.
+    pub(super) fn from_bind_addr(addr: &str) -> Self {
+        let bind_host = host_of_authority(addr).to_ascii_lowercase();
+        let is_loopback = match addr.parse::<std::net::SocketAddr>() {
+            Ok(socket) => socket.ip().is_loopback(),
+            Err(_) => matches!(bind_host.as_str(), "localhost" | "127.0.0.1" | "::1"),
+        };
+        if !is_loopback {
+            return Self {
+                enabled: false,
+                allowed_hosts: Vec::new(),
+            };
+        }
+        let mut allowed_hosts = vec![
+            "localhost".to_string(),
+            "127.0.0.1".to_string(),
+            "::1".to_string(),
+        ];
+        if !allowed_hosts.contains(&bind_host) {
+            allowed_hosts.push(bind_host);
+        }
+        Self {
+            enabled: true,
+            allowed_hosts,
+        }
+    }
+
+    /// Whether the guard is active for this bind.
+    #[cfg(test)]
+    pub(super) fn is_enabled(&self) -> bool {
+        self.enabled
+    }
+
+    /// True if a request with this Host header may reach the static
+    /// bundle. A missing Host is a non-browser client and passes, mirroring
+    /// `check_ws_origin`'s treatment of an absent Origin; a rebinding
+    /// attack always names its own host.
+    fn allows(&self, host_header: Option<&str>) -> bool {
+        let Some(header) = host_header else {
+            return true;
+        };
+        if !self.enabled {
+            return true;
+        }
+        let host = host_of_authority(header).to_ascii_lowercase();
+        self.allowed_hosts.contains(&host)
+    }
+}
+
+/// Reject static-route requests whose Host header is not in the loopback
+/// allowlist (SEC-003). Layered around the static fallback only; the API
+/// routes keep their own auth and origin checks.
+#[cfg(feature = "streaming")]
+pub(super) async fn static_host_guard_middleware(
+    axum::extract::State(guard): axum::extract::State<StaticHostGuard>,
+    req: axum::http::Request<axum::body::Body>,
+    next: axum::middleware::Next,
+) -> axum::response::Response {
+    use axum::response::IntoResponse;
+
+    let host = req
+        .headers()
+        .get(axum::http::header::HOST)
+        .and_then(|v| v.to_str().ok());
+    if !guard.allows(host) {
+        return (axum::http::StatusCode::FORBIDDEN, "Host not allowed").into_response();
+    }
+    next.run(req).await
 }
 
 /// Content-Security-Policy on every HTTP-app response (ENH-059, extends
@@ -363,7 +560,10 @@ pub(super) fn validate_ws_handshake_auth(
             if let Some(query) = req.uri().query() {
                 for pair in query.split('&') {
                     if let Some(value) = pair.strip_prefix("api_key=") {
-                        if bool::from(value.as_bytes().ct_eq(expected_key.as_bytes())) {
+                        // SEC-002: decode URL-encoded values before the
+                        // constant-time comparison.
+                        let decoded = percent_decode_query_component(value);
+                        if bool::from(decoded.as_bytes().ct_eq(expected_key.as_bytes())) {
                             return true;
                         }
                     }

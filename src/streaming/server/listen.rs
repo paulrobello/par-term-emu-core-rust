@@ -28,19 +28,29 @@ impl StreamingServer {
             http_basic_auth: self.config.http_basic_auth.clone(),
             allow_api_key_in_query: self.config.allow_api_key_in_query,
         };
+        let auth_throttle = Arc::clone(&self.auth_throttle);
         let api_routes = if auth_config.is_configured() {
             api_routes.layer(axum::middleware::from_fn(move |req, next| {
                 let auth_config = auth_config.clone();
-                api_auth_middleware(req, next, auth_config)
+                let auth_throttle = Arc::clone(&auth_throttle);
+                api_auth_middleware(req, next, auth_config, auth_throttle)
             }))
         } else {
             api_routes
         };
 
-        // Merge API routes with unprotected static file serving
+        // Merge API routes with static file serving; on a loopback bind the
+        // static fallback carries a Host allowlist (SEC-003, DNS-rebinding
+        // defense) — the API routes keep their own auth/origin checks.
         let allow_blob_connect_src = self.config.allow_blob_connect_src;
-        api_routes
+        let static_routes = Router::new()
             .fallback_service(ServeDir::new(&self.config.web_root))
+            .layer(axum::middleware::from_fn_with_state(
+                StaticHostGuard::from_bind_addr(&self.addr),
+                static_host_guard_middleware,
+            ));
+        api_routes
+            .merge(static_routes)
             .with_state(self.clone())
             .layer(build_cors_layer(&self.config.allowed_origins))
             .layer(axum::middleware::from_fn(move |req, next| {
@@ -270,6 +280,7 @@ impl StreamingServer {
             self.config.http_basic_auth.clone(),
             self.config.allowed_origins.clone(),
             self.config.allow_api_key_in_query,
+            Arc::clone(&self.auth_throttle),
         );
         // The tungstenite `Callback` trait fixes `ErrorResponse` as
         // `HttpResponse<Option<String>>` — we cannot box or shrink it
