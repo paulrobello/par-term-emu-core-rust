@@ -91,6 +91,8 @@ features is the headless (`sim`) profile.**
 | `macro-yaml` | `par-term-emu-core/macro-yaml` | `dep:serde_yaml_ng` moves to the member |
 | `mux` | `par-term-emu-core/mux` | member `mux` only exposes the two mux hooks (see promotions) |
 | `ffi` | `par-term-emu-core/ffi` | member `ffi` gates `for_each_dirty_range*` and `event_fields` |
+| `self-update` | `par-term-emu-core/self-update` | SHA-256/semver/tempfile deps live in the member's `self_update`; the feature is enabled by root `streaming-bin` and by the member's `mux-bin` |
+| `otel` | `streaming`, `par-term-emu-core/otel`, `dep:opentelemetry` | thin per-binary OTLP config over the member's shared otel layer (ARC-001); par-mux's own `otel` feature (`par-term-emu-core/otel` + `dep:opentelemetry`) forwards the same way |
 | `python`, `python-test` | `par-term-emu-core/python` | member `python` = optional `pyo3` dep hosting the `From<PtyError/GraphicsError/ScreenshotError> for PyErr` conversions (orphan rule: both types are foreign to the root) and `event_fields` |
 | `sim` | (none) | stays a root marker feature; root keeps the `sim`+`python` `compile_error!` guard. Root `sim` resolves the member with no features |
 | `rust-only`, `full`, `streaming`, `streaming-bin`, `mux-bin`, `attach`, `jemalloc`, `regenerate-proto` | (none directly) | root-only; they reach member features only through the forwards above |
@@ -294,7 +296,10 @@ wiring, the PyErr impls moved out), `crates/par-mux/src/mux/persist.rs`
   with `#[cfg(feature = "mux")] pub use par_mux::mux;`: every
   `par_term_emu_core_rust::mux::…` path is unchanged (par-term's imports were
   checked against it).
-- **Features.** Member: `mux` (interprocess, toml, dirs, nix, and on Windows
+- **Features.** As of the phase-2 split — several sets have widened since (for
+  example the member's `mux-bin` now also carries the agent-integration
+  installers, `skill_installer`/`jsonc-parser`, and `self-update`); the
+  members' `Cargo.toml` files are authoritative. Member: `mux` (interprocess, toml, dirs, nix, and on Windows
   widestring/windows-sys, plus `serde`), `serde` (forwards core `serde`),
   `mux-bin` = `mux` + clap (the `[[bin]] par-mux` target), `attach` =
   `mux-bin` + crossterm/ratatui. Root: `mux = ["dep:par-mux", "par-mux/mux",
