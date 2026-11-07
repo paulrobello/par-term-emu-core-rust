@@ -370,6 +370,32 @@ fn tab_wheel_scrolls_an_overflowing_strip() {
     );
 }
 
+/// A width change rebuilds the strip's buffers for the new cols, and
+/// the rebuild must carry the configured width bounds across
+/// (`palette` already rides it): without that, `tab-width-min`/`-max`
+/// silently reset to 0 on every resize and on the geometry re-set a
+/// daemon restart's re-land performs — the settings dialog reads the
+/// live strip, so the floor vanished until the value was re-entered.
+#[test]
+fn width_change_keeps_tab_bounds() {
+    let mut session = WindowSession::new(80, 24);
+    session.chrome.tab_strip.bounds = crate::mux::attach::tabs::TabBounds { min: 12, max: 30 };
+    session.draw_tab_strip();
+    assert_eq!(
+        session.chrome.tab_strip.bounds,
+        crate::mux::attach::tabs::TabBounds { min: 12, max: 30 },
+        "a same-width draw leaves the bounds in place"
+    );
+    // A width change takes the rebuild branch.
+    session.geometry.host_cols = 100;
+    session.draw_tab_strip();
+    assert_eq!(
+        session.chrome.tab_strip.bounds,
+        crate::mux::attach::tabs::TabBounds { min: 12, max: 30 },
+        "the rebuild preserves the configured tab width bounds"
+    );
+}
+
 /// The tab-strip scroll chords (prefix H / L): shift the overflowing
 /// strip's visible run without switching windows — 3 tabs per press,
 /// clamped like the wheel, a no-op when the strip fits.

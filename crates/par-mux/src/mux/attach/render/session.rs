@@ -1452,8 +1452,10 @@ impl WindowSession {
         let cols = self.geometry.host_cols;
         if self.chrome.tab_strip.cols() != cols {
             let palette = self.chrome.tab_strip.palette;
+            let bounds = self.chrome.tab_strip.bounds;
             self.chrome.tab_strip = TabStrip::new(cols);
             self.chrome.tab_strip.palette = palette;
+            self.chrome.tab_strip.bounds = bounds;
         }
         // The rail is too narrow for the title; its columns stay blank.
         let strip = self.renderer.sidebar_width();
