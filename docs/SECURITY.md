@@ -1487,7 +1487,7 @@ sections; the numbers live here.
 | `DEFAULT_MAX_CLIPBOARD_EVENT_BYTES` | 4 KiB | `crates/par-term-emu-core/src/terminal/state.rs:84` | Bytes retained for one queued clipboard sync event. |
 | `DEFAULT_MAX_OSC_DATA_LENGTH` | 1 MiB | `crates/par-term-emu-core/src/terminal/state.rs:938` | Payload bytes accepted for one OSC sequence from terminal output. |
 | `MAX_ARCHIVE_BYTES` | 50 MiB | `src/bin/streaming_server/frontend_download.rs:34` | Bytes accepted from a downloaded web-frontend archive response. |
-| `MAX_SIDECAR_BYTES` | 1 KiB | `src/bin/streaming_server/frontend_download.rs:67` | Bytes accepted from a `.sha256` checksum sidecar response (SEC-203). |
+| `MAX_SIDECAR_BYTES` | 1 KiB | `src/bin/streaming_server/frontend_download.rs:71` | Bytes accepted from a `.sha256` checksum sidecar response (SEC-203). |
 | `MAX_DECOMPRESSED_SIZE` | 9 MiB | `src/streaming/proto.rs:48` | Decompressed bytes accepted from one zlib-compressed streaming frame. |
 | `MAX_INLINE_IMAGE_BYTES` | 8 MiB | `src/streaming/protocol.rs:326` | Image bytes accepted in one InlineImage streaming frame. |
 | `MAX_UPLOAD_CHUNK_BYTES` | 64 KiB | `src/streaming/protocol.rs:335` | Bytes accepted in one UploadChunk message payload from a streaming client. |
