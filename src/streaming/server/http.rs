@@ -298,6 +298,95 @@ pub(super) fn build_cors_layer(
     }
 }
 
+/// Static-route Host allowlist (SEC-003, DNS-rebinding defense).
+///
+/// When the server binds a loopback address, the browser-reachable static
+/// bundle under `web_root` is served only to requests whose `Host` header
+/// names a loopback literal or the bind host itself. A page on
+/// `attacker.com` that rebinds its DNS to 127.0.0.1 sends
+/// `Host: attacker.com` and is refused here; the WS and API routes keep
+/// their own origin/auth checks. Not gated behind a flag: loopback Host
+/// values are a closed set, so this cannot break legitimate loopback use.
+#[derive(Debug, Clone)]
+pub(super) struct StaticHostGuard {
+    /// Guard active (the bind address is loopback)
+    enabled: bool,
+    /// Lowercased host names allowed in the Host header
+    allowed_hosts: Vec<String>,
+}
+
+impl StaticHostGuard {
+    /// Build the guard for a bind address string (`host:port`). Active
+    /// only when that address is loopback.
+    pub(super) fn from_bind_addr(addr: &str) -> Self {
+        let bind_host = host_of_authority(addr).to_ascii_lowercase();
+        let is_loopback = match addr.parse::<std::net::SocketAddr>() {
+            Ok(socket) => socket.ip().is_loopback(),
+            Err(_) => matches!(bind_host.as_str(), "localhost" | "127.0.0.1" | "::1"),
+        };
+        if !is_loopback {
+            return Self {
+                enabled: false,
+                allowed_hosts: Vec::new(),
+            };
+        }
+        let mut allowed_hosts = vec![
+            "localhost".to_string(),
+            "127.0.0.1".to_string(),
+            "::1".to_string(),
+        ];
+        if !allowed_hosts.contains(&bind_host) {
+            allowed_hosts.push(bind_host);
+        }
+        Self {
+            enabled: true,
+            allowed_hosts,
+        }
+    }
+
+    /// Whether the guard is active for this bind.
+    #[cfg(test)]
+    pub(super) fn is_enabled(&self) -> bool {
+        self.enabled
+    }
+
+    /// True if a request with this Host header may reach the static
+    /// bundle. A missing Host is a non-browser client and passes, mirroring
+    /// `check_ws_origin`'s treatment of an absent Origin; a rebinding
+    /// attack always names its own host.
+    fn allows(&self, host_header: Option<&str>) -> bool {
+        let Some(header) = host_header else {
+            return true;
+        };
+        if !self.enabled {
+            return true;
+        }
+        let host = host_of_authority(header).to_ascii_lowercase();
+        self.allowed_hosts.contains(&host)
+    }
+}
+
+/// Reject static-route requests whose Host header is not in the loopback
+/// allowlist (SEC-003). Layered around the static fallback only; the API
+/// routes keep their own auth and origin checks.
+#[cfg(feature = "streaming")]
+pub(super) async fn static_host_guard_middleware(
+    axum::extract::State(guard): axum::extract::State<StaticHostGuard>,
+    req: axum::http::Request<axum::body::Body>,
+    next: axum::middleware::Next,
+) -> axum::response::Response {
+    use axum::response::IntoResponse;
+
+    let host = req
+        .headers()
+        .get(axum::http::header::HOST)
+        .and_then(|v| v.to_str().ok());
+    if !guard.allows(host) {
+        return (axum::http::StatusCode::FORBIDDEN, "Host not allowed").into_response();
+    }
+    next.run(req).await
+}
+
 /// Content-Security-Policy on every HTTP-app response (ENH-059, extends
 /// SEC-010). Sources are exactly what the shipped `web_term/` export
 /// loads: Google Fonts CSS + font files and the jsDelivr Nerd Font,

@@ -37,10 +37,18 @@ impl StreamingServer {
             api_routes
         };
 
-        // Merge API routes with unprotected static file serving
+        // Merge API routes with static file serving; on a loopback bind the
+        // static fallback carries a Host allowlist (SEC-003, DNS-rebinding
+        // defense) — the API routes keep their own auth/origin checks.
         let allow_blob_connect_src = self.config.allow_blob_connect_src;
-        api_routes
+        let static_routes = Router::new()
             .fallback_service(ServeDir::new(&self.config.web_root))
+            .layer(axum::middleware::from_fn_with_state(
+                StaticHostGuard::from_bind_addr(&self.addr),
+                static_host_guard_middleware,
+            ));
+        api_routes
+            .merge(static_routes)
             .with_state(self.clone())
             .layer(build_cors_layer(&self.config.allowed_origins))
             .layer(axum::middleware::from_fn(move |req, next| {

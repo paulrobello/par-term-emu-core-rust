@@ -2034,6 +2034,14 @@ par-term-streamer --enable-http --allowed-origins https://app.example.com
 # PAR_TERM_ALLOWED_ORIGINS (comma-separated)
 par-term-streamer --enable-http --allowed-origins https://app.example.com,https://staging.example.com
 
+# Static-bundle Host allowlist (DNS-rebinding defense, SEC-003): when the server
+# binds a loopback address (the default 127.0.0.1), requests for the static web
+# frontend are refused with 403 unless their Host header names 127.0.0.1, ::1,
+# localhost, or the configured bind address — a page on attacker.com whose DNS
+# rebinds to 127.0.0.1 cannot load the frontend bundle. Always on for loopback
+# binds (there is no flag: loopback Host values are a closed set, so this cannot
+# break legitimate loopback use); inactive when binding a non-loopback address.
+
 # Clients can authenticate API key via:
 #   Header: Authorization: Bearer secret-token-here
 #   Header: X-API-Key: secret-token-here

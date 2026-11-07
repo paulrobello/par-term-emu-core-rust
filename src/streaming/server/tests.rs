@@ -625,6 +625,104 @@ fn test_validate_ws_handshake_auth_query_api_key_percent_decoded() {
     assert!(validate_ws_handshake_auth(&req, Some("a&b=c"), None, true));
 }
 
+// ─── Static-route Host allowlist (2026-11-06 audit SEC-003) ────────────────
+
+#[test]
+fn test_static_host_guard_bind_classification() {
+    for loopback in [
+        "127.0.0.1:8099",
+        "localhost:8099",
+        "[::1]:8099",
+        "127.0.0.5:9000",
+    ] {
+        assert!(
+            StaticHostGuard::from_bind_addr(loopback).is_enabled(),
+            "{loopback} is a loopback bind and must enable the guard"
+        );
+    }
+    for remote in [
+        "0.0.0.0:8099",
+        "192.168.1.5:8099",
+        "[::]:8099",
+        "example.com:8099",
+    ] {
+        assert!(
+            !StaticHostGuard::from_bind_addr(remote).is_enabled(),
+            "{remote} is not a loopback bind; the guard must stay inactive"
+        );
+    }
+}
+
+#[tokio::test]
+async fn test_static_host_guard_rejects_non_loopback_host_on_loopback_bind() {
+    use axum::{routing::get, Router};
+    use tower::ServiceExt;
+
+    // Same shape as build_http_app: the guard layers the static fallback
+    // only; the API routes keep their own checks.
+    let api_routes = Router::new().route("/ws", get(|| async { "ws" }));
+    let static_routes =
+        Router::new()
+            .fallback(|| async { "static" })
+            .layer(axum::middleware::from_fn_with_state(
+                StaticHostGuard::from_bind_addr("127.0.0.1:8099"),
+                static_host_guard_middleware,
+            ));
+    let app = api_routes.merge(static_routes);
+
+    // A rebinding attack sends its own Host: refused on the static route.
+    let req = axum::http::Request::builder()
+        .uri("/index.html")
+        .header("host", "attacker.example")
+        .body(axum::body::Body::empty())
+        .expect("static request parts are valid");
+    let res = app
+        .clone()
+        .oneshot(req)
+        .await
+        .expect("router is infallible");
+    assert_eq!(res.status(), axum::http::StatusCode::FORBIDDEN);
+
+    // Loopback Hosts (with or without port, IPv6 brackets) pass.
+    for host in ["localhost:8099", "127.0.0.1", "[::1]:8099"] {
+        let req = axum::http::Request::builder()
+            .uri("/index.html")
+            .header("host", host)
+            .body(axum::body::Body::empty())
+            .expect("static request parts are valid");
+        let res = app
+            .clone()
+            .oneshot(req)
+            .await
+            .expect("router is infallible");
+        assert_eq!(res.status(), axum::http::StatusCode::OK, "Host {host}");
+    }
+
+    // A missing Host header is a non-browser client and passes, mirroring
+    // check_ws_origin's absent-Origin rule (a rebinding page always names
+    // its own host).
+    let req = axum::http::Request::builder()
+        .uri("/index.html")
+        .body(axum::body::Body::empty())
+        .expect("static request parts are valid");
+    let res = app
+        .clone()
+        .oneshot(req)
+        .await
+        .expect("router is infallible");
+    assert_eq!(res.status(), axum::http::StatusCode::OK);
+
+    // The API routes are outside the guard: a non-loopback Host still
+    // reaches them (their own auth/origin checks apply).
+    let req = axum::http::Request::builder()
+        .uri("/ws")
+        .header("host", "attacker.example")
+        .body(axum::body::Body::empty())
+        .expect("static request parts are valid");
+    let res = app.oneshot(req).await.expect("router is infallible");
+    assert_eq!(res.status(), axum::http::StatusCode::OK);
+}
+
 // ─── ClipboardRequest set gating (SEC-003 follow-up) ──────────────────────
 
 #[tokio::test]
