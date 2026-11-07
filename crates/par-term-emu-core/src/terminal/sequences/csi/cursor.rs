@@ -127,6 +127,11 @@ pub(crate) fn handle_cursor_motion(ctx: CursorCtx<'_>, action: char, params: &Pa
 }
 
 impl Terminal {
+    /// CSI dispatch entry for the cursor family. The pure-motion verbs
+    /// (`A`..`d`) go through the capability-scoped `handle_cursor_motion`
+    /// on a `CursorCtx`; the remaining arms (CHT, the space-intermediate
+    /// DECSCUSR/DECSWBV `q`, the SCORC/DECSMBV `u`, TBC) need
+    /// whole-`Terminal` state and stay here.
     pub(crate) fn handle_csi_cursor(
         &mut self,
         action: char,

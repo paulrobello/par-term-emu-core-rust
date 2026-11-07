@@ -318,16 +318,24 @@ impl StreamSessionState {
         }
     }
 
+    /// Register a connected client in the viewer set and broadcast the new
+    /// presence to the session. Called from the WS handshake on connect.
     pub(crate) fn viewer_join(&self, id: uuid::Uuid, kind: &str) {
         self.viewers.lock().insert(id, kind.to_string());
         let _ = self.broadcast_tx.send(self.viewer_presence());
     }
 
+    /// Drop a disconnected client from the viewer set and broadcast the new
+    /// presence. Called by `ViewerGuard` on session teardown.
     pub(crate) fn viewer_leave(&self, id: uuid::Uuid) {
         self.viewers.lock().remove(&id);
         let _ = self.broadcast_tx.send(self.viewer_presence());
     }
 
+    /// Re-identify an already-present viewer as `kind`. Only `web` and
+    /// `mobile` are accepted — an absent id or an `attach` kind is ignored,
+    /// since attach identity is authoritative from the mux mirror, not
+    /// from client self-reporting.
     pub(crate) fn viewer_identity(&self, id: uuid::Uuid, kind: &str) {
         let present = self.viewers.lock().contains_key(&id);
         if matches!(kind, "web" | "mobile") && present {
@@ -335,6 +343,8 @@ impl StreamSessionState {
         }
     }
 
+    /// Build the `ViewerPresence` message: this session's own viewers merged
+    /// with the mirror's viewer list, sorted, formatted `kind:id`.
     pub(crate) fn viewer_presence(&self) -> ServerMessage {
         let mut viewers = self.mux_viewers.lock().clone();
         viewers.extend(
@@ -350,6 +360,8 @@ impl StreamSessionState {
         }
     }
 
+    /// Fold the mirror's reconciled pane size and viewer list into the
+    /// session, broadcasting each only when it changed.
     // Only the mux-gated mirror reconciler calls this; the streaming-only
     // build otherwise lints the method as dead (same shape as parse_titles_output).
     #[cfg_attr(not(feature = "mux"), allow(dead_code))]
@@ -372,6 +384,8 @@ impl StreamSessionState {
         }
     }
 
+    /// The last pane-size status folded in by `update_mux_status`, if any;
+    /// `None` until the mirror reports one.
     pub(crate) fn pane_size_status(&self) -> Option<ServerMessage> {
         self.pane_size_status.read().clone()
     }

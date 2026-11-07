@@ -330,6 +330,10 @@ pub(crate) fn layout_change_notification(
     })
 }
 
+/// Re-render `window_id`'s layout triple from the tree and push the
+/// layout-change notification to every client; a window that no longer
+/// renders produces no line. Called from the dispatch tail and the
+/// dead-pane reaper — every path that can reshape a window.
 pub(crate) fn broadcast_layout_change(
     tree: &Arc<Mutex<MuxTree>>,
     clients: &Clients,
