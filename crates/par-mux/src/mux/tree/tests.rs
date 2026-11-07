@@ -1687,8 +1687,8 @@ fn resize_window_refits_every_pane_terminal() {
 }
 
 /// QA-182: the audit probe, below the parser cap — 2000 columns of
-/// 40 px cells overflowed `cols * cell_w` in u16 and panicked in
-/// `resize_with_cell_pixels`. The extent now saturates.
+/// 40 px cells overflowed `cols * cell_w` in u16 and panicked in the
+/// cell-pixel resize path. The extent now saturates.
 #[test]
 fn oversized_cell_pixels_refit_does_not_panic() {
     let mut tree = tree();

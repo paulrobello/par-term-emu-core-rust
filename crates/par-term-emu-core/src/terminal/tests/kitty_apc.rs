@@ -495,8 +495,8 @@ fn display_paths_emit_graphics_added() {
 /// Card 01a0d9e6f012, criterion 3: after displaying an image the cursor row
 /// must match between a daemon-side terminal and the client-side mirror
 /// rendering it. Both derive rows from the cell size, so a terminal whose
-/// host reported real text-area pixels (`set_pixel_size`, what
-/// `refresh-client -p` drives through `resize_with_cell_pixels`) advances
+/// host reported real text-area pixels (`set_pixel_size`, what the daemon's
+/// cell-pixel resize drives on `refresh-client -p`) advances
 /// by pixel-height / cell-height — not by the (1, 2) no-information default,
 /// which would put the daemon dozens of rows past the mirror.
 #[test]

@@ -451,7 +451,7 @@ fn log_report_outcome(pane: &str, method: &str, reply: &str) {
     if !log::log_enabled!(log::Level::Debug) {
         return;
     }
-    let outcome = if reply_is_error(reply) {
+    let outcome = if json_reply_is_error(reply) {
         "rejected"
     } else {
         "accepted"
@@ -461,7 +461,10 @@ fn log_report_outcome(pane: &str, method: &str, reply: &str) {
 
 /// Whether one of this module's JSON replies carries an `error` key.
 /// Unparseable reads as rejected — a malformed reply is never an accept.
-fn reply_is_error(reply: &str) -> bool {
+/// Named for the JSON shape it inspects, distinct from
+/// `server::protocol::reply_is_error`, which checks the `%error` line
+/// prefix of control-socket replies.
+fn json_reply_is_error(reply: &str) -> bool {
     serde_json::from_str::<serde_json::Value>(reply.trim())
         .map(|value| value.get("error").is_some())
         .unwrap_or(true)
