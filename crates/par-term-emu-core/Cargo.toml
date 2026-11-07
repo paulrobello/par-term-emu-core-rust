@@ -19,26 +19,26 @@ categories = ["command-line-utilities", "development-tools"]
 name = "par_term_emu_core"
 
 [dependencies]
-log = "0.4"
-sha2 = { version = "0.11.0", optional = true }
+log = { workspace = true }
+sha2 = { workspace = true, optional = true }
 semver = { version = "1", optional = true }
-tempfile = { version = "3.27", optional = true }
+tempfile = { workspace = true, optional = true }
 vte = "0.15.0"
-unicode-width = "0.2.2"
+unicode-width = { workspace = true }
 portable-pty = { version = "0.9.0", optional = true }
-base64 = "0.22.1"
+base64 = { workspace = true }
 smallvec = "1.13.0"
 bitflags = "2.13.0"
-regex = "1.12.3"
-serde = { version = "1.0.228", features = ["derive"] }
-serde_json = "1.0.150"
+regex = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
 # Macro YAML save/load only (ARC-116).
 serde_yaml_ng = { version = "0.10.0", optional = true }
 percent-encoding = "2.3.2"
 url = "2.5.8"
-uuid = { version = "1.23.2", features = ["v4", "serde"] }
+uuid = { workspace = true }
 # Kitty graphics o=z zlib decompression.
-flate2 = "1.1.9"
+flate2 = { workspace = true }
 # Decoder exclusions (SEC-007 / ARC-007): AVIF is intentionally excluded — it
 # pulls in `ravif` → `rav1e` → the unmaintained `paste` proc-macro
 # (RUSTSEC-2024-0436). EXR is excluded for the same reason (exr → pulp →
@@ -54,22 +54,20 @@ flate2 = "1.1.9"
 image = { version = "0.25.10", default-features = false, features = ["bmp", "ff", "gif", "ico", "jpeg", "png", "pnm", "qoi", "tga", "tiff", "webp", "color_quant"] }
 # Optional (ARC-043): only the `screenshot` feature shapes text.
 swash = { version = "0.2.7", optional = true }
-parking_lot = "0.13"
+parking_lot = { workspace = true }
 unicode-segmentation = "1.13.3"
 unicode-normalization = "0.1.25"
 lru = "0.18.0"
 # Hosts the `From<PtyError|GraphicsError|ScreenshotError> for PyErr`
 # conversions only (orphan rule); no bindings live in this crate.
-pyo3 = { version = "0.29", optional = true }
+pyo3 = { workspace = true, optional = true }
 # Shared OTLP metrics plumbing (ARC-001): the protocol grammar, provider
 # lifecycle, and reporting exporter the streamer and par-mux both re-export.
 # Same lockstep trio and feature set both binaries' `otel` features forward
 # to, so the workspace keeps a single dedup'd opentelemetry tree
 # (`cargo tree -d` must stay empty).
-opentelemetry = { version = "0.33", default-features = false, optional = true }
-opentelemetry_sdk = { version = "0.33", default-features = false, features = [
-    "metrics",
-], optional = true }
+opentelemetry = { workspace = true, optional = true }
+opentelemetry_sdk = { workspace = true, optional = true }
 opentelemetry-otlp = { version = "0.33", default-features = false, features = [
     "metrics",
     "grpc-tonic",
@@ -79,11 +77,11 @@ opentelemetry-otlp = { version = "0.33", default-features = false, features = [
 ], optional = true }
 
 [target.'cfg(unix)'.dependencies]
-libc = "0.2.186"
+libc = { workspace = true }
 
 [dev-dependencies]
 proptest = "1.11.0"
-tempfile = "3.27"
+tempfile = { workspace = true }
 
 [features]
 default = []
