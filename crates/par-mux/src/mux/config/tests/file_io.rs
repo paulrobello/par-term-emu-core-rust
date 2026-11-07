@@ -2,6 +2,7 @@
 //! write_file refusal, render round-trips, and socket-value mapping.
 
 use crate::mux::config::*;
+#[cfg(unix)]
 use std::path::PathBuf;
 
 #[test]
