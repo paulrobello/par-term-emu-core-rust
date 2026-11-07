@@ -14,6 +14,7 @@ This document covers the **terminal core configuration** (Rust library internals
 - [Core Security Settings](#core-security-settings)
 - [Sixel Resource Limits](#sixel-resource-limits)
 - [Keyboard Protocol](#keyboard-protocol)
+- [Where par-mux Settings Live](#where-par-mux-settings-live)
 - [Color Configuration](#color-configuration)
 - [Screenshot Configuration](#screenshot-configuration)
 - [Terminal Notification Configuration](#terminal-notification-configuration)
@@ -32,6 +33,7 @@ The par-term-emu-core-rust library provides low-level terminal emulation with VT
 **Configuration layers:**
 - **Terminal Core** (this document): Low-level terminal emulator settings (dimensions, modes, protocols)
 - **TUI Layer**: Application-level settings for the TUI (see [par-term-emu-tui-rust](https://github.com/paulrobello/par-term-emu-tui-rust))
+- **par-mux daemon/attach**: the multiplexer's `config.toml` — all `[daemon]` and `[client]` keys — is documented in [MUX.md, Configuration file](MUX.md#configuration-file), not here; the handful of `[client]` keys that interact with terminal behavior are summarized under [Where par-mux Settings Live](#where-par-mux-settings-live)
 
 **Key Distinction**: Core settings control the *terminal emulation behavior* (VT modes, color parsing, escape sequences), while TUI settings control the *application experience* (selection, clipboard, themes).
 
@@ -365,7 +367,9 @@ only relax them in trusted environments where large images are expected.
 
 ---
 
-## Color Configuration
+## Where par-mux Settings Live
+
+par-mux's `config.toml` keys are not terminal-core settings and are documented in full in [MUX.md, Configuration file](MUX.md#configuration-file). The `[client]` keys below interact with terminal behavior, so they are summarized here with pointers to their MUX.md sections.
 
 The `par-mux attach` render client's chrome colors are not terminal settings: they come from the par-mux config file's `[client] theme`, `theme-dark`, and `theme-light` keys (herdr's presets, or `auto` to follow the host's light/dark appearance). See [MUX.md Themes](MUX.md#themes).
 
@@ -378,6 +382,8 @@ The same file's `[client] prefer-default-workspace` (default `false`; a settings
 The same file's `[client] git-status` (default `true`) shows herdr's git badge under the displayed session's workspace row in the attach side panel — ` main ↑2`, the active pane's repo branch with its ahead/behind against the upstream (the daemon resolves it per `client-snapshot` request through a 3 s-cached `git status -sb` on the pane's live cwd, falling back to the workspace's launch folder; no repo, a detached HEAD, or `false` shows nothing). `false` is live on reload; the badge also has a settings-dialog row. See [MUX.md Workspace side panel](MUX.md#workspace-side-panel-s).
 
 The same file's `[[client.popup]]` tables (`key`, `command`, optional `width`/`height` as cells or `"N%"`, and `description`) bind popup command windows: prefix + the key runs the command in a floating box over the attach TUI. See [MUX.md Popups](MUX.md#popups).
+
+## Color Configuration
 
 ### Default Colors
 
