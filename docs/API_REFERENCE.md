@@ -198,11 +198,13 @@ Create a new terminal with specified dimensions.
 
 **Example:**
 ```python
-term.set_badge_format(r"\(username)@\(hostname)")
-term.set_badge_session_variable("username", "alice")
-term.set_badge_session_variable("hostname", "server1")
-badge = term.evaluate_badge()  # "alice@server1"
+term.set_badge_format(r"\(env)::\(branch)")
+term.set_badge_session_variable("env", "prod")
+term.set_badge_session_variable("branch", "main")
+badge = term.evaluate_badge()  # "prod::main"
 ```
+
+> **Note:** Built-in variable names are resolved from live terminal state and cannot be overridden via `set_badge_session_variable` — a custom variable stored under a built-in name is shadowed by the built-in. Use names outside the built-in list for custom values.
 
 #### User Variables (OSC 1337 SetUserVar)
 - `get_user_var(name: str) -> str | None`: Get a user variable set via OSC 1337 SetUserVar
@@ -281,7 +283,7 @@ term.encode_key(1, 2, ord("f"), left_option=0)  # b'f' (normal passthrough)
 - `clear_all_clipboard_history()`: Clear all clipboard history
 - `search_clipboard_history(query: str, slot: str | None = None) -> list[ClipboardEntry]`: Search clipboard history for entries containing `query` (case-sensitive substring match; searches all slots if `slot` is None)
 
-The same family is available as a feature-scoped facade, `TerminalClipboard(term)` (ARC-002), which delegates to the terminal it wraps: `add(slot, content, label=None)`, `history(slot)`, `latest(slot)`, `clear(slot=None)` (all slots when `slot` is None), `set(content, slot=None)`, `get(slot=None)`, `search(query, slot=None)`, and the `terminal` property. New code should prefer the facade; the flat methods stay for compatibility.
+The same family is available as a feature-scoped facade, [TerminalClipboard](#terminalclipboard) (ARC-002). New code should prefer the facade; the flat methods stay for compatibility.
 
 #### Scrollback Buffer
 - `scrollback() -> list[str]`: Get scrollback buffer as list of strings
@@ -434,8 +436,6 @@ Multi-protocol graphics support: Sixel (DCS), iTerm2 Inline Images (OSC 1337), a
 - `clear_graphics()`: Clear all graphics
 - `export_graphics_json() -> str`: Export all graphics metadata as JSON for session persistence (includes placements, scrollback, animations with base64-encoded pixel data)
 - `import_graphics_json(json: str) -> int`: Import graphics from JSON string (clears existing graphics first, returns count restored)
-- `graphics_store() -> GraphicsStore`: Get immutable access to graphics store (Rust API only)
-- `graphics_store_mut() -> GraphicsStore`: Get mutable access to graphics store (Rust API only)
 
 **Supported Protocols:**
 - **Sixel** (DCS): VT340 bitmap graphics via `DCS Pq ... ST`
@@ -468,7 +468,7 @@ Multi-protocol graphics support: Sixel (DCS), iTerm2 Inline Images (OSC 1337), a
 - `screenshot_config(config: ScreenshotConfig, scrollback_offset: int = 0) -> bytes`: Take a screenshot using a reusable `ScreenshotConfig` instead of repeating 16+ keyword args on every call (QA-005). Available on both `Terminal` and `PtyTerminal`.
 - `screenshot_to_file_config(path: str, config: ScreenshotConfig, scrollback_offset: int = 0)`: Take a screenshot to a file using a reusable `ScreenshotConfig`. Available on both `Terminal` and `PtyTerminal`.
 
-**Supported Formats:** PNG, JPEG, BMP, SVG (vector), HTML
+**Supported Formats:** PNG, JPEG, BMP, SVG (vector). HTML output is not a screenshot format — use `export_html()` for HTML export.
 
 **Example:**
 ```python
@@ -576,10 +576,8 @@ Extended shell integration features beyond basic OSC 133:
 - `clear_cwd_history()`: Clear CWD history
 - `set_max_cwd_history(max: int)`: Set CWD history limit
 - `record_cwd_change(new_cwd: str, hostname: str | None = None, username: str | None = None)`: Record working directory change (same method as documented under Shell Integration)
-- `poll_events()`: Now also returns `cwd_changed` events with `old_cwd`, `new_cwd`, `hostname`, `username`, `timestamp`
-- `poll_events()`: Now also returns `user_var_changed` events with `name`, `value`, `old_value` (optional) when OSC 1337 SetUserVar sequences are received
+- `poll_events() -> list[dict]`: Returns `cwd_changed` events (`old_cwd`, `new_cwd`, `hostname`, `username`, `timestamp`) and `user_var_changed` events (`name`, `value`, `old_value` (optional)) when OSC 1337 SetUserVar sequences are received. Shell integration events include the `cursor_line` field on both `poll_events()` and `poll_subscribed_events()`
 - `poll_shell_integration_events() -> list[dict]`: Drain only shell integration events (keeping other events queued). Returns dicts with `event_type`, `command`, `exit_code`, `timestamp`, `cursor_line`. The `cursor_line` is the absolute cursor line (`scrollback_len + cursor_row`) captured at the exact moment each OSC 133 marker was parsed
-- `poll_events()` and `poll_subscribed_events()`: Shell integration events now include `cursor_line` field
 
 ### Semantic Zones
 
@@ -625,7 +623,7 @@ zones = term.get_zones()
 # [
 #   {"zone_type": "prompt", "abs_row_start": 0, "abs_row_end": 0, ...},
 #   {"zone_type": "command", "abs_row_start": 0, "abs_row_end": 0, ...},
-#   {"zone_type": "output", "abs_row_start": 0, "abs_row_end": 1, ...},
+#   {"zone_type": "output", "abs_row_start": 0, "abs_row_end": 2, ...},
 # ]
 
 # Query a specific row
@@ -697,15 +695,30 @@ Advanced clipboard features beyond basic OSC 52:
 - `get_clipboard_sync_history(target: str) -> list[ClipboardHistoryEntry]`: Get clipboard sync history for a target (`"clipboard"`, `"primary"`, `"secondary"`, or `"cutbuffer0"`, case-insensitive)
 - `record_clipboard_sync(target: str, operation: str, content: str | None, is_remote: bool)`: Record a clipboard synchronization event (e.g. `record_clipboard_sync("clipboard", "set", "hello", False)`)
 
+### TerminalClipboard
+
+Feature-scoped facade over the clipboard family (ARC-002). `TerminalClipboard(term)` delegates every call to the terminal it wraps — `TerminalClipboard(term).history("clipboard")` is `term.get_clipboard_history("clipboard")`:
+
+- `add(slot: str, content: str, label: str | None = None)`: Add entry to the slot's clipboard history (raises `ValueError` for an unrecognized slot name)
+- `history(slot: str) -> list[ClipboardEntry]`: Get the slot's history, oldest-first
+- `latest(slot: str) -> ClipboardEntry | None`: Get the most recent entry for the slot
+- `clear(slot: str | None = None)`: Clear history for one slot, or all slots when `slot` is None
+- `set(content: str, slot: str | None = None)`: Set clipboard content, writing it to the slot's history
+- `get(slot: str | None = None) -> str | None`: Get the slot's current clipboard content
+- `search(query: str, slot: str | None = None) -> list[ClipboardEntry]`: Search history for entries containing `query` (case-sensitive substring; all slots when `slot` is None)
+- `terminal`: Property — the wrapped `Terminal` (the same object passed to the constructor)
+
 ### Graphics Extended
 
 Additional graphics management beyond basic display:
 
 - `add_inline_image(image: InlineImage)`: Add inline image (iTerm2 protocol)
-- `get_image_by_id(id: int) -> InlineImage | None`: Get image by ID
+- `get_image_by_id(id: str) -> InlineImage | None`: Get image by ID
 - `get_images_at(col: int, row: int) -> list[InlineImage]`: Get images at a position
 - `get_all_images() -> list[InlineImage]`: Get all images in terminal
-- `delete_image(id: int)`: Delete image by ID
+- `delete_image(id: str) -> bool`: Delete image by ID; returns `True` if an image with that ID was found and deleted
+
+Image IDs are strings. A programmatically added `InlineImage` keeps the `id` it was constructed with — one built with `id=None` cannot be addressed by `get_image_by_id`/`delete_image` (enumerate with `get_all_images()` instead); images received via OSC 1337 carry parser-assigned ids.
 - `clear_images()`: Clear all inline images
 - `set_max_inline_images(max: int)`: Set maximum inline image count
 - `set_allow_file_media(mode: str)`: Control whether Kitty graphics may load payloads from files (`t=f`/`t=t`): `"off"`, `"temp_only"` (default — only `*tty-graphics-protocol*` files inside an allowed temp root, deleted after decoding), or `"all"` (unrestricted `t=f` reads). Raises `ValueError` on any other name
@@ -914,10 +927,11 @@ Controls how character widths are calculated, particularly for East Asian Ambigu
 - `set_width_config(config: WidthConfig)`: Set the full width configuration (Unicode version + ambiguous-width treatment)
 - `set_ambiguous_width(width: AmbiguousWidth)`: Convenience method to set just the ambiguous-width treatment without changing the Unicode version
 - `set_unicode_version(version: UnicodeVersion)`: Convenience method to set just the Unicode version without changing the ambiguous-width treatment
-- `char_width(c: str) -> int`: Get the display width of a single character (0, 1, or 2 cells)
+- `char_width(c: str, config: WidthConfig | None = None) -> int`: Get the display width of a single character (0, 1, or 2 cells); pass a `WidthConfig` to override the default width rules
 
 **Module-level width functions** (call on the package, not a Terminal instance):
 
+- `char_width(c: str, config: WidthConfig | None = None) -> int`: Display width of a single character; pass a `WidthConfig` to override the default width rules
 - `char_width_cjk(c: str) -> int`: Display width of a single character using CJK rules (East Asian Ambiguous characters count as 2 cells)
 - `str_width(s: str, config: WidthConfig | None = None) -> int`: Display width of a string; pass a `WidthConfig` to override the default width rules
 - `str_width_cjk(s: str) -> int`: Display width of a string using CJK rules
