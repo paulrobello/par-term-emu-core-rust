@@ -238,6 +238,21 @@ impl Terminal {
             // Decode filename from base64 name= param
             let filename = Self::decode_iterm_filename(&params);
 
+            // A restart supersedes any in-progress multipart transfer: the
+            // buffer below is replaced, so the old manager entry becomes
+            // unreachable (FilePart appends only to the current buffer) —
+            // fail it here so it lands in the bounded completed ring.
+            if let Some(old) = self.graphics.iterm_multipart_buffer.take() {
+                if old.is_file_transfer {
+                    if let Some(old_id) = old.transfer_id {
+                        let _ = self.graphics.file_transfer_manager.fail_transfer(
+                            old_id,
+                            "superseded by MultipartFile restart".to_string(),
+                        );
+                    }
+                }
+            }
+
             // Start a download in the file transfer manager
             let transfer_id = self.graphics.file_transfer_manager.start_download(
                 filename.clone(),

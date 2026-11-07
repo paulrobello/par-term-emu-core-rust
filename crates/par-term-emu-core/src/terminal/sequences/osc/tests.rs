@@ -2151,6 +2151,41 @@ fn test_osc1337_filepart_without_multipartfile() {
 }
 
 #[test]
+fn test_osc1337_multipart_restart_fails_superseded_transfer() {
+    let mut term = Terminal::new(80, 24);
+    // MultipartFile A (file transfer, not inline) with one chunk appended.
+    term.process(b"\x1b]1337;MultipartFile=size=100;name=YS50eHQ=\x07");
+    term.process(b"\x1b]1337;FilePart=aGVsbG8=\x07");
+    let active = term.get_active_transfers();
+    assert_eq!(active.len(), 1);
+    assert_eq!(active[0].filename, "a.txt");
+    let id_a = active[0].id;
+
+    // A second MultipartFile replaces the multipart buffer: A's manager
+    // entry is unreachable afterwards, so it must be failed into the
+    // bounded completed ring rather than left active forever.
+    term.process(b"\x1b]1337;MultipartFile=size=100;name=Yi50eHQ=\x07");
+
+    let active = term.get_active_transfers();
+    assert_eq!(
+        active.len(),
+        1,
+        "the restart must be the sole active transfer"
+    );
+    assert_eq!(active[0].filename, "b.txt");
+
+    let completed = term.get_completed_transfers();
+    let superseded = completed
+        .iter()
+        .find(|t| t.id == id_a)
+        .expect("superseded transfer must land in the completed ring");
+    assert!(matches!(
+        &superseded.status,
+        crate::terminal::TransferStatus::Failed(msg) if msg == "superseded by MultipartFile restart"
+    ));
+}
+
+#[test]
 fn test_osc7_rejects_decoded_nul_and_control_chars() {
     let mut term = Terminal::new(80, 24);
 

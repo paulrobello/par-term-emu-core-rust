@@ -82,6 +82,8 @@ pub struct FileTransferManager {
     next_id: TransferId,
     /// Maximum allowed transfer size in bytes (default 50 MB)
     max_transfer_size: usize,
+    /// Maximum number of simultaneously active transfers
+    max_active: usize,
 }
 
 /// Default maximum transfer size: 50 MB
@@ -92,6 +94,10 @@ pub(crate) const DEFAULT_MAX_TRANSFER_SIZE: usize = 50 * 1024 * 1024;
 /// cap: Completed transfers retained from client file-transfer requests.
 const DEFAULT_MAX_COMPLETED: usize = 32;
 
+/// Default maximum number of concurrently active transfers
+/// cap: Concurrent in-progress downloads from client file-transfer requests.
+pub(crate) const DEFAULT_MAX_ACTIVE_TRANSFERS: usize = 8;
+
 impl Default for FileTransferManager {
     fn default() -> Self {
         Self {
@@ -100,6 +106,7 @@ impl Default for FileTransferManager {
             max_completed: DEFAULT_MAX_COMPLETED,
             next_id: 1,
             max_transfer_size: DEFAULT_MAX_TRANSFER_SIZE,
+            max_active: DEFAULT_MAX_ACTIVE_TRANSFERS,
         }
     }
 }
@@ -119,6 +126,25 @@ impl FileTransferManager {
         total_bytes: Option<usize>,
         params: HashMap<String, String>,
     ) -> TransferId {
+        // Admission cap: a transfer orphaned by a client restart (buffer
+        // replaced without completion) is unreachable from any later append,
+        // so the active set must stay bounded at entry.
+        if self.active_transfers.len() >= self.max_active {
+            let oldest = self
+                .active_transfers
+                .iter()
+                .min_by_key(|(&id, t)| (t.started_at, id))
+                .map(|(&id, _)| id);
+            if let Some(oldest_id) = oldest {
+                if let Some(mut transfer) = self.active_transfers.remove(&oldest_id) {
+                    transfer.status =
+                        TransferStatus::Failed("superseded by new transfer (active cap)".into());
+                    transfer.completed_at = Some(unix_millis());
+                    self.push_completed(transfer);
+                }
+            }
+        }
+
         let id = self.next_id;
         self.next_id += 1;
 
@@ -528,6 +554,38 @@ mod tests {
         // First two should be evicted
         assert!(mgr.take_completed_transfer(ids[0]).is_none());
         assert!(mgr.take_completed_transfer(ids[1]).is_none());
+    }
+
+    #[test]
+    fn test_active_transfer_cap_fails_oldest() {
+        let mut mgr = FileTransferManager::new();
+
+        let mut ids = Vec::new();
+        for i in 0..DEFAULT_MAX_ACTIVE_TRANSFERS {
+            ids.push(mgr.start_download(format!("file_{i}.txt"), None, HashMap::new()));
+        }
+        assert_eq!(mgr.active_transfers().len(), DEFAULT_MAX_ACTIVE_TRANSFERS);
+
+        // The start past the cap must fail the oldest entry instead of
+        // growing the active set.
+        let overflow_id = mgr.start_download("overflow.txt".into(), None, HashMap::new());
+        assert_eq!(
+            mgr.active_transfers().len(),
+            DEFAULT_MAX_ACTIVE_TRANSFERS,
+            "active count must never exceed the cap"
+        );
+        assert!(mgr.get_transfer(ids[0]).is_none());
+        assert!(mgr.get_transfer(overflow_id).is_some());
+
+        let evicted = mgr
+            .completed_transfers()
+            .iter()
+            .find(|t| t.id == ids[0])
+            .expect("the failed-oldest transfer must land in the completed ring");
+        assert!(matches!(
+            &evicted.status,
+            TransferStatus::Failed(msg) if msg == "superseded by new transfer (active cap)"
+        ));
     }
 
     #[test]
