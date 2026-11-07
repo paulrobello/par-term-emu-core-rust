@@ -164,6 +164,8 @@ par-mux --print-schema            Print the bundled JSON command schema and exit
 par-mux --print-completions SHELL Print the shell-completion script (bash, zsh, fish, powershell, elvish) and exit
 ```
 
+The list above is a quick reference, not the full surface: `par-mux --help` prints every flag (44 at last count), and the sections below document the rest.
+
 The `[daemon]` section of `<config dir>/par-mux/config.toml` carries
 defaults for the socket, state dir, and the two endpoint switches — see
 [Configuration file](#configuration-file).
@@ -635,7 +637,7 @@ flags then override — resolution precedence everywhere is **flags > env >
 file > built-in defaults**. The location is `$PAR_MUX_CONFIG` when set,
 else `dirs::config_dir()/par-mux/config.toml` (on macOS
 `~/Library/Application Support/par-mux/config.toml`, on Linux
-`~/.config/par-mux/config.toml`, on Windows `%APPDATA%\par-mux\config.toml`).
+`~/.config/par-mux/config.toml`, on Windows `%APPDATA%\par-mux\config.toml` <!-- doc-path: example -->).
 A file that exists but does not parse is a startup WARNING with defaults
 applied (unreadable config never blocks the daemon, the same rule the
 state file follows), and an `%error` on `reload-config` (see below). The
@@ -1432,7 +1434,7 @@ command = "notify-send par-mux \"$PAR_MUX_EVENT_LINE\""
 timeout-ms = 3000
 ```
 
-**The trust gate**: `par-mux plugin install <dir-or-git-url>` first resolves the source (a local directory as-is; a git URL through a depth-1 clone, manifest at the root or one level down) and prints the preview — the source, the plugin's identity, and EVERY command each event would run with its effective timeout. Without `--trust` that is all that happens; with it the directory is copied into `plugins/`, an entry lands in `plugins/installed.json` (name, version, source, install time), and the output names the directory. `plugin list` / `update <name>` (re-fetch from the recorded source, preview and `--trust` again) / `remove <name>` complete the lifecycle. None of it contacts a daemon.
+**The trust gate**: `par-mux plugin install <dir-or-git-url>` first resolves the source (a local directory as-is; a git URL through a depth-1 clone, manifest at the root or one level down) and prints the preview — the source, the plugin's identity, and EVERY command each event would run with its effective timeout. Without `--trust` that is all that happens; with it the directory is copied into `plugins/`, an entry lands in `plugins/installed.json` (name, version, source, install time), and the output names the directory. <!-- doc-path: example --> `plugin list` / `update <name>` (re-fetch from the recorded source, preview and `--trust` again) / `remove <name>` complete the lifecycle. None of it contacts a daemon.
 
 **Hook execution**: dispatch rides the notification broadcast itself — a plugin sees exactly the line a client sees, from the same emitter, so plugin events can never drift from the wire. The hookable events are the stable slice: `session-changed`, `session-renamed`, `sessions-changed`, `window-add`, `window-close`, `window-renamed`, `layout-change`, `pane-exited`, `pane-respawned`, `pane-title-changed`, `agent-state-changed`, `agent-released`, `notification`, `config-changed`. The command line runs through POSIX `sh -c` (`cmd /d /c` on Windows) with `PAR_MUX_EVENT` (the event name) and `PAR_MUX_EVENT_LINE` (the emitted line) in its environment — and `PAR_MUX_SOCKET` deliberately REMOVED, so a plugin cannot drive the daemon's panes from the hook environment. Hooks run detached (stdin/stdout/stderr null), are killed at their timeout (default 3 s, 1..=60000), and at most 8 run at once daemon-wide — a flooding or stuck plugin drops its own events with a warning while the daemon keeps serving. Manifests that fail validation (unknown event, empty command, out-of-range timeout, name not matching the directory) are skipped at load with a warning, never failing the daemon.
 

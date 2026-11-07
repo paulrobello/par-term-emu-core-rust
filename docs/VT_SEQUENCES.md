@@ -47,7 +47,7 @@ VT100 cursor movement sequences.
 - `ESC 7` - Save cursor (DECSC)
 - `ESC 8` - Restore cursor (DECRC)
 
-> **Note:** `CSI s` and `CSI u` have dual purposes depending on context. `CSI s` with parameters and DECLRMM mode enabled sets left/right margins (DECSLRM). `CSI u` with a parameter sets margin bell volume (DECSMBV).
+> **Note:** `CSI s` and `CSI u` have dual purposes depending on context. `CSI s` with parameters and DECLRMM mode enabled sets left/right margins (DECSLRM). `CSI Ps SP u` — with a space intermediate byte, distinct from bare `CSI u` — sets margin bell volume (DECSMBV); see the VT520 features list below.
 
 ## Display Control
 
