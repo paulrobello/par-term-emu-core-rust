@@ -507,9 +507,11 @@ async fn test_validate_terminal_size_max_u16() {
 // =========================================================================
 
 /// Send one credential-less GET through `api_auth_middleware` (wired the
-/// same way `build_http_app` wires it) and return the response.
-async fn unauthenticated_response(
+/// same way `build_http_app` wires it) against the given target URI and
+/// return the response.
+async fn auth_middleware_response(
     auth_config: ApiAuthConfig,
+    target_uri: &str,
 ) -> axum::http::Response<axum::body::Body> {
     use axum::{routing::get, Router};
     use tower::ServiceExt;
@@ -521,10 +523,17 @@ async fn unauthenticated_response(
             api_auth_middleware(req, next, auth_config)
         }));
     let req = axum::http::Request::builder()
-        .uri("/ok")
+        .uri(target_uri)
         .body(axum::body::Body::empty())
         .expect("static request parts are valid");
     app.oneshot(req).await.expect("router is infallible")
+}
+
+/// Send one credential-less GET to `/ok` through `api_auth_middleware`.
+async fn unauthenticated_response(
+    auth_config: ApiAuthConfig,
+) -> axum::http::Response<axum::body::Body> {
+    auth_middleware_response(auth_config, "/ok").await
 }
 
 #[tokio::test]
@@ -559,6 +568,61 @@ async fn test_auth_middleware_api_key_only_401_has_no_challenge() {
     assert!(!res
         .headers()
         .contains_key(axum::http::header::WWW_AUTHENTICATE));
+}
+
+// ─── Query API-key percent-decoding (SEC-002) ─────────────────────────────
+
+#[test]
+fn test_percent_decode_query_component() {
+    assert_eq!(
+        percent_decode_query_component("plain-key_42"),
+        "plain-key_42"
+    );
+    assert_eq!(percent_decode_query_component("a%26b%3Dc%25d"), "a&b=c%d");
+    // Encoded plus decodes; a raw plus passes through unchanged.
+    assert_eq!(percent_decode_query_component("%2B"), "+");
+    assert_eq!(percent_decode_query_component("a+b"), "a+b");
+    // Malformed escapes are left as-is (the comparison then fails safely).
+    assert_eq!(percent_decode_query_component("100%"), "100%");
+    assert_eq!(percent_decode_query_component("%zz"), "%zz");
+    assert_eq!(percent_decode_query_component("%2"), "%2");
+}
+
+#[tokio::test]
+async fn test_auth_middleware_query_api_key_percent_decoded() {
+    // A key containing characters a raw query cannot carry must match via
+    // the query channel once URL-encoded (SEC-002).
+    let res = auth_middleware_response(
+        ApiAuthConfig {
+            api_key: Some("s3cr&t=k%y+".to_string()),
+            http_basic_auth: None,
+            allow_api_key_in_query: true,
+        },
+        "/ok?api_key=s3cr%26t%3Dk%25y%2B",
+    )
+    .await;
+    assert_eq!(res.status(), axum::http::StatusCode::OK);
+
+    // The same key sent raw cannot match: the `&` splits the query.
+    let res = auth_middleware_response(
+        ApiAuthConfig {
+            api_key: Some("s3cr&t=k%y+".to_string()),
+            http_basic_auth: None,
+            allow_api_key_in_query: true,
+        },
+        "/ok?api_key=s3cr&t=k%y+",
+    )
+    .await;
+    assert_eq!(res.status(), axum::http::StatusCode::UNAUTHORIZED);
+}
+
+#[test]
+fn test_validate_ws_handshake_auth_query_api_key_percent_decoded() {
+    let req = tokio_tungstenite::tungstenite::http::Request::builder()
+        .uri("ws://127.0.0.1:8099/ws?api_key=a%26b%3Dc")
+        .body(())
+        .expect("static request parts are valid");
+    assert!(validate_ws_handshake_auth(&req, Some("a&b=c"), None, true));
 }
 
 // ─── ClipboardRequest set gating (SEC-003 follow-up) ──────────────────────

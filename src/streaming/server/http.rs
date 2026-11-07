@@ -139,7 +139,10 @@ pub(super) async fn api_auth_middleware(
             if let Some(query) = req.uri().query() {
                 for pair in query.split('&') {
                     if let Some(value) = pair.strip_prefix("api_key=") {
-                        if bool::from(value.as_bytes().ct_eq(expected_key.as_bytes())) {
+                        // SEC-002: the value may be URL-encoded — decode
+                        // before the constant-time comparison.
+                        let decoded = percent_decode_query_component(value);
+                        if bool::from(decoded.as_bytes().ct_eq(expected_key.as_bytes())) {
                             return next.run(req).await;
                         }
                     }
@@ -225,6 +228,44 @@ pub(super) fn host_of_authority(authority: &str) -> &str {
     } else {
         authority
     }
+}
+
+/// Percent-decode one query-string value (SEC-002).
+///
+/// The `?api_key=` channel cannot carry `&`, `=`, `%`, or `+` raw (the
+/// `&`-split of the query breaks first), so clients must URL-encode such
+/// keys; decode `%XX` escapes before the constant-time comparison. This is
+/// RFC 3986 percent-decoding, not form decoding: a raw `+` passes through
+/// unchanged so it still matches a key containing `+`. A malformed escape
+/// is left as-is and the comparison simply fails.
+pub(super) fn percent_decode_query_component(s: &str) -> String {
+    fn hex_val(b: u8) -> Option<u8> {
+        match b {
+            b'0'..=b'9' => Some(b - b'0'),
+            b'a'..=b'f' => Some(b - b'a' + 10),
+            b'A'..=b'F' => Some(b - b'A' + 10),
+            _ => None,
+        }
+    }
+
+    let bytes = s.as_bytes();
+    if !bytes.contains(&b'%') {
+        return s.to_string();
+    }
+    let mut out = Vec::with_capacity(bytes.len());
+    let mut i = 0;
+    while i < bytes.len() {
+        if bytes[i] == b'%' && i + 2 < bytes.len() {
+            if let (Some(h), Some(l)) = (hex_val(bytes[i + 1]), hex_val(bytes[i + 2])) {
+                out.push(h * 16 + l);
+                i += 3;
+                continue;
+            }
+        }
+        out.push(bytes[i]);
+        i += 1;
+    }
+    String::from_utf8_lossy(&out).into_owned()
 }
 
 /// Build a CORS layer for the HTTP server reflecting the `allowed_origins`
@@ -363,7 +404,10 @@ pub(super) fn validate_ws_handshake_auth(
             if let Some(query) = req.uri().query() {
                 for pair in query.split('&') {
                     if let Some(value) = pair.strip_prefix("api_key=") {
-                        if bool::from(value.as_bytes().ct_eq(expected_key.as_bytes())) {
+                        // SEC-002: decode URL-encoded values before the
+                        // constant-time comparison.
+                        let decoded = percent_decode_query_component(value);
+                        if bool::from(decoded.as_bytes().ct_eq(expected_key.as_bytes())) {
                             return true;
                         }
                     }
