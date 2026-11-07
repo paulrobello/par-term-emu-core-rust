@@ -7,6 +7,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Security
+- Streamer refuses to start when a non-loopback bind would serve an interactive shell without authentication, or carry credentials without TLS, unless the new explicit `--allow-unauthenticated` / `--allow-cleartext-auth` flags (env: `PAR_TERM_ALLOW_UNAUTHENTICATED` / `PAR_TERM_ALLOW_CLEARTEXT_AUTH`) are passed; the former warn-only banners remain for the opt-in case (cards SEC-001/SEC-002, commit c9276e22).
+- Help text presents the safer secret forms first: `--http-password-file` / `--http-password-hash` before `--http-password`, `PAR_TERM_API_KEY` (masked) recommended over `--api-key`, with ps/shell-history exposure noted (SEC-004, same commit).
+- Frontend archive extraction writes regular files and directories only — symlink/hardlink/device/FIFO entries abort loudly with a named path-containment check — replacing `Archive::unpack` (SEC-006, commit b362499c); a 256 MiB total extraction cap with per-entry bounded reads follows in aa40e980.
+
+### Changed
+- `mux/config.rs` (3,433 lines) split into a themed `config/` directory (daemon/client/resolve/file/chords/management/reload/parse); every public path re-exported unchanged, zero call-site edits (ARC-004, commit 1cce09fd).
+- The ~1,100-line OTel metrics layer shared by the streamer and par-mux now lives once in the `par-term-emu-core` member behind a new `otel` feature; per-binary metrics files are thin config on top, public paths unchanged (ARC-001, commit aa1c7592).
+- Shared dependency versions hoisted into `[workspace.dependencies]` with member `workspace = true` references; CONTRIBUTING.md states the MSRV policy (release stamp tracking latest stable, not a support floor) (ARC-003+008, commit 2f7b80ff). The base64 0.22/0.23 double-compile is ecosystem-forced (axum vs bcrypt/reqwest) and clears with the axum bump.
+
+### Fixed
+- Screenshot rendering releases the GIL for the render+encode phase (`py.detach`, matching the PTY write paths) (QA-003, commit 2c04cde0).
+- `MuxClient::send_ok` added as the recommended err-on-`%error` send variant; `send` stays the tmux-compatible default (QA-006, commit 6d81bafd).
+- Watcher reconnect-backoff policy deduplicated into `streaming/watcher_common.rs` (QA-001, commit 370a7b6b); hooks predicate renamed `json_reply_is_error` to disambiguate from the protocol one (QA-005, commit 17d6164b).
+- Unused `MuxPane::resize_with_cell_pixels` removed after verifying no consumer in the published rlib's users (QA-004, commit 518616e2).
+
+### Documentation
+- Root `tests/` runner layout documented in BUILDING.md (ARC-006); `web_term/` drift gate now runs on every PR (ARC-007, commit 501d08b8); the stale `MUX_FEATURE_MATRIX.md` snapshot archived under `docs/archive/` (DOC-002); README gains a CI badge and a corrected What's New scope note (DOC-003/004, commit b8e0820e); `PtyInputHandle::write` documented (DOC-001, commit 6972819f); ARCHITECTURE.md, SECURITY.md caps table, and CONFIG_REFERENCE synced to the new structure.
+
 ## [0.79.0] - 2026-11-06
 
 ### Fixed
