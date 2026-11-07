@@ -838,6 +838,9 @@ impl PyTerminal {
     }
 
     /// Remove all named progress bars
+    ///
+    /// Returns:
+    ///     None
     fn remove_all_named_progress_bars(&mut self) -> PyResult<()> {
         self.inner.remove_all_named_progress_bars();
         Ok(())

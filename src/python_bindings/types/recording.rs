@@ -361,14 +361,32 @@ impl PyMacro {
         self.inner.description = Some(description);
     }
 
-    /// Save to YAML file
+    /// Save the macro to a YAML file
+    ///
+    /// Args:
+    ///     path: Destination file path
+    ///
+    /// Returns:
+    ///     None on success
+    ///
+    /// Raises:
+    ///     OSError: If the file cannot be written or the macro cannot be serialized
     fn save_yaml(&self, path: String) -> PyResult<()> {
         self.inner
             .save_yaml(path)
             .map_err(|e| pyo3::exceptions::PyIOError::new_err(e.to_string()))
     }
 
-    /// Load from YAML file
+    /// Load a macro from a YAML file
+    ///
+    /// Args:
+    ///     path: Path to a YAML file written by `save_yaml`
+    ///
+    /// Returns:
+    ///     Macro: The loaded macro
+    ///
+    /// Raises:
+    ///     OSError: If the file cannot be read or parsed
     #[staticmethod]
     fn load_yaml(path: String) -> PyResult<Self> {
         crate::macros::Macro::load_yaml(path)
@@ -376,14 +394,29 @@ impl PyMacro {
             .map_err(|e| pyo3::exceptions::PyIOError::new_err(e.to_string()))
     }
 
-    /// Convert to YAML string
+    /// Serialize the macro to a YAML string
+    ///
+    /// Returns:
+    ///     str: The macro as a YAML document
+    ///
+    /// Raises:
+    ///     ValueError: If serialization fails
     fn to_yaml(&self) -> PyResult<String> {
         self.inner
             .to_yaml()
             .map_err(|e| pyo3::exceptions::PyValueError::new_err(e.to_string()))
     }
 
-    /// Parse from YAML string
+    /// Parse a macro from a YAML string
+    ///
+    /// Args:
+    ///     yaml: YAML document produced by `to_yaml`
+    ///
+    /// Returns:
+    ///     Macro: The parsed macro
+    ///
+    /// Raises:
+    ///     ValueError: If the YAML cannot be parsed as a macro
     #[staticmethod]
     fn from_yaml(yaml: String) -> PyResult<Self> {
         crate::macros::Macro::from_yaml(&yaml)

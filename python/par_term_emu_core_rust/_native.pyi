@@ -921,18 +921,48 @@ class Macro:
     @events.setter
     def events(self, value: Any) -> None: ...
     @staticmethod
-    def from_yaml(yaml: Any) -> Any:
-        """Parse from YAML string"""
+    def from_yaml(yaml: Any) -> Macro:
+        """Parse a macro from a YAML string
+
+        Args:
+            yaml: YAML document produced by `to_yaml`
+
+        Returns:
+            Macro: The parsed macro
+
+        Raises:
+            ValueError: If the YAML cannot be parsed as a macro
+        """
     @staticmethod
-    def load_yaml(path: Any) -> Any:
-        """Load from YAML file"""
+    def load_yaml(path: Any) -> Macro:
+        """Load a macro from a YAML file
+
+        Args:
+            path: Path to a YAML file written by `save_yaml`
+
+        Returns:
+            Macro: The loaded macro
+
+        Raises:
+            OSError: If the file cannot be read or parsed
+        """
     @property
     def name(self) -> Any:
         """Get macro name"""
     @name.setter
     def name(self, value: Any) -> None: ...
     def save_yaml(self, path: Any) -> Any:
-        """Save to YAML file"""
+        """Save the macro to a YAML file
+
+        Args:
+            path: Destination file path
+
+        Returns:
+            None on success
+
+        Raises:
+            OSError: If the file cannot be written or the macro cannot be serialized
+        """
     def set_description(self, description: Any) -> Any:
         """Set description"""
     @property
@@ -940,8 +970,15 @@ class Macro:
         """Get terminal size (cols, rows)"""
     @terminal_size.setter
     def terminal_size(self, value: Any) -> None: ...
-    def to_yaml(self) -> Any:
-        """Convert to YAML string"""
+    def to_yaml(self) -> str:
+        """Serialize the macro to a YAML string
+
+        Returns:
+            str: The macro as a YAML document
+
+        Raises:
+            ValueError: If serialization fails
+        """
 
 class MacroEvent:
     """Macro event"""
@@ -4397,6 +4434,12 @@ class StreamingServer:
             label: Optional label for the mark
             color: Optional RGB color tuple (r, g, b)
 
+
+        Returns:
+            None on success
+
+        Raises:
+            RuntimeError: If the server has been stopped
         Example:
             ```python
             server = StreamingServer(PtyTerminal(80, 24), "127.0.0.1:0")
@@ -4411,6 +4454,12 @@ class StreamingServer:
             title: Notification title
             message: Notification message
 
+
+        Returns:
+            None on success
+
+        Raises:
+            RuntimeError: If the server has been stopped
         Example:
             ```python
             server = StreamingServer(PtyTerminal(80, 24), "127.0.0.1:0")
@@ -4423,6 +4472,12 @@ class StreamingServer:
         Args:
             badge: New badge text, or None to clear the badge
 
+
+        Returns:
+            None on success
+
+        Raises:
+            RuntimeError: If the server has been stopped
         Example:
             ```python
             server = StreamingServer(PtyTerminal(80, 24), "127.0.0.1:0")
@@ -4433,6 +4488,12 @@ class StreamingServer:
     def send_bell(self) -> Any:
         """Send a bell event to all clients
 
+
+        Returns:
+            None on success
+
+        Raises:
+            RuntimeError: If the server has been stopped
         Example:
             ```python
             server = StreamingServer(PtyTerminal(80, 24), "127.0.0.1:0")
@@ -4447,6 +4508,12 @@ class StreamingServer:
             row: Cursor row (0-indexed)
             visible: Whether the cursor is visible
 
+
+        Returns:
+            None on success
+
+        Raises:
+            RuntimeError: If the server has been stopped
         Example:
             ```python
             server = StreamingServer(PtyTerminal(80, 24), "127.0.0.1:0")
@@ -4470,6 +4537,12 @@ class StreamingServer:
             username: Username associated with the CWD (optional)
             timestamp: Unix timestamp of the change
 
+
+        Returns:
+            None on success
+
+        Raises:
+            RuntimeError: If the server has been stopped
         Example:
             ```python
             server = StreamingServer(PtyTerminal(80, 24), "127.0.0.1:0")
@@ -4482,6 +4555,12 @@ class StreamingServer:
         Args:
             row: Grid row the new graphic was placed on
 
+
+        Returns:
+            None on success
+
+        Raises:
+            RuntimeError: If the server has been stopped
         Example:
             ```python
             server = StreamingServer(PtyTerminal(80, 24), "127.0.0.1:0")
@@ -4497,6 +4576,12 @@ class StreamingServer:
             col: Grid column the link starts at (0-indexed)
             id: Optional link id for grouping multi-cell links
 
+
+        Returns:
+            None on success
+
+        Raises:
+            RuntimeError: If the server has been stopped
         Example:
             ```python
             server = StreamingServer(PtyTerminal(80, 24), "127.0.0.1:0")
@@ -4515,6 +4600,9 @@ class StreamingServer:
         Args:
             data: Raw bytes to send to the PTY
 
+        Returns:
+            None on success
+
         Raises:
             RuntimeError: If the server has been stopped
 
@@ -4531,6 +4619,12 @@ class StreamingServer:
             mode: Mode name (e.g. "alt_screen", "cursor_visible")
             enabled: Whether the mode is now enabled
 
+
+        Returns:
+            None on success
+
+        Raises:
+            RuntimeError: If the server has been stopped
         Example:
             ```python
             server = StreamingServer(PtyTerminal(80, 24), "127.0.0.1:0")
@@ -4543,6 +4637,12 @@ class StreamingServer:
         Args:
             data: The output data to send (ANSI escape sequences)
 
+
+        Returns:
+            None on success
+
+        Raises:
+            RuntimeError: If the server has been stopped or the send fails
         Example:
             ```python
             server = StreamingServer(PtyTerminal(80, 24), "127.0.0.1:0")
@@ -4556,6 +4656,12 @@ class StreamingServer:
             shape: OSC 22 shape name (``ew-resize``, ``text``, ...), or None to
                 restore the client's own pointer
 
+
+        Returns:
+            None on success
+
+        Raises:
+            RuntimeError: If the server has been stopped
         Example:
             ```python
             server = StreamingServer(PtyTerminal(80, 24), "127.0.0.1:0")
@@ -4580,6 +4686,12 @@ class StreamingServer:
             percent: Optional progress percentage (0-100)
             label: Optional label text
 
+
+        Returns:
+            None on success
+
+        Raises:
+            RuntimeError: If the server has been stopped
         Example:
             ```python
             server = StreamingServer(PtyTerminal(80, 24), "127.0.0.1:0")
@@ -4596,6 +4708,12 @@ class StreamingServer:
             cols: Number of columns
             rows: Number of rows
 
+
+        Returns:
+            None on success
+
+        Raises:
+            RuntimeError: If the server has been stopped
         Example:
             ```python
             server = StreamingServer(PtyTerminal(80, 24), "127.0.0.1:0")
@@ -4608,6 +4726,12 @@ class StreamingServer:
         Args:
             title: The new terminal title
 
+
+        Returns:
+            None on success
+
+        Raises:
+            RuntimeError: If the server has been stopped
         Example:
             ```python
             server = StreamingServer(PtyTerminal(80, 24), "127.0.0.1:0")
@@ -4635,6 +4759,12 @@ class StreamingServer:
             captures: List of capture group strings
             timestamp: Unix timestamp of the match
 
+        Returns:
+            None on success
+
+        Raises:
+            RuntimeError: If the server has been stopped
+
         Example:
             ```python
             server = StreamingServer(PtyTerminal(80, 24), "127.0.0.1:0")
@@ -4651,6 +4781,12 @@ class StreamingServer:
             value: New variable value
             old_value: Previous value, if known
 
+
+        Returns:
+            None on success
+
+        Raises:
+            RuntimeError: If the server has been stopped
         Example:
             ```python
             server = StreamingServer(PtyTerminal(80, 24), "127.0.0.1:0")
@@ -4674,6 +4810,11 @@ class StreamingServer:
         """Start the streaming server (non-blocking)
 
         This spawns the server in a background thread
+
+        Returns:
+            None on success
+        Raises:
+            RuntimeError: If the server has been stopped
         """
 
 class Terminal:
@@ -7842,7 +7983,11 @@ class Terminal:
             ```
         """
     def remove_all_named_progress_bars(self) -> Any:
-        """Remove all named progress bars"""
+        """Remove all named progress bars
+
+        Returns:
+            None
+        """
     def remove_bookmark(self, id: Any) -> Any:
         """Remove a bookmark by ID
 

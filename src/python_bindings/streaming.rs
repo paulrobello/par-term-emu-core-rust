@@ -877,6 +877,11 @@ impl PyStreamingServer {
     /// Start the streaming server (non-blocking)
     ///
     /// This spawns the server in a background thread
+    ///
+    /// Returns:
+    ///     None on success
+    /// Raises:
+    ///     RuntimeError: If the server has been stopped
     fn start(&mut self) -> PyResult<()> {
         if let Some(server) = &self.server {
             let server = server.clone();
@@ -998,6 +1003,12 @@ impl PyStreamingServer {
     /// Args:
     ///     data: The output data to send (ANSI escape sequences)
     ///
+    ///
+    /// Returns:
+    ///     None on success
+    ///
+    /// Raises:
+    ///     RuntimeError: If the server has been stopped or the send fails
     /// Example:
     ///     ```python
     ///     server = StreamingServer(PtyTerminal(80, 24), "127.0.0.1:0")
@@ -1023,6 +1034,9 @@ impl PyStreamingServer {
     ///
     /// Args:
     ///     data: Raw bytes to send to the PTY
+    ///
+    /// Returns:
+    ///     None on success
     ///
     /// Raises:
     ///     RuntimeError: If the server has been stopped
@@ -1051,6 +1065,12 @@ impl PyStreamingServer {
     ///     cols: Number of columns
     ///     rows: Number of rows
     ///
+    ///
+    /// Returns:
+    ///     None on success
+    ///
+    /// Raises:
+    ///     RuntimeError: If the server has been stopped
     /// Example:
     ///     ```python
     ///     server = StreamingServer(PtyTerminal(80, 24), "127.0.0.1:0")
@@ -1097,6 +1117,12 @@ impl PyStreamingServer {
     /// Args:
     ///     title: The new terminal title
     ///
+    ///
+    /// Returns:
+    ///     None on success
+    ///
+    /// Raises:
+    ///     RuntimeError: If the server has been stopped
     /// Example:
     ///     ```python
     ///     server = StreamingServer(PtyTerminal(80, 24), "127.0.0.1:0")
@@ -1113,6 +1139,12 @@ impl PyStreamingServer {
 
     /// Send a bell event to all clients
     ///
+    ///
+    /// Returns:
+    ///     None on success
+    ///
+    /// Raises:
+    ///     RuntimeError: If the server has been stopped
     /// Example:
     ///     ```python
     ///     server = StreamingServer(PtyTerminal(80, 24), "127.0.0.1:0")
@@ -1133,6 +1165,12 @@ impl PyStreamingServer {
     ///     mode: Mode name (e.g. "alt_screen", "cursor_visible")
     ///     enabled: Whether the mode is now enabled
     ///
+    ///
+    /// Returns:
+    ///     None on success
+    ///
+    /// Raises:
+    ///     RuntimeError: If the server has been stopped
     /// Example:
     ///     ```python
     ///     server = StreamingServer(PtyTerminal(80, 24), "127.0.0.1:0")
@@ -1152,6 +1190,12 @@ impl PyStreamingServer {
     /// Args:
     ///     row: Grid row the new graphic was placed on
     ///
+    ///
+    /// Returns:
+    ///     None on success
+    ///
+    /// Raises:
+    ///     RuntimeError: If the server has been stopped
     /// Example:
     ///     ```python
     ///     server = StreamingServer(PtyTerminal(80, 24), "127.0.0.1:0")
@@ -1174,6 +1218,12 @@ impl PyStreamingServer {
     ///     col: Grid column the link starts at (0-indexed)
     ///     id: Optional link id for grouping multi-cell links
     ///
+    ///
+    /// Returns:
+    ///     None on success
+    ///
+    /// Raises:
+    ///     RuntimeError: If the server has been stopped
     /// Example:
     ///     ```python
     ///     server = StreamingServer(PtyTerminal(80, 24), "127.0.0.1:0")
@@ -1202,6 +1252,12 @@ impl PyStreamingServer {
     ///     value: New variable value
     ///     old_value: Previous value, if known
     ///
+    ///
+    /// Returns:
+    ///     None on success
+    ///
+    /// Raises:
+    ///     RuntimeError: If the server has been stopped
     /// Example:
     ///     ```python
     ///     server = StreamingServer(PtyTerminal(80, 24), "127.0.0.1:0")
@@ -1229,6 +1285,12 @@ impl PyStreamingServer {
     ///     row: Cursor row (0-indexed)
     ///     visible: Whether the cursor is visible
     ///
+    ///
+    /// Returns:
+    ///     None on success
+    ///
+    /// Raises:
+    ///     RuntimeError: If the server has been stopped
     /// Example:
     ///     ```python
     ///     server = StreamingServer(PtyTerminal(80, 24), "127.0.0.1:0")
@@ -1248,6 +1310,12 @@ impl PyStreamingServer {
     /// Args:
     ///     badge: New badge text, or None to clear the badge
     ///
+    ///
+    /// Returns:
+    ///     None on success
+    ///
+    /// Raises:
+    ///     RuntimeError: If the server has been stopped
     /// Example:
     ///     ```python
     ///     server = StreamingServer(PtyTerminal(80, 24), "127.0.0.1:0")
@@ -1270,6 +1338,12 @@ impl PyStreamingServer {
     ///     shape: OSC 22 shape name (``ew-resize``, ``text``, ...), or None to
     ///         restore the client's own pointer
     ///
+    ///
+    /// Returns:
+    ///     None on success
+    ///
+    /// Raises:
+    ///     RuntimeError: If the server has been stopped
     /// Example:
     ///     ```python
     ///     server = StreamingServer(PtyTerminal(80, 24), "127.0.0.1:0")
@@ -1293,6 +1367,12 @@ impl PyStreamingServer {
     ///     title: Notification title
     ///     message: Notification message
     ///
+    ///
+    /// Returns:
+    ///     None on success
+    ///
+    /// Raises:
+    ///     RuntimeError: If the server has been stopped
     /// Example:
     ///     ```python
     ///     server = StreamingServer(PtyTerminal(80, 24), "127.0.0.1:0")
@@ -1315,6 +1395,12 @@ impl PyStreamingServer {
     ///     label: Optional label for the mark
     ///     color: Optional RGB color tuple (r, g, b)
     ///
+    ///
+    /// Returns:
+    ///     None on success
+    ///
+    /// Raises:
+    ///     RuntimeError: If the server has been stopped
     /// Example:
     ///     ```python
     ///     server = StreamingServer(PtyTerminal(80, 24), "127.0.0.1:0")
@@ -1345,6 +1431,12 @@ impl PyStreamingServer {
     ///     username: Username associated with the CWD (optional)
     ///     timestamp: Unix timestamp of the change
     ///
+    ///
+    /// Returns:
+    ///     None on success
+    ///
+    /// Raises:
+    ///     RuntimeError: If the server has been stopped
     /// Example:
     ///     ```python
     ///     server = StreamingServer(PtyTerminal(80, 24), "127.0.0.1:0")
@@ -1377,6 +1469,12 @@ impl PyStreamingServer {
     ///     text: The matched text
     ///     captures: List of capture group strings
     ///     timestamp: Unix timestamp of the match
+    ///
+    /// Returns:
+    ///     None on success
+    ///
+    /// Raises:
+    ///     RuntimeError: If the server has been stopped
     ///
     /// Example:
     ///     ```python
@@ -1415,6 +1513,12 @@ impl PyStreamingServer {
     ///     percent: Optional progress percentage (0-100)
     ///     label: Optional label text
     ///
+    ///
+    /// Returns:
+    ///     None on success
+    ///
+    /// Raises:
+    ///     RuntimeError: If the server has been stopped
     /// Example:
     ///     ```python
     ///     server = StreamingServer(PtyTerminal(80, 24), "127.0.0.1:0")
