@@ -114,10 +114,14 @@ fn epoch_ms() -> u128 {
 /// landing-chain milestone, parsed from the client's stderr log:
 /// the host mouse report (`mouse cb=…`), the reseed (`reseed_window …`),
 /// and the reseed replays (`replay panes …`).
-fn parse_trace_stamps(log: &str, from_ms: u128) -> (Option<u128>, Option<u128>, Option<u128>) {
+fn parse_trace_stamps(
+    log: &str,
+    from_ms: u128,
+) -> (Option<u128>, Option<u128>, Option<u128>, Option<u128>) {
     let mut mouse = None;
     let mut reseed = None;
     let mut replay = None;
+    let mut painted = None;
     for line in log.lines() {
         let Some(rest) = line.strip_prefix("par-mux input-trace[") else {
             continue;
@@ -140,8 +144,11 @@ fn parse_trace_stamps(log: &str, from_ms: u128) -> (Option<u128>, Option<u128>, 
         if replay.is_none() && msg.starts_with("replay panes") {
             replay = Some(stamp);
         }
+        if painted.is_none() && msg.starts_with("frame painted") {
+            painted = Some(stamp);
+        }
     }
-    (mouse, reseed, replay)
+    (mouse, reseed, replay, painted)
 }
 
 /// p50 of the `b - a` delta over the rows where both stage stamps exist.
@@ -181,6 +188,8 @@ struct ClickStages {
     replay: Option<u128>,
     /// The harness saw the landing marker painted.
     land: Option<u128>,
+    /// The client's frame flushed the landing's diff (`frame painted`).
+    painted: Option<u128>,
 }
 
 /// One click on `agent`'s roster row, timed from the input bytes to the
@@ -227,7 +236,7 @@ fn timed_click(
         if screen.iter().any(|r| r.contains(landed_marker)) {
             let land = t0_epoch + t0.elapsed().as_millis();
             let log = std::fs::read_to_string(trace_log).unwrap_or_default();
-            let (mouse, reseed, replay) = parse_trace_stamps(&log, t0_epoch);
+            let (mouse, reseed, replay, painted) = parse_trace_stamps(&log, t0_epoch);
             return (
                 Some(t0.elapsed()),
                 ClickStages {
@@ -236,15 +245,16 @@ fn timed_click(
                     reseed,
                     replay,
                     land: Some(land),
+                    painted,
                 },
             );
         }
         if Instant::now() >= end {
             let log = std::fs::read_to_string(trace_log).unwrap_or_default();
-            let (mouse, reseed, replay) = parse_trace_stamps(&log, t0_epoch);
+            let (mouse, reseed, replay, painted) = parse_trace_stamps(&log, t0_epoch);
             let input = mouse.map(|m| m.saturating_sub(t0_epoch));
             eprintln!(
-                "LATENCY-SKIP {what}: landing never painted; stages input={input:?} mouse={mouse:?} reseed={reseed:?} replay={replay:?}; screen tail: {:?}",
+                "LATENCY-SKIP {what}: landing never painted; stages input={input:?} mouse={mouse:?} reseed={reseed:?} replay={replay:?} painted={painted:?}; screen tail: {:?}",
                 screen.iter().rev().take(6).collect::<Vec<_>>()
             );
             return (
@@ -255,6 +265,7 @@ fn timed_click(
                     reseed,
                     replay,
                     land: None,
+                    painted,
                 },
             );
         }
@@ -448,11 +459,12 @@ fn click_latency_harness_records_click_to_action_ms_at_load_shapes() {
         // seed = reseed → replay panes (the reseed's own round trips);
         // paint = replay → the marker visible to the harness.
         eprintln!(
-            "LATENCY {label} stages(ms,p50): input={:?} chain={:?} seed={:?} paint={:?}",
+            "LATENCY {label} stages(ms,p50): input={:?} chain={:?} seed={:?} paint={:?} delivery={:?}",
             stage_p50(&stage_rows, |_| Some(0), |s| s.input),
             stage_p50(&stage_rows, |s| s.mouse, |s| s.reseed),
             stage_p50(&stage_rows, |s| s.reseed, |s| s.replay),
-            stage_p50(&stage_rows, |s| s.replay, |s| s.land),
+            stage_p50(&stage_rows, |s| s.replay, |s| s.painted),
+            stage_p50(&stage_rows, |s| s.painted, |s| s.land),
         );
     }
     host.killer.kill().ok();
@@ -518,7 +530,7 @@ fn stdin_wake_routes_host_clicks_off_the_poll_tick() {
         let deadline = Instant::now() + Duration::from_secs(2);
         let delta = loop {
             let log = std::fs::read_to_string(&trace_log).unwrap_or_default();
-            let (mouse, _, _) = parse_trace_stamps(&log, t0);
+            let (mouse, _, _, _) = parse_trace_stamps(&log, t0);
             if let Some(stamp) = mouse {
                 break stamp.saturating_sub(t0);
             }

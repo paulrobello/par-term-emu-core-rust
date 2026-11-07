@@ -3,8 +3,8 @@
 //! config-driven display setters.
 
 use super::{
-    copy_mode, DragState, FlushSink, Glyphs, Modal, PaneRect, RenderOptions, SessionStripMode,
-    WindowSession, RESTART_TOAST_WINDOW_SECS,
+    copy_mode, trace_input, DragState, FlushSink, Glyphs, Modal, PaneRect, RenderOptions,
+    SessionStripMode, WindowSession, RESTART_TOAST_WINDOW_SECS,
 };
 use crate::mux::attach::status::{Segment, StatusRow};
 use crate::mux::attach::tabs::TabStrip;
@@ -1295,6 +1295,7 @@ impl WindowSession {
                     (*x, *y) = geometry.frame_to_host(*x, *y);
                 }
                 sink.flush(&diff);
+                trace_input(format_args!("frame painted cells={}", diff.len()));
                 flushed = true;
             }
         }
