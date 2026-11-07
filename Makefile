@@ -590,6 +590,7 @@ env-docs-check:
 # build OTel-free (criterion 1).
 otel-check:
 	cargo check --locked --no-default-features --features rust-only,streaming,otel
+	cargo test --locked -p par-term-emu-core --features otel --lib otel::
 	@count=$$(cargo tree --no-default-features --features rust-only -e normal | grep -ci "^opentelemetry"); \
 	if [ "$$count" != "0" ]; then echo "ERROR: default build pulls opentelemetry ($$count refs)"; exit 1; fi
 	@dup=$$(cargo tree -d | grep -cE "^opentelemetry"); \

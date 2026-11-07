@@ -61,6 +61,22 @@ lru = "0.18.0"
 # Hosts the `From<PtyError|GraphicsError|ScreenshotError> for PyErr`
 # conversions only (orphan rule); no bindings live in this crate.
 pyo3 = { version = "0.29", optional = true }
+# Shared OTLP metrics plumbing (ARC-001): the protocol grammar, provider
+# lifecycle, and reporting exporter the streamer and par-mux both re-export.
+# Same lockstep trio and feature set both binaries' `otel` features forward
+# to, so the workspace keeps a single dedup'd opentelemetry tree
+# (`cargo tree -d` must stay empty).
+opentelemetry = { version = "0.33", default-features = false, optional = true }
+opentelemetry_sdk = { version = "0.33", default-features = false, features = [
+    "metrics",
+], optional = true }
+opentelemetry-otlp = { version = "0.33", default-features = false, features = [
+    "metrics",
+    "grpc-tonic",
+    "http-proto",
+    "reqwest-blocking-client",
+    "reqwest-rustls",
+], optional = true }
 
 [target.'cfg(unix)'.dependencies]
 libc = "0.2.186"
@@ -81,6 +97,10 @@ pty_session = ["dep:portable-pty"]
 serde = ["smallvec/serde", "bitflags/serde"]
 # `Macro::{save_yaml, load_yaml, to_yaml, from_yaml}`.
 macro-yaml = ["dep:serde_yaml_ng"]
+# Shared OTLP metrics plumbing (ARC-001): forwarded by the root's and
+# par-mux's `otel` features; the per-binary instrument facades stay with
+# their consumers.
+otel = ["dep:opentelemetry", "dep:opentelemetry_sdk", "dep:opentelemetry-otlp"]
 # The two hooks par-mux uses (PtyInputHandle, kitty temp-file retention).
 mux = ["pty_session"]
 # Dirty-range iteration + structured event fields for the C ABI.
