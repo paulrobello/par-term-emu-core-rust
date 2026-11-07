@@ -299,7 +299,7 @@ The main terminal emulator that ties everything together, organized into submodu
   - `server/` - the socket server: `mod.rs` (accept loop, one writer thread per client), `protocol.rs` (bounded line reads, eviction-aware writes, reply classification), `client.rs` (per-client registration and the read-dispatch-reply loop), `broadcast.rs` (client fan-out, pane output wiring, layout/exit replays), `reap.rs` (dead-pane reaping), `endpoint.rs` (hook-only per-pane endpoints, ENH-039)
   - `command/` - control-command parsing (`parse_command` → `MuxCommand`), one file per verb group: `sessions.rs`, `windows.rs`, `panes.rs`, `keys.rs`, `buffers.rs`, `agents.rs`, `streams.rs`, `worktrees.rs`, `layouts.rs` (named layouts), `uploads.rs` (client file uploads); the `mutates()` persistence rule lives in `mod.rs`
   - `dispatch/` - private per-command handlers, one file per group (`sessions.rs`, `windows.rs`, `panes.rs`, `buffers.rs`, `agents.rs`, `worktrees.rs`, `layouts.rs`, `uploads.rs`, `client.rs`) plus the shared post-dispatch tail in `mod.rs`; reached only through `server`
-  - `emit.rs` (wire lines and `%`-notifications), `ids.rs` (`$N`/`@N`/`%N` ids and allocation), `ipc.rs` (Unix socket / Windows named pipe transport) plus `ipc/rows.rs` (typed reply rows for the fixed-shape listings, shared by the daemon's emitters and the clients that parse them, ARC-130), `client.rs` (`MuxClient`), `discovery.rs` (registry of running daemons plus a stale-entry probe), `config.rs` (`<config dir>/par-mux/config.toml`)
+  - `emit.rs` (wire lines and `%`-notifications), `ids.rs` (`$N`/`@N`/`%N` ids and allocation), `ipc.rs` (Unix socket / Windows named pipe transport) plus `ipc/rows.rs` (typed reply rows for the fixed-shape listings, shared by the daemon's emitters and the clients that parse them, ARC-130), `client.rs` (`MuxClient`), `discovery.rs` (registry of running daemons plus a stale-entry probe), `config/` (daemon/client settings, TOML parsing, reload reporting, chords; `<config dir>/par-mux/config.toml`)
 - State:
   - `tree/` - the session/window/pane tree, the server's single source of truth: `mod.rs` (types and lookups), `lifecycle.rs` (creation, respawn, renames, session environment, kill cascades), `layout_ops.rs` (splits, selection, zoom, moves, resizes, and the `mutate_layout` choke point, ARC-090), `worktrees.rs` (git-worktree workspace grouping, derived from each link's repo key)
   - `layout.rs` (a window's binary split tree and its geometry), `pane.rs` (PTY panes + env contract), `persist.rs` (save format, quarantine, restore, and the named-layout store), `uploads.rs` (bounded staging for client file uploads: `upload-commit` materializes the bytes under one staging directory and bracket-pastes the file's path into the target pane)
@@ -346,7 +346,7 @@ The main terminal emulator that ties everything together, organized into submodu
   - `broadcaster.rs` - Multi-client broadcast support
   - `auth_hash.rs` - htpasswd-format hash verification (bcrypt, apr1/MD5-crypt, `{SHA}`) for HTTP Basic Auth (SEC-003)
   - `inline_image.rs` - Bridges a terminal's `GraphicsAdded` events to size-bounded `InlineImage` frames (the announce carries an id, the pixels are fetched once), and `apply_inline_image` ingests a received frame into a mirroring `Terminal`'s graphics store
-  - `metrics.rs` + `metrics/` - Server metrics behind two gates: the `otel` cargo feature (without it, `metrics/stub.rs` compiles an identical-API no-op) and the runtime switch `--otel-enabled` / `PAR_TERM_STREAMER_OTEL_ENABLED`; `metrics/otel.rs` binds the instruments to the global OTLP meter provider
+  - `metrics.rs` + `metrics/` - Server metrics behind two gates: the `otel` cargo feature (without it, `metrics/stub.rs` compiles an identical-API no-op) and the runtime switch `--otel-enabled` / `PAR_TERM_STREAMER_OTEL_ENABLED`; `metrics/otel.rs` binds the instruments to the global OTLP meter provider. The shared OTLP layer (protocol grammar, header parsing, provider/exporter init) lives once in the `par-term-emu-core` member (`otel.rs` + `otel/`) behind its own `otel` feature — the streamer and par-mux copies are thin per-binary config on top of it (ARC-001)
   - `error.rs` - Streaming-specific errors
 - **App-to-wire conversions (ARC-006)**: the message-level conversions between `protocol.rs` types and the generated protobuf types are derived with `#[derive(par_term_emu_derive::ProtoConvert)]` (macro in `derive/src/proto_convert.rs`). Every field value passes through `ToWire`/`FromWire` in `proto.rs`, keyed on the app and wire field types. Each type pair is listed explicitly, so a missing pair fails to compile instead of silently narrowing; fields with a specific rule (a clamp, a presence check) use `#[proto(with = ..)]`. The golden test fails on any byte-level change. Regenerate it only for an intended wire change: `PROTO_GOLDEN_UPDATE=1 cargo test --lib --no-default-features --features pyo3/auto-initialize,streaming proto_golden`
 - **Features**: Real-time terminal sharing, multiplexing, binary protocol with compression, mouse/focus/paste forwarding, selection/clipboard sync, shell integration events (with cursor_line positioning), per-client event subscription filtering, badge change streaming, per-session client limits, input rate limiting, session metrics, terminal size validation, dead session reaping
@@ -1047,7 +1047,7 @@ The lists below cover the workspace as a whole. The terminal-side crates (`vte`,
 - `sysinfo` - System resource statistics for `SystemStats` events
 - `subtle` + `zeroize` - Constant-time credential comparison and secret wiping
 - `sha2` - Release-asset checksum verification (binary-only, via `streaming-bin`)
-- `opentelemetry` + `opentelemetry_sdk` + `opentelemetry-otlp` - OTLP metrics export (feature `otel`, default off; the three release in lockstep)
+- `opentelemetry` + `opentelemetry_sdk` + `opentelemetry-otlp` - OTLP metrics export (feature `otel`, default off; the three release in lockstep, versions pinned once in `[workspace.dependencies]` and compiled by the `par-term-emu-core` member's shared `otel` module)
 
 **Self-update dependencies (`par-term-emu-core` member, feature `self-update`):**
 - `sha2` + `semver` + `tempfile` - Checksum-required release download, version comparison, and atomic binary replacement for `self_update.rs`
@@ -1184,9 +1184,9 @@ The project uses GitHub Actions. `.github/workflows/ci.yml` is authoritative; th
   - Python: `ruff format --check`, `ruff check`, `pyright`
   - Doc links and anchors: `lychee --offline --include-fragments` over `docs/*.md` and the top-level guides (same scope as `make doc-links-check`)
 
-#### Build Job and web_term Drift Gate (dispatch only)
+#### Build Job and web_term Drift Gate
 - **Build wheels:** `maturin build --release --locked` on Ubuntu, macOS, and Windows with Python 3.14; wheels are uploaded as artifacts
-- **web_term/ drift gate:** rebuilds `web-terminal-frontend/` and fails when the committed `web_term/` static export differs
+- **web_term/ drift gate:** rebuilds `web-terminal-frontend/` and fails when the committed `web_term/` static export differs; runs on every pull request (and on `'all'`/default dispatches) so a frontend edit without `make web-build-static` cannot land silently (ARC-007)
 
 #### Other Jobs
 - **Feature matrix (`features`)**: `make check-features` through cargo-hack builds the library across feature combinations (dispatch only)
