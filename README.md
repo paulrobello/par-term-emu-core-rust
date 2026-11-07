@@ -614,8 +614,10 @@ make streamer-run-auth
 cargo build --bin par-term-streamer --no-default-features --features streaming-bin --release
 ./target/release/par-term-streamer --port 8099 --theme dracula
 
-# With authentication
-./target/release/par-term-streamer --api-key my-secret --theme monokai
+# With authentication (prefer the env var: a CLI argument is readable in
+# ps and shell history for the server's lifetime)
+export PAR_TERM_API_KEY=my-secret
+./target/release/par-term-streamer --theme monokai
 
 # With system resource stats (CPU, memory, disk, network)
 ./target/release/par-term-streamer --enable-system-stats --system-stats-interval 5

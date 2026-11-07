@@ -33,6 +33,10 @@ const FRONTEND_ARCHIVE_PREFIX: &str = "par-term-web-frontend-v";
 /// must not be buffered in memory, let alone extracted.
 /// cap: Bytes accepted from a downloaded web-frontend archive response.
 const MAX_ARCHIVE_BYTES: usize = 50 * 1024 * 1024;
+/// Total bytes the extracted bundle may occupy: the 50 MiB download cap
+/// bounds compressed bytes only, so a hostile archive could still expand
+/// past it (text assets compress far better than 4x).
+const MAX_EXTRACTED_BYTES: u64 = 256 * 1024 * 1024;
 
 /// Read a response body up to `max_bytes`, failing as soon as the cap is
 /// exceeded instead of buffering an unbounded stream (SEC-007).
@@ -309,7 +313,7 @@ pub async fn download_frontend(version: &str, web_root: &str, force: bool) -> Re
     // SEC-006: the `.sha256` sidecar comes from the same release as the
     // archive, so it cannot vouch against a compromised release — `unpack`
     // would honor symlink/hardlink entries, writing outside the web root.
-    extract_regular_files(&mut archive, web_root_path)?;
+    extract_regular_files(&mut archive, web_root_path, MAX_EXTRACTED_BYTES)?;
 
     // Count extracted files
     let file_count = count_files(web_root_path)?;
@@ -355,7 +359,13 @@ fn safe_entry_path(path: &Path) -> Result<&Path> {
 /// against a compromised one. The bundle our release process publishes
 /// contains only regular files and directories, so a legitimate archive
 /// never trips this.
-fn extract_regular_files<R: std::io::Read>(archive: &mut Archive<R>, dest: &Path) -> Result<()> {
+fn extract_regular_files<R: std::io::Read>(
+    archive: &mut Archive<R>,
+    dest: &Path,
+    max_total_bytes: u64,
+) -> Result<()> {
+    use std::io::Read as _;
+    let mut extracted_total: u64 = 0;
     for entry in archive
         .entries()
         .context("Failed to read archive entries")?
@@ -370,13 +380,32 @@ fn extract_regular_files<R: std::io::Read>(archive: &mut Archive<R>, dest: &Path
             let out_path = dest.join(safe_entry_path(&path)?);
             if let Some(parent) = out_path.parent() {
                 fs::create_dir_all(parent).with_context(|| {
-                    format!("Failed to create directory for {}", path.display())
+                    format!(
+                        "Over-extraction cap aborts before '{}' is created",
+                        path.display()
+                    )
                 })?;
             }
             let mut out = fs::File::create(&out_path)
                 .with_context(|| format!("Failed to create {}", out_path.display()))?;
-            std::io::copy(&mut entry, &mut out)
-                .with_context(|| format!("Failed to write {}", out_path.display()))?;
+            // `take` bounds a single entry whose header lies about its size:
+            // at most remaining+1 bytes are read, so the total can overshoot
+            // the cap by at most one byte before the check below aborts.
+            let remaining = max_total_bytes.saturating_sub(extracted_total);
+            let copied = {
+                let mut limited = (&mut entry).take(remaining.saturating_add(1));
+                std::io::copy(&mut limited, &mut out)
+                    .with_context(|| format!("Failed to write {}", out_path.display()))?
+            };
+            extracted_total += copied;
+            if extracted_total > max_total_bytes {
+                anyhow::bail!(
+                    "Refusing to extract archive entry '{}': the bundle expands past the \
+                     {} MiB extraction cap (CWE-409)",
+                    path.display(),
+                    max_total_bytes / (1024 * 1024)
+                );
+            }
             // Match `Archive::unpack`'s default: apply the header's plain
             // permission bits (never setuid/setgid/sticky).
             #[cfg(unix)]
@@ -633,7 +662,8 @@ mod tests {
         let bytes = regular_bundle();
         let dest = tempfile::tempdir().expect("tempdir");
         let mut archive = Archive::new(bytes.as_slice());
-        extract_regular_files(&mut archive, dest.path()).expect("regular bundle must extract");
+        extract_regular_files(&mut archive, dest.path(), MAX_EXTRACTED_BYTES)
+            .expect("regular bundle must extract");
         assert_eq!(
             fs::read(dest.path().join("assets/app.js")).unwrap(),
             b"console.log"
@@ -685,7 +715,7 @@ mod tests {
         let bytes = bundle_with_entry(tar::EntryType::symlink(), "evil-link");
         let dest = tempfile::tempdir().expect("tempdir");
         let mut archive = Archive::new(bytes.as_slice());
-        let err = extract_regular_files(&mut archive, dest.path())
+        let err = extract_regular_files(&mut archive, dest.path(), MAX_EXTRACTED_BYTES)
             .expect_err("a symlink entry must be refused");
         let msg = format!("{err:#}");
         assert!(msg.contains("evil-link"), "{msg}");
@@ -702,11 +732,41 @@ mod tests {
         let bytes = bundle_with_entry(tar::EntryType::hard_link(), "hard-link");
         let dest = tempfile::tempdir().expect("tempdir");
         let mut archive = Archive::new(bytes.as_slice());
-        let err = extract_regular_files(&mut archive, dest.path())
+        let err = extract_regular_files(&mut archive, dest.path(), MAX_EXTRACTED_BYTES)
             .expect_err("a hard-link entry must be refused");
         let msg = format!("{err:#}");
         assert!(msg.contains("hard-link"), "{msg}");
         assert!(!dest.path().join("hard-link").exists());
+    }
+
+    #[test]
+    fn extraction_exceeding_total_cap_is_refused() {
+        // CWE-409: MAX_ARCHIVE_BYTES bounds the compressed download only.
+        // Two modest entries past a small cap must abort extraction; a
+        // header lying about its size cannot push more than cap+1 bytes to
+        // disk, because each entry is read through `take(remaining + 1)`.
+        let mut builder = tar::Builder::new(Vec::new());
+        let mut header = tar::Header::new_gnu();
+        header.set_mode(0o644);
+        header.set_size(1024);
+        builder
+            .append_data(&mut header, "a.txt", vec![0u8; 1024].as_slice())
+            .unwrap();
+        header.set_size(1024);
+        builder
+            .append_data(&mut header, "b.txt", vec![0u8; 1024].as_slice())
+            .unwrap();
+        let bytes = builder.into_inner().unwrap();
+        let dest = tempfile::tempdir().expect("tempdir");
+        let mut archive = Archive::new(bytes.as_slice());
+        let err = extract_regular_files(&mut archive, dest.path(), 1500)
+            .expect_err("a bundle past the extraction cap must be refused");
+        let msg = format!("{err:#}");
+        assert!(msg.contains("extraction cap"), "{msg}");
+        // The overshooting entry must not have been fully written: at most
+        // cap+1 bytes of b.txt reached disk.
+        let written = fs::read(dest.path().join("b.txt")).unwrap().len() as u64;
+        assert!(written <= 1501 - 1024, "b.txt wrote {written} bytes");
     }
 
     #[test]
