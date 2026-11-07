@@ -20,6 +20,18 @@ pub struct PtyInputHandle {
 
 #[cfg(feature = "mux")]
 impl PtyInputHandle {
+    /// Write input bytes to the PTY — [`PtySession::write`] without
+    /// `&mut self`, for a caller holding a broader lock (the mux
+    /// dispatcher's tree mutex) that must release it before a write that
+    /// can block once the PTY buffer fills.
+    ///
+    /// # Arguments
+    /// * `data` - Bytes to write to the PTY
+    ///
+    /// # Returns
+    /// `Ok(())` after a successful write and flush; the same errors as
+    /// [`PtySession::write`] — `NotStartedError` when the session is not
+    /// running, `IoError` when the write or flush fails.
     #[doc(hidden)]
     pub fn write(&self, data: &[u8]) -> Result<(), PtyError> {
         if !self.running.load(Ordering::SeqCst) {
