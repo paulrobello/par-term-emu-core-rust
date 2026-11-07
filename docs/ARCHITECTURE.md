@@ -1047,7 +1047,7 @@ The lists below cover the workspace as a whole. The terminal-side crates (`vte`,
 - `sysinfo` - System resource statistics for `SystemStats` events
 - `subtle` + `zeroize` - Constant-time credential comparison and secret wiping
 - `sha2` - Release-asset checksum verification (binary-only, via `streaming-bin`)
-- `opentelemetry` + `opentelemetry_sdk` + `opentelemetry-otlp` - OTLP metrics export (feature `otel`, default off; the three release in lockstep, versions pinned once in `[workspace.dependencies]` and compiled by the `par-term-emu-core` member's shared `otel` module)
+- `opentelemetry` + `opentelemetry_sdk` + `opentelemetry-otlp` - OTLP metrics export (feature `otel`, default off; the three release in lockstep, versions declared once in the workspace dependency table and compiled by the par-term-emu-core member's shared otel module)
 
 **Self-update dependencies (`par-term-emu-core` member, feature `self-update`):**
 - `sha2` + `semver` + `tempfile` - Checksum-required release download, version comparison, and atomic binary replacement for `self_update.rs`
