@@ -35,7 +35,7 @@ impl StreamingServer {
 
     /// Broadcast a message to all clients in the default session
     pub fn broadcast(&self, msg: ServerMessage) {
-        if let Some(ref session) = self.default_session {
+        if let Some(session) = self.default_session() {
             session.broadcast(msg);
         }
     }
@@ -150,8 +150,8 @@ impl StreamingServer {
     ///
     /// 1. If session already exists in registry, return it
     /// 2. If factory is available, create a new session
-    /// 3. If no factory and id == "default", return default session
-    /// 4. Otherwise, error
+    /// 3. Otherwise, error (a closed session is a clean miss, never handed
+    ///    back dead)
     pub fn resolve_session(
         self: &Arc<Self>,
         params: &ConnectionParams,
@@ -234,13 +234,6 @@ impl StreamingServer {
             factory.setup_session(session_id, &session)?;
 
             return Ok(session);
-        }
-
-        // No factory - check if asking for default
-        if session_id == "default" {
-            if let Some(ref default) = self.default_session {
-                return Ok(Arc::clone(default));
-            }
         }
 
         Err(StreamingError::SessionNotFound(session_id.clone()))
@@ -354,8 +347,7 @@ impl StreamingServer {
 
     /// Spawn broadcaster loop for the default session
     pub(super) fn spawn_default_broadcaster(self: &Arc<Self>) {
-        if let Some(ref session) = self.default_session {
-            let session = Arc::clone(session);
+        if let Some(session) = self.default_session() {
             tokio::spawn(async move {
                 session.output_broadcaster_loop().await;
             });

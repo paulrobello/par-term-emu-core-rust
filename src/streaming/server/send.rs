@@ -5,7 +5,7 @@ use super::*;
 impl StreamingServer {
     /// Send terminal output to all connected clients
     pub fn send_output(&self, data: String) -> Result<()> {
-        if let Some(ref session) = self.default_session {
+        if let Some(session) = self.default_session() {
             match session.output_tx.try_send(OutputChunk::plain(data)) {
                 Ok(()) => Ok(()),
                 Err(mpsc::error::TrySendError::Full(_)) => {
