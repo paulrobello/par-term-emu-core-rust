@@ -52,6 +52,8 @@ mod tmux;
 mod tui;
 #[cfg(test)]
 mod vt520;
+#[cfg(test)]
+mod xterm_resize;
 
 #[cfg(test)]
 mod metrics;

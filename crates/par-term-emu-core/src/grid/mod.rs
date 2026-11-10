@@ -12,10 +12,12 @@ mod edit;
 mod erase;
 mod export;
 mod rect;
+mod reflow;
 mod scroll;
 mod snapshot;
 mod zone;
 
+pub use reflow::{BufferPositions, BufferReflow};
 pub use snapshot::GridSnapshot;
 
 /// One recorded vertical scroll (ENH-038): `[top, bottom]` rotated by
@@ -124,6 +126,9 @@ pub struct Grid {
     /// value from it, so consumers diff against a remembered generation
     /// instead of clearing shared state.
     pub(in crate::grid) gen: u64,
+    /// Where the last xterm.js resize moved each line
+    /// ([`Grid::resize_xterm`]).
+    pub(in crate::grid) last_buffer_reflow: Option<BufferReflow>,
 }
 
 impl Grid {
@@ -149,6 +154,7 @@ impl Grid {
             scroll_ops: VecDeque::new(),
             scroll_epoch: 0,
             gen: 0,
+            last_buffer_reflow: None,
         }
     }
 

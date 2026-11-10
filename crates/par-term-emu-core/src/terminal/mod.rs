@@ -510,8 +510,20 @@ impl Terminal {
     /// pushed off the scrollback floor are queued as `ZoneScrolledOut` and
     /// delivered to observers before this returns.
     pub fn resize(&mut self, cols: usize, rows: usize) {
-        self.resize_internal(cols, rows);
+        self.resize_internal(cols, rows, None);
         self.finish_applied_actions();
+    }
+
+    /// [`Terminal::resize`] for a host whose viewport on the
+    /// primary screen is scrolled to `viewport_top` (a buffer line,
+    /// scrollback first). Returns the viewport's top line after the
+    /// resize: with [`Terminal::set_xterm_resize`] it moves by xterm.js's
+    /// rules (a viewport at the bottom stays there), otherwise it is the
+    /// bottom.
+    pub fn resize_with_viewport(&mut self, cols: usize, rows: usize, viewport_top: usize) -> usize {
+        let top = self.resize_internal(cols, rows, Some(viewport_top));
+        self.finish_applied_actions();
+        top
     }
 
     /// [`Terminal::resize`] without invoking observer callbacks: the
@@ -520,14 +532,14 @@ impl Terminal {
     /// releasing that lock.
     #[doc(hidden)]
     pub fn resize_deferred(&mut self, cols: usize, rows: usize) -> ObserverDispatchBatch {
-        self.resize_internal(cols, rows);
+        self.resize_internal(cols, rows, None);
         self.flush_evicted_zones();
         let batch = self.take_observer_dispatch_batch();
         self.cap_terminal_events();
         batch
     }
 
-    fn resize_internal(&mut self, cols: usize, rows: usize) {
+    fn resize_internal(&mut self, cols: usize, rows: usize, viewport_top: Option<usize>) -> usize {
         crate::debug_log!("TERMINAL_RESIZE", "Requested resize to {}x{}", cols, rows);
 
         // Reflow moves rows across the scrollback boundary; pending trigger
@@ -541,9 +553,14 @@ impl Terminal {
         let old_cols = self.grid.cols().max(1);
         let old_rows = self.grid.rows().max(1);
 
-        self.grid.resize(cols, rows);
-        // The alt screen never reflows (see Grid::resize_without_reflow).
-        self.alt_grid.resize_without_reflow(cols, rows);
+        let viewport_top = if self.host.xterm_resize {
+            self.resize_screens_xterm(cols, rows, viewport_top)
+        } else {
+            self.grid.resize(cols, rows);
+            // The alt screen never reflows (see Grid::resize_without_reflow).
+            self.alt_grid.resize_without_reflow(cols, rows);
+            self.grid.scrollback_len()
+        };
         // Both grids' damage bitsets were resized and fully marked by their
         // resize calls: a resize reflows/redraws the whole screen, and a
         // damage-driven renderer (FFI readback) must repaint all of it.
@@ -617,6 +634,97 @@ impl Terminal {
             .set_dimensions(cols as u16, rows as u16);
 
         self.record_resize(cols, rows);
+        viewport_top
+    }
+
+    /// Resize both screens as xterm.js resizes its normal and
+    /// alternate buffers (`Grid::resize_xterm`), moving each screen's
+    /// cursor, the saved cursor of the active one and the on-screen images
+    /// with their lines. A pending wrap ends, as xterm.js clamps its cursor
+    /// into the last column. Returns the primary viewport's new top line.
+    fn resize_screens_xterm(
+        &mut self,
+        cols: usize,
+        rows: usize,
+        viewport_top: Option<usize>,
+    ) -> usize {
+        use crate::grid::BufferPositions;
+
+        // xterm.js ignores a resize to the size it has (a pending wrap stays pending).
+        if (self.grid.cols(), self.grid.rows()) == (cols, rows) || cols == 0 || rows == 0 {
+            return viewport_top.unwrap_or(self.grid.scrollback_len());
+        }
+        let old_cols = self.grid.cols();
+        let primary_active = !self.alt_screen_active;
+        let saved = self.saved_state.saved_cursor;
+        // The saved cursor belongs to the buffer it was saved on. The one
+        // save that matters while the alternate screen is shown is 1049's
+        // entry save, taken on the primary just before the switch, so the
+        // saved position always reflows with the primary buffer's lines.
+        let positions_of =
+            |cursor: &Cursor, active: bool, pending_wrap: bool, owns_saved: bool| BufferPositions {
+                cursor_col: if active && pending_wrap {
+                    old_cols
+                } else {
+                    cursor.col
+                },
+                cursor_row: cursor.row,
+                saved_col: saved.filter(|_| owns_saved).map_or(0, |saved| saved.col),
+                saved_row: saved.filter(|_| owns_saved).map_or(0, |saved| saved.row),
+                viewport_top: 0,
+            };
+        // While the alternate screen is shown the primary cursor waits in `alt_cursor`.
+        let (primary_cursor, alternate_cursor) = if primary_active {
+            (self.cursor, self.alt_cursor)
+        } else {
+            (self.alt_cursor, self.cursor)
+        };
+        let mut primary = positions_of(&primary_cursor, primary_active, self.pending_wrap, true);
+        let mut alternate =
+            positions_of(&alternate_cursor, !primary_active, self.pending_wrap, false);
+        let scrollback = self.grid.scrollback_len();
+        primary.viewport_top = viewport_top.unwrap_or(scrollback);
+
+        self.grid.resize_xterm(cols, rows, true, &mut primary);
+        self.alt_grid
+            .resize_xterm(cols, rows, false, &mut alternate);
+        // Nothing follows the alternate screen's lines.
+        let _ = self.alt_grid.take_buffer_reflow();
+
+        // The images on the primary screen keep their lines.
+        if primary_active {
+            if let Some(reflow) = self.grid.buffer_reflow() {
+                let new_base = self.grid.scrollback_len() as isize;
+                let last = reflow.lines.len() as isize - 1;
+                self.graphics.graphics_store.move_placements(|top| {
+                    let old = scrollback as isize + top;
+                    let line = if (0..=last).contains(&old) {
+                        reflow.follow(old as usize).map(|line| line as isize)
+                    } else {
+                        None
+                    };
+                    line.unwrap_or(old - reflow.trimmed as isize) - new_base
+                });
+            }
+        }
+
+        let place = |cursor: &mut Cursor, positions: &BufferPositions| {
+            cursor.col = positions.cursor_col;
+            cursor.row = positions.cursor_row;
+        };
+        if primary_active {
+            place(&mut self.cursor, &primary);
+            place(&mut self.alt_cursor, &alternate);
+        } else {
+            place(&mut self.alt_cursor, &primary);
+            place(&mut self.cursor, &alternate);
+        }
+        if let Some(saved) = self.saved_state.saved_cursor.as_mut() {
+            saved.col = primary.saved_col;
+            saved.row = primary.saved_row;
+        }
+        self.pending_wrap = false;
+        primary.viewport_top
     }
 
     /// Check if synchronized updates mode is enabled
@@ -1295,6 +1403,22 @@ impl Terminal {
         self.graphics
             .graphics_store
             .rebase_scrollback_after_shrink(excess);
+    }
+
+    /// Resize the screens the way xterm.js resizes its buffers
+    /// (`Grid::resize_xterm`): the primary screen and its scrollback reflow
+    /// as one buffer, so the cursor follows its line and lines come back
+    /// from the scrollback, and both screens drop the rows below the cursor
+    /// before the rows above it. Off by default; survives RIS.
+    pub fn set_xterm_resize(&mut self, on: bool) {
+        self.host.xterm_resize = on;
+    }
+
+    /// Where the last resize moved the primary screen's lines,
+    /// once ([`Grid::take_buffer_reflow`]; only with
+    /// [`Terminal::set_xterm_resize`]).
+    pub fn take_buffer_reflow(&mut self) -> Option<crate::grid::BufferReflow> {
+        self.grid.take_buffer_reflow()
     }
 
     /// Soft terminal reset (DECSTR, `CSI ! p`) per VT510.
