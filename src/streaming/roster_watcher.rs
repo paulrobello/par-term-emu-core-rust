@@ -17,14 +17,18 @@
 //! stable — and a fresh snapshot, so no agent from before a daemon restart
 //! survives as a ghost. The fetches are timeout-bounded (bounded connect plus
 //! the client's reply timeout), so a hung daemon delays the watcher but cannot
-//! wedge its thread. There is no polling timer: the only waits are the fetch
-//! bounds and the reconnect backoff.
+//! wedge its thread. On each live connection a long-interval presence
+//! refresh re-runs the full fetch: presence stamps (`last_activity_at`,
+//! `cpu_ms`, `viewer_count`, ...) ride only full list-agents fetches, while
+//! state deltas keep the cached values, so without the timer a client's
+//! "last input 2m ago" could go hours stale while state stays fresh.
 
 use super::protocol::{AgentEntry, ServerMessage};
 use super::roster::{
     parse_agents_output, parse_titles_output, translate_notification, RosterDelta,
 };
 use super::watcher_common::{next_backoff, BACKOFF_INITIAL, BACKOFF_STABLE};
+use crate::mux::crossbeam_channel::RecvTimeoutError;
 use crate::mux::{emit, MuxClient};
 use crate::tmux_control::TmuxNotification;
 use parking_lot::Mutex;
@@ -40,6 +44,13 @@ use std::time::{Duration, Instant};
 /// block the watcher's connect forever — the client's reply timeout does
 /// not cover the connect itself.
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
+
+/// Full-roster refresh cadence on a live connection. Presence stamps
+/// (`last_activity_at`, `cpu_ms`, `viewer_count`, ...) ride only full
+/// list-agents fetches — state deltas keep the cached values — so without
+/// this timer a client's "last input 2m ago" can go hours stale while state
+/// stays fresh (card 01a1c2fd).
+const PRESENCE_REFRESH_INTERVAL: Duration = Duration::from_secs(60);
 
 /// Callback receiving every roster message the watcher produces.
 pub type OnMessage = Arc<dyn Fn(ServerMessage) + Send + Sync>;
@@ -61,7 +72,15 @@ impl RosterWatcher {
         {
             let roster = Arc::clone(&roster);
             let stop = Arc::clone(&stop);
-            std::thread::spawn(move || run(&socket, &roster, &stop, &on_message));
+            std::thread::spawn(move || {
+                run(
+                    &socket,
+                    &roster,
+                    &stop,
+                    &on_message,
+                    PRESENCE_REFRESH_INTERVAL,
+                )
+            });
         }
         Self { roster, stop }
     }
@@ -149,11 +168,32 @@ fn pane_label(client: &mut MuxClient, pane_id: u32) -> io::Result<String> {
     Ok(reply.body.join("\n"))
 }
 
+/// Re-run the full roster fetch on the live client and replace the cache
+/// with it, emitting the fresh roster. Same lock discipline as the
+/// connect-time snapshot: the fetch runs with no lock held; the swap takes
+/// the lock only after the entries are in hand. A failure is returned so
+/// the caller falls to its redial path.
+fn refetch_snapshot(
+    client: &mut MuxClient,
+    roster: &Mutex<BTreeMap<u32, AgentEntry>>,
+    on_message: &OnMessage,
+) -> io::Result<()> {
+    let entries = fetch_roster(client)?;
+    let snapshot = {
+        let mut map = roster.lock();
+        *map = entries.into_iter().map(|e| (e.pane_id, e)).collect();
+        roster_message(&map)
+    };
+    on_message(snapshot);
+    Ok(())
+}
+
 fn run(
     socket: &std::path::Path,
     roster: &Mutex<BTreeMap<u32, AgentEntry>>,
     stop: &AtomicBool,
     on_message: &OnMessage,
+    presence_refresh: Duration,
 ) {
     let mut backoff = BACKOFF_INITIAL;
     while !stop.load(Ordering::Relaxed) {
@@ -168,108 +208,115 @@ fn run(
         };
         // Notifications queue on the client from connect on, so deltas that
         // land while the snapshot is in flight are applied after it.
-        let entries = match fetch_roster(&mut client) {
-            Ok(entries) => entries,
-            Err(_) => {
-                std::thread::sleep(backoff);
-                backoff = next_backoff(backoff, None);
-                continue;
-            }
-        };
-        let snapshot = {
-            let mut map = roster.lock();
-            *map = entries.into_iter().map(|e| (e.pane_id, e)).collect();
-            roster_message(&map)
-        };
-        on_message(snapshot);
+        if refetch_snapshot(&mut client, roster, on_message).is_err() {
+            std::thread::sleep(backoff);
+            backoff = next_backoff(backoff, None);
+            continue;
+        }
 
         let connected_at = Instant::now();
-        while let Ok(notification) = client.notifications().recv() {
+        let mut last_full_fetch = Instant::now();
+        loop {
             if stop.load(Ordering::Relaxed) {
                 return;
             }
-            match notification {
-                // Telemetry pushes are identity-only by wire contract, so
-                // freshness comes from re-running the roster fetch: the
-                // host-attributed project the push itself never carries
-                // rides the fresh rows' host_telemetry tokens.
-                TmuxNotification::AgentTelemetryChanged { .. } => {
-                    match fetch_roster(&mut client) {
-                        Ok(entries) => {
-                            let snapshot = {
-                                let mut map = roster.lock();
-                                *map = entries.into_iter().map(|e| (e.pane_id, e)).collect();
-                                roster_message(&map)
-                            };
-                            on_message(snapshot);
-                        }
+            let notification = {
+                let remaining = presence_refresh
+                    .checked_sub(last_full_fetch.elapsed())
+                    .unwrap_or(Duration::ZERO);
+                match client.notifications().recv_timeout(remaining) {
+                    Ok(notification) => Some(notification),
+                    Err(RecvTimeoutError::Timeout) => None,
+                    Err(RecvTimeoutError::Disconnected) => break,
+                }
+            };
+            if let Some(notification) = notification {
+                match notification {
+                    // Telemetry pushes are identity-only by wire contract, so
+                    // freshness comes from re-running the roster fetch: the
+                    // host-attributed project the push itself never carries
+                    // rides the fresh rows' host_telemetry tokens.
+                    TmuxNotification::AgentTelemetryChanged { .. } => {
                         // Connection degraded: fall to the redial path.
-                        Err(_) => break,
-                    }
-                }
-                // The rename push carries the USER title (empty =
-                // cleared); the displayed label is the effective title,
-                // which falls back to the OSC title on a clear — that
-                // value rides a bounded per-pane query.
-                TmuxNotification::PaneTitleChanged { pane_id, title } => {
-                    let Ok(pane_id) = pane_id.trim_start_matches('%').parse::<u32>() else {
-                        continue;
-                    };
-                    let label = if !title.is_empty() {
-                        Ok(title)
-                    } else {
-                        pane_label(&mut client, pane_id)
-                    };
-                    let Ok(label) = label else { break };
-                    let patched = {
-                        let mut map = roster.lock();
-                        match map.get_mut(&pane_id) {
-                            Some(entry) => {
-                                entry.pane_label = label;
-                                Some(delta_message(RosterDelta::Upsert(entry.clone())))
-                            }
-                            None => None,
+                        if refetch_snapshot(&mut client, roster, on_message).is_err() {
+                            break;
                         }
-                    };
-                    if let Some(message) = patched {
-                        on_message(message);
                     }
-                }
-                _ => {
-                    let Some(delta) = translate_notification(&emit(&notification)) else {
-                        continue;
-                    };
-                    let delta = {
-                        let mut map = roster.lock();
-                        match delta {
-                            RosterDelta::Upsert(mut entry) => {
-                                // State pushes carry no title/project and no
-                                // activity/presence tokens: a pane the
-                                // watcher knows keeps its fetched values
-                                // until the next full roster fetch refreshes
-                                // them (the attach roster patch keeps the
-                                // known one over a bare push).
-                                if let Some(prev) = map.get(&entry.pane_id) {
-                                    entry.pane_label = prev.pane_label.clone();
-                                    entry.project = prev.project.clone();
-                                    entry.last_activity_at = prev.last_activity_at;
-                                    entry.last_report_at = prev.last_report_at;
-                                    entry.last_input_at = prev.last_input_at;
-                                    entry.viewer_count = prev.viewer_count;
-                                    entry.last_viewed_at = prev.last_viewed_at;
-                                    entry.cpu_ms = prev.cpu_ms;
-                                    entry.stalled = prev.stalled;
+                    // The rename push carries the USER title (empty =
+                    // cleared); the displayed label is the effective title,
+                    // which falls back to the OSC title on a clear — that
+                    // value rides a bounded per-pane query.
+                    TmuxNotification::PaneTitleChanged { pane_id, title } => {
+                        let Ok(pane_id) = pane_id.trim_start_matches('%').parse::<u32>() else {
+                            continue;
+                        };
+                        let label = if !title.is_empty() {
+                            Ok(title)
+                        } else {
+                            pane_label(&mut client, pane_id)
+                        };
+                        let Ok(label) = label else { break };
+                        let patched = {
+                            let mut map = roster.lock();
+                            match map.get_mut(&pane_id) {
+                                Some(entry) => {
+                                    entry.pane_label = label;
+                                    Some(delta_message(RosterDelta::Upsert(entry.clone())))
                                 }
-                                map.insert(entry.pane_id, entry.clone());
-                                RosterDelta::Upsert(entry)
+                                None => None,
                             }
-                            RosterDelta::Release { pane_id } => {
-                                map.remove(&pane_id);
-                                RosterDelta::Release { pane_id }
-                            }
+                        };
+                        if let Some(message) = patched {
+                            on_message(message);
                         }
-                    };
-                    on_message(delta_message(delta));
+                    }
+                    _ => {
+                        let Some(delta) = translate_notification(&emit(&notification)) else {
+                            continue;
+                        };
+                        let delta = {
+                            let mut map = roster.lock();
+                            match delta {
+                                RosterDelta::Upsert(mut entry) => {
+                                    // State pushes carry no title/project and no
+                                    // activity/presence tokens: a pane the
+                                    // watcher knows keeps its fetched values
+                                    // until the next full roster fetch refreshes
+                                    // them (the attach roster patch keeps the
+                                    // known one over a bare push).
+                                    if let Some(prev) = map.get(&entry.pane_id) {
+                                        entry.pane_label = prev.pane_label.clone();
+                                        entry.project = prev.project.clone();
+                                        entry.last_activity_at = prev.last_activity_at;
+                                        entry.last_report_at = prev.last_report_at;
+                                        entry.last_input_at = prev.last_input_at;
+                                        entry.viewer_count = prev.viewer_count;
+                                        entry.last_viewed_at = prev.last_viewed_at;
+                                        entry.cpu_ms = prev.cpu_ms;
+                                        entry.stalled = prev.stalled;
+                                    }
+                                    map.insert(entry.pane_id, entry.clone());
+                                    RosterDelta::Upsert(entry)
+                                }
+                                RosterDelta::Release { pane_id } => {
+                                    map.remove(&pane_id);
+                                    RosterDelta::Release { pane_id }
+                                }
+                            }
+                        };
+                        on_message(delta_message(delta));
+                    }
+                }
+            }
+            // Presence refresh due: re-run the full fetch on the SAME
+            // connection so a stamp change (last input, cpu, viewer count)
+            // reaches the cache and clients even with no delta push and no
+            // reconnect. Fetch with no lock held; swap under the lock.
+            if last_full_fetch.elapsed() >= presence_refresh {
+                last_full_fetch = Instant::now();
+                // Connection degraded: fall to the redial path.
+                if refetch_snapshot(&mut client, roster, on_message).is_err() {
+                    break;
                 }
             }
         }
@@ -290,6 +337,7 @@ mod tests {
     use super::*;
     use std::io::{BufRead, BufReader, Write};
     use std::os::unix::net::UnixListener;
+    use std::sync::atomic::AtomicUsize;
     use std::sync::mpsc::{channel, Receiver};
 
     /// What the double does on one accepted connection.
@@ -696,6 +744,111 @@ mod tests {
             }
             other => panic!("expected delta, got {other:?}"),
         }
+    }
+
+    /// Card 01a1c2fd: the periodic presence refresh. A daemon-side stamp
+    /// change with no push and no reconnect reaches the watcher's message
+    /// stream and snapshot on the SAME connection, bounded by the refresh
+    /// interval (driven at 30ms here via run's interval parameter).
+    #[test]
+    fn periodic_presence_refresh_reaches_the_snapshot_without_a_reconnect() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("refresh.sock");
+        let listener = UnixListener::bind(&path).unwrap();
+        let conn_count = Arc::new(AtomicUsize::new(0));
+        let accepted = Arc::clone(&conn_count);
+        // The double serves the CURRENT list-agents body on every fetch, so
+        // the test can flip it between fetches like a live daemon would.
+        let body = Arc::new(Mutex::new(
+            "3 zed idle hook last_activity_at=1000\n".to_string(),
+        ));
+        {
+            let body = Arc::clone(&body);
+            std::thread::spawn(move || {
+                let (mut stream, _) = listener.accept().expect("accept");
+                accepted.fetch_add(1, Ordering::Relaxed);
+                let mut reader = BufReader::new(stream.try_clone().expect("clone"));
+                loop {
+                    let mut line = String::new();
+                    if reader.read_line(&mut line).unwrap_or(0) == 0 {
+                        break;
+                    }
+                    let (reply_body, terminator) = if line.trim() == "list-agents" {
+                        let body = body.lock().clone();
+                        let terminator = if body.is_empty() { "" } else { "\n" };
+                        (body, terminator)
+                    } else {
+                        (String::new(), "")
+                    };
+                    write!(
+                        stream,
+                        "%begin 1 0 1\n{}{}%end 1 0 1\n",
+                        reply_body, terminator
+                    )
+                    .expect("reply");
+                }
+            });
+        }
+
+        let (on_message, rx) = collect();
+        let roster: Arc<Mutex<BTreeMap<u32, AgentEntry>>> = Arc::new(Mutex::new(BTreeMap::new()));
+        let stop = Arc::new(AtomicBool::new(false));
+        {
+            let socket = path.clone();
+            let roster = Arc::clone(&roster);
+            let stop = Arc::clone(&stop);
+            std::thread::spawn(move || {
+                run(
+                    &socket,
+                    &roster,
+                    &stop,
+                    &on_message,
+                    Duration::from_millis(30),
+                )
+            });
+        }
+        let watcher = RosterWatcher {
+            roster: Arc::clone(&roster),
+            stop: Arc::clone(&stop),
+        };
+
+        // Connect-time snapshot carries the first stamp value.
+        match next(&rx) {
+            ServerMessage::AgentRoster { agents } => {
+                assert_eq!(agents[0].last_activity_at, 1000);
+            }
+            other => panic!("expected initial roster, got {other:?}"),
+        }
+
+        // The daemon-side stamp changes with no push; the next periodic
+        // refresh carries it on the still-open connection.
+        *body.lock() = "3 zed idle hook last_activity_at=2000\n".to_string();
+        let deadline = Instant::now() + Duration::from_secs(5);
+        loop {
+            if let ServerMessage::AgentRoster { agents } =
+                rx.recv_timeout(Duration::from_secs(5)).expect("message")
+            {
+                if agents[0].last_activity_at == 2000 {
+                    break;
+                }
+            }
+            assert!(
+                Instant::now() < deadline,
+                "the refreshed stamp never reached the watcher"
+            );
+        }
+        let ServerMessage::AgentRoster { agents } = watcher.snapshot() else {
+            panic!("snapshot is a roster");
+        };
+        assert_eq!(
+            agents[0].last_activity_at, 2000,
+            "the cache holds the refreshed stamp"
+        );
+        assert_eq!(
+            conn_count.load(Ordering::Relaxed),
+            1,
+            "the refresh reused the connection: no reconnect"
+        );
     }
 
     #[test]
