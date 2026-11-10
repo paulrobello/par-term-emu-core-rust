@@ -14,6 +14,25 @@ use crate::debug;
 use crate::grapheme;
 use crate::terminal::{Charset, Terminal};
 
+#[cfg(test)]
+thread_local! {
+    /// Tests compare the run writer against the per-character path.
+    pub(crate) static PER_CHAR_PRINT: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+
+/// Whether a test asked this thread to write printable ASCII one
+/// character at a time (always `false` outside tests).
+fn per_char_print_for_tests() -> bool {
+    #[cfg(test)]
+    {
+        PER_CHAR_PRINT.with(std::cell::Cell::get)
+    }
+    #[cfg(not(test))]
+    {
+        false
+    }
+}
+
 impl Terminal {
     /// DECALN (`ESC # 8`): fill the screen with default-attribute `E`s,
     /// reset the margins, clear origin mode and home the cursor, as xterm
@@ -48,6 +67,122 @@ impl Terminal {
         }
     }
 
+    /// Write the printable ASCII collected by `print` (see
+    /// `ParseBuffers::print_run`). Called before every other parser callback
+    /// and at the end of every parse pass.
+    pub(crate) fn flush_print_run(&mut self) {
+        if self.parse_buffers.print_run.is_empty() {
+            return;
+        }
+        let run = std::mem::take(&mut self.parse_buffers.print_run);
+        self.write_ascii_run(&run);
+        self.parse_buffers.print_run = run;
+        self.parse_buffers.print_run.clear();
+    }
+
+    /// Write a run of printable ASCII (`' '..='~'`) exactly as one
+    /// `write_char` per byte would, but a screen row at a time: the pen is
+    /// packed once, and each row segment is marked damaged once and written
+    /// straight into the row. Anything that changes how a single character
+    /// lands (a translating charset, insert mode, left/right margins,
+    /// autowrap off, trace logging) takes the per-character path.
+    fn write_ascii_run(&mut self, run: &[u8]) {
+        if self.active_charset() != Charset::Ascii
+            || self.modes.insert_mode
+            || self.margins.use_lr_margins
+            || !self.modes.auto_wrap
+            || debug::is_enabled(debug::DebugLevel::Trace)
+            || per_char_print_for_tests()
+        {
+            for &b in run {
+                debug::log_print(b as char, self.cursor.col, self.cursor.row);
+                self.write_char(b as char);
+            }
+            return;
+        }
+
+        let (cols, _rows) = self.size();
+        let mut flags = self.attrs.flags;
+        flags.hyperlink_id = self.hyperlink_state.current_hyperlink_id;
+        flags.set_guarded(self.modes.char_protected);
+        let pen = Cell {
+            c: ' ',
+            combining: None,
+            fg: PackedColor::pack(self.attrs.fg),
+            bg: PackedColor::pack(self.attrs.bg),
+            underline_color: PackedOptionColor::pack(self.attrs.underline_color),
+            flags,
+            width: 1,
+        };
+
+        let mut rest = run;
+        while !rest.is_empty() {
+            if self.pending_wrap {
+                self.resolve_pending_wrap();
+            }
+            let (col, row) = (self.cursor.col, self.cursor.row);
+            if col >= cols {
+                // Not a state the cursor is kept in; let the general path
+                // decide what it means.
+                for &b in rest {
+                    self.write_char(b as char);
+                }
+                return;
+            }
+            let n = rest.len().min(cols - col);
+            // Same invariant as the per-character path: halves of wide pairs
+            // orphaned at the segment edges are blanked before the overwrite.
+            let bg = pen.bg;
+            self.active_grid_mut()
+                .split_wide_chars_at(row, col, col + n, bg);
+            self.active_grid_mut()
+                .write_ascii(col, row, &rest[..n], &pen);
+            self.triggers.mark_written(row);
+            self.cursor.col = col + n;
+            if self.cursor.col >= cols {
+                // Delayed autowrap: stay in the last column, wrap on the
+                // next character.
+                self.cursor.col = cols - 1;
+                self.pending_wrap = true;
+            }
+            rest = &rest[n..];
+        }
+    }
+
+    /// Perform the wrap a character written in the last column left
+    /// pending (DECAWM): mark the row wrapped and move to the start of the
+    /// next row, scrolling the region when the cursor is at its bottom.
+    fn resolve_pending_wrap(&mut self) {
+        let (cols, rows) = self.size();
+        let was_outside_lr = self.margins.use_lr_margins
+            && (self.cursor.col < self.margins.left_margin
+                || self.cursor.col > self.margins.right_margin);
+
+        // Mark the current row as wrapped (line continues to next row)
+        let current_row = self.cursor.row;
+        self.active_grid_mut().set_line_wrapped(current_row, true);
+
+        // Move to left margin or column 0
+        self.cursor.col = if self.margins.use_lr_margins {
+            self.margins.left_margin.min(cols.saturating_sub(1))
+        } else {
+            0
+        };
+        if self.cursor.row == self.margins.scroll_region_bottom && !was_outside_lr {
+            let scroll_top = self.margins.scroll_region_top;
+            let scroll_bottom = self.margins.scroll_region_bottom;
+            debug::log_scroll("wrap-pending-advance", scroll_top, scroll_bottom, 1);
+            self.scroll_region_up_tracked(1, scroll_top, scroll_bottom);
+            // Cursor remains at bottom of region
+        } else {
+            self.cursor.row += 1;
+            if self.cursor.row >= rows {
+                self.cursor.row = rows - 1;
+            }
+        }
+        self.pending_wrap = false;
+    }
+
     /// Write a character to the terminal at the current cursor position
     pub(super) fn write_char(&mut self, c: char) {
         // Apply ACS (Alternate Character Set) translation when the active charset
@@ -69,6 +204,12 @@ impl Terminal {
             self.write_normal_cell_known_width(c, 1, cols);
             return;
         }
+        // C0 controls are never regional indicators or combining marks
+        // either, so they go straight to their handling below.
+        if c.is_ascii_control() {
+            self.write_control(c, cols);
+            return;
+        }
 
         // Handle regional indicator pairs (flag emoji like 🇺🇸)
         // When the second regional indicator arrives, combine it with the first
@@ -84,6 +225,12 @@ impl Terminal {
             return;
         }
 
+        self.write_control(c, cols);
+    }
+
+    /// Handle CR, LF, TAB and BS; ignore other control characters; write
+    /// anything else as a normal cell.
+    fn write_control(&mut self, c: char, cols: usize) {
         // Handle special characters
         match c {
             '\r' => {
@@ -191,34 +338,7 @@ impl Terminal {
     fn write_normal_cell_known_width(&mut self, c: char, char_width: usize, cols: usize) {
         // If a wrap is pending from a prior write at the right margin, perform the wrap now
         if self.pending_wrap {
-            let (cols, rows) = self.size();
-            let was_outside_lr = self.margins.use_lr_margins
-                && (self.cursor.col < self.margins.left_margin
-                    || self.cursor.col > self.margins.right_margin);
-
-            // Mark the current row as wrapped (line continues to next row)
-            let current_row = self.cursor.row;
-            self.active_grid_mut().set_line_wrapped(current_row, true);
-
-            // Move to left margin or column 0
-            self.cursor.col = if self.margins.use_lr_margins {
-                self.margins.left_margin.min(cols.saturating_sub(1))
-            } else {
-                0
-            };
-            if self.cursor.row == self.margins.scroll_region_bottom && !was_outside_lr {
-                let scroll_top = self.margins.scroll_region_top;
-                let scroll_bottom = self.margins.scroll_region_bottom;
-                debug::log_scroll("wrap-pending-advance", scroll_top, scroll_bottom, 1);
-                self.scroll_region_up_tracked(1, scroll_top, scroll_bottom);
-                // Cursor remains at bottom of region
-            } else {
-                self.cursor.row += 1;
-                if self.cursor.row >= rows {
-                    self.cursor.row = rows - 1;
-                }
-            }
-            self.pending_wrap = false;
+            self.resolve_pending_wrap();
         }
 
         // If wide character won't fit on current line, wrap first

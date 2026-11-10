@@ -778,6 +778,9 @@ pub(crate) struct HostConfig {
     pub(crate) configured_warning_bell_volume: u8,
     /// Margin bell volume RIS restores; DECSMBV changes only the live value.
     pub(crate) configured_margin_bell_volume: u8,
+    /// Store scrollback lines without their trailing default cells
+    /// ([`Terminal::set_compact_scrollback`]).
+    pub(crate) compact_scrollback: bool,
 }
 
 impl Default for HostConfig {
@@ -795,6 +798,7 @@ impl Default for HostConfig {
             configured_conformance_level: crate::conformance_level::ConformanceLevel::default(),
             configured_warning_bell_volume: 4,
             configured_margin_bell_volume: 4,
+            compact_scrollback: false,
         }
     }
 }
@@ -874,6 +878,21 @@ impl Default for BellVolumeState {
             margin: 4,
         }
     }
+}
+
+/// Byte buffers a parse pass reuses (ARC-001 sub-struct): their capacity is
+/// kept between passes instead of being reallocated.
+#[derive(Default)]
+pub(crate) struct ParseBuffers {
+    /// SEC-003: scratch buffer reused by the incremental OSC guard in
+    /// `Terminal::advance_parser` so guarded chunks (those containing ESC or
+    /// mid-OSC state) do not allocate per call.
+    pub(crate) osc_scratch: Vec<u8>,
+    /// Printable ASCII the parser handed to `print` and that is not on the
+    /// grid yet. It is written as one run (see `Terminal::flush_print_run`)
+    /// before any other parser callback and before a parse pass returns, so
+    /// no code ever observes it pending.
+    pub(crate) print_run: Vec<u8>,
 }
 
 /// Kitty TGP APC pre-filter state (ARC-001 sub-struct). vte 0.15 does not

@@ -4,31 +4,96 @@ use crate::cell::Cell;
 use crate::grid::Grid;
 
 impl Grid {
-    fn push_rows_to_scrollback(&mut self, start_row: usize, count: usize) {
-        if self.max_scrollback == 0 || count == 0 || start_row >= self.rows {
-            return;
+    /// Rotate the rows `[top, bottom]` by `n` (up when `up`, else down)
+    /// together with their wrap flags and content generations, then blank
+    /// the `n` rows that wrapped around. Rows move by pointer; no cell is
+    /// copied. When `to_scrollback` (an upward scroll of a region anchored
+    /// at the top of the screen), the rows leaving the top move into the
+    /// scrollback, oldest first, and the rows the scrollback evicts are
+    /// reused as the blank rows. Returns how many lines reached the
+    /// scrollback.
+    pub(in crate::grid) fn rotate_region(
+        &mut self,
+        n: usize,
+        top: usize,
+        bottom: usize,
+        up: bool,
+        to_scrollback: bool,
+    ) -> usize {
+        let n = n.min(bottom + 1 - top);
+        if n == 0 {
+            return 0;
         }
-
-        let available = self.rows - start_row;
-        let count = count.min(available);
-
-        for i in 0..count {
-            let row = start_row + i;
-            let src_start = row * self.cols;
-            let src_end = src_start + self.cols;
-            let is_wrapped = self.wrapped.get(row).copied().unwrap_or(false);
-            self.push_scrollback_row(
-                self.cells[src_start..src_end].to_vec().into_boxed_slice(),
-                is_wrapped,
-            );
+        let region = top..=bottom;
+        let blanks = if up {
+            self.screen[region.clone()].rotate_left(n);
+            self.row_used[region.clone()].rotate_left(n);
+            self.wrapped[region.clone()].rotate_left(n);
+            self.row_content_gen[region].rotate_left(n);
+            (bottom + 1 - n)..=bottom
+        } else {
+            self.screen[region.clone()].rotate_right(n);
+            self.row_used[region.clone()].rotate_right(n);
+            self.wrapped[region.clone()].rotate_right(n);
+            self.row_content_gen[region].rotate_right(n);
+            top..=(top + n - 1)
+        };
+        let to_scrollback = to_scrollback && self.max_scrollback > 0 && self.cols > 0;
+        for row in blanks.clone() {
+            let wrapped = std::mem::replace(&mut self.wrapped[row], false);
+            let used = std::mem::replace(&mut self.row_used[row], 0).min(self.cols);
+            if to_scrollback {
+                self.scroll_row_off(row, used, wrapped);
+            } else {
+                self.screen[row][..used].fill(Cell::default());
+            }
         }
-        self.total_lines_scrolled += count;
-        // The floor is computed after the pushes, so a batch that crosses
-        // the cap mid-way still evicts zones in the rows it dropped.
-        let floor = self
-            .total_lines_scrolled
-            .saturating_sub(self.scrollback_lines);
-        self.evict_zones(floor);
+        // Blanked rows changed content; rows that merely moved keep the
+        // content generation they already had (ENH-038).
+        self.mark_rows_content(*blanks.start(), *blanks.end());
+        if to_scrollback {
+            self.total_lines_scrolled += n;
+            // The floor is computed after the pushes, so a batch that
+            // crosses the cap mid-way still evicts zones in the rows it
+            // dropped.
+            let floor = self
+                .total_lines_scrolled
+                .saturating_sub(self.scrollback_lines);
+            self.evict_zones(floor);
+            n
+        } else {
+            0
+        }
+    }
+
+    /// Move screen row `row` (with `used` written cells) into the scrollback
+    /// and leave a blank row in its place.
+    ///
+    /// A full-width line moves by pointer, and the row the scrollback
+    /// evicts becomes the blank screen row. With compact scrollback
+    /// ([`Grid::set_compact_scrollback`]) a line is stored without its
+    /// trailing default cells instead: only the written cells are copied,
+    /// so the cost of a scrolled line follows its text rather than the
+    /// screen width, and the screen row stays in place (warm in cache) for
+    /// the next line.
+    fn scroll_row_off(&mut self, row: usize, used: usize, wrapped: bool) {
+        let len = if wrapped || !self.compact_scrollback {
+            self.cols
+        } else {
+            super::used_len(&self.screen[row][..used])
+        };
+        if len == self.cols {
+            let line = std::mem::take(&mut self.screen[row]);
+            let spare = self.push_scrollback_row(line, wrapped);
+            self.screen[row] = self.recycle_row(spare);
+        } else {
+            let cells = &mut self.screen[row];
+            // `take` leaves default cells behind, which blanks the copied
+            // part of the screen row on the way.
+            let line: Box<[Cell]> = cells[..len].iter_mut().map(std::mem::take).collect();
+            cells[len..used].fill(Cell::default());
+            let _evicted = self.push_scrollback_row(line, wrapped);
+        }
     }
 
     /// Scroll up by n lines
@@ -37,63 +102,13 @@ impl Grid {
         if n == 0 {
             return;
         }
-
-        // Drain the top n rows out in one shot: the remaining rows shift up
-        // via a single memmove inside drain, and the drained rows move into
-        // scrollback by ownership instead of being cloned cell by cell —
-        // the per-cell SmallVec clone here was ~50% of plain_ascii runtime.
-        let mut drained: Vec<Cell> = self.cells.drain(0..n * self.cols).collect();
-        let wrapped_len = self.wrapped.len();
-        let wrapped_n = n.min(wrapped_len);
-        let drained_wrapped: Vec<bool> = self.wrapped.drain(0..wrapped_n).collect();
-
-        self.absorb_rows_into_scrollback(&mut drained, &drained_wrapped);
-
-        // Cell::default() carries bg == DEFAULT_BG (Named Black), so the
-        // refill matches what clear_row wrote on these rows before.
-        self.cells.resize(self.rows * self.cols, Cell::default());
-        self.wrapped.resize(wrapped_len, false);
-        // Content generations move with their rows (ENH-038); the n fresh
-        // blank rows at the bottom take fresh stamps.
-        self.row_content_gen.drain(0..n);
-        self.row_content_gen.resize(self.rows, 0);
-        for row in (self.rows - n)..self.rows {
-            self.mark_row_content(row);
-        }
-        self.mark_rows_damage(0, self.rows.saturating_sub(1));
-        self.record_scroll_op(0, self.rows - 1, n as i32);
-    }
-
-    /// Absorb rows drained out of the main grid into the scrollback buffer.
-    ///
-    /// Takes ownership per line so each row moves into scrollback by
-    /// ownership (no per-cell clone). Bookkeeping mirrors
-    /// [`push_rows_to_scrollback`]: the total-lines counter, zone eviction,
-    /// and oldest-line eviction when the buffer is full.
-    fn absorb_rows_into_scrollback(&mut self, rows: &mut Vec<Cell>, wrapped_flags: &[bool]) {
-        let cols = self.cols;
-        if cols == 0 || self.max_scrollback == 0 {
-            return;
-        }
-        let count = (rows.len() / cols).min(wrapped_flags.len());
-        if count == 0 {
-            return;
-        }
-
-        for i in 0..count {
-            let is_wrapped = wrapped_flags[i];
-            let line: Vec<Cell> = rows[i * cols..(i + 1) * cols]
-                .iter_mut()
-                .map(std::mem::take)
-                .collect();
-            self.push_scrollback_row(line.into_boxed_slice(), is_wrapped);
-        }
-        rows.clear();
-        self.total_lines_scrolled += count;
-        let floor = self
-            .total_lines_scrolled
-            .saturating_sub(self.scrollback_lines);
-        self.evict_zones(floor);
+        // The top n rows move into scrollback by ownership (no per-cell
+        // clone), the rest shift up by pointer, and the n fresh blank rows
+        // at the bottom take fresh content stamps (ENH-038).
+        let bottom = self.rows - 1;
+        self.rotate_region(n, 0, bottom, true, true);
+        self.mark_rows_damage(0, bottom);
+        self.record_scroll_op(0, bottom, n as i32);
     }
 
     /// Scroll down by n lines
@@ -102,23 +117,12 @@ impl Grid {
         if n == 0 {
             return;
         }
-
-        // One rotation of the whole grid replaces the reverse per-cell clone
-        // loop: rotate_right relocates rows n places down without cloning
-        // the SmallVec in every cell (down-mirror of the scroll_up drain
-        // fix; rows [0, n) land on stale bottom content and are cleared).
-        self.cells.rotate_right(n * self.cols);
-        self.wrapped.rotate_right(n);
-        self.row_content_gen.rotate_right(n);
-
-        for i in 0..n {
-            self.clear_row(i);
-            if i < self.wrapped.len() {
-                self.wrapped[i] = false;
-            }
-        }
-        self.mark_rows_damage(0, self.rows.saturating_sub(1));
-        self.record_scroll_op(0, self.rows - 1, -(n as i32));
+        // Rows move down by pointer; rows [0, n) land on stale bottom
+        // content and are cleared.
+        let bottom = self.rows - 1;
+        self.rotate_region(n, 0, bottom, false, false);
+        self.mark_rows_damage(0, bottom);
+        self.record_scroll_op(0, bottom, -(n as i32));
     }
 
     /// Scroll up within a region. Returns `false` if parameters are invalid.
@@ -133,44 +137,23 @@ impl Grid {
         }
 
         let n = n.min(bottom - top + 1);
-        let effective_bottom = bottom.min(self.rows - 1);
-        let region_size = effective_bottom - top + 1;
-        self.mark_rows_damage(top, effective_bottom);
 
-        if top == 0 && effective_bottom == self.rows - 1 && self.max_scrollback > 0 {
+        let whole_screen = top == 0 && bottom == self.rows - 1 && self.max_scrollback > 0;
+        if whole_screen && n > 0 {
+            // scroll_up marks every row damaged itself.
             self.scroll_up(n);
             return true;
         }
-
-        if top == 0 {
-            self.push_rows_to_scrollback(0, n);
-        }
-
-        if n >= region_size {
-            for i in top..=effective_bottom {
-                self.clear_row(i);
-            }
-            if n > 0 {
-                self.record_scroll_op(top, effective_bottom, n as i32);
-            }
+        self.mark_rows_damage(top, bottom);
+        if whole_screen {
             return true;
         }
 
-        // One rotation of the contiguous region replaces the per-row
-        // clone_from_slice moves: rotate_left relocates elements without
-        // cloning the SmallVec in every cell.
-        let region_start = top * self.cols;
-        let region_end = (effective_bottom + 1) * self.cols;
-        self.cells[region_start..region_end].rotate_left(n * self.cols);
-        self.row_content_gen[top..=effective_bottom].rotate_left(n);
-
-        for i in (effective_bottom - n + 1)..=effective_bottom {
-            if i < self.rows {
-                self.clear_row(i);
-            }
-        }
+        // A region anchored at the top of the screen (a status line below
+        // it) still sends its departing lines to the scrollback.
+        self.rotate_region(n, top, bottom, true, top == 0);
         if n > 0 {
-            self.record_scroll_op(top, effective_bottom, n as i32);
+            self.record_scroll_op(top, bottom, n as i32);
         }
         true
     }
@@ -187,31 +170,10 @@ impl Grid {
         }
 
         let n = n.min(bottom - top + 1);
-        let effective_bottom = bottom.min(self.rows - 1);
-        self.mark_rows_damage(top, effective_bottom);
-
-        if n > effective_bottom - top {
-            for i in top..=effective_bottom {
-                self.clear_row(i);
-            }
-            if n > 0 {
-                self.record_scroll_op(top, effective_bottom, -(n as i32));
-            }
-            return true;
-        }
-
-        // One rotation of the contiguous region replaces the reverse per-row
-        // clone loop — down-mirror of scroll_region_up's rotate_left.
-        let region_start = top * self.cols;
-        let region_end = (effective_bottom + 1) * self.cols;
-        self.cells[region_start..region_end].rotate_right(n * self.cols);
-        self.row_content_gen[top..=effective_bottom].rotate_right(n);
-
-        for i in top..(top + n).min(self.rows) {
-            self.clear_row(i);
-        }
+        self.mark_rows_damage(top, bottom);
+        self.rotate_region(n, top, bottom, false, false);
         if n > 0 {
-            self.record_scroll_op(top, effective_bottom, -(n as i32));
+            self.record_scroll_op(top, bottom, -(n as i32));
         }
         true
     }
@@ -234,15 +196,22 @@ impl Grid {
         if cols == 0 || rows == 0 {
             return;
         }
-        let mut cells = vec![Cell::default(); cols * rows];
-        let copy_rows = rows.min(self.rows);
         let copy_cols = cols.min(self.cols);
-        for row in 0..copy_rows {
-            let src = row * self.cols;
-            let dst = row * cols;
-            cells[dst..dst + copy_cols].clone_from_slice(&self.cells[src..src + copy_cols]);
+        let mut screen = std::mem::take(&mut self.screen);
+        screen.truncate(rows);
+        for row in &mut screen {
+            let mut cells = std::mem::take(row).into_vec();
+            cells.truncate(copy_cols);
+            cells.resize(cols, Cell::default());
+            *row = cells.into_boxed_slice();
         }
-        self.cells = cells;
+        screen.resize_with(rows, || super::blank_row(cols));
+        self.screen = screen;
+        self.row_used.truncate(rows);
+        for used in &mut self.row_used {
+            *used = (*used).min(cols);
+        }
+        self.row_used.resize(rows, 0);
         self.wrapped = vec![false; rows];
         self.cols = cols;
         self.rows = rows;
@@ -282,7 +251,8 @@ impl Grid {
             // This implicitly handles growing (padding with default) and shrinking (truncating)
             // for the main grid, without touching scrollback.
 
-            self.cells.resize(cols * rows, Cell::default());
+            self.screen.resize_with(rows, || super::blank_row(cols));
+            self.row_used.resize(rows, 0);
             self.wrapped.resize(rows, false);
             self.rows = rows;
             self.reset_damage_for_resize();
@@ -313,7 +283,7 @@ impl Grid {
         for line_idx in 0..count {
             let start = line_idx * cols;
             let is_wrapped = wrapped.get(line_idx).copied().unwrap_or(false);
-            self.push_scrollback_row(
+            let _evicted = self.push_scrollback_row(
                 cells[start..start + cols].to_vec().into_boxed_slice(),
                 is_wrapped,
             );
@@ -379,22 +349,18 @@ impl Grid {
             all_wrapped = all_wrapped[excess_lines..].to_vec();
         }
 
-        let mut new_cells = vec![Cell::default(); new_cols * new_rows];
         let mut new_wrapped = vec![false; new_rows];
         let lines_to_copy = all_wrapped.len().min(new_rows);
-        for row in 0..lines_to_copy {
-            let src_start = row * new_cols;
-            let dst_start = row * new_cols;
-            if src_start + new_cols <= all_cells.len() {
-                new_cells[dst_start..dst_start + new_cols]
-                    .clone_from_slice(&all_cells[src_start..src_start + new_cols]);
-            }
-            new_wrapped[row] = all_wrapped[row];
-        }
+        new_wrapped[..lines_to_copy].copy_from_slice(&all_wrapped[..lines_to_copy]);
+        // Only whole rows of the reflowed buffer carry over (a partial last
+        // row stays blank, as before).
+        let whole = (all_cells.len() / new_cols).min(lines_to_copy);
+        all_cells.truncate(whole * new_cols);
 
         self.cols = new_cols;
         self.rows = new_rows;
-        self.cells = new_cells;
+        self.screen = super::rows_from_cells(&all_cells, new_cols, new_rows);
+        self.row_used = vec![new_cols; new_rows];
         self.wrapped = new_wrapped;
     }
 

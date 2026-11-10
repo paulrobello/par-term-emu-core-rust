@@ -21,6 +21,8 @@ mod detection;
 #[cfg(test)]
 mod editing;
 #[cfg(test)]
+mod fast_paths;
+#[cfg(test)]
 mod grid_integration_tests;
 #[cfg(test)]
 mod keyboard;
