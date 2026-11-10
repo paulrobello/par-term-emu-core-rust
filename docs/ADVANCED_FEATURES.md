@@ -1176,15 +1176,16 @@ import time
 term = Terminal(80, 24)
 
 # Create animation frames
-# Frame 1 (action=f, frame number r=1)
+# Frame 1 is the image itself: transmit and display it, then set its gap
 with open("frame1.png", "rb") as f:
     frame1 = base64.standard_b64encode(f.read()).decode("ascii")
-    term.process_str(f"\x1b_Ga=f,i=100,r=1,z=500,f=100;{frame1}\x1b\\")
+    term.process_str(f"\x1b_Ga=T,i=100,f=100;{frame1}\x1b\\")
+    term.process_str("\x1b_Ga=a,i=100,r=1,z=500\x1b\\")
 
-# Frame 2
+# Frame 2 (action=f without r= appends a frame)
 with open("frame2.png", "rb") as f:
     frame2 = base64.standard_b64encode(f.read()).decode("ascii")
-    term.process_str(f"\x1b_Ga=f,i=100,r=2,z=500,f=100;{frame2}\x1b\\")
+    term.process_str(f"\x1b_Ga=f,i=100,z=500,f=100;{frame2}\x1b\\")
 
 # Set infinite loops (v=1) and start animation (s=3)
 term.process_str("\x1b_Ga=a,i=100,v=1\x1b\\")  # Infinite loops
@@ -1290,7 +1291,7 @@ term.process_str("\x1b_Ga=d,d=p,i=42\x1b\\")
 | Placement ID | `p` | Placement identifier | `p=1` |
 | Format | `f` | Image format | `f=100` (PNG), `f=32` (RGBA), `f=24` (RGB) |
 | Transmission | `t` | Transmission medium | `t=d` (direct), `t=f` (file; requires `set_allow_file_media("all")`) |
-| Frame Number | `r` | Animation frame number | `r=1` |
+| Frame Number | `r` | Animation frame to edit in place (on `a=f`; without it a frame is appended) | `r=1` |
 | Frame Delay | `z` | Delay in milliseconds | `z=500` |
 | Virtual | `U` | Virtual placement flag | `U=1` |
 | Columns | `c` | Columns for virtual placement | `c=3` |
@@ -1308,7 +1309,7 @@ term.process_str("\x1b_Ga=d,d=p,i=42\x1b\\")
 | Query | `a=q` | Query terminal capabilities |
 | Put | `a=p` | Display previously transmitted image |
 | Delete | `a=d` | Delete images/placements |
-| Frame | `a=f` | Add animation frame |
+| Frame | `a=f` | Add an animation frame to an image, or edit one in place (`r=`) |
 | Animation Control | `a=a` | Control animation playback |
 
 ### Use Cases

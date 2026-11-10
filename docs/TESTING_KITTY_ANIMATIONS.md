@@ -72,26 +72,39 @@ The test script creates two animations:
 
 ### Frame Transmission
 
+Frame 1 is the image itself: transmit it first (`a=t` or `a=T`). `a=f` then adds frames to that
+image or edits one in place.
+
 ```text
-ESC _ G a=f,i=<id>,r=<frame>,z=<delay>[,c=<comp>],f=100,t=d ; <base64_png> ESC \
+ESC _ G a=t,i=<id>,f=100,t=d ; <base64_png> ESC \
+ESC _ G a=f,i=<id>[,r=<frame>][,c=<base>][,z=<gap>][,X=<comp>],f=100,t=d ; <base64_png> ESC \
 ```
 
-**Parameters:**
+**Parameters of `a=f`:**
 - `a=f` - Action: frame
-- `i=<id>` - Image ID
-- `r=<frame>` - Frame number (1-indexed)
-- `z=<delay>` - Frame delay in milliseconds
-- `c=<comp>` - Composition mode (optional):
+- `i=<id>` - Image ID. The image must exist; a frame for an unknown image is an error
+- `r=<frame>` - Frame to edit in place (1-indexed, 1 is the image itself). Without it a new
+  frame is appended. Editing a frame that does not exist is an error
+- `c=<base>` - Frame a new frame starts from (optional); without it the frame starts from the
+  background color `Y=<rgba>`
+- `x=<px>`, `y=<px>` - Where the transmitted rectangle goes in the frame (optional)
+- `z=<gap>` - Frame gap in milliseconds
+- `X=<comp>` - Composition mode (optional):
   - `0` or unspecified: AlphaBlend (default)
   - `1`: Overwrite
 - `f=100` - Format: PNG
 - `t=d` - Transmission: direct (or `f` for file, `t` for temp file)
 
+A frame command creates no placement and does not move the cursor: placements of the image
+show its current frame, at their own place and size.
+
 **Example:**
 ```python
-# Send frame 1 of animation with image_id=42, 500ms delay
-payload = f"a=f,i=42,r=1,z=500,f=100,t=d;{base64_png_data}"
-print(f"\x1b_G{payload}\x1b\\", end="", flush=True)
+# Frame 1: the image itself, with a 500ms gap
+print(f"\x1b_Ga=t,i=42,f=100,t=d;{base64_png_frame1}\x1b\\", end="")
+print("\x1b_Ga=a,i=42,r=1,z=500\x1b\\", end="")
+# Frame 2: appended, 500ms gap
+print(f"\x1b_Ga=f,i=42,z=500,f=100,t=d;{base64_png_frame2}\x1b\\", end="", flush=True)
 ```
 
 ### Animation Control
@@ -280,10 +293,11 @@ img.save(buf, format='PNG')
 print(base64.standard_b64encode(buf.getvalue()).decode())
 " > /tmp/red.b64
 
-# Send frame 1 (action='f' for frame, not 'T')
-printf '\x1b_Ga=f,i=1,r=1,z=500,f=100,t=d;'
+# Send frame 1: the image itself (transmit only), then its gap
+printf '\x1b_Ga=t,i=1,f=100,t=d;'
 cat /tmp/red.b64
 printf '\x1b\\'
+printf '\x1b_Ga=a,i=1,r=1,z=500\x1b\\'
 
 # Create and send blue frame 2
 python3 -c "
@@ -293,7 +307,7 @@ img = Image.new('RGB', (100, 100), (0, 0, 255))
 buf = io.BytesIO()
 img.save(buf, format='PNG')
 print(base64.standard_b64encode(buf.getvalue()).decode())
-" | (printf '\x1b_Ga=f,i=1,r=2,z=500,f=100,t=d;'; cat; printf '\x1b\\')
+" | (printf '\x1b_Ga=f,i=1,z=500,f=100,t=d;'; cat; printf '\x1b\\')
 
 # Set infinite loops
 printf '\x1b_Ga=a,i=1,v=1\x1b\\'

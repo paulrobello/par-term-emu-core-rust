@@ -13,9 +13,8 @@ use std::path::{Component, Path, PathBuf};
 use flate2::read::ZlibDecoder;
 
 use crate::graphics::{
-    next_graphic_id, AnimationControl, AnimationFrame, CompositionMode, GraphicProtocol,
-    GraphicsError, GraphicsStore, ImageDimension, ImagePlacement, TerminalGraphic,
-    MAX_IMAGE_PIXELS,
+    next_graphic_id, AnimationControl, CompositionMode, GraphicProtocol, GraphicsError,
+    GraphicsStore, ImageDimension, ImagePlacement, TerminalGraphic, MAX_IMAGE_PIXELS,
 };
 
 /// cap: Decoded bytes one kitty transmission may accumulate across chunks
@@ -278,12 +277,18 @@ pub struct KittyParser {
     pub relative_x_offset: Option<i32>,
     /// Relative Y offset (V= key) in pixels
     pub relative_y_offset: Option<i32>,
-    /// Frame number for animation
+    /// Frame number for animation: the frame `a=f` edits, or whose gap `a=a` sets (`r=`)
     pub frame_number: Option<u32>,
     /// Frame delay in milliseconds
     pub frame_delay_ms: Option<u32>,
-    /// Frame composition mode
+    /// Frame composition mode (`X=` on `a=f`)
     pub frame_composition: Option<CompositionMode>,
+    /// The frame a new frame starts from (`c=` on `a=f`)
+    pub base_frame: Option<u32>,
+    /// A new frame's color without a base frame, 32-bit RGBA (`Y=` on `a=f`)
+    pub background_color: Option<u32>,
+    /// The frame to show (`c=` on `a=a`)
+    pub current_frame: Option<u32>,
     /// Animation control
     pub animation_control: Option<AnimationControl>,
     /// Number of times to play animation (v= parameter)

@@ -594,3 +594,55 @@ fn short_payload_for_declared_dims_is_silently_rejected() {
         "a rejected graphic never moves the cursor"
     );
 }
+
+/// A program that animates one image by editing its root frame, as kitty-doom
+/// does (`a=T` sized in cells with `C=1`, then `a=f,r=1` and `a=a,c=1` for every frame, all
+/// sent in chunks), keeps one placement at home with its cell size, and the cursor stays.
+#[test]
+fn root_frame_edits_repaint_the_placement_in_place() {
+    const ST: &str = "\x1b\\";
+    let mut term = Terminal::new(80, 24);
+    term.set_cell_dimensions(10, 20);
+    // A 4×2 RGB image is 24 bytes, 32 base64 characters: two chunks of 12 bytes each.
+    let chunks = |value: u8| {
+        let b64 = base64::Engine::encode(&base64::engine::general_purpose::STANDARD, [value; 24]);
+        (b64[..16].to_string(), b64[16..].to_string())
+    };
+    let (first, rest) = chunks(1);
+    term.process(b"\x1b[2J\x1b[H");
+    term.process(
+        format!("\x1b_Ga=T,i=9,f=24,s=4,v=2,q=2,c=80,r=24,C=1,m=1;{first}{ST}\x1b_Gm=0;{rest}{ST}")
+            .as_bytes(),
+    );
+    let placed = term.graphics.graphics_store.all_graphics()[0].id;
+
+    for value in 2..=4u8 {
+        let (first, rest) = chunks(value);
+        term.process(
+            format!(
+                "\x1b_Ga=f,r=1,i=9,f=24,q=2,x=0,y=0,s=4,v=2,m=1;{first}{ST}\
+                 \x1b_Ga=f,r=1,q=2,m=0;{rest}{ST}\x1b_Ga=a,q=2,c=1,i=9;{ST}"
+            )
+            .as_bytes(),
+        );
+        let graphics = term.graphics.graphics_store.all_graphics();
+        assert_eq!(graphics.len(), 1, "frame {value}: still one placement");
+        let graphic = &graphics[0];
+        assert_eq!(graphic.id, placed);
+        assert_eq!(graphic.position, (0, 0));
+        assert_eq!(
+            (graphic.placement.columns, graphic.placement.rows),
+            (Some(80), Some(24))
+        );
+        assert!(
+            graphic
+                .pixels
+                .as_chunks::<4>()
+                .0
+                .iter()
+                .all(|pixel| *pixel == [value, value, value, 255]),
+            "frame {value} shows"
+        );
+        assert_eq!((term.cursor().col, term.cursor().row), (0, 0));
+    }
+}

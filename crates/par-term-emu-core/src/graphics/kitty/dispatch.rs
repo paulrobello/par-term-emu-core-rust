@@ -2,6 +2,7 @@
 //! animation-control commands applied to the graphics store.
 
 use super::*;
+use crate::graphics::FrameEdit;
 
 impl KittyParser {
     /// Handle `a=d` (delete): resolve the delete target against the
@@ -212,84 +213,43 @@ impl KittyParser {
         }
     }
 
-    /// Handle `a=f` (animation frame): decode the frame's payload, append
-    /// it to the image's animation, and (for frame 1) also create the
-    /// placement that displays the animation.
+    /// Handle `a=f` (animation frame). As kitty does, the data is a rectangle
+    /// for a frame of an existing image: `r=N` edits frame N in place (frame 1 is the image
+    /// itself), no `r=` appends a frame. Placements keep their place and size and the cursor
+    /// stays; they show the edited pixels when it is the image's current frame.
     pub(super) fn apply_frame_command(
         &self,
-        position: (usize, usize),
         store: &mut GraphicsStore,
     ) -> Result<KittyGraphicResult, GraphicsError> {
-        // Add animation frame
         let raw_data = self.get_data()?;
         if raw_data.is_empty() {
             return Err(GraphicsError::KittyError("No frame data".to_string()));
         }
 
-        let compressed = self.is_compressed();
-
         let image_id = self
             .image_id
             .ok_or_else(|| GraphicsError::KittyError("Frame requires image ID".to_string()))?;
 
-        // Decode frame data
         let (width, height, pixels) =
             self.decode_payload(raw_data, "Shared memory not supported for frames")?;
 
-        // Create frame
-        let frame_num = self.frame_number.unwrap_or(1);
-        let mut frame = AnimationFrame::new(frame_num, pixels, width, height);
-        let frame_pixels = frame.pixels.clone();
-
-        if let Some(delay) = self.frame_delay_ms {
-            frame = frame.with_delay(delay);
-        }
-
-        if let Some(x) = self.source_x {
-            if let Some(y) = self.source_y {
-                frame = frame.with_offset(x, y);
-            }
-        }
-
-        if let Some(comp) = self.frame_composition {
-            frame = frame.with_composition(comp);
-        }
-
-        // Add frame to animation
-        store.add_animation_frame(image_id, frame);
-
-        // Frame 1 creates both animation entry AND a placement for display
-        if frame_num == 1 {
-            // Store as shared image so it can be referenced by Put commands;
-            // the frame's buffer is shared so it is retained (and budgeted) once.
-            store.store_kitty_image_shared(image_id, width, height, frame_pixels.clone());
-
-            // Create placement to display the animation
-            let mut graphic = TerminalGraphic::with_shared_pixels(
-                next_graphic_id(),
-                GraphicProtocol::Kitty,
-                position,
+        store.edit_kitty_frame(
+            image_id,
+            FrameEdit {
+                frame: self.frame_number,
+                base: self.base_frame,
+                x: self.source_x.unwrap_or(0) as usize,
+                y: self.source_y.unwrap_or(0) as usize,
                 width,
                 height,
-                frame_pixels,
-            );
-            graphic.kitty_image_id = Some(image_id);
-            graphic.kitty_placement_id = self.placement_id;
-            graphic.was_compressed = compressed;
-            graphic.placement = self.build_placement();
-
-            // Handle relative positioning
-            if let Some(parent_img_id) = self.parent_image_id {
-                graphic.parent_image_id = Some(parent_img_id);
-                graphic.parent_placement_id = self.parent_placement_id;
-                graphic.relative_x_offset = self.relative_x_offset.unwrap_or(0);
-                graphic.relative_y_offset = self.relative_y_offset.unwrap_or(0);
-            }
-
-            return Ok(KittyGraphicResult::Graphic(graphic));
-        }
-
-        // Subsequent frames only add to animation, don't create new placements
+                pixels,
+                // RGB data is opaque: blending it over the frame replaces the pixels.
+                replace: self.frame_composition == Some(CompositionMode::Overwrite)
+                    || self.format == KittyFormat::Rgb,
+                background: self.background_color.unwrap_or(0),
+                gap_ms: self.frame_delay_ms,
+            },
+        )?;
         Ok(KittyGraphicResult::None)
     }
 
@@ -323,6 +283,16 @@ impl KittyParser {
                 );
                 store.set_animation_loops(image_id, loop_count);
             }
+        }
+
+        // `r=` with `z=` sets that frame's gap, `c=` shows a frame.
+        if let (Some(number), Some(gap)) = (self.frame_number, self.frame_delay_ms) {
+            if gap > 0 {
+                store.set_kitty_frame_gap(image_id, number, gap);
+            }
+        }
+        if let Some(number) = self.current_frame.filter(|number| *number > 0) {
+            store.set_kitty_current_frame(image_id, number);
         }
 
         // Handle state control (s= parameter)
