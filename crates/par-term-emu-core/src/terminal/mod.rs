@@ -1180,6 +1180,14 @@ impl Terminal {
         self.bell_volumes.margin = self.host.configured_margin_bell_volume;
     }
 
+    /// Change the scrollback capacity of the primary screen while the
+    /// terminal runs (see [`Grid::set_max_scrollback`]): a smaller capacity
+    /// drops the oldest lines. The alternate screen keeps none.
+    pub fn set_max_scrollback(&mut self, max_scrollback: usize) {
+        self.sync_damage_generations();
+        self.grid.set_max_scrollback(max_scrollback);
+    }
+
     /// Soft terminal reset (DECSTR, `CSI ! p`) per VT510.
     ///
     /// Resets the state a program can set through escapes — cursor
