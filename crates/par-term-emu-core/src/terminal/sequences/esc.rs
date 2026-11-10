@@ -20,21 +20,24 @@ impl Terminal {
         byte: u8,
     ) {
         debug::log_esc_dispatch(intermediates, byte as char);
+        // The two-byte sequences match only without intermediates: `ESC # 8` is
+        // DECALN, not DECRC, and `ESC ( =` designates a character set, it is not
+        // DECPAM.
         match (byte, intermediates) {
-            (b'7', _) => {
+            (b'7', []) => {
                 // Save cursor (DECSC)
                 self.save_cursor();
             }
-            (b'8', _) => {
+            (b'8', []) => {
                 // Restore cursor (DECRC)
                 self.restore_cursor();
             }
-            (b'H', _)
+            (b'H', [])
                 // Set tab stop at current column (HTS)
                 if self.cursor.col < self.tab_stops.len() => {
                     self.tab_stops[self.cursor.col] = true;
                 }
-            (b'M', _) => {
+            (b'M', []) => {
                 // Reverse index (RI) - move cursor up one line, scroll if at top
                 self.pending_wrap = false;
                 if self.cursor.row > self.margins.scroll_region_top {
@@ -46,7 +49,7 @@ impl Terminal {
                     self.scroll_region_down_tracked(1, scroll_top, scroll_bottom);
                 }
             }
-            (b'D', _) => {
+            (b'D', []) => {
                 // Index (IND): move cursor down one line; if at bottom of scroll region, scroll the region.
                 // If outside left/right margins (DECLRMM), ignore scroll-at-bottom to match iTerm2.
                 self.pending_wrap = false;
@@ -66,7 +69,7 @@ impl Terminal {
                     self.scroll_region_up_tracked(1, scroll_top, scroll_bottom);
                 }
             }
-            (b'E', _) => {
+            (b'E', []) => {
                 // Next line (NEL): move to first column of next line; if at bottom of scroll region, scroll the region.
                 self.pending_wrap = false;
                 self.cursor.col = if self.margins.use_lr_margins {
@@ -90,21 +93,21 @@ impl Terminal {
                     self.scroll_region_up_tracked(1, scroll_top, scroll_bottom);
                 }
             }
-            (b'c', _) => {
+            (b'c', []) => {
                 // Reset to initial state (RIS)
                 self.reset();
             }
-            (b'V', _) => {
+            (b'V', []) => {
                 // SPA - Start of Protected Area (DECSCA)
                 // Enable character protection for subsequent characters
                 self.modes.char_protected = true;
             }
-            (b'W', _) => {
+            (b'W', []) => {
                 // EPA - End of Protected Area (DECSCA)
                 // Disable character protection
                 self.modes.char_protected = false;
             }
-            (b'=', _) => {
+            (b'=', []) => {
                 // DECPAM - Application keypad mode
                 if !self.modes.application_keypad {
                     self.modes.application_keypad = true;
@@ -114,7 +117,7 @@ impl Terminal {
                         ));
                 }
             }
-            (b'>', _) => {
+            (b'>', []) => {
                 // DECPNM - Numeric keypad mode
                 if self.modes.application_keypad {
                     self.modes.application_keypad = false;
@@ -124,6 +127,8 @@ impl Terminal {
                         ));
                 }
             }
+            // DECALN - Screen Alignment Pattern
+            (b'8', [b'#']) => self.screen_alignment_pattern(),
             // SCS — Select Character Set (G0 slot)
             // ESC ( 0  → G0 = DEC Special / Line Drawing
             (b'0', [b'(']) => self.charset_state.g0_charset = Charset::DecLineDrawing,
@@ -340,6 +345,54 @@ mod tests {
         term.process(b"\x1b=");
         term.process(b"\x1bc");
         assert!(!term.modes.application_keypad);
+    }
+
+    #[test]
+    fn test_escape_sequences_with_intermediates_are_not_their_plain_forms() {
+        let mut term = Terminal::new(10, 4);
+
+        // DECSC at 3;5, then `ESC # 8` (DECALN) homes the cursor: it is not
+        // DECRC, which would bring it back to 3;5.
+        term.process(b"\x1b[3;5H\x1b7\x1b[2;2H\x1b#8");
+        assert_eq!((term.cursor.col, term.cursor.row), (0, 0));
+
+        // A character set designation ending in `=` or `>` is not DECPAM/DECPNM.
+        term.process(b"\x1b(=");
+        assert!(!term.modes.application_keypad);
+        term.process(b"\x1b=");
+        assert!(term.modes.application_keypad);
+        term.process(b"\x1b(>");
+        assert!(term.modes.application_keypad);
+
+        // Nor are the others their plain forms: `ESC ( c` is not RIS, `ESC ( H`
+        // is not HTS, `ESC ( M`/`D`/`E` do not move the cursor.
+        term.process(b"\x1b[2;3H\x1b(c\x1b(M\x1b(D\x1b(E");
+        assert_eq!((term.cursor.col, term.cursor.row), (2, 1));
+        assert!(term.modes.application_keypad, "RIS would have reset it");
+    }
+
+    #[test]
+    fn test_decaln_fills_the_screen_with_e_and_resets_the_margins() {
+        use crate::color::{Color, NamedColor};
+
+        let mut term = Terminal::new(4, 3);
+        // Wrapped text, a scroll region, left/right margins and a pen color.
+        term.process(b"abcdef\x1b[2;3r\x1b[?69h\x1b[2;3s\x1b[3;3H\x1b[44m\x1b#8");
+        for row in 0..3 {
+            assert_eq!(term.active_grid().row_text(row), "EEEE");
+            assert!(!term.active_grid().is_line_wrapped(row));
+        }
+        let cell = term.active_grid().get(3, 2).unwrap();
+        assert_eq!(cell.bg(), Color::Named(NamedColor::Blue));
+        assert!(!cell.flags.wide_char());
+        assert_eq!((term.cursor.col, term.cursor.row), (0, 0));
+        assert!(!term.pending_wrap);
+        assert_eq!(term.margins.scroll_region_top, 0);
+        assert_eq!(term.margins.scroll_region_bottom, 2);
+        assert_eq!(
+            (term.margins.left_margin, term.margins.right_margin),
+            (0, 3)
+        );
     }
 
     #[test]

@@ -315,6 +315,14 @@ impl Grid {
         }
     }
 
+    /// Fill every screen cell with `cell` and clear the screen rows' wrap
+    /// flags (DECALN).
+    pub(crate) fn fill_screen(&mut self, cell: &Cell) {
+        self.cells.fill(cell.clone());
+        self.wrapped.fill(false);
+        self.mark_rows_content(0, self.rows.saturating_sub(1));
+    }
+
     /// Get a row as a slice
     pub fn row(&self, row: usize) -> Option<&[Cell]> {
         if row < self.rows {
