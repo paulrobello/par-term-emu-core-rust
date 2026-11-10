@@ -253,6 +253,13 @@ impl KittyParser {
                 let pixels = width.checked_mul(height).ok_or_else(|| {
                     GraphicsError::KittyError("Image dimensions overflow usize".to_string())
                 })?;
+                // SEC-002 consistency: both dimensions can pass
+                // MAX_IMAGE_DIMENSION individually yet multiply past the
+                // pixel cap — refuse before the size check and any RGBA
+                // conversion allocation, same bound as the PNG branch.
+                if pixels > MAX_IMAGE_PIXELS {
+                    return Err(GraphicsError::ImageTooLarge(pixels, MAX_IMAGE_PIXELS));
+                }
                 let expected = pixels.checked_mul(3).ok_or_else(|| {
                     GraphicsError::KittyError("Image dimensions overflow usize".to_string())
                 })?;
