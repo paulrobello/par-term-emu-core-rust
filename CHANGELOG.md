@@ -7,6 +7,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Security
+- **core: the kitty raw RGBA decode branch now enforces `MAX_IMAGE_PIXELS` (SEC-002 consistency, completing card 01a1c2fd's pixel-cap pass)** (`crates/par-term-emu-core/src/graphics/kitty/decode.rs`): declared width*height above the 64 Mi-pixel cap is refused with `ImageTooLarge` before the payload-length check and the payload copy, the same policy the RGB branch took in `7b8383bd` — previously the RGBA branch only caught arithmetic overflow, so a declaration of e.g. 16384x8192 (each axis within `MAX_IMAGE_DIMENSION`) was length-checked against a ~537 MB expectation instead of being rejected outright. Pinned by `rgba_pixel_bomb_is_rejected_like_the_png_branch` and an under-cap acceptance test.
+
 ### Changed
 - `make test-web` self-bootstraps `web-terminal-frontend/node_modules` when missing (`bun install --frozen-lockfile`, install-if-missing with a visible skip message once present) instead of erroring on fresh git worktrees, mirroring the `test-integrations` leg.
 

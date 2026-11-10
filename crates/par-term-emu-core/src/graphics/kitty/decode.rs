@@ -225,12 +225,19 @@ impl KittyParser {
                 // checked_mul: width/height are attacker-controlled u32 values; without
                 // this, `width * height * 4` can wrap usize and bypass the size check,
                 // yielding a graphic with huge dims over a tiny buffer (OOB/panic DoS).
-                let expected = width
-                    .checked_mul(height)
-                    .and_then(|px| px.checked_mul(4))
-                    .ok_or_else(|| {
-                        GraphicsError::KittyError("Image dimensions overflow usize".to_string())
-                    })?;
+                let pixels = width.checked_mul(height).ok_or_else(|| {
+                    GraphicsError::KittyError("Image dimensions overflow usize".to_string())
+                })?;
+                // SEC-002 consistency: both dimensions can pass
+                // MAX_IMAGE_DIMENSION individually yet multiply past the
+                // pixel cap — refuse before the size check and the payload
+                // copy, same bound as the PNG and RGB branches.
+                if pixels > MAX_IMAGE_PIXELS {
+                    return Err(GraphicsError::ImageTooLarge(pixels, MAX_IMAGE_PIXELS));
+                }
+                let expected = pixels.checked_mul(4).ok_or_else(|| {
+                    GraphicsError::KittyError("Image dimensions overflow usize".to_string())
+                })?;
                 if data.len() != expected {
                     return Err(GraphicsError::KittyError(format!(
                         "Data size mismatch: got {}, expected {}",

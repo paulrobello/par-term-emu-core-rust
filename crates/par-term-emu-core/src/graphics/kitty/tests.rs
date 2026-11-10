@@ -1109,20 +1109,24 @@ fn parse_chunk_v_offset_without_parent_is_parsed() {
 
 #[test]
 fn decode_pixels_rejects_rgba_dimension_overflow() {
-    // Regression: width*height*4 must not wrap usize. Attacker-controlled
-    // u32 dimensions that overflow must report "overflow" (previously the
-    // wrapping arithmetic bypassed the size check -> huge dims over a tiny
-    // buffer -> OOB/panic downstream).
+    // u32::MAX squared fits 64-bit usize (no arithmetic overflow), but the
+    // product is far past MAX_IMAGE_PIXELS: the pixel-cap check (SEC-002
+    // consistency) now rejects it before the payload-size check that used
+    // to raise the overflow error.
     let mut parser = KittyParser::new();
     parser.format = KittyFormat::Rgba;
     parser.width = Some(u32::MAX);
     parser.height = Some(u32::MAX);
     let result = parser.decode_pixels(&[0u8; 8]);
-    assert!(result.is_err());
-    assert!(
-        result.unwrap_err().to_string().contains("overflow"),
-        "overflowing dimensions must be reported as an overflow error"
-    );
+    match result {
+        Err(GraphicsError::ImageTooLarge(pixels, max)) => {
+            assert_eq!(max, crate::graphics::MAX_IMAGE_PIXELS);
+            assert!(pixels > max, "declared pixels must exceed the cap");
+        }
+        other => {
+            panic!("oversized RGBA dimensions must be rejected with the pixel cap, got {other:?}")
+        }
+    }
 }
 
 #[test]
@@ -1791,6 +1795,48 @@ fn rgb_pixel_bomb_is_rejected_like_the_png_branch() {
         }
         other => panic!("expected raw-branch ImageTooLarge, got {other:?}"),
     }
+}
+
+/// SEC-002 consistency (RGBA half): a raw-RGBA payload whose declared
+/// dimensions pass MAX_IMAGE_DIMENSION on each axis but multiply past
+/// MAX_IMAGE_PIXELS is refused with the same pixel-product error as the PNG
+/// and RGB branches, before the payload-length check and the payload copy.
+#[test]
+fn rgba_pixel_bomb_is_rejected_like_the_png_branch() {
+    let mut parser = KittyParser::new();
+    parser.format = KittyFormat::Rgba;
+    // 16384 * 8192 = 134,217,728 px, above MAX_IMAGE_PIXELS (67,108,864),
+    // each axis within MAX_IMAGE_DIMENSION (16384).
+    parser.width = Some(16_384);
+    parser.height = Some(8_192);
+    // A stub payload: the pixel cap fires before the payload-length check.
+    let data = [0u8; 4];
+    match parser.decode_pixels(&data) {
+        Err(GraphicsError::ImageTooLarge(pixels, max)) => {
+            assert_eq!(pixels, 16_384 * 8_192);
+            assert_eq!(max, crate::graphics::MAX_IMAGE_PIXELS);
+        }
+        other => panic!("expected raw-branch ImageTooLarge, got {other:?}"),
+    }
+}
+
+/// The cap is exclusive (`pixels > MAX_IMAGE_PIXELS`), so a raw-RGBA payload
+/// just under it decodes normally. Uses a real full-length payload so the
+/// size check and the copy run end to end.
+#[test]
+fn rgba_just_under_pixel_cap_is_accepted() {
+    let mut parser = KittyParser::new();
+    parser.format = KittyFormat::Rgba;
+    // 8192 * 8191 = 67,100,672 px, below MAX_IMAGE_PIXELS (67,108,864),
+    // each axis within MAX_IMAGE_DIMENSION (16384).
+    let width = 8_192usize;
+    let height = 8_191usize;
+    parser.width = Some(width as u32);
+    parser.height = Some(height as u32);
+    let data = vec![0u8; width * height * 4];
+    let (w, h, rgba) = parser.decode_pixels(&data).expect("under-cap RGBA decodes");
+    assert_eq!((w, h), (width, height));
+    assert_eq!(rgba.len(), width * height * 4);
 }
 
 // --- build_graphic: Frame action ---
