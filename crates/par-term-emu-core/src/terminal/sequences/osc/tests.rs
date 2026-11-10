@@ -155,6 +155,25 @@ fn test_hyperlinks() {
 }
 
 #[test]
+fn test_hyperlink_uri_keeps_its_semicolons() {
+    let mut term = Terminal::new(80, 24);
+
+    term.process(b"\x1b]8;id=x;https://h/p;a=1;b=2\x1b\\link\x1b]8;;\x1b\\");
+    let id = term
+        .active_grid()
+        .get(0, 0)
+        .unwrap()
+        .flags
+        .hyperlink_id
+        .expect("the text is a hyperlink");
+    assert_eq!(
+        term.get_hyperlink_url(id.get()).as_deref(),
+        Some("https://h/p;a=1;b=2")
+    );
+    assert!(term.hyperlink_state.current_hyperlink_id.is_none());
+}
+
+#[test]
 fn test_osc7_set_directory() {
     let mut term = Terminal::new(80, 24);
 
