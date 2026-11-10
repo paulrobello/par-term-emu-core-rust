@@ -5,7 +5,7 @@
 
 use std::collections::VecDeque;
 
-use crate::cell::Cell;
+use crate::cell::{Cell, PackedColor};
 use crate::zone::Zone;
 
 mod edit;
@@ -337,6 +337,44 @@ impl Grid {
         } else {
             None
         }
+    }
+
+    /// Before cells `[start, end)` of screen row `row` are overwritten or
+    /// erased, blank the half of a wide character that lies outside the
+    /// span while its other half is inside it (with background `bg`), as
+    /// xterm does: no wide character is left without its spacer and no
+    /// spacer without its character, which would hide the cell next to it
+    /// from rendering and copying.
+    pub(crate) fn split_wide_chars_at(
+        &mut self,
+        row: usize,
+        start: usize,
+        end: usize,
+        bg: PackedColor,
+    ) {
+        let end = end.min(self.cols);
+        if row >= self.rows || start >= end {
+            return;
+        }
+        let base = row * self.cols;
+        // A wide character just left of the span loses its spacer, and a
+        // spacer just right of it loses its wide character.
+        let head = start > 0 && self.cells[base + start - 1].flags.wide_char();
+        let spacer = end < self.cols && self.cells[base + end].flags.wide_char_spacer();
+        if !(head || spacer) {
+            return;
+        }
+        let blank = Cell {
+            bg,
+            ..Cell::default()
+        };
+        if head {
+            self.cells[base + start - 1] = blank.clone();
+        }
+        if spacer {
+            self.cells[base + end] = blank;
+        }
+        self.mark_row_content(row);
     }
 
     /// Get the text content of a row
