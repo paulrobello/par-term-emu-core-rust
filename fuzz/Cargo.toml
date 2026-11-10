@@ -90,3 +90,10 @@ path = "fuzz_targets/ipc_rows.rs"
 test = false
 doc = false
 bench = false
+
+[[bin]]
+name = "iterm_transfer"
+path = "fuzz_targets/iterm_transfer.rs"
+test = false
+doc = false
+bench = false

@@ -468,6 +468,32 @@ impl Terminal {
     pub fn get_max_transfer_size(&self) -> usize {
         self.graphics.file_transfer_manager.max_transfer_size()
     }
+
+    /// Fuzzing-only oracle accessor (ENH-064): the live SEC-001 caps —
+    /// per-transfer size, active count, completed ring length — plus the
+    /// retained bytes of the inline multipart buffer (params + accumulated
+    /// base64 chunks), which lives outside `FileTransferManager` in the same
+    /// state machine. The `iterm_transfer` cargo-fuzz target pins its
+    /// invariant assertions to these values instead of hard-coded caps.
+    /// Hidden from docs; exists only under `--cfg fuzzing` (cargo-fuzz builds).
+    #[cfg(fuzzing)]
+    #[doc(hidden)]
+    pub fn fuzz_file_transfer_caps(&self) -> (usize, usize, usize, usize) {
+        let buffer_bytes = match &self.graphics.iterm_multipart_buffer {
+            Some(state) => {
+                let params_bytes: usize = state.params.iter().map(|(k, v)| k.len() + v.len()).sum();
+                let chunks_bytes: usize = state.chunks.iter().map(|c| c.len()).sum();
+                params_bytes + chunks_bytes
+            }
+            None => 0,
+        };
+        (
+            self.graphics.file_transfer_manager.max_transfer_size,
+            self.graphics.file_transfer_manager.max_active,
+            self.graphics.file_transfer_manager.max_completed,
+            buffer_bytes,
+        )
+    }
 }
 
 #[cfg(test)]

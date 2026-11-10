@@ -215,6 +215,7 @@ the documented API; they are the root's private reach into the core.
 | `PtySession::{resize_deferred, resize_with_pixels_deferred}` (`mux`) | mux pane |
 | `graphics::{pixel_at_in, sample_half_block_in, cell_size_for, PlacedPixels}` (+ its 4 fields) | python_bindings graphics |
 | `terminal::fuzz_apc_filter` (`cfg(fuzzing)`) | the `apc_filter` cargo-fuzz target |
+| `terminal::Terminal::fuzz_file_transfer_caps` (`cfg(fuzzing)`) | the `iterm_transfer` cargo-fuzz target |
 
 **Gate (ARC-005).** `make doc-hidden-check` (`scripts/check_doc_hidden.py`,
 part of `checkall`) extracts the member's `#[doc(hidden)] pub` set from
@@ -265,6 +266,7 @@ existing ones with accessor methods when their consumers are next touched.
 - `terminal::event_fields (fn)`
 - `terminal::event_fields (mod)`
 - `terminal::fuzz_apc_filter (fn)`
+- `terminal::Terminal::fuzz_file_transfer_caps (fn)`
 <!-- doc-hidden-baseline:end -->
 
 Not promoted: `Cell::{combining, fg, bg, underline_color}`. One root test
