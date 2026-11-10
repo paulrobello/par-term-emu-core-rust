@@ -477,8 +477,10 @@ fn click_latency_harness_records_click_to_action_ms_at_load_shapes() {
 /// load 1. Gate: p50 of click-bytes → `mouse cb=` trace stamp under
 /// 8 ms across 16 clicks at 30 ms spacing; the quantized shape's floor
 /// is a half tick on average, so 8 ms separates woken from quantized.
-/// Not `#[ignore]`d: it measures the client-side wake only — the daemon
-/// chain and paint stay out of the delta — and passes in seconds.
+/// `#[ignore]`d as load-sensitive: it measures the client-side wake only
+/// — the daemon chain and paint stay out of the delta — but the p50 gate
+/// is wall-clock and flakes under host load.
+#[ignore = "load-sensitive: PTY/timing suite; run via make test-rust-sensitive or checkall-ci"]
 #[test]
 #[cfg(unix)]
 fn stdin_wake_routes_host_clicks_off_the_poll_tick() {
