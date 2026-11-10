@@ -788,6 +788,15 @@ impl GraphicsStore {
         self.placements.retain(|g| g.id != id);
     }
 
+    /// Remove a graphic by ID from the placements and the scrollback, for
+    /// a host that enforces its own image storage limit and evicts the
+    /// oldest images wherever they are ([`Self::remove_graphic`] only
+    /// reaches the placements on screen).
+    pub fn remove_graphic_everywhere(&mut self, id: u64) {
+        self.placements.retain(|g| g.id != id);
+        self.scrollback.retain(|g| g.id != id);
+    }
+
     /// Get graphics at a specific row
     pub fn graphics_at_row(&self, row: usize) -> Vec<&TerminalGraphic> {
         self.placements
@@ -1555,6 +1564,34 @@ mod tests {
                 .collect::<Vec<_>>(),
             vec![1, 2]
         );
+    }
+
+    /// `remove_graphic` reaches the placements on screen only;
+    /// `remove_graphic_everywhere` also takes the graphic out of the
+    /// scrollback, and leaves the others alone.
+    #[test]
+    fn remove_graphic_everywhere_reaches_the_scrollback() {
+        let mut store = GraphicsStore::new();
+        let on_screen =
+            TerminalGraphic::new(1, GraphicProtocol::Sixel, (0, 0), 10, 10, vec![255; 400]);
+        store.add_graphic(on_screen);
+        for id in [2, 3] {
+            let mut scrolled =
+                TerminalGraphic::new(id, GraphicProtocol::Sixel, (0, 0), 10, 10, vec![255; 400]);
+            scrolled.scrollback_row = Some(id as usize);
+            store.scrollback.push(scrolled);
+        }
+
+        // The on-screen removal does not see a scrollback graphic.
+        store.remove_graphic(2);
+        assert_eq!((store.graphics_count(), store.scrollback_count()), (1, 2));
+
+        store.remove_graphic_everywhere(2);
+        assert_eq!((store.graphics_count(), store.scrollback_count()), (1, 1));
+        assert_eq!(store.scrollback[0].id, 3);
+
+        store.remove_graphic_everywhere(1);
+        assert_eq!((store.graphics_count(), store.scrollback_count()), (0, 1));
     }
 
     /// Retransmitting an existing image ID must delete all its placements
