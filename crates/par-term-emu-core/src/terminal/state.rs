@@ -366,6 +366,10 @@ pub(crate) struct CharsetState {
     pub(crate) g1_charset: Charset,
     /// Active charset slot: 0 = G0, 1 = G1 (toggled by SO/SI)
     pub(crate) active_g: u8,
+    /// The graphic character printed last, which REP (`CSI Ps b`) repeats.
+    /// Every other parser callback clears it, as in xterm.js, so REP only
+    /// repeats a character it directly follows.
+    pub(crate) rep_char: Option<char>,
 }
 
 impl Default for CharsetState {
@@ -374,6 +378,7 @@ impl Default for CharsetState {
             g0_charset: Charset::Ascii,
             g1_charset: Charset::Ascii,
             active_g: 0,
+            rep_char: None,
         }
     }
 }

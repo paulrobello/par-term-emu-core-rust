@@ -10,6 +10,7 @@ use vte::{Params, Perform};
 
 impl Perform for Terminal {
     fn print(&mut self, c: char) {
+        self.charset_state.rep_char = Some(c);
         debug::log_print(c, self.cursor.col, self.cursor.row);
 
         // Fast path for the Kitty TGP placeholder character (U+10EEEE):
@@ -44,6 +45,7 @@ impl Perform for Terminal {
     }
 
     fn execute(&mut self, byte: u8) {
+        self.charset_state.rep_char = None;
         debug::log_execute(byte);
         match byte {
             b'\n' => self.write_char('\n'),
@@ -84,6 +86,7 @@ impl Perform for Terminal {
     }
 
     fn hook(&mut self, params: &Params, intermediates: &[u8], ignore: bool, action: char) {
+        self.charset_state.rep_char = None;
         self.dcs_hook(params, intermediates, ignore, action);
     }
 
@@ -96,14 +99,18 @@ impl Perform for Terminal {
     }
 
     fn osc_dispatch(&mut self, params: &[&[u8]], bell_terminated: bool) {
+        self.charset_state.rep_char = None;
         self.osc_dispatch_impl(params, bell_terminated);
     }
 
     fn csi_dispatch(&mut self, params: &Params, intermediates: &[u8], ignore: bool, action: char) {
         self.csi_dispatch_impl(params, intermediates, ignore, action);
+        // REP (just dispatched) read it; nothing after a sequence repeats.
+        self.charset_state.rep_char = None;
     }
 
     fn esc_dispatch(&mut self, intermediates: &[u8], ignore: bool, byte: u8) {
+        self.charset_state.rep_char = None;
         self.esc_dispatch_impl(intermediates, ignore, byte);
     }
 }

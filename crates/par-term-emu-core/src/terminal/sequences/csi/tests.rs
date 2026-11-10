@@ -1129,3 +1129,69 @@ fn test_synchronized_updates_mode_toggle() {
         "synchronized_updates should be false after disable"
     );
 }
+
+// ─── REP ───────────────────────────────────────────────────────────────────
+
+/// Screen row `row` of `term` with trailing blanks trimmed.
+fn rep_row(term: &Terminal, row: usize) -> String {
+    term.active_grid().row_text(row).trim_end().to_string()
+}
+
+#[test]
+fn rep_repeats_the_character_printed_last() {
+    let mut term = Terminal::new(20, 4);
+    term.process(b"a\x1b[3b");
+    assert_eq!(rep_row(&term, 0), "aaaa");
+    assert_eq!(term.cursor.col, 4);
+
+    // 0 and a missing count mean 1; non-ASCII and wide characters repeat
+    // too, with the pen they were printed with.
+    let mut term = Terminal::new(20, 4);
+    term.process("x\x1b[0by\x1b[b\x1b[31m\u{2500}\x1b[2b中\x1b[1b".as_bytes());
+    assert_eq!(rep_row(&term, 0), "xxyy\u{2500}\u{2500}\u{2500}中中");
+    assert_eq!(
+        term.active_grid().get(6, 0).unwrap().fg(),
+        Color::Named(NamedColor::Red)
+    );
+
+    // A count past the row wraps like printed text.
+    let mut term = Terminal::new(5, 4);
+    term.process(b"=\x1b[6b");
+    assert_eq!(rep_row(&term, 0), "=====");
+    assert_eq!(rep_row(&term, 1), "==");
+
+    // The DEC line drawing set applies to the repeats as well.
+    let mut term = Terminal::new(10, 4);
+    term.process(b"\x1b(0q\x1b[2b");
+    assert_eq!(rep_row(&term, 0), "\u{2500}\u{2500}\u{2500}");
+
+    // REP split from its character across two writes still repeats it.
+    let mut term = Terminal::new(10, 4);
+    term.process(b"-");
+    term.process(b"\x1b[2b");
+    assert_eq!(rep_row(&term, 0), "---");
+}
+
+#[test]
+fn rep_does_nothing_without_a_character_right_before_it() {
+    // Nothing printed yet, after a control, after another sequence, and a
+    // second REP in a row (as xterm.js does).
+    for (input, expected) in [
+        (&b"\x1b[3b"[..], ""),
+        (b"a\r\x1b[3b", "a"),
+        (b"a\x1b[m\x1b[3b", "a"),
+        (b"a\x1b[1b\x1b[2b", "aa"),
+    ] {
+        let mut term = Terminal::new(10, 4);
+        term.process(input);
+        assert_eq!(rep_row(&term, 0), expected, "{input:?}");
+    }
+    // A zero-width character is not repeated.
+    let mut term = Terminal::new(10, 4);
+    term.process("e\u{301}\x1b[3b".as_bytes());
+    assert_eq!(rep_row(&term, 0), "\u{e9}");
+    // A private-marker or intermediate variant is not REP.
+    let mut term = Terminal::new(10, 4);
+    term.process(b"a\x1b[?3b");
+    assert_eq!(rep_row(&term, 0), "a");
+}
