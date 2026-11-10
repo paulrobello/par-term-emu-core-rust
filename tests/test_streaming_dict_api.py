@@ -147,8 +147,9 @@ SERVER_CASES = [
             "session_id": "sess-1",
             "theme": THEME,
             # QUIRK: encode never reads badge/faint_text_alpha/cwd/
-            # modify_other_keys/client_id/readonly/pointer_shape kwargs — the
-            # Connected constructors hard-code them to None.
+            # modify_other_keys/client_id/readonly/pointer_shape/
+            # pane_create_allowed kwargs — the Connected constructors
+            # hard-code them to None.
             "badge": "main",
             "faint_text_alpha": 0.7,
             "cwd": "/tmp",
@@ -174,6 +175,7 @@ SERVER_CASES = [
             "client_id": None,
             "readonly": None,
             "pointer_shape": None,
+            "pane_create_allowed": None,
         },
     ),
     (
@@ -192,6 +194,7 @@ SERVER_CASES = [
             "client_id": None,
             "readonly": None,
             "pointer_shape": None,
+            "pane_create_allowed": None,
         },
     ),
     ("error", {"message": "boom", "code": "E42"}, {"message": "boom", "code": "E42"}),

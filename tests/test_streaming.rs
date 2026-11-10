@@ -1845,7 +1845,7 @@ mod streaming_tests {
             let mut term = Terminal::new(80, 24);
             term.process(b"\x1b]22;ns-resize\x07");
             let session = create_session_with_terminal(term);
-            match session.build_connect_message("client-1", false) {
+            match session.build_connect_message("client-1", false, false) {
                 ServerMessage::Connected { pointer_shape, .. } => {
                     assert_eq!(pointer_shape.as_deref(), Some("ns-resize"));
                 }
@@ -1857,7 +1857,7 @@ mod streaming_tests {
         #[test]
         fn test_connect_message_default_terminal_has_no_pointer_shape() {
             let session = create_session_with_terminal(Terminal::new(80, 24));
-            match session.build_connect_message("client-1", false) {
+            match session.build_connect_message("client-1", false, false) {
                 ServerMessage::Connected { pointer_shape, .. } => {
                     assert!(pointer_shape.is_none());
                 }
@@ -1875,7 +1875,7 @@ mod streaming_tests {
             term.process(b"\x1b[4;6H\x1b_Ga=T,f=24,s=2,v=2;AAAAAAAAAAAAAAAA\x1b\\");
             assert_eq!(term.all_graphics().len(), 1, "the image decoded");
             let session = create_session_with_terminal(term);
-            match session.build_connect_message("client-1", false) {
+            match session.build_connect_message("client-1", false, false) {
                 ServerMessage::Connected { graphics, .. } => {
                     assert_eq!(graphics.len(), 1, "the store's graphic replays");
                     let frame = &graphics[0];
@@ -1911,7 +1911,7 @@ mod streaming_tests {
             // the NEWEST 24 of them, newest first.
             let store_ids: Vec<u64> = term.all_graphics().iter().map(|g| g.id).collect();
             let session = create_session_with_terminal(term);
-            match session.build_connect_message("client-1", false) {
+            match session.build_connect_message("client-1", false, false) {
                 ServerMessage::Connected { graphics, .. } => {
                     assert_eq!(graphics.len(), 24, "the frame cap stops the replay");
                     let ids: Vec<u64> = graphics.iter().map(|f| f.image_id).collect();
@@ -1948,7 +1948,7 @@ mod streaming_tests {
             }
             assert_eq!(term.all_graphics().len(), 12);
             let session = create_session_with_terminal(term);
-            match session.build_connect_message("client-1", false) {
+            match session.build_connect_message("client-1", false, false) {
                 ServerMessage::Connected { graphics, .. } => {
                     assert_eq!(graphics.len(), 8, "the byte budget stops the replay");
                     assert_eq!(graphics[0].image_id, 12, "newest first");
@@ -1957,6 +1957,43 @@ mod streaming_tests {
                         total <= 8 * 1024 * 1024,
                         "the aggregate payload respects the budget: {total}"
                     );
+                }
+                other => panic!("expected Connected, got {other:?}"),
+            }
+        }
+
+        /// Kanban 01a1c25c: `Connected.pane_create_allowed` mirrors the
+        /// `handle_pane_create` refusal ladder — read-only forces false
+        /// even on an allow-enabled server; the field is `None` only for
+        /// hand-built defaults (the handshake always stamps it).
+        #[test]
+        fn test_connect_message_pane_create_read_only_forces_false() {
+            let session = create_session_with_terminal(Terminal::new(80, 24));
+            match session.build_connect_message("client-1", true, true) {
+                ServerMessage::Connected {
+                    pane_create_allowed,
+                    ..
+                } => {
+                    assert_eq!(
+                        pane_create_allowed,
+                        Some(false),
+                        "read-only connection must not advertise pane create"
+                    );
+                }
+                other => panic!("expected Connected, got {other:?}"),
+            }
+        }
+
+        /// An allow-enabled writable handshake stamps the field `Some(true)`.
+        #[test]
+        fn test_connect_message_pane_create_allowed_true_when_enabled_and_writable() {
+            let session = create_session_with_terminal(Terminal::new(80, 24));
+            match session.build_connect_message("client-1", false, true) {
+                ServerMessage::Connected {
+                    pane_create_allowed,
+                    ..
+                } => {
+                    assert_eq!(pane_create_allowed, Some(true));
                 }
                 other => panic!("expected Connected, got {other:?}"),
             }

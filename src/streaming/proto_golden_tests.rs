@@ -182,6 +182,7 @@ fn server_fixtures() -> Vec<AppServerMessage> {
                 row: 34,
                 pane: Some("pane-3".into()),
             }],
+            pane_create_allowed: Some(true),
         },
         S::Connected {
             cols: 1,
@@ -197,6 +198,7 @@ fn server_fixtures() -> Vec<AppServerMessage> {
             client_id: None,
             readonly: None,
             pointer_shape: None,
+            pane_create_allowed: None,
         },
         S::Refresh {
             cols: 7,
@@ -762,6 +764,7 @@ fn lossy_server_inputs() -> Vec<(&'static str, pb::ServerMessage)> {
                 client_id: None,
                 readonly: None,
                 pointer_shape: None,
+                pane_create_allowed: Some(false),
                 graphics: vec![pb::InlineImage {
                     image_id: 1,
                     pane_id: None,

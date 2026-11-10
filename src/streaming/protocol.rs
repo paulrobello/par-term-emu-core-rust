@@ -581,6 +581,20 @@ pub enum ServerMessage {
             pydict(nested)
         )]
         graphics: Vec<InlineImageFrame>,
+        /// Server admits [`ClientMessage::PaneCreateRequest`]: the
+        /// `allow_pane_create` config is on AND this connection is not
+        /// read-only. Always set by `build_connect_message` so a client can
+        /// tell "new server, disabled" from "old server" (field absent).
+        /// `None` (absent on the wire) for hand-built defaults.
+        #[serde(skip_serializing_if = "Option::is_none")]
+        #[cfg_attr(
+            all(
+                any(feature = "python", feature = "python-test"),
+                feature = "streaming"
+            ),
+            pydict(encode_skip)
+        )]
+        pane_create_allowed: Option<bool>,
     },
 
     /// Screen refresh response (full screen content)
@@ -1984,6 +1998,9 @@ pub struct ConnectedBuilder {
     pub pointer_shape: Option<String>,
     /// Frames already on screen, replayed for a late joiner
     pub graphics: Vec<InlineImageFrame>,
+    /// Pane-create capability advertised to the client; `None` = field
+    /// absent on the wire (pre-feature servers omit it)
+    pub pane_create_allowed: Option<bool>,
 }
 
 impl ConnectedBuilder {
@@ -2065,6 +2082,13 @@ impl ConnectedBuilder {
         self
     }
 
+    /// Advertise the pane-create capability (allow + writable); `None`
+    /// leaves the field absent on the wire
+    pub fn pane_create_allowed(mut self, allowed: Option<bool>) -> Self {
+        self.pane_create_allowed = allowed;
+        self
+    }
+
     /// Finish and produce the `Connected` message
     pub fn build(self) -> ServerMessage {
         ServerMessage::Connected {
@@ -2081,6 +2105,7 @@ impl ConnectedBuilder {
             readonly: self.readonly,
             pointer_shape: self.pointer_shape,
             graphics: self.graphics,
+            pane_create_allowed: self.pane_create_allowed,
         }
     }
 }

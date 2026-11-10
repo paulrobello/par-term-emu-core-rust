@@ -1019,6 +1019,7 @@ mod tests {
             readonly: None,
             pointer_shape: None,
             graphics: Vec::new(),
+            pane_create_allowed: None,
         };
         let encoded = encode_server_message(&msg).unwrap();
         let decoded = decode_server_message(&encoded).unwrap();
@@ -1322,6 +1323,7 @@ mod tests {
             .client_id(Some("client-42".to_string()))
             .readonly(Some(true))
             .pointer_shape(Some("ew-resize".to_string()))
+            .pane_create_allowed(Some(true))
             .build();
         let encoded = encode_server_message(&msg).unwrap();
         let decoded = decode_server_message(&encoded).unwrap();
@@ -1339,6 +1341,7 @@ mod tests {
             readonly,
             pointer_shape,
             graphics,
+            pane_create_allowed,
         } = decoded
         else {
             panic!("Wrong message type");
@@ -1359,6 +1362,7 @@ mod tests {
         assert_eq!(client_id, Some("client-42".to_string()));
         assert_eq!(readonly, Some(true));
         assert_eq!(pointer_shape, Some("ew-resize".to_string()));
+        assert_eq!(pane_create_allowed, Some(true));
     }
 
     #[test]

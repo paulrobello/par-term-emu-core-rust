@@ -183,6 +183,7 @@ message Connected {
   optional bool readonly = 11;            // Whether this connection is read-only
   optional string pointer_shape = 12;     // Requested pointer shape (OSC 22); absent = client's own pointer
   repeated InlineImage graphics = 13;     // Frames already on screen, replayed for a late joiner
+  optional bool pane_create_allowed = 14; // Server admits PaneCreateRequest (allow-pane-create + writable); absent = pre-0.81 server
 }
 
 // Full screen refresh response

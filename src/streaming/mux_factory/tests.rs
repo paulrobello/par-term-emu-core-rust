@@ -320,7 +320,7 @@ fn a_workspace_active_handshake_names_the_resolved_pane() {
 
     // The handshake names the pane the mirror landed on, not the
     // sentinel the client dialed.
-    let connected = session.build_connect_message("dialer", false);
+    let connected = session.build_connect_message("dialer", false, false);
     let ServerMessage::Connected { session_id, .. } = connected else {
         panic!("expected a Connected message");
     };
@@ -332,7 +332,7 @@ fn a_workspace_active_handshake_names_the_resolved_pane() {
 
     // Any other id echoes verbatim (here: the first-pane fallback).
     let fallback = mirror_session(&server, "fallback");
-    let connected = fallback.build_connect_message("dialer", false);
+    let connected = fallback.build_connect_message("dialer", false, false);
     let ServerMessage::Connected { session_id, .. } = connected else {
         panic!("expected a Connected message");
     };
@@ -349,7 +349,7 @@ fn a_workspace_active_handshake_names_the_resolved_pane() {
     wait_pane(&mut control, &pane1, "WS2-MARKER");
     control.send("select-workspace -t second").expect("switch");
     wait_mirror(&session, "WS2-MARKER");
-    let connected = session.build_connect_message("late-joiner", false);
+    let connected = session.build_connect_message("late-joiner", false, false);
     let ServerMessage::Connected { session_id, .. } = connected else {
         panic!("expected a Connected message");
     };
@@ -413,7 +413,7 @@ fn a_workspace_reseed_tags_frames_with_the_new_pane() {
 
     let server = streaming(&socket);
     let session = mirror_session(&server, ACTIVE_WORKSPACE_SESSION_ID);
-    let connected = session.build_connect_message("late-joiner", false);
+    let connected = session.build_connect_message("late-joiner", false, false);
     let ServerMessage::Connected { graphics, .. } = connected else {
         panic!("expected a Connected message");
     };
@@ -452,7 +452,7 @@ fn a_workspace_reseed_tags_frames_with_the_new_pane() {
     control.send("select-workspace -t second").expect("switch");
     wait_mirror(&session, "GFX2-PLACED");
 
-    let connected = session.build_connect_message("late-joiner", false);
+    let connected = session.build_connect_message("late-joiner", false, false);
     let ServerMessage::Connected { graphics, .. } = connected else {
         panic!("expected a Connected message");
     };
@@ -653,7 +653,7 @@ fn a_graphic_placed_before_attach_replays_in_connected_graphics() {
 
     let server = streaming(&socket);
     let session = mirror(&server, &pane);
-    let connected = session.build_connect_message("late-joiner", false);
+    let connected = session.build_connect_message("late-joiner", false, false);
     let ServerMessage::Connected { graphics, .. } = connected else {
         panic!("expected a Connected message");
     };
@@ -1898,7 +1898,7 @@ fn streamed_damage_matches_dirty_rows_and_the_late_seed_carries_none() {
 
     // The late joiner: the handshake is a seeded Connected — no damage
     // fields anywhere in the seed a joining client replays.
-    let connected = session.build_connect_message("late-viewer", false);
+    let connected = session.build_connect_message("late-viewer", false, false);
     assert!(
         matches!(
             connected,

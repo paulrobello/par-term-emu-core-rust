@@ -157,8 +157,14 @@ impl StreamingServer {
             reconnect,
         );
 
-        // Send initial connection message
-        let connect_msg = session.build_connect_message(&client_id.to_string(), read_only);
+        // Send initial connection message. The pane-create signal mirrors
+        // the `handle_pane_create` refusal ladder's first two rungs: the
+        // allow flag AND the writable requirement (read-only forces false).
+        let connect_msg = session.build_connect_message(
+            &client_id.to_string(),
+            read_only,
+            self.config.allow_pane_create,
+        );
         client.send(connect_msg).await?;
 
         // Sync terminal mode state for existing sessions

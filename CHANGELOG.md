@@ -7,6 +7,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- Streaming `Connected.pane_create_allowed` (proto field 14, optional bool): the server's opt-in pane-create capability advertised at handshake (`--allow-pane-create` AND a writable connection; read-only forces false), so a client knows before its first `pane_create_request` whether creation is admitted. Absent on the wire for hand-built defaults — how old servers degrade cleanly. Generated TS (`terminal_pb.ts`) refreshed for client re-vendoring (card 01a1c25c, filed from mux-xr).
+
 ## [0.80.0] - 2026-11-07
 
 ### Security

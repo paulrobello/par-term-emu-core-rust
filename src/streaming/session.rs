@@ -480,7 +480,20 @@ impl StreamSessionState {
     /// the ones likeliest still on screen — and the walk stops at the
     /// first frame that would bust the frame count or the aggregate byte
     /// budget; the skipped tail is logged, never truncated.
-    pub fn build_connect_message(&self, client_id: &str, readonly: bool) -> ServerMessage {
+    ///
+    /// `allow_pane_create` is the server's `allow_pane_create` config flag
+    /// (streamer CLI `--allow-pane-create`). `Connected.pane_create_allowed`
+    /// is set to `Some(allow_pane_create && !readonly)` — mirroring the
+    /// `handle_pane_create` refusal ladder — so a client knows before its
+    /// first request whether `PaneCreateRequest` can succeed. A plain
+    /// builder-built `Connected` leaves the field `None` (absent on the
+    /// wire): how old servers degrade.
+    pub fn build_connect_message(
+        &self,
+        client_id: &str,
+        readonly: bool,
+        allow_pane_create: bool,
+    ) -> ServerMessage {
         let terminal = self.terminal.write();
         let (cols, rows) = terminal.size();
 
@@ -540,6 +553,7 @@ impl StreamSessionState {
             .readonly(Some(readonly))
             .pointer_shape(terminal.pointer_shape().map(str::to_string))
             .graphics(graphics)
+            .pane_create_allowed(Some(allow_pane_create && !readonly))
             .build()
     }
 
@@ -1317,7 +1331,7 @@ mod tests {
         let terminal = Arc::new(RwLock::new(terminal));
         let session = StreamSessionState::new("hist".to_string(), terminal, None, true);
 
-        let screen = match session.build_connect_message("client-1", false) {
+        let screen = match session.build_connect_message("client-1", false, false) {
             ServerMessage::Connected { initial_screen, .. } => {
                 initial_screen.expect("send_initial_screen=true produces a payload")
             }
@@ -1375,6 +1389,69 @@ mod tests {
 
         // Should be idle with zero timeout
         assert!(session.is_idle(Duration::from_secs(0)));
+    }
+
+    /// Kanban 01a1c25c: the pane-create capability rides `Connected`.
+    /// Three wire shapes: (a) a builder-built `Connected` without the
+    /// capability leaves the field `None` — absent on the wire, the same
+    /// degradation a pre-feature server produces; (b) allow + writable
+    /// stamps `Some(true)` and survives the pb round trip as present-true;
+    /// (c) a read-only connection forces `Some(false)` even when the
+    /// config flag is on.
+    #[test]
+    fn connect_message_pane_create_allowed_wire_shapes() {
+        use crate::streaming::proto::pb;
+        use prost::Message as _;
+
+        // (a) unset: absent on the wire
+        let unset = ServerMessage::connected_builder(80, 24, "s".to_string()).build();
+        let ServerMessage::Connected {
+            pane_create_allowed,
+            ..
+        } = &unset
+        else {
+            panic!("expected Connected");
+        };
+        assert_eq!(pane_create_allowed, &None, "unset stays absent");
+        let wire: pb::ServerMessage = (&unset).into();
+        let bytes = wire.encode_to_vec();
+        let back = ServerMessage::try_from(pb::ServerMessage::decode(&*bytes).unwrap()).unwrap();
+        let ServerMessage::Connected {
+            pane_create_allowed,
+            ..
+        } = back
+        else {
+            panic!("expected Connected");
+        };
+        assert_eq!(pane_create_allowed, None);
+
+        // (b) allow + writable: present and true
+        let session = StreamSessionState::new(
+            "pca".to_string(),
+            Arc::new(RwLock::new(Terminal::new(80, 24))),
+            None,
+            true,
+        );
+        let allowed = session.build_connect_message("client-1", false, true);
+        let ServerMessage::Connected {
+            pane_create_allowed,
+            ..
+        } = allowed
+        else {
+            panic!("expected Connected");
+        };
+        assert_eq!(pane_create_allowed, Some(true));
+
+        // (c) read-only forces false even with the allow flag on
+        let readonly = session.build_connect_message("client-1", true, true);
+        let ServerMessage::Connected {
+            pane_create_allowed,
+            ..
+        } = readonly
+        else {
+            panic!("expected Connected");
+        };
+        assert_eq!(pane_create_allowed, Some(false));
     }
 
     #[tokio::test]
