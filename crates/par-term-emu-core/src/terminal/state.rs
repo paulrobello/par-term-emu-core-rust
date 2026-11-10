@@ -916,6 +916,9 @@ pub(crate) struct UnicodeConfigState {
     pub(crate) width_config: crate::unicode_width_config::WidthConfig,
     /// Unicode normalization form for text stored in cells
     pub(crate) normalization_form: crate::unicode_normalization_config::NormalizationForm,
+    /// Count widths per code point, as `wcwidth` does, instead of per
+    /// grapheme cluster ([`crate::terminal::Terminal::set_codepoint_widths`]).
+    pub(crate) codepoint_widths: bool,
 }
 
 /// Security flags: OSC 7 acceptance + insecure-sequence disable (ARC-001 sub-struct)
