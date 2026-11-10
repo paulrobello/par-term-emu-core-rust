@@ -1,0 +1,11 @@
+{
+  "name": "par-mux-integrations",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "test": "vitest run"
+  },
+  "devDependencies": {
+    "vitest": "^5.0.5"
+  }
+}

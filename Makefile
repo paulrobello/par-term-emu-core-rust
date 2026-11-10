@@ -1,5 +1,5 @@
 .PHONY: help build build-release build-streaming dev-streaming app test test-rust test-rust-streaming test-python test-pty coverage coverage-html coverage-python clean install install-force python-install python-uninstall par-mux-install par-mux-uninstall streamer-uninstall uninstall dev fmt lint check \
-        examples examples-basic examples-pty examples-streaming examples-all setup-venv watch \
+        examples examples-basic examples-pty examples-streaming examples-all setup-venv watch test-integrations \
         typecheck clippy fmt-python lint-python lint-check checkall checkall-ci test-mux-ci test-python-streaming-ci cross-target-check check-features bench pre-commit-install pre-commit-uninstall \
         caps-table caps-table-check gen-extensions extensions-check ffi-header ffi-header-check ffi-surface-check core-version-check doc-hidden-check api-surface-check python-features-check terminal-fields-check mux-docs-check mux-schema mux-schema-check completions completions-check _completions-into env-docs-check pinned-tests-check stub-docs-check doc-links-check release-check derive-version-check set-version version-train-check audit-deps \
         mux-manual-seed mux-package-check rustdoc-check \
@@ -47,6 +47,7 @@ help:
 	@echo "  test-python     - Run Python tests only"
 	@echo "  test-pty        - Run the PTY test family with a longer per-test timeout"
 	@echo "  test-web        - Run web frontend tests (vitest)"
+	@echo "  test-integrations - Agent-state extension wire tests (vitest; part of checkall)"
 	@echo "  coverage        - Rust coverage via cargo-llvm-cov (lib + integration tests, streaming feature)"
 	@echo "  coverage-html   - Generate and open an HTML Rust coverage report"
 	@echo "  coverage-python - Python coverage via pytest-cov"
@@ -749,7 +750,7 @@ audit-deps:
 	uvx --python-preference only-system pip-audit --strict -r $$reqs; \
 	status=$$?; rm -f $$reqs; exit $$status
 
-checkall: extensions-check ffi-header-check ffi-surface-check derive-version-check core-version-check version-train-check doc-hidden-check api-surface-check python-features-check terminal-fields-check mux-docs-check caps-table-check mux-schema-check completions-check env-docs-check otel-check mux-otel-check pinned-tests-check stub-docs-check mux-package-check rustdoc-check doc-links-check lint-check test-rust test-rust-streaming stub-check test-python test-web
+checkall: extensions-check ffi-header-check ffi-surface-check derive-version-check core-version-check version-train-check doc-hidden-check api-surface-check python-features-check terminal-fields-check mux-docs-check caps-table-check mux-schema-check completions-check env-docs-check otel-check mux-otel-check pinned-tests-check stub-docs-check mux-package-check rustdoc-check doc-links-check lint-check test-integrations test-rust test-rust-streaming stub-check test-python test-web
 	@echo ""
 	@echo "======================================================================"
 	@echo "  All code quality checks passed!"
@@ -767,6 +768,7 @@ checkall: extensions-check ffi-header-check ffi-surface-check derive-version-che
 	@echo "  ✓ Python type check (pyright)"
 	@echo "  ✓ Python stub check (pyright)"
 	@echo "  ✓ Python tests"
+	@echo "  ✓ Agent-state extension wire tests (vitest)"
 	@echo "  ✓ Web frontend tests (vitest)"
 	@echo "  ✓ Caps table in sync"
 	@echo "  ✓ Doc links + anchors (lychee, offline)"
@@ -1240,6 +1242,15 @@ test-web:
 		exit 1; \
 	fi
 	cd web-terminal-frontend && bun run test
+	@echo ""
+
+# ENH-063: the shipped agent-state extensions' vitest wire-shape harness.
+# bun install --frozen-lockfile self-bootstraps a fresh checkout or
+# worktree; it is a fast no-op once node_modules matches the lockfile.
+test-integrations:
+	@echo "Running agent-state extension wire tests (vitest)..."
+	cd crates/par-mux/integrations && bun install --frozen-lockfile
+	cd crates/par-mux/integrations && bun run test
 	@echo ""
 
 web-clean:
