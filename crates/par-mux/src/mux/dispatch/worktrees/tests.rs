@@ -377,6 +377,78 @@ fn kill_workspace_group_broadcasts_releases_for_linked_members() {
     );
 }
 
+/// `worktree-remove -f` is the only teardown that can kill a claimed pane
+/// here (the non-force path refuses on claims), so it owes the roster the
+/// same release notices every other kill sends: one `%agent-released` per
+/// claimed pane, ahead of the cascade's `%window-close`, and the row gone
+/// from `list-agents`.
+#[test]
+fn worktree_remove_force_broadcasts_releases_for_claimed_panes() {
+    let (_dir, repo) = test_repo();
+    let h = Harness::new();
+    let (sink_tx, sink) = std::sync::mpsc::sync_channel(1024);
+    h.clients.lock().push((
+        u64::MAX,
+        sink_tx,
+        Arc::new(std::sync::atomic::AtomicUsize::new(0)),
+        Arc::new(std::sync::atomic::AtomicBool::new(false)),
+        crate::mux::ipc::ConnectionAbort::none(),
+    ));
+    let linked =
+        Harness::workspace_id(&h.ok(&format!("worktree-create -c {} -b wip", quoted(&repo))));
+    let pane = {
+        let guard = h.tree.lock();
+        let session = guard.workspace(linked).unwrap().sessions[0];
+        let window = guard.session(session).unwrap().windows[0];
+        guard.window(window).unwrap().panes()[0]
+    };
+    let (reply, _) = crate::mux::hooks::handle_report(
+        &format!(
+            r#"{{"id":1,"method":"pane.report_agent","params":{{"pane_id":"{pane}","agent":"claude","state":"blocked","seq":1,"source":"test:hook"}}}}"#
+        ),
+        &h.tree,
+    );
+    assert!(reply.contains("\"ok\""), "{reply}");
+    assert!(
+        h.ok("list-agents").contains("claude"),
+        "the claim rides the roster before the remove: {}",
+        h.ok("list-agents")
+    );
+
+    h.ok(&format!("worktree-remove -t {linked} -f"));
+    let lines: Vec<String> = sink.try_iter().collect();
+    let first_close = lines
+        .iter()
+        .position(|l| l.contains("%window-close"))
+        .expect("the cascade announces the window");
+    let release_lines: Vec<&String> = lines
+        .iter()
+        .filter(|l| l.contains("%agent-released"))
+        .collect();
+    assert_eq!(
+        release_lines.len(),
+        1,
+        "the claimed pane releases exactly once: {lines:?}"
+    );
+    assert!(
+        release_lines[0].contains(&format!("%agent-released %{} claude", pane.0)),
+        "the release names the pane and the agent: {release_lines:?}"
+    );
+    assert!(
+        lines
+            .iter()
+            .position(|l| l.contains("%agent-released"))
+            .expect("a release line was counted")
+            < first_close,
+        "the release precedes the removal geometry: {lines:?}"
+    );
+    let roster = h.ok("list-agents");
+    assert!(
+        !roster.contains("claude"),
+        "the stale agent is gone: {roster}"
+    );
+}
+
 #[test]
 fn worktree_remove_refuses_dirty_and_running_agents_unless_forced() {
     let (_dir, repo) = test_repo();

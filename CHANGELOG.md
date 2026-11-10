@@ -17,6 +17,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Added
 - Streaming `Connected.pane_create_allowed` (proto field 14, optional bool): the server's opt-in pane-create capability advertised at handshake (`--allow-pane-create` AND a writable connection; read-only forces false), so a client knows before its first `pane_create_request` whether creation is admitted. Absent on the wire for hand-built defaults — how old servers degrade cleanly. Generated TS (`terminal_pb.ts`) refreshed for client re-vendoring (card 01a1c25c, filed from mux-xr).
 
+### Fixed
+- **mux: `worktree-remove -f` releases the agent-roster rows of the claimed panes it tears down** (`crates/par-mux/src/mux/dispatch/worktrees.rs`): the force path bypassed the `%agent-released` emission the other kill cascades route through (`kill-pane`, `kill-window`, `kill-session`, `kill-workspace`), so a forced removal of a workspace holding agent-claimed panes left stale agent rows in every later roster snapshot. Claims now snapshot before the checkout removal runs and the notices queue ahead of the removal geometry through the same `notify_agent_releases` helper — including the Windows retry path that closes the workspace's panes while git is still refusing a busy checkout. Pinned by `worktree_remove_force_broadcasts_releases_for_claimed_panes`.
+
 ## [0.80.0] - 2026-11-07
 
 ### Security
