@@ -506,6 +506,38 @@ def collect_problems(root: Path) -> tuple[list[str], dict[str, int]]:
 
     problems: list[str] = []
 
+    command_problems, command_names = check_command_reference(command_rs, mux_md)
+    problems.extend(command_problems)
+    save_problems, mutating = check_when_it_saves(command_rs, mux_md, command_names)
+    problems.extend(save_problems)
+    notif_problems, tabled = check_notifications(emit_rs, mux_md, tmux_rs, root)
+    problems.extend(notif_problems)
+    type_problems, type_names = check_notification_types(tmux_rs, api_md)
+    problems.extend(type_problems)
+    flag_problems, clap_flags = check_flag_claims(
+        main_rs, config_rs, changelog, mux_md, skill_md
+    )
+    problems.extend(flag_problems)
+    problems.extend(check_list_agents_grammar(skill_md))
+    roster_problems, roster_keys = check_roster_keys(root, mux_md)
+    problems.extend(roster_problems)
+
+    counts = {
+        "commands": len(command_names),
+        "mutating": len(mutating),
+        "notifications": len(tabled),
+        "types": len(type_names),
+        "flags": len(clap_flags),
+        "roster_keys": len(roster_keys),
+    }
+    return problems, counts
+
+
+def check_command_reference(
+    command_rs: str, mux_md: str
+) -> tuple[list[str], list[str]]:
+    """MUX.md Command Reference rows vs `const COMMANDS`, both directions. Returns problems and the check's metric."""
+    problems: list[str] = []
     # Check 1: COMMANDS table ↔ Command Reference rows, both directions.
     commands = parse_commands(command_rs)
     command_names = [name for name, _ in commands]
@@ -525,7 +557,16 @@ def collect_problems(root: Path) -> tuple[list[str], dict[str, int]]:
                 f"MUX.md Command Reference row `{name}` has no `const COMMANDS` entry in crates/par-mux/src/mux/command/"
             )
 
+    return problems, command_names
+
+
+def check_when_it_saves(
+    command_rs: str, mux_md: str, command_names: list[str]
+) -> tuple[list[str], set[str]]:
+    """Mutating commands vs the MUX.md 'When it saves' list. Returns problems and the check's metric."""
+    problems: list[str] = []
     # Check 2: mutates() true arms ↔ the "When it saves" list.
+    commands = parse_commands(command_rs)
     mut_variants = parse_mutates_true_arms(command_rs)
     variant_of = variant_map(command_rs, commands)
     saves = save_list(mux_md)
@@ -540,6 +581,14 @@ def collect_problems(root: Path) -> tuple[list[str], dict[str, int]]:
             "(the conditional RefreshClient arm)"
         )
 
+    return problems, mutating
+
+
+def check_notifications(
+    emit_rs: str, mux_md: str, tmux_rs: str, root: Path
+) -> tuple[list[str], set[str]]:
+    """emit() arms vs the Notifications table; framing/never-sent allowlists. Returns problems and the check's metric."""
+    problems: list[str] = []
     # Check 3: emit() strings ↔ Notifications table rows, both directions,
     # with the framing and never-sent allowlists gated separately.
     emit_names = EMIT_STRING_RE.findall(
@@ -582,6 +631,12 @@ def collect_problems(root: Path) -> tuple[list[str], dict[str, int]]:
             "and remove it from NEVER_SENT"
         )
 
+    return problems, tabled
+
+
+def check_notification_types(tmux_rs: str, api_md: str) -> tuple[list[str], set[str]]:
+    """notification_type() arms vs the API_REFERENCE bullet. Returns problems and the check's metric."""
+    problems: list[str] = []
     # Check 4: notification_type() strings ↔ the API_REFERENCE bullet.
     type_names = set(
         re.findall(
@@ -607,6 +662,14 @@ def collect_problems(root: Path) -> tuple[list[str], dict[str, int]]:
             f"API_REFERENCE notification_type token `{name}` has no notification_type() arm in crates/par-term-emu-core/src/tmux_control/"
         )
 
+    return problems, type_names
+
+
+def check_flag_claims(
+    main_rs: str, config_rs: str, changelog: str, mux_md: str, skill_md: str
+) -> tuple[list[str], set[str]]:
+    """Every --flag claimed in docs/config/changelog/skill exists in clap. Returns problems and the check's metric."""
+    problems: list[str] = []
     # Check 5: every --flag claimed for par-mux exists in clap (ARC-126 class).
     clap_flags = clap_long_flags(main_rs)
     for name in sorted(set(FOREIGN_FLAGS) & clap_flags):
@@ -636,6 +699,12 @@ def collect_problems(root: Path) -> tuple[list[str], dict[str, int]]:
                 "(add the flag, fix the claim, or allowlist it in FOREIGN_FLAGS with a reason)"
             )
 
+    return problems, clap_flags
+
+
+def check_list_agents_grammar(skill_md: str) -> list[str]:
+    """SKILL.md's list-agents line documents the key=value row grammar. Returns problems."""
+    problems: list[str] = []
     # Check 6: SKILL.md documents the list-agents key=value row grammar.
     list_agents_lines = LIST_AGENTS_LINE_RE.findall(skill_md)
     if not list_agents_lines:
@@ -651,6 +720,12 @@ def collect_problems(root: Path) -> tuple[list[str], dict[str, int]]:
             "`--cmd list-agents` line"
         )
 
+    return problems
+
+
+def check_roster_keys(root: Path, mux_md: str) -> tuple[list[str], list[str]]:
+    """list-agents trailing keys appear in the MUX.md bullet and SKILL.md. Returns problems and the check's metric."""
+    problems: list[str] = []
     # Check 6: list-agents trailing keys (roster_row) <-> MUX.md bullet +
     # SKILL.md (ENH-056). The bullet is the grammar's home; the skill must
     # keep teaching the same token shape.
@@ -673,15 +748,7 @@ def collect_problems(root: Path) -> tuple[list[str], dict[str, int]]:
             "docs/MUX.md `list-agents` bullet must keep the consumer rule 'unknown keys are ignored'"
         )
 
-    counts = {
-        "commands": len(command_names),
-        "mutating": len(mutating),
-        "notifications": len(tabled),
-        "types": len(type_names),
-        "flags": len(clap_flags),
-        "roster_keys": len(roster_keys),
-    }
-    return problems, counts
+    return problems, roster_keys
 
 
 def copy_inputs(src_root: Path, dst_root: Path) -> None:

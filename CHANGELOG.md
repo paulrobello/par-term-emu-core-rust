@@ -12,6 +12,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 - `make test-web` self-bootstraps `web-terminal-frontend/node_modules` when missing (`bun install --frozen-lockfile`, install-if-missing with a visible skip message once present) instead of erroring on fresh git worktrees, mirroring the `test-integrations` leg.
+- `install.sh` `main` and `scripts/check_mux_docs.py` `collect_problems` split into named per-phase/per-check functions; behavior, output and exit codes unchanged (QA-010).
 
 ### Added
 - Streaming `Connected.pane_create_allowed` (proto field 14, optional bool): the server's opt-in pane-create capability advertised at handshake (`--allow-pane-create` AND a writable connection; read-only forces false), so a client knows before its first `pane_create_request` whether creation is admitted. Absent on the wire for hand-built defaults — how old servers degrade cleanly. Generated TS (`terminal_pb.ts`) refreshed for client re-vendoring (card 01a1c25c, filed from mux-xr).
