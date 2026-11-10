@@ -614,6 +614,90 @@ mod tests {
         );
     }
 
+    /// The control verb's report-state claim (`source=self`) rides the
+    /// same delta path as a hook claim, reason included (the mux-xr
+    /// report-state faults): the watcher was connected before the report
+    /// landed — one connection, no refetch, no reconnect — so a client
+    /// attached when it happened sees the delta with the reason live, and
+    /// the cache serves the row to every later connect.
+    #[test]
+    fn self_claim_push_upserts_the_cache_and_broadcasts_the_reason() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = serve(
+            dir.path(),
+            vec![Conn {
+                list_agents_body: "3 zed idle hook\n",
+                list_panes_body: "%3 zed\n",
+                pane_titles: &[],
+                then_send: &["%agent-state-changed %7 claude blocked source=self msg=YXBwcm92ZQ=="],
+                hold: true,
+            }],
+        );
+        let (on_message, rx) = collect();
+        let watcher = RosterWatcher::spawn(path, on_message);
+        assert_eq!(entries(next(&rx)), vec![(3, "idle".to_string())]);
+        match next(&rx) {
+            ServerMessage::AgentStateChanged { agent, released } => {
+                assert!(!released);
+                assert_eq!(
+                    (agent.pane_id, agent.state.as_str(), agent.source.as_str()),
+                    (7, "blocked", "self")
+                );
+                assert_eq!(agent.reason, "approve", "the msg= token decodes");
+            }
+            other => panic!("expected self-claim delta, got {other:?}"),
+        }
+        // The cache holds the row: a client connecting after the report
+        // reads the claim and its reason from the snapshot — no refetch,
+        // no reconnect.
+        let ServerMessage::AgentRoster { agents } = watcher.snapshot() else {
+            panic!("snapshot is a roster");
+        };
+        assert_eq!(agents.len(), 2, "the self-claimed pane rides the cache");
+        let seven = agents.iter().find(|a| a.pane_id == 7).unwrap();
+        assert_eq!(
+            (
+                seven.agent.as_str(),
+                seven.state.as_str(),
+                seven.source.as_str()
+            ),
+            ("claude", "blocked", "self")
+        );
+        assert_eq!(seven.reason, "approve");
+    }
+
+    /// The reason a delta carries is authoritative: a later push without
+    /// `msg=` (the daemon cleared the reason, e.g. the report omitted it)
+    /// overwrites the cached one — the cache never serves a stale reason.
+    #[test]
+    fn a_reasonless_state_push_clears_a_cached_reason() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = serve(
+            dir.path(),
+            vec![Conn {
+                list_agents_body: "3 claude blocked hook reason=SGVsbG8=\n",
+                list_panes_body: "%3 zed\n",
+                pane_titles: &[],
+                then_send: &["%agent-state-changed %3 claude working source=hook"],
+                hold: true,
+            }],
+        );
+        let (on_message, rx) = collect();
+        let _watcher = RosterWatcher::spawn(path, on_message);
+        assert_eq!(entries(next(&rx)), vec![(3, "blocked".to_string())]);
+        match next(&rx) {
+            ServerMessage::AgentStateChanged { agent, released } => {
+                assert!(!released);
+                assert_eq!((agent.pane_id, agent.state.as_str()), (3, "working"));
+                assert_eq!(
+                    agent.reason, "",
+                    "the cleared push overwrites the cached reason"
+                );
+            }
+            other => panic!("expected delta, got {other:?}"),
+        }
+    }
+
     #[test]
     fn watcher_reconnect_resnapshots() {
         let dir = tempfile::tempdir().unwrap();

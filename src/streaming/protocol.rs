@@ -1374,7 +1374,7 @@ pub struct AgentEntry {
     pub agent: String,
     /// par-mux state string (working, blocked, ...)
     pub state: String,
-    /// `hook`, `scrape`, or empty when the daemon reported no provenance
+    /// `hook`, `scrape`, `self`, or empty when the daemon reported no provenance
     pub source: String,
     /// Decoded blocked reason, empty when none
     pub reason: String,

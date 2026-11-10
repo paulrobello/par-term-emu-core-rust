@@ -1025,6 +1025,59 @@ fn report_state_self_authority_is_not_scraped() {
     assert_eq!(f.metadata("agent_state_source").as_deref(), Some("self"));
 }
 
+/// Killing a hook-claimed pane broadcasts `%agent-released` — the reaper's
+/// own-death path answers with `%pane-exited`, but the explicit kill-pane
+/// had no notice at all, so roster consumers (the streamer's watcher)
+/// kept the row as a ghost in every later snapshot (the mux-xr kill-pane
+/// fault).
+#[test]
+fn kill_pane_of_a_claimed_pane_broadcasts_the_release() {
+    let f = Fixture::new();
+    // A broadcast sink so the test reads what a control client receives.
+    let (sink_tx, sink) = std::sync::mpsc::sync_channel(1024);
+    f.clients.lock().push((
+        u64::MAX,
+        sink_tx,
+        Arc::new(std::sync::atomic::AtomicUsize::new(0)),
+        Arc::new(AtomicBool::new(false)),
+        crate::mux::ipc::ConnectionAbort::none(),
+    ));
+    f.report("claude", "blocked", 1);
+    assert!(
+        f.run("list-agents").contains("%0 claude blocked hook"),
+        "the claim rides the roster before the kill"
+    );
+    let reply = f.run("kill-pane -t %0");
+    assert!(!reply.contains("%error"), "kill failed: {reply}");
+    let lines: Vec<String> = sink.try_iter().collect();
+    assert!(
+        lines
+            .iter()
+            .any(|l| l.contains("%agent-released %0 claude")),
+        "the release rides the broadcast: {lines:?}"
+    );
+    // The row is gone from the daemon roster, and the broadcast set has
+    // the release ahead of the removal geometry (window-close for the
+    // emptied window).
+    assert!(
+        !f.run("list-agents").contains("claude"),
+        "the row is gone: {}",
+        f.run("list-agents")
+    );
+    let release_index = lines
+        .iter()
+        .position(|l| l.contains("%agent-released"))
+        .expect("release present");
+    let window_close = lines
+        .iter()
+        .position(|l| l.contains("%window-close"))
+        .expect("window close present");
+    assert!(
+        release_index < window_close,
+        "the release precedes the removal geometry: {lines:?}"
+    );
+}
+
 /// A registry line's `project=` field scopes the resolution; zero matches
 /// refuse naming the --to escape, several refuse listing the candidates.
 #[test]

@@ -239,12 +239,19 @@ pub(super) fn cmd_send_keys(
 }
 
 pub(super) fn cmd_kill_pane(ctx: &Ctx<'_>, pane: Target<PaneId>) -> Outcome {
-    let pane = {
+    // The agent claim reads BEFORE the kill: the pane (and its claim with
+    // it) is gone afterwards, and a claimed pane's removal must reach
+    // roster consumers as `%agent-released` — the reaper's own-death path
+    // answers through `%pane-exited`, but this explicit kill has no other
+    // notice, so its row ghosts in every later roster snapshot otherwise.
+    let (pane, claimed) = {
         let guard = ctx.tree.lock();
-        match guard.resolve_pane_target(pane) {
+        let id = match guard.resolve_pane_target(pane) {
             Ok(id) => id,
             Err(err) => return Outcome::err(ctx, &err.to_string()),
-        }
+        };
+        let claim = guard.pane(id).and_then(|p| p.agent_claim());
+        (id, claim)
     };
     // kill_pane resolves and returns the owning window: afterwards the
     // pane (and its window membership) is gone and cannot be looked up.
@@ -254,6 +261,15 @@ pub(super) fn cmd_kill_pane(ctx: &Ctx<'_>, pane: Target<PaneId>) -> Outcome {
     let outcome = ctx.tree.lock().kill_pane(pane);
     match outcome {
         Ok((window_id, removed_session)) => {
+            // The claim's removal notice queues first — the reaper's
+            // death-notice-before-removal-geometry order.
+            let mut outcome = Outcome::ok(ctx, "");
+            if let Some(claim) = claimed {
+                outcome = outcome.notifying(TmuxNotification::AgentReleased {
+                    pane_id: pane.to_string(),
+                    agent: claim.agent,
+                });
+            }
             // A window whose last pane was killed is REMOVED by
             // tree.kill_pane (an emptied session goes with it) — its
             // clients learn that through %window-close, the same
@@ -265,14 +281,14 @@ pub(super) fn cmd_kill_pane(ctx: &Ctx<'_>, pane: Target<PaneId>) -> Outcome {
             // if/else (parking_lot is not reentrant).
             let active = ctx.tree.lock().window(window_id).map(|w| w.active);
             if let Some(active) = active {
-                Outcome::ok(ctx, "").with_layout(window_id).notifying(
-                    TmuxNotification::WindowPaneChanged {
+                outcome
+                    .with_layout(window_id)
+                    .notifying(TmuxNotification::WindowPaneChanged {
                         window_id: window_id.to_string(),
                         pane_id: active.to_string(),
-                    },
-                )
+                    })
             } else {
-                let mut outcome = Outcome::ok(ctx, "").notifying(TmuxNotification::WindowClose {
+                outcome = outcome.notifying(TmuxNotification::WindowClose {
                     window_id: window_id.to_string(),
                 });
                 if removed_session.is_some() {
