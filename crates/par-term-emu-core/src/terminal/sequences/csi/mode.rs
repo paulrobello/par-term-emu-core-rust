@@ -180,10 +180,23 @@ impl Terminal {
                 }
             }
             1049 => {
+                // xterm saves the cursor as DECSC does before switching to the
+                // alternate screen and restores it as DECRC does after switching
+                // back. The screen swap keeps the position; the SGR pen comes back
+                // here, so a program that exits with colors set does not paint
+                // them over the primary screen with the next erase (BCE).
                 if enabled {
+                    if !self.alt_screen_active {
+                        self.saved_state.alt_entry_attrs = Some(self.attrs);
+                    }
                     self.use_alt_screen();
                 } else {
+                    let leaving = self.alt_screen_active;
                     self.use_primary_screen();
+                    let saved = self.saved_state.alt_entry_attrs.take();
+                    if let Some(attrs) = saved.filter(|_| leaving) {
+                        self.attrs = attrs;
+                    }
                 }
             }
             1004 => self.modes.focus_tracking = enabled,

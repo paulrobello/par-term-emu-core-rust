@@ -691,6 +691,10 @@ pub(crate) struct SavedCursorState {
     pub(crate) saved_underline_color: Option<Color>,
     /// Saved cell flags
     pub(crate) saved_flags: CellFlags,
+    /// The SGR pen DECSET 1049 saved on entering the alternate screen;
+    /// DECRST 1049 restores it on leaving (xterm's DECSC/DECRC around the
+    /// alternate screen). 47 and 1047 do not save it.
+    pub(crate) alt_entry_attrs: Option<TextAttributes>,
 }
 
 impl Default for SavedCursorState {
@@ -702,6 +706,7 @@ impl Default for SavedCursorState {
             saved_bg: Color::Named(NamedColor::Black),
             saved_underline_color: None,
             saved_flags: CellFlags::default(),
+            alt_entry_attrs: None,
         }
     }
 }

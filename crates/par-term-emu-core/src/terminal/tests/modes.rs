@@ -24,6 +24,33 @@ fn test_alt_screen() {
     assert!(content.contains("Primary"));
 }
 
+/// Leaving the alternate screen with DECRST 1049 brings back the SGR pen it
+/// was entered with (xterm's DECSC/DECRC); 1047 does not save it. A program
+/// that exits with a background color set must not leave it for the shell's
+/// next erase.
+#[test]
+fn test_alt_screen_1049_restores_the_pen() {
+    use crate::color::Color;
+
+    let mut term = Terminal::new(80, 24);
+    term.process(b"\x1b[31m\x1b[?1049h\x1b[38;5;0;48;5;230mfire");
+    assert_eq!(term.attrs.bg, Color::Indexed(230));
+    term.process(b"\x1b[?1049l");
+    assert_eq!(term.attrs.fg, Color::Named(crate::color::NamedColor::Red));
+    assert_eq!(term.attrs.bg, TextAttributes::default().bg);
+
+    term.process(b"\x1b[0m\x1b[?1047h\x1b[48;5;230m\x1b[?1047l");
+    assert_eq!(
+        term.attrs.bg,
+        Color::Indexed(230),
+        "1047 keeps the pen, as in xterm"
+    );
+
+    // Leaving when not on the alternate screen restores nothing.
+    term.process(b"\x1b[?1049l");
+    assert_eq!(term.attrs.bg, Color::Indexed(230));
+}
+
 #[test]
 fn test_mouse_modes() {
     let mut term = Terminal::new(80, 24);
