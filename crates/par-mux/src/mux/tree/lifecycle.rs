@@ -778,4 +778,23 @@ impl MuxTree {
         }
         Ok(killed)
     }
+
+    /// The `(pane_id, agent)` pairs of every claimed pane under the given
+    /// windows, in window order — the kill cascades' pre-kill claim
+    /// snapshot. The caller queues `%agent-released` for each BEFORE the
+    /// removal geometry (`%window-close` / `%sessions-changed`), the same
+    /// contract [`Self::kill_pane`]'s caller implements, or the claimed
+    /// rows ghost in every later roster snapshot.
+    pub fn agent_claims_for_windows(&self, window_ids: &[WindowId]) -> Vec<(String, String)> {
+        window_ids
+            .iter()
+            .filter_map(|w| self.windows.get(w))
+            .flat_map(|w| w.panes())
+            .filter_map(|p| {
+                self.panes
+                    .get(&p)
+                    .and_then(|pane| pane.agent_claim().map(|claim| (p.to_string(), claim.agent)))
+            })
+            .collect()
+    }
 }

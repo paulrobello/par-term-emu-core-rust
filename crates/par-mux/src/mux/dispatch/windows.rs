@@ -177,17 +177,25 @@ pub(super) fn cmd_kill_window(ctx: &Ctx<'_>, window: Target<WindowId>) -> Outcom
         window,
         MuxTree::resolve_window_target,
         MuxTree::kill_window,
+        |tree, id| tree.agent_claims_for_windows(&[id]),
     ) {
         Ok(killed) => killed,
         Err(outcome) => return outcome,
     };
     let windows = [killed.id];
     if killed.removed.is_none() {
-        return notify_window_closes(Outcome::ok(ctx, ""), &windows);
+        return notify_window_closes(
+            notify_agent_releases(Outcome::ok(ctx, ""), &killed.claims),
+            &windows,
+        );
     }
     // The cascade reached the session — same argument-less cue
     // kill-pane's cascade sends, so one handler covers both.
-    notify_kill_cascade(Outcome::ok(ctx, ""), &windows, killed.workspaces_changed)
+    notify_kill_cascade(
+        notify_agent_releases(Outcome::ok(ctx, ""), &killed.claims),
+        &windows,
+        killed.workspaces_changed,
+    )
 }
 
 pub(super) fn cmd_rename_window(ctx: &Ctx<'_>, window: Target<WindowId>, name: String) -> Outcome {

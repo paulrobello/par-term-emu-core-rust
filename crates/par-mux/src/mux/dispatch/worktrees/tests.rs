@@ -283,6 +283,100 @@ fn kill_workspace_of_a_parent_with_linked_worktrees_requires_g() {
     );
 }
 
+/// `kill-workspace -g` kills the linked worktree members too, so their
+/// claimed panes must ride the same release contract: every
+/// `%agent-released` lands ahead of the first `%window-close` of the
+/// cascade, and both rows leave `list-agents`.
+#[test]
+fn kill_workspace_group_broadcasts_releases_for_linked_members() {
+    let (_dir, repo) = test_repo();
+    let h = Harness::new();
+    let (sink_tx, sink) = std::sync::mpsc::sync_channel(1024);
+    h.clients.lock().push((
+        u64::MAX,
+        sink_tx,
+        Arc::new(std::sync::atomic::AtomicUsize::new(0)),
+        Arc::new(std::sync::atomic::AtomicBool::new(false)),
+        crate::mux::ipc::ConnectionAbort::none(),
+    ));
+    let a = Harness::workspace_id(&h.ok(&format!("worktree-create -c {} -b a", quoted(&repo))));
+    let parent = h.tree.lock().repo_workspace(&repo).unwrap();
+
+    // One claimed pane on each side of the group: the repo workspace's
+    // pane and the linked member's pane.
+    let (parent_pane, linked_pane) = {
+        let guard = h.tree.lock();
+        let pane_of = |ws: WorkspaceId| -> PaneId {
+            let session = guard.workspace(ws).unwrap().sessions[0];
+            guard
+                .session(session)
+                .unwrap()
+                .windows
+                .iter()
+                .find_map(|w| guard.window(*w))
+                .unwrap()
+                .panes()[0]
+        };
+        (pane_of(parent), pane_of(a))
+    };
+    for (pane, agent) in [(parent_pane, "claude"), (linked_pane, "codex")] {
+        let (reply, _) = crate::mux::hooks::handle_report(
+            &format!(
+                r#"{{"id":1,"method":"pane.report_agent","params":{{"pane_id":"{pane}","agent":"{agent}","state":"blocked","seq":1,"source":"test:hook"}}}}"#
+            ),
+            &h.tree,
+        );
+        assert!(reply.contains("\"ok\""), "{reply}");
+    }
+    assert!(
+        h.ok("list-agents").contains("claude") && h.ok("list-agents").contains("codex"),
+        "both claims ride the roster before the kill: {}",
+        h.ok("list-agents")
+    );
+
+    h.ok(&format!("kill-workspace -t {parent} -g"));
+    let lines: Vec<String> = sink.try_iter().collect();
+    let first_close = lines
+        .iter()
+        .position(|l| l.contains("%window-close"))
+        .expect("the cascade announces the windows");
+    let release_lines: Vec<&String> = lines
+        .iter()
+        .filter(|l| l.contains("%agent-released"))
+        .collect();
+    assert_eq!(
+        release_lines.len(),
+        2,
+        "both claimed panes release: {lines:?}"
+    );
+    assert!(
+        release_lines
+            .iter()
+            .any(|l| l.contains("%agent-released %0 claude")),
+        "the repo workspace's agent releases: {release_lines:?}"
+    );
+    assert!(
+        release_lines
+            .iter()
+            .any(|l| l.contains("%agent-released %1 codex")),
+        "the linked member's agent releases: {release_lines:?}"
+    );
+    let release_indexes: Vec<usize> = lines
+        .iter()
+        .enumerate()
+        .filter_map(|(i, l)| l.contains("%agent-released").then_some(i))
+        .collect();
+    assert!(
+        release_indexes.iter().all(|&i| i < first_close),
+        "releases precede the removal geometry: {lines:?}"
+    );
+    let roster = h.ok("list-agents");
+    assert!(
+        !roster.contains("claude") && !roster.contains("codex"),
+        "both rows are gone: {roster}"
+    );
+}
+
 #[test]
 fn worktree_remove_refuses_dirty_and_running_agents_unless_forced() {
     let (_dir, repo) = test_repo();

@@ -1078,6 +1078,133 @@ fn kill_pane_of_a_claimed_pane_broadcasts_the_release() {
     );
 }
 
+/// Killing a WINDOW whose pane carries a claim broadcasts
+/// `%agent-released` ahead of the removal geometry — kill-pane's
+/// ghost-row rule generalized to the window cascade. Without it the
+/// killed window's claimed row ghosts in every later roster snapshot.
+#[test]
+fn kill_window_of_a_claimed_pane_broadcasts_the_release() {
+    let f = Fixture::new();
+    let (sink_tx, sink) = std::sync::mpsc::sync_channel(1024);
+    f.clients.lock().push((
+        u64::MAX,
+        sink_tx,
+        Arc::new(std::sync::atomic::AtomicUsize::new(0)),
+        Arc::new(AtomicBool::new(false)),
+        crate::mux::ipc::ConnectionAbort::none(),
+    ));
+    f.report("claude", "blocked", 1);
+    assert!(
+        f.run("list-agents").contains("%0 claude blocked hook"),
+        "the claim rides the roster before the kill"
+    );
+    let reply = f.run("kill-window -t @0");
+    assert!(!reply.contains("%error"), "kill failed: {reply}");
+    let lines: Vec<String> = sink.try_iter().collect();
+    let release_index = lines
+        .iter()
+        .position(|l| l.contains("%agent-released %0 claude"))
+        .expect("release present");
+    let window_close = lines
+        .iter()
+        .position(|l| l.contains("%window-close"))
+        .expect("window close present");
+    assert!(
+        release_index < window_close,
+        "the release precedes the removal geometry: {lines:?}"
+    );
+    assert!(
+        !f.run("list-agents").contains("claude"),
+        "the row is gone: {}",
+        f.run("list-agents")
+    );
+}
+
+/// Same contract for kill-session: every claimed pane the session
+/// cascade removes releases first, the `%window-close` lines follow.
+#[test]
+fn kill_session_of_a_claimed_pane_broadcasts_the_release() {
+    let f = Fixture::new();
+    let (sink_tx, sink) = std::sync::mpsc::sync_channel(1024);
+    f.clients.lock().push((
+        u64::MAX,
+        sink_tx,
+        Arc::new(std::sync::atomic::AtomicUsize::new(0)),
+        Arc::new(AtomicBool::new(false)),
+        crate::mux::ipc::ConnectionAbort::none(),
+    ));
+    f.report("claude", "blocked", 1);
+    assert!(
+        f.run("list-agents").contains("%0 claude blocked hook"),
+        "the claim rides the roster before the kill"
+    );
+    let reply = f.run("kill-session -t agents");
+    assert!(!reply.contains("%error"), "kill failed: {reply}");
+    let lines: Vec<String> = sink.try_iter().collect();
+    let release_index = lines
+        .iter()
+        .position(|l| l.contains("%agent-released %0 claude"))
+        .expect("release present");
+    let window_close = lines
+        .iter()
+        .position(|l| l.contains("%window-close"))
+        .expect("window close present");
+    let sessions_changed = lines
+        .iter()
+        .position(|l| l.contains("%sessions-changed"))
+        .expect("sessions changed present");
+    assert!(
+        release_index < window_close && release_index < sessions_changed,
+        "the release precedes the removal geometry: {lines:?}"
+    );
+    assert!(
+        !f.run("list-agents").contains("claude"),
+        "the row is gone: {}",
+        f.run("list-agents")
+    );
+}
+
+/// Same contract for kill-workspace (`kill-workspace` also rides the
+/// shared kill_target): the workspace cascade's claimed panes release
+/// before `%window-close` / `%sessions-changed` / `%workspaces-changed`.
+#[test]
+fn kill_workspace_of_a_claimed_pane_broadcasts_the_release() {
+    let f = Fixture::new();
+    let (sink_tx, sink) = std::sync::mpsc::sync_channel(1024);
+    f.clients.lock().push((
+        u64::MAX,
+        sink_tx,
+        Arc::new(std::sync::atomic::AtomicUsize::new(0)),
+        Arc::new(AtomicBool::new(false)),
+        crate::mux::ipc::ConnectionAbort::none(),
+    ));
+    f.report("claude", "blocked", 1);
+    assert!(
+        f.run("list-agents").contains("%0 claude blocked hook"),
+        "the claim rides the roster before the kill"
+    );
+    let reply = f.run("kill-workspace -t +0");
+    assert!(!reply.contains("%error"), "kill failed: {reply}");
+    let lines: Vec<String> = sink.try_iter().collect();
+    let release_index = lines
+        .iter()
+        .position(|l| l.contains("%agent-released %0 claude"))
+        .expect("release present");
+    let window_close = lines
+        .iter()
+        .position(|l| l.contains("%window-close"))
+        .expect("window close present");
+    assert!(
+        release_index < window_close,
+        "the release precedes the removal geometry: {lines:?}"
+    );
+    assert!(
+        !f.run("list-agents").contains("claude"),
+        "the row is gone: {}",
+        f.run("list-agents")
+    );
+}
+
 /// A registry line's `project=` field scopes the resolution; zero matches
 /// refuse naming the --to escape, several refuse listing the candidates.
 #[test]

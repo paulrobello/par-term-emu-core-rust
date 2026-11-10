@@ -262,14 +262,13 @@ pub(super) fn cmd_kill_pane(ctx: &Ctx<'_>, pane: Target<PaneId>) -> Outcome {
     match outcome {
         Ok((window_id, removed_session)) => {
             // The claim's removal notice queues first — the reaper's
-            // death-notice-before-removal-geometry order.
-            let mut outcome = Outcome::ok(ctx, "");
-            if let Some(claim) = claimed {
-                outcome = outcome.notifying(TmuxNotification::AgentReleased {
-                    pane_id: pane.to_string(),
-                    agent: claim.agent,
-                });
-            }
+            // death-notice-before-removal-geometry order, through the
+            // same helper the window/session/workspace cascades use.
+            let claims: Vec<(String, String)> = claimed
+                .map(|claim| (pane.to_string(), claim.agent))
+                .into_iter()
+                .collect();
+            let mut outcome = notify_agent_releases(Outcome::ok(ctx, ""), &claims);
             // A window whose last pane was killed is REMOVED by
             // tree.kill_pane (an emptied session goes with it) — its
             // clients learn that through %window-close, the same

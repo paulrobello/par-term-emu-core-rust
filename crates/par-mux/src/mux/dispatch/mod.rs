@@ -448,21 +448,28 @@ struct Killed<I, T> {
     /// Whether the workspace roster (set or selection) differs from its
     /// pre-kill snapshot.
     workspaces_changed: bool,
+    /// The `(pane_id, agent)` pairs of every claimed pane under the killed
+    /// target, snapshotted before the kill — each queues an
+    /// `%agent-released` ahead of the removal geometry.
+    claims: Vec<(String, String)>,
 }
 
 /// The resolve-then-kill step shared by the kill-window, kill-session, and
 /// kill-workspace handlers: resolve the target under its own lock (released
-/// before the kill), snapshot the workspace roster, run the tree's kill, and
-/// report the roster delta. A resolve failure, then a kill failure, becomes
-/// the command's error reply; each handler keeps only its notifications.
+/// before the kill), snapshot the killed target's agent claims and the
+/// workspace roster, run the tree's kill, and report the roster delta. A
+/// resolve failure, then a kill failure, becomes the command's error reply;
+/// each handler keeps only its notifications.
 fn kill_target<I: Copy, T>(
     ctx: &Ctx<'_>,
     target: Target<I>,
     resolve: impl FnOnce(&MuxTree, Target<I>) -> Result<I, MuxError>,
     kill: impl FnOnce(&mut MuxTree, I) -> Result<T, MuxError>,
+    claims: impl FnOnce(&MuxTree, I) -> Vec<(String, String)>,
 ) -> Result<Killed<I, T>, Outcome> {
     let resolved = resolve(&ctx.tree.lock(), target);
     let id = resolved.map_err(|err| Outcome::err(ctx, &err.to_string()))?;
+    let claims = claims(&ctx.tree.lock(), id);
     let fingerprint = workspace_roster_fingerprint(ctx.tree);
     let killed = kill(&mut ctx.tree.lock(), id);
     let removed = killed.map_err(|err| Outcome::err(ctx, &err.to_string()))?;
@@ -470,7 +477,23 @@ fn kill_target<I: Copy, T>(
         id,
         removed,
         workspaces_changed: workspace_roster_changed(ctx.tree, &fingerprint),
+        claims,
     })
+}
+
+/// Queue one `%agent-released` per claimed pane — kill-pane's ghost-row
+/// rule generalized to the cascade kills: the notices queue AHEAD of the
+/// removal geometry (`%window-close` / `%sessions-changed`), so roster
+/// consumers empty the claimed row before the window/session it lived in
+/// disappears (otherwise the row ghosts in every later snapshot).
+fn notify_agent_releases(mut outcome: Outcome, claims: &[(String, String)]) -> Outcome {
+    for (pane_id, agent) in claims {
+        outcome = outcome.notifying(TmuxNotification::AgentReleased {
+            pane_id: pane_id.clone(),
+            agent: agent.clone(),
+        });
+    }
+    outcome
 }
 
 /// Queue one `%window-close` per killed window, in kill order.
