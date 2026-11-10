@@ -119,9 +119,9 @@ pub(crate) use state::{
     ApcPrefilterState, BadgeState, BellVolumeState, BookmarksState, CharsetState, ClipboardState,
     ClipboardSyncState, ColorPaletteSnapshot, ColorThemeState, CommandHistoryState, DcsState,
     HostConfig, HyperlinkState, InlineImageState, KeyboardState, MarginState, MouseHistoryState,
-    NotificationState, PointerShapeState, ProfilingState, ProgressBellState, RecordingState,
-    RenderingState, SavedCursorState, SearchState, SecurityFlagsState, ShellState, SyncState,
-    TerminalModes, TextAttributes, TitleState, TmuxState, UnicodeConfigState,
+    NotificationState, OutputBudgetState, PointerShapeState, ProfilingState, ProgressBellState,
+    RecordingState, RenderingState, SavedCursorState, SearchState, SecurityFlagsState, ShellState,
+    SyncState, TerminalModes, TextAttributes, TitleState, TmuxState, UnicodeConfigState,
 };
 pub use state::{AttributeChangeExtent, Charset, GraphicsState, DEFAULT_MAX_OSC_DATA_LENGTH};
 // Generic helpers relocated to `crate::text_utils` (ARC-009); re-exported so
@@ -327,6 +327,11 @@ pub struct Terminal {
     // === ACS (Alternate Character Set) state ===
     /// G0/G1 charset designations and active slot (ARC-001 sub-struct)
     pub(crate) charset_state: CharsetState,
+
+    // === Unified untrusted-output memory budget (ENH-062) ===
+    /// Aggregate budget sub-struct: graphics store, iTerm2 multipart buffer,
+    /// and file-transfer manager all reserve against one total (ARC-001)
+    pub(crate) output_budget: OutputBudgetState,
 }
 
 impl std::fmt::Debug for Terminal {
@@ -360,7 +365,7 @@ impl Terminal {
             tab_stops[i] = true;
         }
 
-        Self {
+        let mut terminal = Self {
             grid: Grid::new(cols, rows, scrollback),
             alt_grid: Grid::new(cols, rows, 0), // Alt screen has no scrollback
             default_consumer_gen: 0,
@@ -423,7 +428,23 @@ impl Terminal {
             },
             triggers: trigger::TriggerState::default(),
             charset_state: CharsetState::default(),
-        }
+            output_budget: OutputBudgetState::default(),
+        };
+        terminal.wire_output_budget();
+        terminal
+    }
+
+    /// Share the aggregate untrusted-output budget (ENH-062) with the two
+    /// stores that enforce it. Called by the constructor and again after
+    /// RIS, which replaces the graphics store wholesale (ARC-100).
+    pub(crate) fn wire_output_budget(&mut self) {
+        let budget = self.output_budget.budget.clone();
+        self.graphics
+            .graphics_store
+            .set_shared_budget(budget.clone());
+        self.graphics
+            .file_transfer_manager
+            .set_shared_budget(budget);
     }
 
     /// Return the currently-active character set (G0 or G1 based on SO/SI state).
@@ -749,6 +770,7 @@ impl Terminal {
                     } else {
                         // Errors here are non-fatal.
                         let position = (self.cursor.col, self.cursor.row);
+                        let dropped_before = self.graphics.graphics_store.dropped_count();
                         match self
                             .kitty_parser
                             .build_graphic(position, &mut self.graphics.graphics_store)
@@ -790,8 +812,29 @@ impl Terminal {
                                     ..
                                 }
                                 | crate::graphics::kitty::KittyGraphicResult::None,
-                            )
-                            | Err(_) => {}
+                            ) => {}
+                            Err(crate::graphics::GraphicsError::ImageTooLarge(pixels, _)) => {
+                                // A size/budget refusal: publish the unified
+                                // budget event (ENH-062) so an oversized
+                                // payload is visible alongside the per-store
+                                // diagnostics. The error carries the attempted
+                                // pixel count; the RGBA cost is 4 bytes/px.
+                                let bytes = pixels.saturating_mul(4);
+                                self.output_budget.report_exceeded(
+                                    &mut self.events,
+                                    crate::graphics::budget::BudgetStore::Graphics,
+                                    bytes,
+                                );
+                            }
+                            Err(_) => {}
+                        }
+                        let dropped_after = self.graphics.graphics_store.dropped_count();
+                        if dropped_after > dropped_before {
+                            self.output_budget.report_exceeded(
+                                &mut self.events,
+                                crate::graphics::budget::BudgetStore::Graphics,
+                                0,
+                            );
                         }
                         self.kitty_parser.reset();
                     }
@@ -1092,6 +1135,13 @@ impl Terminal {
         fresh.graphics.graphics_store =
             GraphicsStore::with_limits(*self.graphics.graphics_store.limits());
 
+        // The aggregate output budget total survives RIS like the other
+        // limits (ENH-062); stores are rewired below after the swap.
+        std::mem::swap(
+            &mut fresh.output_budget.budget,
+            &mut self.output_budget.budget,
+        );
+
         // Answerback is embedder identification, not terminal state.
         fresh.title_state.answerback_string = self.title_state.answerback_string.take();
 
@@ -1159,6 +1209,7 @@ impl Terminal {
 
         *self = fresh;
         self.tab_stops = tab_stops;
+        self.wire_output_budget();
 
         self.grid.raise_generation(max_gen);
         self.invalidate_visible_screen();

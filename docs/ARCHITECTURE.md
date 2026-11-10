@@ -263,6 +263,7 @@ The main terminal emulator that ties everything together, organized into submodu
 - **Submodules**:
   - `mod.rs` - Core graphics types and `GraphicsStore`
   - `animation.rs` - Animation control and frame management
+  - `budget.rs` - Unified untrusted-output memory budget (ENH-062): one aggregate cap (`DEFAULT_OUTPUT_MEMORY_BUDGET`, 320 MiB) over the graphics store, the iTerm2 multipart buffer, and the file-transfer manager. Each store reconciles its slice after mutations; growth is admitted against the aggregate total and refusals/evictions publish the single `OutputBudgetExceeded` event. The per-manager SEC-001 caps stay independent underneath
   - `kitty/` - Kitty graphics protocol: `mod.rs` (`KittyParser`), `parse.rs` (chunk accumulation, key/value parsing, payload assembly), `dispatch.rs` (delete/placement/transmit/frame/animation commands), `decode.rs` (transmission media with filesystem safety gates, pixel formats)
   - `iterm.rs` - iTerm2 inline images implementation
   - `placeholder.rs` - Placeholder character management

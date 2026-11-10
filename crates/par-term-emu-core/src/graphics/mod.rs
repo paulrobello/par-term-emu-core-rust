@@ -12,6 +12,7 @@
 //! The `GraphicsStore` handles storage, scrolling, and Kitty image ID reuse.
 
 pub mod animation;
+pub mod budget;
 pub mod iterm;
 pub mod kitty;
 pub mod placeholder;
@@ -28,6 +29,7 @@ pub use animation::{
     Animation, AnimationControl, AnimationFrame, AnimationState, CompositionMode,
     MAX_ANIMATION_FRAMES,
 };
+pub use budget::{BudgetGuard, BudgetStore, OutputMemoryBudget, DEFAULT_OUTPUT_MEMORY_BUDGET};
 pub use iterm::ITermParser;
 pub use placeholder::{
     create_placeholder_with_diacritics, number_to_diacritic, PlaceholderInfo, PLACEHOLDER_CHAR,
@@ -698,6 +700,12 @@ pub struct GraphicsStore {
 
     /// Next insertion sequence handed out for `kitty_entries`
     kitty_seq: u64,
+
+    /// Shared aggregate untrusted-output budget (ENH-062). `None` keeps the
+    /// store-local caps as the only gates. When set, kitty admissions and
+    /// placement insertions additionally require the aggregate to fit, and
+    /// the store reconciles its slice to `retained_bytes()` after mutations.
+    shared_budget: Option<std::sync::Arc<OutputMemoryBudget>>,
 }
 
 /// Budget bookkeeping for one kitty image ID (SEC-001).
@@ -723,13 +731,67 @@ impl GraphicsStore {
         }
     }
 
+    /// Attach the shared aggregate untrusted-output budget (ENH-062).
+    ///
+    /// When set, kitty admissions and placement insertions additionally
+    /// require the aggregate to fit, and the store reconciles its slice of
+    /// the budget to [`retained_bytes`](Self::retained_bytes) after
+    /// mutations. Call (again) whenever the store is replaced wholesale,
+    /// e.g. after the RIS store swap.
+    pub fn set_shared_budget(&mut self, budget: std::sync::Arc<OutputMemoryBudget>) {
+        self.shared_budget = Some(budget);
+    }
+
+    /// Unique pixel bytes retained across shared kitty images, animation
+    /// frames, visible placements, and scrollback graphics. Buffers shared
+    /// between an image and its placements count once (SEC-001's dedup rule
+    /// extended store-wide). This is the store's slice of the shared
+    /// aggregate budget.
+    pub fn retained_bytes(&self) -> usize {
+        let mut seen = std::collections::HashSet::new();
+        let mut total = 0usize;
+        let mut count = |buf: &std::sync::Arc<Vec<u8>>| {
+            if seen.insert(std::sync::Arc::as_ptr(buf)) {
+                total = total.saturating_add(buf.len());
+            }
+        };
+        for (_, _, pixels) in self.shared_images.values() {
+            count(pixels);
+        }
+        for anim in self.animations.values() {
+            for frame in anim.frames.values() {
+                count(&frame.pixels);
+            }
+        }
+        for g in self.placements.iter().chain(self.scrollback.iter()) {
+            count(&g.pixels);
+        }
+        total
+    }
+
+    /// Reconcile the shared budget's graphics slice after a mutation.
+    /// Admission checks run before growth, so the reservation always fits;
+    /// the release direction saturates.
+    fn sync_shared_budget(&mut self) {
+        if let Some(budget) = self.shared_budget.clone() {
+            let after = self.retained_bytes();
+            let current = budget.graphics_bytes();
+            if after > current {
+                budget.try_reserve(BudgetStore::Graphics, after - current);
+            } else if after < current {
+                budget.release(BudgetStore::Graphics, current - after);
+            }
+        }
+    }
+
     /// Add a graphic placement.
     ///
     /// Kitty placements with explicit nonzero image and placement IDs are
     /// upserts: redisplaying the same pair replaces it in place. A zero
     /// placement ID is intentionally non-unique and always coexists.
     pub fn add_graphic(&mut self, graphic: TerminalGraphic) {
-        // Exact (image_id, placement_id) upsert.
+        // The upsert path swaps pixel buffers too, so the shared budget
+        // reconciles there as well (ENH-062).
         if let (Some(image_id), Some(placement_id)) =
             (graphic.kitty_image_id, graphic.kitty_placement_id)
         {
@@ -739,6 +801,7 @@ impl GraphicsStore {
                         && existing.kitty_placement_id == Some(placement_id)
                 }) {
                     *existing = graphic;
+                    self.sync_shared_budget();
                     return;
                 }
             }
@@ -752,6 +815,7 @@ impl GraphicsStore {
         }
         self.placements.push(graphic);
         self.enforce_placement_budget();
+        self.sync_shared_budget();
     }
 
     /// Pixel bytes held by visible and scrollback placements, counting a
@@ -781,11 +845,25 @@ impl GraphicsStore {
             }
             self.dropped_count += 1;
         }
+        // Aggregate gate (ENH-062): when other stores' bytes fill the shared
+        // total, shed oldest scrollback then placements until it fits.
+        if let Some(aggregate) = self.shared_budget.clone() {
+            while !aggregate.admits(0) && self.placements.len() + self.scrollback.len() > 0 {
+                if !self.scrollback.is_empty() {
+                    self.scrollback.remove(0);
+                } else if !self.placements.is_empty() {
+                    self.placements.remove(0);
+                }
+                self.dropped_count += 1;
+                self.sync_shared_budget();
+            }
+        }
     }
 
     /// Remove a graphic by ID
     pub fn remove_graphic(&mut self, id: u64) {
         self.placements.retain(|g| g.id != id);
+        self.sync_shared_budget();
     }
 
     /// Get graphics at a specific row
@@ -842,6 +920,7 @@ impl GraphicsStore {
     /// Clear all graphics
     pub fn clear(&mut self) {
         self.placements.clear();
+        self.sync_shared_budget();
     }
 
     // --- Kitty image management ---
@@ -904,6 +983,7 @@ impl GraphicsStore {
         }
         self.shared_images.insert(image_id, (width, height, pixels));
         self.resync_kitty_entry(image_id);
+        self.sync_shared_budget();
     }
 
     /// Get a stored Kitty image
@@ -915,6 +995,7 @@ impl GraphicsStore {
     pub fn remove_kitty_image(&mut self, image_id: u32) {
         self.shared_images.remove(&image_id);
         self.resync_kitty_entry(image_id);
+        self.sync_shared_budget();
     }
 
     /// Pixel bytes currently retained by stored kitty images and animation
@@ -984,6 +1065,15 @@ impl GraphicsStore {
         if protected_bytes.saturating_add(incoming) > budget {
             return false;
         }
+        // Aggregate gate (ENH-062): the protected image plus the incoming
+        // bytes must fit under the shared total even after every other
+        // store releases, since other stores' bytes cannot be evicted here.
+        if let Some(aggregate) = self.shared_budget.clone() {
+            let foreign = aggregate.used() - aggregate.graphics_bytes();
+            if protected_bytes.saturating_add(incoming) + foreign > aggregate.total() {
+                return false;
+            }
+        }
         let is_new = !self.kitty_entries.contains_key(&protect);
         while self.kitty_bytes.saturating_add(incoming) > budget
             || (is_new && self.kitty_entries.len() >= MAX_KITTY_IMAGES)
@@ -998,6 +1088,26 @@ impl GraphicsStore {
                 break;
             };
             self.evict_kitty_id(oldest);
+        }
+        // Aggregate eviction loop: release kitty bytes until the incoming
+        // bytes fit the shared total (ENH-062).
+        if let Some(aggregate) = self.shared_budget.clone() {
+            while !aggregate.admits(incoming) {
+                let Some(oldest) = self
+                    .kitty_entries
+                    .iter()
+                    .filter(|(id, _)| **id != protect)
+                    .min_by_key(|(_, e)| e.seq)
+                    .map(|(id, _)| *id)
+                else {
+                    break;
+                };
+                self.evict_kitty_id(oldest);
+                self.sync_shared_budget();
+            }
+            if !aggregate.admits(incoming) {
+                return false;
+            }
         }
         true
     }
@@ -1030,6 +1140,7 @@ impl GraphicsStore {
             self.virtual_placements
                 .retain(|(img_id, _), _| *img_id != iid);
         }
+        self.sync_shared_budget();
     }
 
     // --- Virtual placements ---
@@ -1306,6 +1417,7 @@ impl GraphicsStore {
     /// Clear scrollback graphics
     pub fn clear_scrollback_graphics(&mut self) {
         self.scrollback.clear();
+        self.sync_shared_budget();
     }
 
     /// Get scrollback graphics count

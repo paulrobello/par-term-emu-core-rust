@@ -1454,15 +1454,16 @@ sections; the numbers live here.
 | `MAX_UPLOAD_NAME_BYTES` | 200 | `crates/par-mux/src/mux/uploads.rs:46` | Bytes of one `upload-begin` filename (a bare file name, never a |
 | `MAX_BADGE_FORMAT_LENGTH` | 4 KiB | `crates/par-term-emu-core/src/badge.rs:189` | Badge format bytes accepted from one OSC 1337 SetBadgeFormat payload. |
 | `MAX_ANIMATION_FRAMES` | 1,024 | `crates/par-term-emu-core/src/graphics/animation.rs:18` | Frames retained per kitty animation from escape payloads. |
+| `DEFAULT_OUTPUT_MEMORY_BUDGET` | 335,544,320 | `crates/par-term-emu-core/src/graphics/budget.rs:17` | Aggregate bytes of graphics pixels, iTerm2 multipart buffers, and file-transfer payloads retained from untrusted output. |
 | `MAX_IMAGE_DATA_SIZE` | 100 MiB | `crates/par-term-emu-core/src/graphics/iterm.rs:17` | Base64 image bytes accepted from one iTerm2 inline-image sequence. |
 | `MAX_FILE_SIZE` | 100 MiB | `crates/par-term-emu-core/src/graphics/kitty/decode.rs:155` | Bytes read from one kitty file medium named by an escape payload. |
 | `MAX_KITTY_PAYLOAD_BYTES` | 64 MiB | `crates/par-term-emu-core/src/graphics/kitty/mod.rs:21` | Decoded bytes one kitty transmission may accumulate across chunks |
 | `MAX_KITTY_DECOMPRESSED_BYTES` | `MAX_IMAGE_PIXELS * 4` | `crates/par-term-emu-core/src/graphics/kitty/mod.rs:26` | Upper bound on one kitty zlib stream's decompressed output |
-| `MAX_IMAGE_DIMENSION` | 16 KiB | `crates/par-term-emu-core/src/graphics/mod.rs:42` | Width or height accepted for a graphic decoded from a protocol payload. |
-| `MAX_IMAGE_PIXELS` | 67,108,864 | `crates/par-term-emu-core/src/graphics/mod.rs:49` | Total pixels accepted for a graphic decoded from a protocol payload. |
-| `DEFAULT_MAX_GRAPHICS_MEMORY_BYTES` | 256 MiB | `crates/par-term-emu-core/src/graphics/mod.rs:57` | Bytes of decoded kitty image and animation-frame pixels retained store-wide. |
-| `MAX_KITTY_IMAGES` | 4,096 | `crates/par-term-emu-core/src/graphics/mod.rs:62` | Kitty image IDs (stored images plus animations) retained store-wide. |
-| `MAX_VIRTUAL_PLACEMENTS` | 4,096 | `crates/par-term-emu-core/src/graphics/mod.rs:67` | Distinct kitty virtual placements retained from escape payloads. |
+| `MAX_IMAGE_DIMENSION` | 16 KiB | `crates/par-term-emu-core/src/graphics/mod.rs:44` | Width or height accepted for a graphic decoded from a protocol payload. |
+| `MAX_IMAGE_PIXELS` | 67,108,864 | `crates/par-term-emu-core/src/graphics/mod.rs:51` | Total pixels accepted for a graphic decoded from a protocol payload. |
+| `DEFAULT_MAX_GRAPHICS_MEMORY_BYTES` | 256 MiB | `crates/par-term-emu-core/src/graphics/mod.rs:59` | Bytes of decoded kitty image and animation-frame pixels retained store-wide. |
+| `MAX_KITTY_IMAGES` | 4,096 | `crates/par-term-emu-core/src/graphics/mod.rs:64` | Kitty image IDs (stored images plus animations) retained store-wide. |
+| `MAX_VIRTUAL_PLACEMENTS` | 4,096 | `crates/par-term-emu-core/src/graphics/mod.rs:69` | Distinct kitty virtual placements retained from escape payloads. |
 | `MAX_EVICTED_ZONES` | 10,000 | `crates/par-term-emu-core/src/grid/zone.rs:11` | Evicted zones buffered per grid before they become events. |
 | `SIXEL_HARD_MAX_WIDTH` | 4 KiB | `crates/par-term-emu-core/src/sixel.rs:25` | Hard ceiling on sixel raster width from payload geometry or user config. |
 | `SIXEL_HARD_MAX_HEIGHT` | 4 KiB | `crates/par-term-emu-core/src/sixel.rs:28` | Hard ceiling on sixel raster height from payload geometry or user config. |
@@ -1476,9 +1477,9 @@ sections; the numbers live here.
 | `MAX_CLIPBOARD_CONTENT_SIZE` | 10 MiB | `crates/par-term-emu-core/src/terminal/clipboard.rs:6` | Clipboard content bytes accepted from an OSC 52 sequence. |
 | `MAX_TERMINAL_EVENTS` | 10,000 | `crates/par-term-emu-core/src/terminal/event_broker.rs:20` | Unpolled terminal events retained from processed output. |
 | `MAX_BELL_EVENTS` | 1,024 | `crates/par-term-emu-core/src/terminal/event_broker.rs:27` | Undrained bell events retained from processed output. |
-| `DEFAULT_MAX_TRANSFER_SIZE` | 50 MiB | `crates/par-term-emu-core/src/terminal/file_transfer.rs:90` | Bytes accepted for one file-transfer payload. |
-| `DEFAULT_MAX_COMPLETED` | 32 | `crates/par-term-emu-core/src/terminal/file_transfer.rs:94` | Completed transfers retained from client file-transfer requests. |
-| `DEFAULT_MAX_ACTIVE_TRANSFERS` | 8 | `crates/par-term-emu-core/src/terminal/file_transfer.rs:98` | Concurrent in-progress downloads from client file-transfer requests. |
+| `DEFAULT_MAX_TRANSFER_SIZE` | 50 MiB | `crates/par-term-emu-core/src/terminal/file_transfer.rs:97` | Bytes accepted for one file-transfer payload. |
+| `DEFAULT_MAX_COMPLETED` | 32 | `crates/par-term-emu-core/src/terminal/file_transfer.rs:101` | Completed transfers retained from client file-transfer requests. |
+| `DEFAULT_MAX_ACTIVE_TRANSFERS` | 8 | `crates/par-term-emu-core/src/terminal/file_transfer.rs:105` | Concurrent in-progress downloads from client file-transfer requests. |
 | `MAX_RESPONSE_BYTES` | 64 KiB | `crates/par-term-emu-core/src/terminal/mod.rs:82` | Undrained device-query response bytes retained from processed output. |
 | `MAX_CLIPBOARD_CONTENT_SIZE` | 10 MiB | `crates/par-term-emu-core/src/terminal/mod.rs:146` | Clipboard content bytes accepted from an OSC 52 sequence. |
 | `MAX_BOOKMARKS` | 1,000 | `crates/par-term-emu-core/src/terminal/semantic_snapshot.rs:543` | Bookmark entries retained for one terminal session. |
@@ -1486,15 +1487,15 @@ sections; the numbers live here.
 | `MAX_SIXEL_DIMENSION` | 16 KiB | `crates/par-term-emu-core/src/terminal/sequences/dcs/sixel.rs:12` | Width or height accepted for a sixel raster declared in a DCS payload. |
 | `MAX_SIXEL_COLORS` | 4,096 | `crates/par-term-emu-core/src/terminal/sequences/dcs/sixel.rs:16` | Color registers accepted in a sixel palette from a DCS payload. |
 | `DEFAULT_MAX_MEMORY_BYTES` | 4 MiB | `crates/par-term-emu-core/src/terminal/snapshot_manager.rs:14` | Memory held by snapshots retained from processed terminal output. |
-| `DEFAULT_MAX_NOTIFICATIONS` | 128 | `crates/par-term-emu-core/src/terminal/state.rs:80` | Terminal notifications queued from processed escape-sequence output. |
-| `DEFAULT_MAX_CLIPBOARD_SYNC_EVENTS` | 256 | `crates/par-term-emu-core/src/terminal/state.rs:82` | Clipboard sync events queued from processed escape-sequence output. |
-| `DEFAULT_MAX_CLIPBOARD_EVENT_BYTES` | 4 KiB | `crates/par-term-emu-core/src/terminal/state.rs:84` | Bytes retained for one queued clipboard sync event. |
-| `DEFAULT_MAX_OSC_DATA_LENGTH` | 1 MiB | `crates/par-term-emu-core/src/terminal/state.rs:938` | Payload bytes accepted for one OSC sequence from terminal output. |
+| `DEFAULT_MAX_NOTIFICATIONS` | 128 | `crates/par-term-emu-core/src/terminal/state.rs:82` | Terminal notifications queued from processed escape-sequence output. |
+| `DEFAULT_MAX_CLIPBOARD_SYNC_EVENTS` | 256 | `crates/par-term-emu-core/src/terminal/state.rs:84` | Clipboard sync events queued from processed escape-sequence output. |
+| `DEFAULT_MAX_CLIPBOARD_EVENT_BYTES` | 4 KiB | `crates/par-term-emu-core/src/terminal/state.rs:86` | Bytes retained for one queued clipboard sync event. |
+| `DEFAULT_MAX_OSC_DATA_LENGTH` | 1 MiB | `crates/par-term-emu-core/src/terminal/state.rs:940` | Payload bytes accepted for one OSC sequence from terminal output. |
 | `MAX_ARCHIVE_BYTES` | 50 MiB | `src/bin/streaming_server/frontend_download.rs:34` | Bytes accepted from a downloaded web-frontend archive response. |
 | `MAX_SIDECAR_BYTES` | 1 KiB | `src/bin/streaming_server/frontend_download.rs:71` | Bytes accepted from a `.sha256` checksum sidecar response (SEC-203). |
 | `MAX_DECOMPRESSED_SIZE` | 9 MiB | `src/streaming/proto.rs:48` | Decompressed bytes accepted from one zlib-compressed streaming frame. |
-| `MAX_INLINE_IMAGE_BYTES` | 8 MiB | `src/streaming/protocol.rs:326` | Image bytes accepted in one InlineImage streaming frame. |
-| `MAX_UPLOAD_CHUNK_BYTES` | 64 KiB | `src/streaming/protocol.rs:335` | Bytes accepted in one UploadChunk message payload from a streaming client. |
+| `MAX_INLINE_IMAGE_BYTES` | 8 MiB | `src/streaming/protocol.rs:332` | Image bytes accepted in one InlineImage streaming frame. |
+| `MAX_UPLOAD_CHUNK_BYTES` | 64 KiB | `src/streaming/protocol.rs:341` | Bytes accepted in one UploadChunk message payload from a streaming client. |
 | `WS_MAX_MESSAGE_SIZE` | 16 MiB | `src/streaming/server/mod.rs:45` | Bytes accepted in one inbound WebSocket message from a streaming client. |
 | `WS_MAX_FRAME_SIZE` | 16 MiB | `src/streaming/server/mod.rs:47` | Bytes accepted in one inbound WebSocket frame from a streaming client. |
 | `MAX_INPUT_PAYLOAD_BYTES` | 64 KiB | `src/streaming/server/mod.rs:53` | Bytes accepted in one Input message payload from a streaming client. |

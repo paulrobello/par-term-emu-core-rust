@@ -152,6 +152,12 @@ pub fn terminal_event_to_server_message(event: TerminalEvent) -> Option<ServerMe
             // poll_events()/observers instead.
             return None;
         }
+        TerminalEvent::OutputBudgetExceeded { .. } => {
+            // Diagnostic-only budget event (ENH-062), not part of the
+            // streaming wire protocol; Python consumers read it via
+            // poll_events()/observers instead.
+            return None;
+        }
     })
 }
 

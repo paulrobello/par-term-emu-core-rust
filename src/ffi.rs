@@ -386,6 +386,7 @@ term_event_kinds! {
     ScreenCleared = 25 => "TERM_EVENT_SCREEN_CLEARED",
     InlineImageDropped = 26 => "TERM_EVENT_INLINE_IMAGE_DROPPED",
     PointerShapeChanged = 27 => "TERM_EVENT_POINTER_SHAPE_CHANGED",
+    OutputBudgetExceeded = 28 => "TERM_EVENT_OUTPUT_BUDGET_EXCEEDED",
 }
 
 /// The `on_event_v2` JSON payload for an event: an object of the event's

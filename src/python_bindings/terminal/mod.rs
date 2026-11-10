@@ -1182,7 +1182,7 @@ impl PyTerminal {
     ///            sub_shell_detected, file_transfer_started,
     ///            file_transfer_progress, file_transfer_completed,
     ///            file_transfer_failed, upload_requested, screen_cleared,
-    ///            inline_image_dropped.
+    ///            inline_image_dropped, output_budget_exceeded.
     #[pyo3(signature = (kinds=None))]
     fn set_event_subscription(&mut self, kinds: Option<Vec<String>>) -> PyResult<()> {
         let mapped = kinds.map(|items| {
@@ -1684,12 +1684,12 @@ mod tests {
 
     /// The `type` string emitted by `event_fields` and the string matched by
     /// `parse_event_kind` must remain one table (`TerminalEventKind::as_str`);
-    /// these 27 strings are pinned so the two sides cannot drift apart.
+    /// these 28 strings are pinned so the two sides cannot drift apart.
     #[test]
-    fn observer_event_type_strings_round_trip_all_27() {
+    fn observer_event_type_strings_round_trip_all_28() {
         use crate::terminal::TerminalEventKind;
 
-        const TABLE: [&str; 27] = [
+        const TABLE: [&str; 28] = [
             "bell",
             "title_changed",
             "pointer_shape_changed",
@@ -1717,6 +1717,7 @@ mod tests {
             "upload_requested",
             "screen_cleared",
             "inline_image_dropped",
+            "output_budget_exceeded",
         ];
         assert_eq!(TerminalEventKind::ALL.len(), TABLE.len());
         for (kind, expected) in TerminalEventKind::ALL.into_iter().zip(TABLE) {

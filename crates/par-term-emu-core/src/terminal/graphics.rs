@@ -152,6 +152,21 @@ impl Terminal {
         self.handle_single_file_transfer(data);
     }
 
+    /// Release a multipart buffer's aggregate-budget reservation and clear
+    /// it (ENH-062). File-transfer multipart buffers reserve nothing here —
+    /// their payload bytes are accounted by `FileTransferManager` — so only
+    /// inline buffers' `accumulated_size` is released.
+    fn clear_multipart_buffer(&mut self) {
+        if let Some(state) = self.graphics.iterm_multipart_buffer.take() {
+            if !state.is_file_transfer && state.accumulated_size > 0 {
+                self.output_budget.budget.release(
+                    crate::graphics::budget::BudgetStore::Multipart,
+                    state.accumulated_size,
+                );
+            }
+        }
+    }
+
     /// Decode a base64-encoded filename from iTerm2 `name=` parameter
     fn decode_iterm_filename(params: &std::collections::HashMap<String, String>) -> String {
         params
@@ -200,11 +215,19 @@ impl Terminal {
                                 size, limits.max_total_memory
                             ),
                         });
+                    self.output_budget.report_exceeded(
+                        &mut self.events,
+                        crate::graphics::budget::BudgetStore::Multipart,
+                        size,
+                    );
                     return;
                 }
             }
 
-            // Initialize multipart state for inline image
+            // Initialize multipart state for inline image. An inline restart
+            // supersedes any in-flight buffer; release its aggregate
+            // reservation first (ENH-062).
+            self.clear_multipart_buffer();
             self.graphics.iterm_multipart_buffer = Some(crate::terminal::ITermMultipartState {
                 params,
                 chunks: Vec::new(),
@@ -231,6 +254,11 @@ impl Terminal {
                                 size, max_size
                             ),
                         });
+                    self.output_budget.report_exceeded(
+                        &mut self.events,
+                        crate::graphics::budget::BudgetStore::FileTransfer,
+                        size,
+                    );
                     return;
                 }
             }
@@ -250,6 +278,13 @@ impl Terminal {
                             "superseded by MultipartFile restart".to_string(),
                         );
                     }
+                } else {
+                    // The superseded inline buffer's aggregate reservation
+                    // releases with it (ENH-062).
+                    self.output_budget.budget.release(
+                        crate::graphics::budget::BudgetStore::Multipart,
+                        old.accumulated_size,
+                    );
                 }
             }
 
@@ -331,11 +366,47 @@ impl Terminal {
                             reason: format!("FilePart base64 decode failed: {}", e),
                         });
                 }
-                self.graphics.iterm_multipart_buffer = None;
+                self.clear_multipart_buffer();
                 return;
             }
         };
         let decoded_size = decoded.len();
+
+        // Aggregate gate (ENH-062): refuse chunks that would push the
+        // shared untrusted-output budget past its total, whichever path
+        // the multipart transfer takes.
+        if !self.output_budget.budget.admits(decoded_size) {
+            if state.is_file_transfer {
+                if let Some(transfer_id) = state.transfer_id {
+                    let _ = self.graphics.file_transfer_manager.fail_transfer(
+                        transfer_id,
+                        "aggregate output memory budget exceeded".to_string(),
+                    );
+                    self.events
+                        .push(crate::terminal::TerminalEvent::FileTransferFailed {
+                            id: transfer_id,
+                            reason: "aggregate output memory budget exceeded".to_string(),
+                        });
+                }
+                self.output_budget.report_exceeded(
+                    &mut self.events,
+                    crate::graphics::budget::BudgetStore::FileTransfer,
+                    decoded_size,
+                );
+            } else {
+                self.events
+                    .push(crate::terminal::TerminalEvent::InlineImageDropped {
+                        reason: "aggregate output memory budget exceeded".to_string(),
+                    });
+                self.output_budget.report_exceeded(
+                    &mut self.events,
+                    crate::graphics::budget::BudgetStore::Multipart,
+                    decoded_size,
+                );
+            }
+            self.clear_multipart_buffer();
+            return;
+        }
 
         if state.is_file_transfer {
             // File transfer path: append decoded data to transfer manager
@@ -351,7 +422,7 @@ impl Terminal {
                             id: transfer_id,
                             reason: e,
                         });
-                    self.graphics.iterm_multipart_buffer = None;
+                    self.clear_multipart_buffer();
                     return;
                 }
 
@@ -385,7 +456,7 @@ impl Terminal {
                                 state.accumulated_size, decoded_size, expected_size
                             ),
                         });
-                    self.graphics.iterm_multipart_buffer = None;
+                    self.clear_multipart_buffer();
                     return;
                 }
             }
@@ -394,6 +465,12 @@ impl Terminal {
         // For inline images: accumulate base64 chunks
         if !state.is_file_transfer {
             state.chunks.push(base64_chunk.to_string());
+            // Inline multipart bytes reserve against the aggregate budget
+            // (ENH-062); the admission check above guarantees this fits.
+            self.output_budget.budget.try_reserve(
+                crate::graphics::budget::BudgetStore::Multipart,
+                decoded_size,
+            );
         }
         state.accumulated_size = new_accumulated;
 
@@ -428,7 +505,7 @@ impl Terminal {
                                 .to_string(),
                     });
             }
-            self.graphics.iterm_multipart_buffer = None;
+            self.clear_multipart_buffer();
             return;
         };
 
@@ -444,6 +521,14 @@ impl Terminal {
             Some(s) => s,
             None => return,
         };
+        // The inline buffer's aggregate reservation releases as it finalizes
+        // (ENH-062); file-transfer bytes stay accounted by the manager.
+        if !state.is_file_transfer && state.accumulated_size > 0 {
+            self.output_budget.budget.release(
+                crate::graphics::budget::BudgetStore::Multipart,
+                state.accumulated_size,
+            );
+        }
 
         if state.is_file_transfer {
             // File transfer path: complete the transfer
@@ -1673,5 +1758,143 @@ mod tests {
         assert_eq!(term.graphics_store().scrollback_position(), 5);
         term.graphics_store_mut().notify_scrollback_advance(3);
         assert_eq!(term.graphics_store().scrollback_position(), 8);
+    }
+
+    // --- Unified untrusted-output memory budget (ENH-062) ---
+
+    /// A kitty APC payload whose PNG header declares 16384x4800 RGBA pixels
+    /// (~300 MiB decoded): over the 64M-pixel decode cap, so it is refused
+    /// before any pixel buffer is allocated. Only magic + IHDR + CRC are
+    /// needed — the decoder probes the header before decoding anything.
+    fn oversize_kitty_apc() -> Vec<u8> {
+        fn crc32(data: &[u8]) -> u32 {
+            let mut crc: u32 = 0xFFFF_FFFF;
+            for &b in data {
+                crc ^= b as u32;
+                for _ in 0..8 {
+                    let mask = (crc & 1).wrapping_neg();
+                    crc = (crc >> 1) ^ (0xEDB8_8320 & mask);
+                }
+            }
+            !crc
+        }
+        let (w, h): (u32, u32) = (16384, 4800);
+        let mut png = vec![0x89, b'P', b'N', b'G', 0x0D, 0x0A, 0x1A, 0x0A];
+        png.extend_from_slice(&13u32.to_be_bytes());
+        png.extend_from_slice(b"IHDR");
+        png.extend_from_slice(&w.to_be_bytes());
+        png.extend_from_slice(&h.to_be_bytes());
+        png.extend_from_slice(&[8, 6, 0, 0, 0]);
+        let crc = crc32(&png[12..]);
+        png.extend_from_slice(&crc.to_be_bytes());
+        // Minimal valid IDAT (zlib stream over empty data) + IEND, so the
+        // decoder's header probe reads the declared dimensions instead of
+        // failing with "unexpected end of file".
+        png.extend_from_slice(&11u32.to_be_bytes());
+        png.extend_from_slice(b"IDAT");
+        png.extend_from_slice(&[
+            0x78, 0x01, 0x01, 0x00, 0x00, 0xFF, 0xFF, 0x00, 0x00, 0x00, 0x01,
+        ]);
+        png.extend_from_slice(
+            &crc32(&[
+                0x78, 0x01, 0x01, 0x00, 0x00, 0xFF, 0xFF, 0x00, 0x00, 0x00, 0x01,
+            ])
+            .to_be_bytes(),
+        );
+        png.extend_from_slice(&[0, 0, 0, 0]);
+        png.extend_from_slice(b"IEND");
+        use base64::Engine as _;
+        let b64 = base64::engine::general_purpose::STANDARD.encode(&png);
+        let mut seq = vec![0x1b, b'_', b'G'];
+        seq.extend_from_slice(format!("f=100,s={w},v={h},i=1,a=T;").as_bytes());
+        seq.extend_from_slice(b64.as_bytes());
+        seq.extend_from_slice(&[0x1b, b'\\']);
+        seq
+    }
+
+    /// ENH-062 acceptance smoke: a ~300 MiB kitty graphic pushed through
+    /// process() stays bounded (nothing retained) and emits exactly one
+    /// OutputBudgetExceeded for the graphics store.
+    #[test]
+    fn kitty_300mib_graphic_refused_with_budget_event() {
+        let mut term = Terminal::new(80, 24);
+        term.process(&oversize_kitty_apc());
+        let events = term.poll_events();
+        let budget_events: Vec<_> = events
+            .iter()
+            .filter(|e| {
+                matches!(
+                    e.kind(),
+                    crate::terminal::TerminalEventKind::OutputBudgetExceeded
+                )
+            })
+            .collect();
+        assert_eq!(
+            budget_events.len(),
+            1,
+            "exactly one budget event expected, got {budget_events:?}"
+        );
+        match &budget_events[0] {
+            TerminalEvent::OutputBudgetExceeded { store, bytes } => {
+                assert_eq!(*store, crate::graphics::budget::BudgetStore::Graphics);
+                assert_eq!(*bytes, 16384 * 4800 * 4);
+            }
+            other => panic!("unexpected event {other:?}"),
+        }
+        assert_eq!(term.graphics_count(), 0, "nothing may be retained");
+        assert_eq!(term.graphics_store().dropped_count(), 0);
+    }
+
+    /// MultipartFile declared over the graphics limit emits the unified
+    /// budget event alongside the per-store diagnostic.
+    #[test]
+    fn multipart_oversize_declared_size_emits_budget_event() {
+        let mut term = Terminal::new(80, 24);
+        let oversize = 300 * 1024 * 1024usize;
+        term.process(
+            format!("\x1b]1337;MultipartFile=inline=1;size={oversize};name=YQ==\x07").as_bytes(),
+        );
+        let events = term.poll_events();
+        assert!(events.iter().any(|e| matches!(
+            e.kind(),
+            crate::terminal::TerminalEventKind::OutputBudgetExceeded
+        )));
+        assert!(events.iter().any(|e| matches!(
+            e.kind(),
+            crate::terminal::TerminalEventKind::InlineImageDropped
+        )));
+        assert!(term.graphics.iterm_multipart_buffer.is_none());
+    }
+
+    /// A completed inline multipart frees its aggregate reservation, so a
+    /// later MultipartFile of the same declared size passes admission.
+    #[test]
+    fn inline_multipart_reservation_released_on_finalize() {
+        use crate::graphics::budget::OutputMemoryBudget;
+        use std::sync::Arc;
+
+        let mut term = Terminal::new(80, 24);
+        let budget = Arc::new(OutputMemoryBudget::new(50_000));
+        term.output_budget.budget = budget.clone();
+        term.wire_output_budget();
+
+        let chunk = "A".repeat(20_000); // 15,000 decoded bytes
+                                        // First MultipartFile: size declares 30,000 (two chunks), then only
+                                        // one FilePart — the buffer stays in flight holding the reservation.
+        term.process("\x1b]1337;MultipartFile=inline=1;size=30000;name=YQ==\x07".as_bytes());
+        term.process(format!("\x1b]1337;FilePart={chunk}\x07").as_bytes());
+        assert_eq!(budget.multipart_bytes(), 15_000);
+
+        // A second MultipartFile restart must release the first buffer's
+        // reservation before admitting the new one.
+        term.process("\x1b]1337;MultipartFile=inline=1;size=30000;name=Yg==\x07".as_bytes());
+        assert_eq!(budget.multipart_bytes(), 0);
+        term.process(format!("\x1b]1337;FilePart={chunk}\x07").as_bytes());
+        assert_eq!(budget.multipart_bytes(), 15_000);
+
+        // Completing the transfer releases the reservation.
+        term.process(format!("\x1b]1337;FilePart={chunk}\x07").as_bytes());
+        assert_eq!(budget.multipart_bytes(), 0);
+        assert!(term.graphics.iterm_multipart_buffer.is_none());
     }
 }

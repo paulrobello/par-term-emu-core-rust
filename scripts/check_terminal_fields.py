@@ -30,7 +30,7 @@ from _gate_common import ROOT, expect_failure, fail
 TERMINAL_REL = "crates/par-term-emu-core/src/terminal/mod.rs"
 
 # The recorded ceiling. Lower it when fields are extracted.
-BASELINE = 52
+BASELINE = 53
 
 STRUCT_START_RE = re.compile(r"^pub struct Terminal \{\s*$", re.MULTILINE)
 FIELD_RE = re.compile(r"^    (?:pub(?:\([a-z]+\))? )?([a-z_][a-z0-9_]*):", re.MULTILINE)

@@ -18,6 +18,7 @@ use super::{
 use crate::cell::CellFlags;
 use crate::color::{Color, NamedColor};
 use crate::cursor::Cursor;
+use crate::graphics::budget::{BudgetStore, OutputMemoryBudget, DEFAULT_OUTPUT_MEMORY_BUDGET};
 use crate::graphics::GraphicsStore;
 use crate::mouse::{MouseEncoding, MouseEventRecord, MouseMode, MousePosition};
 use crate::shell_integration::ShellIntegration;
@@ -25,6 +26,7 @@ use crate::sixel;
 use crate::terminal::sequences::dcs::DcsKind;
 use std::collections::HashMap;
 use std::num::NonZeroU32;
+use std::sync::Arc;
 
 /// Character set designation for G0/G1 charset slots.
 ///
@@ -1004,5 +1006,35 @@ impl Default for GraphicsState {
             iterm_multipart_buffer: None,
             file_transfer_manager: FileTransferManager::default(),
         }
+    }
+}
+
+/// Unified aggregate budget for everything untrusted PTY output can retain
+/// (ENH-062): the graphics store, the iTerm2 multipart buffer, and the
+/// file-transfer manager all reserve against this one total. The `Arc` is
+/// shared into both stores by [`Terminal::wire_output_budget`]; RIS carries
+/// the sub-struct across so the configured total survives resets (ARC-100).
+pub(crate) struct OutputBudgetState {
+    pub(crate) budget: Arc<OutputMemoryBudget>,
+}
+
+impl Default for OutputBudgetState {
+    fn default() -> Self {
+        Self {
+            budget: Arc::new(OutputMemoryBudget::new(DEFAULT_OUTPUT_MEMORY_BUDGET)),
+        }
+    }
+}
+
+impl OutputBudgetState {
+    /// Publish the unified `OutputBudgetExceeded` event for a store whose
+    /// admission, growth, or eviction decision was refused by the budget.
+    pub(crate) fn report_exceeded(
+        &self,
+        events: &mut EventBroker,
+        store: BudgetStore,
+        bytes: usize,
+    ) {
+        events.push(TerminalEvent::OutputBudgetExceeded { store, bytes });
     }
 }

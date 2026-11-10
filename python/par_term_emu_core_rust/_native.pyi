@@ -8717,7 +8717,7 @@ class Terminal:
                    sub_shell_detected, file_transfer_started,
                    file_transfer_progress, file_transfer_completed,
                    file_transfer_failed, upload_requested, screen_cleared,
-                   inline_image_dropped.
+                   inline_image_dropped, output_budget_exceeded.
         """
     def set_faint_text_alpha(self, alpha: Any) -> Any:
         """Set faint/dim text alpha multiplier

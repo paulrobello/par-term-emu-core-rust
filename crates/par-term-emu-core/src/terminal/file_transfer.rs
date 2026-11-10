@@ -9,7 +9,9 @@
 
 use std::collections::hash_map::Entry;
 use std::collections::HashMap;
+use std::sync::Arc;
 
+use crate::graphics::budget::{BudgetStore, OutputMemoryBudget};
 use crate::text_utils::unix_millis;
 
 /// Unique file transfer identifier
@@ -84,6 +86,11 @@ pub struct FileTransferManager {
     max_transfer_size: usize,
     /// Maximum number of simultaneously active transfers
     max_active: usize,
+    /// Shared aggregate untrusted-output budget (ENH-062). `None` keeps the
+    /// per-manager caps as the only gates; when set, `append_data` also
+    /// refuses growth that would exceed the aggregate total, and the
+    /// manager reconciles its slice of the budget after mutations.
+    shared_budget: Option<Arc<OutputMemoryBudget>>,
 }
 
 /// Default maximum transfer size: 50 MB
@@ -107,6 +114,7 @@ impl Default for FileTransferManager {
             next_id: 1,
             max_transfer_size: DEFAULT_MAX_TRANSFER_SIZE,
             max_active: DEFAULT_MAX_ACTIVE_TRANSFERS,
+            shared_budget: None,
         }
     }
 }
@@ -115,6 +123,44 @@ impl FileTransferManager {
     /// Create a new `FileTransferManager` with default settings
     pub fn new() -> Self {
         Self::default()
+    }
+
+    /// Attach the shared aggregate untrusted-output budget (ENH-062).
+    ///
+    /// When set, `append_data` refuses growth that would exceed the
+    /// aggregate total, and the manager reconciles its slice of the budget
+    /// to [`retained_bytes`](Self::retained_bytes) after mutations.
+    pub fn set_shared_budget(&mut self, budget: Arc<OutputMemoryBudget>) {
+        self.shared_budget = Some(budget);
+    }
+
+    /// Total payload bytes retained: every active transfer's accumulated
+    /// `data` plus the completed ring's retained results. This is the
+    /// manager's slice of the shared aggregate budget.
+    pub fn retained_bytes(&self) -> usize {
+        self.active_transfers
+            .values()
+            .map(|t| t.data.len())
+            .sum::<usize>()
+            .saturating_add(
+                self.completed_transfers
+                    .iter()
+                    .map(|t| t.data.len())
+                    .sum::<usize>(),
+            )
+    }
+
+    /// Reconcile the shared budget's transfer slice after a mutation.
+    fn sync_budget(&self) {
+        if let Some(budget) = &self.shared_budget {
+            let after = self.retained_bytes();
+            let current = budget.transfer_bytes();
+            if after > current {
+                budget.try_reserve(BudgetStore::FileTransfer, after - current);
+            } else if after < current {
+                budget.release(BudgetStore::FileTransfer, current - after);
+            }
+        }
     }
 
     /// Start a new download transfer
@@ -169,6 +215,7 @@ impl FileTransferManager {
         };
 
         self.active_transfers.insert(id, transfer);
+        self.sync_budget();
         id
     }
 
@@ -197,6 +244,22 @@ impl FileTransferManager {
             ));
         }
 
+        // Aggregate gate (ENH-062): refuse growth that would push the
+        // shared untrusted-output budget over its total.
+        if let Some(budget) = self.shared_budget.clone() {
+            if !budget.admits(data.len()) {
+                let total = budget.total();
+                let mut transfer = entry.remove();
+                transfer.status =
+                    TransferStatus::Failed("aggregate output memory budget exceeded".to_string());
+                transfer.completed_at = Some(unix_millis());
+                self.push_completed(transfer);
+                return Err(format!(
+                    "transfer {id} exceeds the aggregate output memory budget of {total} bytes",
+                ));
+            }
+        }
+
         let transfer = entry.into_mut();
         transfer.data.extend_from_slice(data);
 
@@ -217,6 +280,7 @@ impl FileTransferManager {
             total_bytes,
         };
 
+        self.sync_budget();
         Ok(())
     }
 
@@ -287,11 +351,15 @@ impl FileTransferManager {
     ///
     /// Returns `None` if no completed transfer with the given ID exists.
     pub fn take_completed_transfer(&mut self, id: TransferId) -> Option<FileTransfer> {
-        if let Some(pos) = self.completed_transfers.iter().position(|t| t.id == id) {
+        let taken = if let Some(pos) = self.completed_transfers.iter().position(|t| t.id == id) {
             Some(self.completed_transfers.remove(pos))
         } else {
             None
+        };
+        if taken.is_some() {
+            self.sync_budget();
         }
+        taken
     }
 
     /// Get the current maximum transfer size in bytes
@@ -310,6 +378,7 @@ impl FileTransferManager {
             self.completed_transfers.remove(0);
         }
         self.completed_transfers.push(transfer);
+        self.sync_budget();
     }
 }
 
