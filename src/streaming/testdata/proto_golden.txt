@@ -160,8 +160,8 @@ C 5a080a0466756c6c1009
   = Ok(SnapshotRequest { scope: "full", max_commands: Some(9) })
 C 8a0100
   = Ok(MuxTreeRequest)
-C 92010e0a086372656174652d3712022430
-  = Ok(PaneCreateRequest { correlation_id: "create-7", session_id: "$0" })
+C 92011b0a086372656174652d37120224301a0b6167656e742d62656e6368
+  = Ok(PaneCreateRequest { correlation_id: "create-7", session_id: "$0", name: Some("agent-bench") })
 LS empty server oneof
   = Err(InvalidMessage("Empty server message"))
 LS output invalid utf8

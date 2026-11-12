@@ -1873,6 +1873,12 @@ pub enum ClientMessage {
         correlation_id: String,
         /// Daemon session (`$N` or name) to create the window in
         session_id: String,
+        /// Optional window name (card 01a1d0d5): the streamer validates it
+        /// (bounded length, no control characters) and hands it to the
+        /// daemon's `new-window -n`. Absent keeps the daemon's default
+        /// name.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        name: Option<String>,
     },
 }
 

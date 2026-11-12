@@ -171,11 +171,17 @@ pub trait SessionFactory: Send + Sync {
 
     /// Create one new default-shell window (a single new pane) in the
     /// daemon session named `mux_session` (`$N` or name), answering
-    /// `(window_id, pane_id)`. Only a mux-backed factory can answer: the
+    /// `(window_id, pane_id)`. `name` is the streamer-validated window
+    /// name (card 01a1d0d5); the default keeps the daemon's naming.
+    /// Only a mux-backed factory can answer: the
     /// default error is the `pane_create_no_daemon` refusal's cause (plain
     /// PTY sessions have no daemon control path). Blocking on daemon I/O,
     /// bounded by the reply deadline; callers run it off the async runtime.
-    fn pane_create(&self, _mux_session: &str) -> std::io::Result<(String, String)> {
+    fn pane_create(
+        &self,
+        _mux_session: &str,
+        _name: Option<&str>,
+    ) -> std::io::Result<(String, String)> {
         Err(std::io::Error::other(
             "pane creation requires a mux-backed session",
         ))

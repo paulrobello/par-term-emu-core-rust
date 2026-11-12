@@ -1493,7 +1493,7 @@ fn pane_create_opens_a_default_shell_window_on_the_daemon() {
         MuxSessionFactory::new(&socket, MuxPaneSelector::FromSessionId).with_reply_timeout(CEILING);
 
     let (window, pane) = factory
-        .pane_create("stream")
+        .pane_create("stream", None)
         .expect("pane_create must answer the new window and pane");
     assert!(window.starts_with('@'), "window id {window:?}");
     assert!(pane.starts_with('%'), "pane id {pane:?}");
@@ -1522,6 +1522,27 @@ fn pane_create_opens_a_default_shell_window_on_the_daemon() {
         pane_ids,
         vec![pane.as_str()],
         "the new window must hold exactly its one pane"
+    );
+}
+
+/// Card 01a1d0d5 criterion 2: a validated name reaches the daemon's
+/// `new-window -n` and the created window carries it in `list-windows`.
+#[test]
+fn pane_create_carries_a_validated_name_to_the_daemon() {
+    let (_dir, socket, _serving, mut control, _pane) = daemon();
+    let factory =
+        MuxSessionFactory::new(&socket, MuxPaneSelector::FromSessionId).with_reply_timeout(CEILING);
+
+    factory
+        .pane_create("stream", Some("agent-bench"))
+        .expect("the named create must succeed");
+
+    let windows = control
+        .send("list-windows -t stream")
+        .expect("list-windows");
+    assert!(
+        windows.iter().any(|line| line.contains("agent-bench")),
+        "the named window must be listed: {windows:?}"
     );
 }
 

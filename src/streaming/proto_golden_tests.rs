@@ -597,6 +597,7 @@ fn client_fixtures() -> Vec<AppClientMessage> {
         C::PaneCreateRequest {
             correlation_id: "create-7".into(),
             session_id: "$0".into(),
+            name: Some("agent-bench".into()),
         },
     ]
 }

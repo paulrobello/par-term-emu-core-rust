@@ -991,6 +991,7 @@ async fn pane_create_is_refused_when_the_flag_is_off() {
     let request = || ClientMessage::PaneCreateRequest {
         correlation_id: "corr-1".to_string(),
         session_id: "$0".to_string(),
+        name: None,
     };
 
     for read_only in [false, true] {
@@ -1052,6 +1053,7 @@ async fn pane_create_is_refused_read_only_and_without_a_daemon_when_enabled() {
     let request = || ClientMessage::PaneCreateRequest {
         correlation_id: "corr-2".to_string(),
         session_id: "$0".to_string(),
+        name: None,
     };
 
     match dispatch(true, request()).await.as_slice() {
@@ -1074,6 +1076,75 @@ async fn pane_create_is_refused_read_only_and_without_a_daemon_when_enabled() {
             );
         }
         other => panic!("expected the pane_create_no_daemon refusal, got {other:?}"),
+    }
+}
+
+/// Card 01a1d0d5 criterion 1: an optional name rides the request, but the
+/// streamer rejects one over the byte bound or carrying control characters
+/// with `pane_create_failed` BEFORE any daemon path is probed (the
+/// validation sits between the read-only rung and the no-daemon rung).
+#[tokio::test]
+async fn pane_create_rejects_names_over_the_bound_or_with_control_characters() {
+    use crate::streaming::protocol::ClientMessage;
+
+    let terminal = Arc::new(RwLock::new(Terminal::new(80, 24)));
+    let server = Arc::new(StreamingServer::with_config(
+        terminal,
+        "127.0.0.1:0".to_string(),
+        crate::streaming::StreamingConfig {
+            allow_pane_create: true,
+            ..Default::default()
+        },
+    ));
+    let session = server.get_session("default").expect("default session");
+
+    let dispatch = |name: Option<String>| {
+        let server = Arc::clone(&server);
+        let session = Arc::clone(&session);
+        async move {
+            server
+                .handle_client_message(
+                    &session,
+                    super::ConnCtx {
+                        transport_label: "ws-test",
+                        client_id: uuid::Uuid::new_v4(),
+                        read_only: false,
+                    },
+                    &mut None,
+                    &mut None,
+                    ClientMessage::PaneCreateRequest {
+                        correlation_id: "corr-3".to_string(),
+                        session_id: "$0".to_string(),
+                        name,
+                    },
+                )
+                .await
+        }
+    };
+
+    for (label, name) in [
+        ("over-bound", Some("x".repeat(65))),
+        ("control char", Some("bad\nname".to_string())),
+    ] {
+        match dispatch(name).await.as_slice() {
+            [ServerMessage::Error { message, code }] => {
+                assert_eq!(code.as_deref(), Some("pane_create_failed"), "{label}");
+                assert!(
+                    message.starts_with("invalid pane name"),
+                    "{label}: {message}"
+                );
+            }
+            other => panic!("{label}: expected pane_create_failed, got {other:?}"),
+        }
+    }
+
+    // A name at exactly the bound is accepted past validation (reaches the
+    // no-daemon rung on this factory-less server).
+    match dispatch(Some("x".repeat(64))).await.as_slice() {
+        [ServerMessage::Error { code, .. }] => {
+            assert_eq!(code.as_deref(), Some("pane_create_no_daemon"));
+        }
+        other => panic!("expected pane_create_no_daemon at the bound, got {other:?}"),
     }
 }
 

@@ -190,6 +190,7 @@ mod streaming_tests {
         let request = ClientMessage::PaneCreateRequest {
             correlation_id: "create-7".into(),
             session_id: "$0".into(),
+            name: Some("agent-bench".into()),
         };
         let json = serde_json::to_value(&request).unwrap();
         let from_json: ClientMessage = serde_json::from_value(json.clone()).unwrap();

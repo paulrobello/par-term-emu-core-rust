@@ -277,6 +277,7 @@ impl StreamingServer {
             crate::streaming::protocol::ClientMessage::PaneCreateRequest {
                 correlation_id,
                 session_id,
+                name,
             } => {
                 self.handle_pane_create(
                     session,
@@ -285,6 +286,7 @@ impl StreamingServer {
                     read_only,
                     &correlation_id,
                     &session_id,
+                    name.as_deref(),
                     &mut replies,
                 );
             }
@@ -534,6 +536,29 @@ impl StreamingServer {
         }
     }
 
+    /// Longest window name a `PaneCreateRequest` may carry (card
+    /// 01a1d0d5), in bytes.
+    pub(crate) const MAX_PANE_CREATE_NAME_BYTES: usize = 64;
+
+    /// Validate an optional window name: bounded and free of control
+    /// characters (card 01a1d0d5 criterion 1), so it rides the daemon's
+    /// `new-window -n` grammar safely.
+    fn validate_pane_create_name(name: Option<&str>) -> std::result::Result<(), String> {
+        let Some(name) = name else {
+            return Ok(());
+        };
+        if name.len() > Self::MAX_PANE_CREATE_NAME_BYTES {
+            return Err(format!(
+                "exceeds the {}-byte bound",
+                Self::MAX_PANE_CREATE_NAME_BYTES
+            ));
+        }
+        if name.chars().any(char::is_control) {
+            return Err("contains control characters".to_string());
+        }
+        Ok(())
+    }
+
     /// `PaneCreateRequest`: create one default-shell window (a single new
     /// pane) on the session factory's mux daemon, gated by the opt-in
     /// `allow_pane_create` config flag. Default-shell only — no command
@@ -561,6 +586,7 @@ impl StreamingServer {
         read_only: bool,
         correlation_id: &str,
         mux_session: &str,
+        name: Option<&str>,
         replies: &mut Vec<ServerMessage>,
     ) {
         if !self.config.allow_pane_create {
@@ -573,13 +599,26 @@ impl StreamingServer {
         if read_only {
             crate::debug_error!(
                 "STREAMING",
-                "PaneCreateRequest from {} {} refused: read-only connection",
+                "PaneCreateRequest with name {name:?} from {} {} refused: read-only connection",
                 transport_label,
                 client_id
             );
             replies.push(Self::pane_create_refusal(
                 "pane_create_read_only",
                 "read-only connections cannot create panes".to_string(),
+            ));
+            return;
+        }
+        if let Err(reason) = Self::validate_pane_create_name(name) {
+            crate::debug_error!(
+                "STREAMING",
+                "PaneCreateRequest from {} {} refused: invalid name: {reason}",
+                transport_label,
+                client_id
+            );
+            replies.push(Self::pane_create_refusal(
+                "pane_create_failed",
+                format!("invalid pane name: {reason}"),
             ));
             return;
         }
@@ -597,7 +636,7 @@ impl StreamingServer {
             ));
             return;
         };
-        match factory.pane_create(mux_session) {
+        match factory.pane_create(mux_session, name) {
             Ok((window_id, pane_id)) => {
                 replies.push(ServerMessage::PaneCreated {
                     correlation_id: correlation_id.to_string(),

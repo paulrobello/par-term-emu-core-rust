@@ -569,6 +569,7 @@ message MuxTreeRequest {}
 message PaneCreateRequest {
   string correlation_id = 1;  // client-chosen; echoed in pane_created
   string session_id = 2;      // daemon session ($N or name) to create in
+  optional string name = 3;   // optional window name; streamer validates (bounded, no control chars)
 }
 
 // Reply to PaneCreateRequest on success: the new window and its single

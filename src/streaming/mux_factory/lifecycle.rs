@@ -405,7 +405,7 @@ impl SessionFactory for MuxSessionFactory {
             .map(|pipe| pipe as std::sync::Arc<dyn UploadForwarder>)
     }
 
-    fn pane_create(&self, mux_session: &str) -> io::Result<(String, String)> {
+    fn pane_create(&self, mux_session: &str, name: Option<&str>) -> io::Result<(String, String)> {
         // One verb on its own short-lived daemon control connection (the
         // upload verbs' shape): a mirror link's connection is read solely
         // by its drain thread, so a request/reply verb cannot share one.
@@ -416,10 +416,17 @@ impl SessionFactory for MuxSessionFactory {
         })?;
         let mut writer = stream.try_clone()?;
         let reader = MuxLines::spawn(stream)?;
+        let name_part = name
+            .map(|n| format!(" -n {}", quote_upload_word(n)))
+            .unwrap_or_default();
         let window = command(
             &mut writer,
             &reader,
-            &format!("new-window -t {}", quote_upload_word(mux_session)),
+            &format!(
+                "new-window -t {}{}",
+                quote_upload_word(mux_session),
+                name_part
+            ),
             self.reply_timeout,
         )?;
         let window_id = window

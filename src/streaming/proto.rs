@@ -1060,6 +1060,40 @@ mod tests {
     }
 
     #[test]
+    fn test_encode_decode_client_pane_create_named_and_unnamed() {
+        let named = AppClientMessage::PaneCreateRequest {
+            correlation_id: "c-7".to_string(),
+            session_id: "$0".to_string(),
+            name: Some("agent-bench".to_string()),
+        };
+        let encoded = encode_client_message(&named).unwrap();
+        let decoded = decode_client_message(&encoded).unwrap();
+        let AppClientMessage::PaneCreateRequest {
+            correlation_id,
+            session_id,
+            name,
+        } = decoded
+        else {
+            panic!("Wrong message type");
+        };
+        assert_eq!(correlation_id, "c-7");
+        assert_eq!(session_id, "$0");
+        assert_eq!(name, Some("agent-bench".to_string()));
+
+        let unnamed = AppClientMessage::PaneCreateRequest {
+            correlation_id: "c-8".to_string(),
+            session_id: "$0".to_string(),
+            name: None,
+        };
+        let encoded = encode_client_message(&unnamed).unwrap();
+        let decoded = decode_client_message(&encoded).unwrap();
+        let AppClientMessage::PaneCreateRequest { name, .. } = decoded else {
+            panic!("Wrong message type");
+        };
+        assert_eq!(name, None, "an absent name round-trips as None");
+    }
+
+    #[test]
     fn test_encode_decode_client_subscribe() {
         let msg = AppClientMessage::Subscribe {
             events: vec![
