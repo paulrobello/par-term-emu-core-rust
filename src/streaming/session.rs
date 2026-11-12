@@ -617,6 +617,26 @@ impl StreamSessionState {
         )
     }
 
+    /// The whole-replacement frames a client that lagged the broadcast
+    /// receives before the queued replay resumes (card 01a1ce56): the
+    /// screen, the mux pane-size status, the pane's process lifecycle, and
+    /// viewer presence. Every frame is a whole replacement or a stored
+    /// snapshot, so send-then-overwrite converges — dropped roster/tree
+    /// deltas are resynced separately by the ws loop's server snapshots.
+    #[cfg_attr(not(feature = "mux"), allow(dead_code))]
+    pub fn lag_resync_frames(&self) -> Vec<ServerMessage> {
+        let mut frames = Vec::with_capacity(4);
+        frames.push(self.screen_resync_frame());
+        if let Some(status) = self.pane_size_status() {
+            frames.push(status);
+        }
+        if let Some(process) = self.pane_process_status() {
+            frames.push(process);
+        }
+        frames.push(self.viewer_presence());
+        frames
+    }
+
     /// Build ModeChanged messages for all active (non-default) terminal modes.
     ///
     /// Used to sync terminal mode state to clients connecting to existing sessions.
@@ -1210,6 +1230,45 @@ impl SessionRegistry {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Card 01a1ce56 criterion 2: the lag-resync recovery frames carry the
+    /// pane's CURRENT process lifecycle, so a viewer that lagged across an
+    /// exit transition converges on `exited` — this is the exact frame set
+    /// the ws loop sends after a broadcast `Lagged`.
+    #[test]
+    fn lag_resync_frames_carry_the_current_process_state() {
+        let session = StreamSessionState::new(
+            "lag-resync".into(),
+            Arc::new(RwLock::new(Terminal::new(80, 24))),
+            None,
+            true,
+        );
+        // No mux state yet: screen + presence only.
+        assert_eq!(session.lag_resync_frames().len(), 2);
+
+        // The exit transition the viewer lagged across.
+        session.update_pane_process(ServerMessage::PaneProcessState {
+            pane_id: "%3".into(),
+            state: "exited".into(),
+            exit_code: Some(5),
+        });
+        assert!(session.lag_resync_frames().iter().any(|f| matches!(
+            f,
+            ServerMessage::PaneProcessState { state, exit_code: Some(5), .. }
+                if state == "exited"
+        )));
+
+        // A respawn transition replaces the stored state.
+        session.update_pane_process(ServerMessage::PaneProcessState {
+            pane_id: "%3".into(),
+            state: "running".into(),
+            exit_code: None,
+        });
+        assert!(session.lag_resync_frames().iter().any(|f| matches!(
+            f,
+            ServerMessage::PaneProcessState { state, .. } if state == "running"
+        )));
+    }
 
     #[test]
     fn viewer_presence_composes_attach_web_mobile_and_pushes_leave() {

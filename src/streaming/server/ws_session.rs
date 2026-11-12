@@ -288,14 +288,21 @@ impl StreamingServer {
                             // uses); frames still queued behind the lag
                             // replay over it, which is the convergence shape
                             // the roster/tree resync below already relies on.
-                            let resync = session.screen_resync_frame();
-                            if client.send(resync).await.is_err() {
-                                break;
+                            // The lag resync (card 01a1ce56): screen, mux
+                            // pane-size status, the pane's process
+                            // lifecycle, viewer presence. Every frame is a
+                            // whole replacement or a stored snapshot, so
+                            // send-then-overwrite converges; dropped
+                            // roster/tree deltas resync separately below.
+                            // Previously the process snapshot was missed —
+                            // a viewer that lagged across an exit
+                            // transition showed `running` until the NEXT
+                            // transition.
+                            for frame in session.lag_resync_frames() {
+                                if client.send(frame).await.is_err() {
+                                    break;
+                                }
                             }
-                            if let Some(status) = session.pane_size_status() {
-                                client.send(status).await?;
-                            }
-                            client.send(session.viewer_presence()).await?;
                             // Dropped messages may include roster deltas or
                             // tree pushes: resync both. Every snapshot is a
                             // whole replacement, so send-then-overwrite
