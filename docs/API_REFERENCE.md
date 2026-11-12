@@ -2190,7 +2190,7 @@ Methods for sending events to all connected clients:
 - `send_pointer_shape_changed(shape: str | None = None)`: Send OSC 22 pointer shape change; `None` restores the client's own pointer
 - `send_action_notify(trigger_id: int, title: str, message: str)`: Send trigger notification action
 - `send_action_mark_line(trigger_id: int, row: int, label: str | None = None, color: tuple[int, int, int] | None = None)`: Send trigger mark line action
-- `send_cwd_changed(new_cwd: str, old_cwd: str | None = None, hostname: str | None = None, username: str | None = None, timestamp: int = 0)`: Send working directory change event
+- `send_cwd_changed(new_cwd: str, old_cwd: str | None = None, hostname: str | None = None, username: str | None = None, timestamp: int = 0)`: Send working directory change event. The server computes and stamps `is_local` on the wire message from the OSC 7 hostname (SEC-128 rule)
 - `send_trigger_matched(trigger_id: int, row: int, col: int, end_col: int, text: str, captures: list[str] = [], timestamp: int = 0)`: Send trigger match event
 - `send_progress_bar_changed(action: str, id: str, state: ProgressState | None = None, percent: int | None = None, label: str | None = None)`: Send progress bar state change. `action` must be `"set"`, `"remove"`, or `"remove_all"`.
 

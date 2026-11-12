@@ -22,9 +22,10 @@ pub fn terminal_event_to_server_message(event: TerminalEvent) -> Option<ServerMe
         TerminalEvent::CwdChanged(cwd) => ServerMessage::cwd_changed_full(
             cwd.old_cwd,
             cwd.new_cwd,
-            cwd.hostname,
+            cwd.hostname.clone(),
             cwd.username,
             cwd.timestamp,
+            par_term_emu_core::shell_integration::osc7_host_is_local(cwd.hostname.as_deref()),
         ),
         TerminalEvent::TriggerMatched(tm) => ServerMessage::trigger_matched(
             tm.trigger_id,
@@ -595,6 +596,32 @@ pub enum ServerMessage {
             pydict(encode_skip)
         )]
         pane_create_allowed: Option<bool>,
+        /// The OSC 7 hostname accompanying the `cwd` when the cwd came
+        /// from an OSC 7 report; `None` when the cwd has no OSC
+        /// 7 host (a kernel-cwd or spawn-floor cwd is local by
+        /// construction). Pairs with `cwd_is_local` so a client can both
+        /// display the host and decide locality without guessing.
+        #[serde(skip_serializing_if = "Option::is_none")]
+        #[cfg_attr(
+            all(
+                any(feature = "python", feature = "python-test"),
+                feature = "streaming"
+            ),
+            pydict(encode_skip)
+        )]
+        cwd_hostname: Option<String>,
+        /// Server-computed locality of `cwd` (SEC-128 rule): `true` when
+        /// the path lives on the streaming host. `None` = field absent on
+        /// the wire (pre-feature server).
+        #[serde(skip_serializing_if = "Option::is_none")]
+        #[cfg_attr(
+            all(
+                any(feature = "python", feature = "python-test"),
+                feature = "streaming"
+            ),
+            pydict(encode_skip)
+        )]
+        cwd_is_local: Option<bool>,
     },
 
     /// Screen refresh response (full screen content)
@@ -673,6 +700,11 @@ pub enum ServerMessage {
         /// Timestamp of change (Unix epoch milliseconds)
         #[serde(skip_serializing_if = "Option::is_none")]
         timestamp: Option<u64>,
+        /// Server-computed locality of `new_cwd` (SEC-128 rule): `true`
+        /// when the path lives on the streaming host. `None` = field
+        /// absent on the wire (pre-feature sender).
+        #[serde(skip_serializing_if = "Option::is_none")]
+        is_local: Option<bool>,
     },
 
     /// Trigger pattern matched terminal output
@@ -2001,6 +2033,12 @@ pub struct ConnectedBuilder {
     /// Pane-create capability advertised to the client; `None` = field
     /// absent on the wire (pre-feature servers omit it)
     pub pane_create_allowed: Option<bool>,
+    /// The OSC 7 hostname accompanying `cwd`; `None` = no OSC 7 host
+    /// (a kernel-cwd or spawn-floor cwd is local by construction)
+    pub cwd_hostname: Option<String>,
+    /// Server-computed locality of `cwd` (SEC-128); `None` = field
+    /// absent on the wire (pre-feature servers omit it)
+    pub cwd_is_local: Option<bool>,
 }
 
 impl ConnectedBuilder {
@@ -2089,6 +2127,20 @@ impl ConnectedBuilder {
         self
     }
 
+    /// Set the OSC 7 hostname accompanying `cwd`; `None` leaves the
+    /// field absent on the wire
+    pub fn cwd_hostname(mut self, host: Option<String>) -> Self {
+        self.cwd_hostname = host;
+        self
+    }
+
+    /// Set the server-computed locality of `cwd`; `None` leaves the
+    /// field absent on the wire
+    pub fn cwd_is_local(mut self, local: Option<bool>) -> Self {
+        self.cwd_is_local = local;
+        self
+    }
+
     /// Finish and produce the `Connected` message
     pub fn build(self) -> ServerMessage {
         ServerMessage::Connected {
@@ -2106,6 +2158,8 @@ impl ConnectedBuilder {
             pointer_shape: self.pointer_shape,
             graphics: self.graphics,
             pane_create_allowed: self.pane_create_allowed,
+            cwd_hostname: self.cwd_hostname,
+            cwd_is_local: self.cwd_is_local,
         }
     }
 }
@@ -2299,16 +2353,22 @@ impl ServerMessage {
             hostname: None,
             username: None,
             timestamp: None,
+            is_local: None,
         }
     }
 
-    /// Create a fully-specified CWD changed message
+    /// Create a fully-specified CWD changed message. `is_local` is the
+    /// sender's SEC-128 locality verdict for `new_cwd` (the OSC 7
+    /// hostname against the streaming host); the mux mirror and the
+    /// standalone server both compute it with
+    /// `mux::pane::osc7_host_is_local`.
     pub fn cwd_changed_full(
         old_cwd: Option<String>,
         new_cwd: String,
         hostname: Option<String>,
         username: Option<String>,
         timestamp: u64,
+        is_local: bool,
     ) -> Self {
         Self::CwdChanged {
             old_cwd,
@@ -2316,6 +2376,7 @@ impl ServerMessage {
             hostname,
             username,
             timestamp: Some(timestamp),
+            is_local: Some(is_local),
         }
     }
 
@@ -3203,11 +3264,13 @@ mod tests {
             Some("myhost".to_string()),
             Some("user".to_string()),
             1234567890,
+            false,
         );
         let json = serde_json::to_string(&msg).unwrap();
         assert!(json.contains(r#""type":"cwdchanged"#));
         assert!(json.contains(r#""new_cwd":"/new/dir"#));
         assert!(json.contains(r#""old_cwd":"/old/dir"#));
+        assert!(json.contains(r#""is_local":false"#));
     }
 
     #[test]

@@ -184,6 +184,8 @@ message Connected {
   optional string pointer_shape = 12;     // Requested pointer shape (OSC 22); absent = client's own pointer
   repeated InlineImage graphics = 13;     // Frames already on screen, replayed for a late joiner
   optional bool pane_create_allowed = 14; // Server admits PaneCreateRequest (allow-pane-create + writable); absent = pre-0.81 server
+  optional string cwd_hostname = 15;      // OSC 7 hostname accompanying cwd; absent = no OSC 7 host (kernel/spawn cwd is local)
+  optional bool cwd_is_local = 16;        // Server-computed locality of cwd (SEC-128); absent = pre-feature server
 }
 
 // Full screen refresh response
@@ -210,6 +212,7 @@ message CwdChanged {
   optional string hostname = 3;
   optional string username = 4;
   optional uint64 timestamp = 5;
+  optional bool is_local = 6;  // Server-computed locality (SEC-128 rule); absent = pre-feature sender
 }
 
 // Trigger pattern matched

@@ -1480,7 +1480,7 @@ fn respawn_ignores_a_remote_osc7_cwd() {
 #[test]
 fn respawn_uses_a_local_osc7_cwd() {
     let dir = tempfile::tempdir().unwrap();
-    let host = crate::mux::pane::local_hostname().expect("gethostname");
+    let host = par_term_emu_core::shell_integration::local_hostname().expect("gethostname");
     for h in ["", "localhost", host.as_str()] {
         let cwd = respawn_cwd_after_osc7(h, dir.path());
         assert_eq!(cwd.as_deref(), Some(dir.path()), "host {h:?}");

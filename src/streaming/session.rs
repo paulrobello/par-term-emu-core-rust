@@ -269,6 +269,13 @@ pub struct StreamSessionState {
     /// later handshake names the pane being mirrored right now. `None` for
     /// every other session: the requested id echoes verbatim.
     pub(crate) connected_pane: RwLock<Option<Arc<Mutex<u32>>>>,
+    /// The pane's cwd and OSC 7 hostname as a mux mirror factory pushed
+    /// them (attach pane-info row, kept current by the drain loop — card
+    /// 01a1ce6a). `Connected.cwd` falls back to it when the session's
+    /// terminal has no OSC 7 cwd of its own. `None` for direct-PTY
+    /// sessions and mux sessions whose daemon predates the pane-info cwd
+    /// tokens.
+    pub(crate) mux_cwd: Mutex<Option<(String, Option<String>)>>,
     /// Per-session metrics
     pub metrics: SessionMetrics,
 }
@@ -314,6 +321,7 @@ impl StreamSessionState {
             send_initial_screen,
             graphics_panes: RwLock::new(None),
             connected_pane: RwLock::new(None),
+            mux_cwd: Mutex::new(None),
             metrics: SessionMetrics::new(),
         }
     }
@@ -388,6 +396,16 @@ impl StreamSessionState {
     /// `None` until the mirror reports one.
     pub(crate) fn pane_size_status(&self) -> Option<ServerMessage> {
         self.pane_size_status.read().clone()
+    }
+
+    /// Record the pane's cwd and its OSC 7 hostname (card 01a1ce6a).
+    /// `Connected.cwd` falls back to this when the session's terminal has
+    /// no OSC 7 cwd of its own; a later `record_cwd` keeps it current so
+    /// even the first client connecting after a `cd` sees the pane's new
+    /// directory in the handshake.
+    #[cfg_attr(not(feature = "mux"), allow(dead_code))]
+    pub(crate) fn update_mux_cwd(&self, cwd: String, host: Option<String>) {
+        *self.mux_cwd.lock() = Some((cwd, host));
     }
 
     /// Record the pane's process lifecycle and broadcast it to the
@@ -505,7 +523,28 @@ impl StreamSessionState {
 
         let badge = terminal.evaluate_badge();
         let faint_alpha = Some(terminal.faint_text_alpha());
-        let cwd = terminal.current_directory().map(|s| s.to_string());
+        // The cwd in the handshake: the session terminal's own OSC 7 state
+        // first, else the mux factory's daemon-known pane path (card
+        // 01a1ce6a criterion 1 — a mirror's screen replay rarely carries an
+        // OSC 7, so the fallback is the usual mux answer). Locality rides
+        // the OSC 7 hostname under the SEC-128 rule; a cwd with no host is
+        // local by construction.
+        let (cwd, cwd_hostname, cwd_is_local) = match terminal.current_directory() {
+            Some(cwd) => {
+                let host = terminal.shell_integration().hostname().map(str::to_string);
+                let local =
+                    par_term_emu_core::shell_integration::osc7_host_is_local(host.as_deref());
+                (Some(cwd.to_string()), host, Some(local))
+            }
+            None => match &*self.mux_cwd.lock() {
+                Some((cwd, host)) => {
+                    let local =
+                        par_term_emu_core::shell_integration::osc7_host_is_local(host.as_deref());
+                    (Some(cwd.clone()), host.clone(), Some(local))
+                }
+                None => (None, None, None),
+            },
+        };
         let mok_mode = Some(terminal.modify_other_keys_mode() as u32);
 
         let store = terminal.all_graphics();
@@ -548,6 +587,8 @@ impl StreamSessionState {
             .badge(badge)
             .faint_text_alpha(faint_alpha)
             .cwd(cwd)
+            .cwd_hostname(cwd_hostname)
+            .cwd_is_local(cwd_is_local)
             .modify_other_keys(mok_mode)
             .client_id(Some(client_id.to_string()))
             .readonly(Some(readonly))

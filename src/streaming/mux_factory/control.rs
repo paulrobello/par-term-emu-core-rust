@@ -112,6 +112,32 @@ pub(super) fn parse_pane_info(line: &str) -> Option<(String, usize, usize)> {
     Some((window, cols.parse().ok()?, rows.parse().ok()?))
 }
 
+/// Decode the `pane-info` row's `cwd=` tail token (base64, card 01a1ce6a).
+pub(super) fn parse_cwd_token(line: &str) -> Option<String> {
+    let value = line
+        .split_whitespace()
+        .find_map(|t| t.strip_prefix("cwd="))?;
+    decode_b64(value)
+}
+
+/// Decode the row's `cwdhost=` tail token: the OSC 7 hostname riding the
+/// daemon's cwd. Absent (or a kernel-cwd/spawn-floor cwd) = local by
+/// construction.
+pub(super) fn parse_cwdhost_token(line: &str) -> Option<String> {
+    let value = line
+        .split_whitespace()
+        .find_map(|t| t.strip_prefix("cwdhost="))?;
+    decode_b64(value)
+}
+
+fn decode_b64(value: &str) -> Option<String> {
+    use base64::Engine as _;
+    let bytes = base64::engine::general_purpose::STANDARD
+        .decode(value)
+        .ok()?;
+    String::from_utf8(bytes).ok()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -123,5 +149,14 @@ mod tests {
             Some(("@1".to_string(), 120, 40))
         );
         assert_eq!(parse_pane_info("%3 @1"), None);
+    }
+
+    #[test]
+    fn pane_cwd_tokens_decode() {
+        let line = "%3 @1 80x24 cwd=L3RtcA== cwdhost=c3NoaG9zdA==";
+        assert_eq!(parse_cwd_token(line).as_deref(), Some("/tmp"));
+        assert_eq!(parse_cwdhost_token(line).as_deref(), Some("sshhost"));
+        assert_eq!(parse_cwd_token("%3 @1 80x24"), None);
+        assert_eq!(parse_cwdhost_token("%3 @1 80x24"), None);
     }
 }

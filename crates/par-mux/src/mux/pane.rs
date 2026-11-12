@@ -493,7 +493,11 @@ impl MuxPane {
             let term = self.terminal();
             let term = term.read();
             term.current_directory()
-                .filter(|_| osc7_host_is_local(term.shell_integration().hostname()))
+                .filter(|_| {
+                    par_term_emu_core::shell_integration::osc7_host_is_local(
+                        term.shell_integration().hostname(),
+                    )
+                })
                 .map(std::path::PathBuf::from)
         };
         if let Some(dir) = reported.filter(|dir| dir.is_dir()) {
@@ -1341,51 +1345,6 @@ fn process_cwd(_pid: u32) -> Option<std::path::PathBuf> {
     None
 }
 
-/// This machine's hostname, or `None` when the OS will not say.
-#[cfg(unix)]
-pub(crate) fn local_hostname() -> Option<String> {
-    let mut buf = [0u8; 256];
-    // SAFETY: `buf` is a live, writable 256-byte buffer and the length
-    // passed is its exact size, so gethostname(3) writes only inside it.
-    let rc = unsafe { libc::gethostname(buf.as_mut_ptr().cast(), buf.len()) };
-    if rc != 0 {
-        return None;
-    }
-    // POSIX leaves a truncated name unterminated; treat that as unknown.
-    let end = buf.iter().position(|&b| b == 0)?;
-    let name = std::str::from_utf8(&buf[..end]).ok()?;
-    (!name.is_empty()).then(|| name.to_string())
-}
-
-/// This machine's hostname, or `None` when the OS will not say.
-#[cfg(windows)]
-pub(crate) fn local_hostname() -> Option<String> {
-    std::env::var("COMPUTERNAME").ok().filter(|n| !n.is_empty())
-}
-
-/// This machine's hostname, or `None` when the OS will not say.
-#[cfg(not(any(unix, windows)))]
-pub(crate) fn local_hostname() -> Option<String> {
-    None
-}
-
-/// Whether an OSC 7 hostname names this machine (SEC-128). `None` is local:
-/// the parser already folds an empty host and `localhost` into it. Any
-/// other name must match the local hostname, full or short form, case
-/// insensitively. Shells commonly emit `file://$HOSTNAME/path`, so `None`
-/// alone would reject every local zsh/bash integration. An unknown local
-/// name trusts nothing.
-fn osc7_host_is_local(host: Option<&str>) -> bool {
-    let Some(host) = host else {
-        return true;
-    };
-    let Some(local) = local_hostname() else {
-        return false;
-    };
-    let short = |name: &str| name.split('.').next().unwrap_or(name).to_string();
-    host.eq_ignore_ascii_case(&local) || short(host).eq_ignore_ascii_case(&short(&local))
-}
-
 /// A factory recording the [`SpawnContext`] of every spawn, for tests that
 /// assert what each tree path hands the factory.
 #[cfg(test)]
@@ -2142,24 +2101,6 @@ mod tests {
             );
             std::thread::sleep(std::time::Duration::from_millis(25));
         }
-    }
-
-    /// SEC-128: an OSC 7 host is local only when it is absent (the parser's
-    /// fold of empty/`localhost`) or matches this machine's name, full or
-    /// short form, in any case.
-    #[test]
-    fn osc7_host_is_local_matches_only_this_machine() {
-        assert!(osc7_host_is_local(None));
-        let local = local_hostname().expect("hostname");
-        let short = local.split('.').next().unwrap().to_string();
-        assert!(osc7_host_is_local(Some(&local)));
-        assert!(osc7_host_is_local(Some(&local.to_uppercase())));
-        assert!(osc7_host_is_local(Some(&short)));
-        assert!(osc7_host_is_local(Some(&format!(
-            "{short}.example.invalid"
-        ))));
-        assert!(!osc7_host_is_local(Some("remote.invalid")));
-        assert!(!osc7_host_is_local(Some(&format!("{short}x"))));
     }
 
     /// SEC-125: a held (remain-on-exit) pane keeps its frozen screen but

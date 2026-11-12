@@ -2,7 +2,7 @@
 //! (including the active-workspace query), and the [`SessionFactory`]
 //! create/setup/teardown of a mirror session.
 
-use super::control::{command, parse_pane_info, MuxLines};
+use super::control::{command, parse_cwd_token, parse_cwdhost_token, parse_pane_info, MuxLines};
 use super::mirror::{
     ingest_graphics_seed, parse_pane_exited_token, parse_viewer_status, seed_reply,
     split_graphics_seed, MirrorLink, Sink,
@@ -266,6 +266,11 @@ impl SessionFactory for MuxSessionFactory {
                 }
             }),
             session: RwLock::new(None),
+            cwd: Mutex::new(info.first().and_then(|line| {
+                let cwd = parse_cwd_token(line)?;
+                let host = parse_cwdhost_token(line);
+                Some((cwd, host))
+            })),
         });
         spawn_drain(
             Arc::clone(&link),
@@ -317,6 +322,13 @@ impl SessionFactory for MuxSessionFactory {
         }
         if let Some(process) = link.process.lock().clone() {
             session.update_pane_process(process);
+        }
+        // The pane's cwd as the daemon knows it: the `Connected.cwd`
+        // fallback for a pane whose mirror has not seen an OSC 7 (card
+        // 01a1ce6a criterion 1). Later cwd changes reach the session
+        // through `record_cwd`.
+        if let Some((cwd, host)) = link.cwd.lock().clone() {
+            session.update_mux_cwd(cwd, host);
         }
         let sender = session.get_output_sender();
         {

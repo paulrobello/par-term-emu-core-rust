@@ -416,7 +416,8 @@ where
 }
 
 /// One `pane-info -t <pane>` reply line: `%N @W COLSxROWS`, then optional
-/// whitespace-free `cmd=<base64>` / `exited=<code|?>` tokens.
+/// whitespace-free `cmd=<base64>` / `exited=<code|?>` / `cwd=<base64>` /
+/// `cwdhost=<base64>` tokens.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PaneInfoRow {
     /// The pane id, `%N`.
@@ -430,6 +431,13 @@ pub struct PaneInfoRow {
     /// `None` live; `Some(None)` held-dead with an unreadable code (`?`);
     /// `Some(Some(c))` exit code.
     pub exited: Option<Option<i32>>,
+    /// The pane's logical cwd (OSC 7 report, else the child's kernel cwd,
+    /// else the spawn floor), still base64 as on the wire.
+    pub cwd: Option<String>,
+    /// The OSC 7 hostname accompanying `cwd`, still base64 as on the
+    /// wire; `None` when the cwd did not come from an OSC 7 report (a
+    /// kernel or spawn-floor cwd is local by construction).
+    pub cwdhost: Option<String>,
 }
 
 impl fmt::Display for PaneInfoRow {
@@ -446,6 +454,12 @@ impl fmt::Display for PaneInfoRow {
             None => {}
             Some(Some(code)) => write!(f, " exited={code}")?,
             Some(None) => write!(f, " exited=?")?,
+        }
+        if let Some(cwd) = &self.cwd {
+            write!(f, " cwd={cwd}")?;
+        }
+        if let Some(host) = &self.cwdhost {
+            write!(f, " cwdhost={host}")?;
         }
         Ok(())
     }
@@ -471,11 +485,17 @@ impl PaneInfoRow {
         let size = (cols.parse().ok()?, rows.parse().ok()?);
         let mut cmd = None;
         let mut exited = None;
+        let mut cwd = None;
+        let mut cwdhost = None;
         for token in fields {
             if let Some(value) = token.strip_prefix("cmd=") {
                 cmd = Some(value.to_string());
             } else if let Some(code) = token.strip_prefix("exited=") {
                 exited = Some(code.parse::<i32>().ok());
+            } else if let Some(value) = token.strip_prefix("cwd=") {
+                cwd = Some(value.to_string());
+            } else if let Some(value) = token.strip_prefix("cwdhost=") {
+                cwdhost = Some(value.to_string());
             }
         }
         Some(Self {
@@ -484,6 +504,8 @@ impl PaneInfoRow {
             size,
             cmd,
             exited,
+            cwd,
+            cwdhost,
         })
     }
 }
@@ -518,6 +540,8 @@ mod tests {
             size: (80, 24),
             cmd: cmd.map(str::to_string),
             exited,
+            cwd: None,
+            cwdhost: None,
         }
     }
 
@@ -542,6 +566,14 @@ mod tests {
             assert_eq!(row.to_string(), golden);
             assert_eq!(PaneInfoRow::parse(golden), Some(row));
         }
+        // The cwd tokens ride the same additive rule: encoded verbatim on
+        // the wire, decoded by whoever consumes them.
+        let mut row = pane_info(None, None);
+        row.cwd = Some("L3RtcA==".to_string());
+        row.cwdhost = Some("c3NoaG9zdA==".to_string());
+        let golden = "%3 @1 80x24 cwd=L3RtcA== cwdhost=c3NoaG9zdA==";
+        assert_eq!(row.to_string(), golden);
+        assert_eq!(PaneInfoRow::parse(golden), Some(row));
     }
 
     /// ARC-141: the fixed prefix is required; an unknown tail token is

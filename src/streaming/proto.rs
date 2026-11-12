@@ -1020,6 +1020,8 @@ mod tests {
             pointer_shape: None,
             graphics: Vec::new(),
             pane_create_allowed: None,
+            cwd_hostname: None,
+            cwd_is_local: None,
         };
         let encoded = encode_server_message(&msg).unwrap();
         let decoded = decode_server_message(&encoded).unwrap();
@@ -1227,6 +1229,7 @@ mod tests {
             hostname: Some("myhost".to_string()),
             username: Some("user".to_string()),
             timestamp: Some(1234567890),
+            is_local: Some(false),
         };
         let encoded = encode_server_message(&msg).unwrap();
         let decoded = decode_server_message(&encoded).unwrap();
@@ -1236,6 +1239,7 @@ mod tests {
             hostname,
             username,
             timestamp,
+            is_local,
         } = decoded
         else {
             panic!("Wrong message type");
@@ -1245,6 +1249,7 @@ mod tests {
         assert_eq!(hostname, Some("myhost".to_string()));
         assert_eq!(username, Some("user".to_string()));
         assert_eq!(timestamp, Some(1234567890));
+        assert_eq!(is_local, Some(false));
     }
 
     #[test]
@@ -1255,6 +1260,7 @@ mod tests {
             hostname: None,
             username: None,
             timestamp: None,
+            is_local: None,
         };
         let encoded = encode_server_message(&msg).unwrap();
         let decoded = decode_server_message(&encoded).unwrap();
@@ -1264,6 +1270,7 @@ mod tests {
             hostname,
             username,
             timestamp,
+            is_local,
         } = decoded
         else {
             panic!("Wrong message type");
@@ -1273,6 +1280,7 @@ mod tests {
         assert_eq!(hostname, None);
         assert_eq!(username, None);
         assert_eq!(timestamp, None);
+        assert_eq!(is_local, None);
     }
 
     #[test]
@@ -1324,6 +1332,8 @@ mod tests {
             .readonly(Some(true))
             .pointer_shape(Some("ew-resize".to_string()))
             .pane_create_allowed(Some(true))
+            .cwd_hostname(Some("mirror-host".to_string()))
+            .cwd_is_local(Some(false))
             .build();
         let encoded = encode_server_message(&msg).unwrap();
         let decoded = decode_server_message(&encoded).unwrap();
@@ -1342,6 +1352,8 @@ mod tests {
             pointer_shape,
             graphics,
             pane_create_allowed,
+            cwd_hostname,
+            cwd_is_local,
         } = decoded
         else {
             panic!("Wrong message type");
@@ -1363,6 +1375,8 @@ mod tests {
         assert_eq!(readonly, Some(true));
         assert_eq!(pointer_shape, Some("ew-resize".to_string()));
         assert_eq!(pane_create_allowed, Some(true));
+        assert_eq!(cwd_hostname, Some("mirror-host".to_string()));
+        assert_eq!(cwd_is_local, Some(false));
     }
 
     #[test]

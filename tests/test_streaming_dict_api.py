@@ -176,6 +176,8 @@ SERVER_CASES = [
             "readonly": None,
             "pointer_shape": None,
             "pane_create_allowed": None,
+            "cwd_hostname": None,
+            "cwd_is_local": None,
         },
     ),
     (
@@ -195,6 +197,8 @@ SERVER_CASES = [
             "readonly": None,
             "pointer_shape": None,
             "pane_create_allowed": None,
+            "cwd_hostname": None,
+            "cwd_is_local": None,
         },
     ),
     ("error", {"message": "boom", "code": "E42"}, {"message": "boom", "code": "E42"}),
@@ -325,6 +329,7 @@ SERVER_CASES = [
             "hostname": "h",
             "username": "u",
             "timestamp": 99,
+            "is_local": True,
         },
     ),
     # QUIRK: without a timestamp the plain constructor drops old_cwd /
@@ -338,6 +343,7 @@ SERVER_CASES = [
             "hostname": None,
             "username": None,
             "timestamp": None,
+            "is_local": None,
         },
     ),
     (

@@ -1494,8 +1494,8 @@ sections; the numbers live here.
 | `MAX_ARCHIVE_BYTES` | 50 MiB | `src/bin/streaming_server/frontend_download.rs:34` | Bytes accepted from a downloaded web-frontend archive response. |
 | `MAX_SIDECAR_BYTES` | 1 KiB | `src/bin/streaming_server/frontend_download.rs:71` | Bytes accepted from a `.sha256` checksum sidecar response (SEC-203). |
 | `MAX_DECOMPRESSED_SIZE` | 9 MiB | `src/streaming/proto.rs:48` | Decompressed bytes accepted from one zlib-compressed streaming frame. |
-| `MAX_INLINE_IMAGE_BYTES` | 8 MiB | `src/streaming/protocol.rs:332` | Image bytes accepted in one InlineImage streaming frame. |
-| `MAX_UPLOAD_CHUNK_BYTES` | 64 KiB | `src/streaming/protocol.rs:341` | Bytes accepted in one UploadChunk message payload from a streaming client. |
+| `MAX_INLINE_IMAGE_BYTES` | 8 MiB | `src/streaming/protocol.rs:333` | Image bytes accepted in one InlineImage streaming frame. |
+| `MAX_UPLOAD_CHUNK_BYTES` | 64 KiB | `src/streaming/protocol.rs:342` | Bytes accepted in one UploadChunk message payload from a streaming client. |
 | `WS_MAX_MESSAGE_SIZE` | 16 MiB | `src/streaming/server/mod.rs:45` | Bytes accepted in one inbound WebSocket message from a streaming client. |
 | `WS_MAX_FRAME_SIZE` | 16 MiB | `src/streaming/server/mod.rs:47` | Bytes accepted in one inbound WebSocket frame from a streaming client. |
 | `MAX_INPUT_PAYLOAD_BYTES` | 64 KiB | `src/streaming/server/mod.rs:53` | Bytes accepted in one Input message payload from a streaming client. |

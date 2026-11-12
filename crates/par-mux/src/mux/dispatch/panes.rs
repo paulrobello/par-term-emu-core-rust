@@ -479,6 +479,7 @@ pub(super) fn cmd_pane_info(ctx: &Ctx<'_>, pane: Target<PaneId>, mirror: bool) -
         viewer_count,
         last_viewed,
         last_input,
+        parts,
     ) = {
         let mut guard = ctx.tree.lock();
         if mirror {
@@ -514,6 +515,7 @@ pub(super) fn cmd_pane_info(ctx: &Ctx<'_>, pane: Target<PaneId>, mirror: bool) -
             viewer_count,
             last_viewed,
             target.last_client_input_at(),
+            target.snapshot_capture_parts(),
         )
     };
     // The process table snapshots read the whole OS process list; taking
@@ -522,6 +524,21 @@ pub(super) fn cmd_pane_info(ctx: &Ctx<'_>, pane: Target<PaneId>, mirror: bool) -
         .and_then(|pid| ProcessTable::snapshot().and_then(|table| table.foreground_command(pid)))
         .map(|name| base64::engine::general_purpose::STANDARD.encode(name));
     let cpu_ms = child_pid.and_then(crate::mux::process_cpu::group_cpu_ms);
+    // The pane's logical cwd and its OSC 7 host, resolved the same way
+    // persistence resolves them (OSC 7 first, child kernel cwd, spawn
+    // floor) and carried as tail tokens so a streaming mirror can name
+    // the pane's directory without an OSC 7 report of its own (card
+    // 01a1ce6a). Kernel/spawn-floor cwds carry no host — local by
+    // construction; the token stays absent then.
+    let (cwd, cwdhost) = {
+        let cwd = parts
+            .cwd()
+            .map(|p| base64::engine::general_purpose::STANDARD.encode(p.display().to_string()));
+        let cwdhost = parts
+            .cwd_host()
+            .map(|h| base64::engine::general_purpose::STANDARD.encode(h));
+        (cwd, cwdhost)
+    };
     // The row's Display is the wire line, so the attach client's
     // `PaneInfoRow::parse` cannot drift from it (ARC-141).
     let row = crate::mux::ipc::PaneInfoRow {
@@ -530,6 +547,8 @@ pub(super) fn cmd_pane_info(ctx: &Ctx<'_>, pane: Target<PaneId>, mirror: bool) -
         size: (cols, rows),
         cmd,
         exited: dead.then_some(exit_code),
+        cwd,
+        cwdhost,
     };
     // The presence tail (D35): all whitespace-free key=value tokens, so
     // older clients keep parsing the fixed prefix, and a timestamp with

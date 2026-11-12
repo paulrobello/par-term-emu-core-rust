@@ -2,7 +2,7 @@
 //! viewer-status protocol, the seed (screen replay plus graphics
 //! placements), and the `workspace-active` follow that re-seeds in place.
 
-use super::control::{command, parse_pane_info, MuxLines};
+use super::control::{command, parse_cwd_token, parse_cwdhost_token, parse_pane_info, MuxLines};
 use super::lifecycle::{debug_log_active_workspace, query_active_workspace_pane};
 use super::stream::forward;
 use crate::mux::{connect_local_stream, LocalStream};
@@ -65,6 +65,12 @@ pub(super) struct MirrorLink {
     /// a session created after a transition still connects with the
     /// pane's current state.
     pub(super) process: Mutex<Option<ServerMessage>>,
+    /// The pane's cwd and its OSC 7 hostname (card 01a1ce6a), seeded from
+    /// the attach's pane-info row and kept current by the drain loop (OSC
+    /// 7 events and the pane-info poll). Serves the `Connected.cwd`
+    /// fallback for a session created before the mirror saw any OSC 7,
+    /// and the dedupe state for cwd-change broadcasts.
+    pub(super) cwd: Mutex<Option<(String, Option<String>)>>,
     pub(super) session: RwLock<Option<std::sync::Weak<StreamSessionState>>>,
 }
 
@@ -183,6 +189,75 @@ pub(super) fn publish_process_state(
     {
         session.update_pane_process(message);
     }
+}
+
+/// One cwd change to broadcast: the prior path (when known), the new path,
+/// and its OSC 7 hostname (`None` when the cwd did not come from an OSC 7
+/// report).
+pub(super) struct CwdUpdate {
+    pub(super) old: Option<String>,
+    pub(super) new: String,
+    pub(super) host: Option<String>,
+}
+
+/// Record `cwd`/`host` as the pane's state (card 01a1ce6a). Returns the
+/// update to broadcast — `None` when nothing changed, so the 1s pane-info
+/// poll stays silent while the OSC 7 arm and the poll agree. Also pushes
+/// the new state to a live session, so `Connected` for the NEXT client
+/// names the pane's cwd even though the mirror never saw an OSC 7.
+pub(super) fn record_cwd(
+    link: &MirrorLink,
+    cwd: String,
+    host: Option<String>,
+) -> Option<CwdUpdate> {
+    let mut state = link.cwd.lock();
+    if state.as_ref() == Some(&(cwd.clone(), host.clone())) {
+        return None;
+    }
+    let old = state.as_ref().map(|(c, _)| c.clone());
+    *state = Some((cwd.clone(), host.clone()));
+    drop(state);
+    let update = CwdUpdate {
+        old,
+        new: cwd,
+        host,
+    };
+    if let Some(session) = link
+        .session
+        .read()
+        .as_ref()
+        .and_then(std::sync::Weak::upgrade)
+    {
+        session.update_mux_cwd(update.new.clone(), update.host.clone());
+    }
+    Some(update)
+}
+
+/// The `CwdChanged` message for `update`, with the sender's SEC-128
+/// locality verdict computed from the OSC 7 hostname.
+pub(super) fn cwd_changed_message(update: &CwdUpdate) -> ServerMessage {
+    let is_local = par_term_emu_core::shell_integration::osc7_host_is_local(update.host.as_deref());
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_millis() as u64)
+        .unwrap_or(0);
+    ServerMessage::cwd_changed_full(
+        update.old.clone(),
+        update.new.clone(),
+        update.host.clone(),
+        None,
+        now,
+        is_local,
+    )
+}
+
+/// Parse the cwd tokens off a `pane-info` reply row and, when they name a
+/// different (path, host) than the link's last state, record the change
+/// for the caller to broadcast.
+pub(super) fn apply_pane_cwd(link: &MirrorLink, line: &str) -> Option<CwdUpdate> {
+    let cwd = super::control::parse_cwd_token(line)?;
+    let host = super::control::parse_cwdhost_token(line);
+    record_cwd(link, cwd, host)
 }
 
 pub(super) fn query_viewer_status(link: &MirrorLink) -> io::Result<()> {
@@ -481,6 +556,25 @@ fn apply_workspace_target(
     // converge without a reconnect.
     let (exited, code) = parse_pane_exited_token(&target.status_line).unwrap_or((false, None));
     publish_process_state(link, &format!("%{}", link.pane()), exited, code);
+    // The pane (possibly a different one) the mirror now serves: its cwd
+    // replaces the old pane's, and connected viewers learn the switch as a
+    // CwdChanged (card 01a1ce6a). A row without cwd tokens (older daemon)
+    // clears the state so the next Connected does not name the previous
+    // pane's directory.
+    let new_cwd = parse_cwd_token(&target.status_line)
+        .map(|cwd| (cwd, parse_cwdhost_token(&target.status_line)));
+    match new_cwd {
+        Some((cwd, host)) => {
+            if let Some(update) = record_cwd(link, cwd, host) {
+                if let Some(server) = server.as_ref().and_then(std::sync::Weak::upgrade) {
+                    server.send_to_session(session_id, cwd_changed_message(&update));
+                }
+            }
+        }
+        None => {
+            *link.cwd.lock() = None;
+        }
+    }
     let restore = link.terminal.read().export_screen_restore_sequence();
     if resized {
         if let Some(server) = server.as_ref().and_then(std::sync::Weak::upgrade) {

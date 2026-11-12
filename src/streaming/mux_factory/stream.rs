@@ -4,8 +4,8 @@
 
 use super::control::MuxLines;
 use super::mirror::{
-    apply_viewer_status, follow_active_workspace, publish_process_state, query_viewer_status,
-    reseed_after_respawn, MirrorLink, Sink,
+    apply_pane_cwd, apply_viewer_status, cwd_changed_message, follow_active_workspace,
+    publish_process_state, query_viewer_status, record_cwd, reseed_after_respawn, MirrorLink, Sink,
 };
 use super::MUX_REPLY_TIMEOUT;
 use crate::mux::LocalStream;
@@ -217,6 +217,18 @@ pub(super) fn spawn_drain(
                     } else {
                         if line.starts_with(&pane_prefix) {
                             apply_viewer_status(&link, &line);
+                            // A cwd token on the row the mirror polls every
+                            // second: a plain shell's `cd` (no OSC 7)
+                            // still reaches the viewers, within one poll
+                            // (card 01a1ce6a criterion 2).
+                            if let Some(update) = apply_pane_cwd(&link, &line) {
+                                if let Some(server) =
+                                    server.as_ref().and_then(std::sync::Weak::upgrade)
+                                {
+                                    server
+                                        .send_to_session(&session_id, cwd_changed_message(&update));
+                                }
+                            }
                         }
                         reply_body.push(line);
                     }
@@ -270,6 +282,36 @@ pub(super) fn spawn_drain(
                                     {
                                         server.send_to_session(&session_id, ServerMessage::bell());
                                     }
+                                }
+                                // The pane's shell reported a new directory
+                                // via OSC 7 (the instant path; the pane-info
+                                // poll covers shells without integration):
+                                // forward it with the sender's SEC-128
+                                // locality verdict (card 01a1ce6a criteria
+                                // 1+3), and keep the link's copy current so
+                                // the next Connected names it.
+                                if let TerminalEvent::CwdChanged(cwd) = event {
+                                    record_cwd(&link, cwd.new_cwd.clone(), cwd.hostname.clone());
+                                    let is_local =
+                                        par_term_emu_core::shell_integration::osc7_host_is_local(
+                                            cwd.hostname.as_deref(),
+                                        );
+                                    if let Some(server) =
+                                        server.as_ref().and_then(std::sync::Weak::upgrade)
+                                    {
+                                        server.send_to_session(
+                                            &session_id,
+                                            ServerMessage::cwd_changed_full(
+                                                cwd.old_cwd,
+                                                cwd.new_cwd,
+                                                cwd.hostname,
+                                                cwd.username,
+                                                cwd.timestamp,
+                                                is_local,
+                                            ),
+                                        );
+                                    }
+                                    continue;
                                 }
                                 let TerminalEvent::GraphicsAdded { image_id, row } = event else {
                                     // Mirrors stream text via %output itself; only
@@ -586,6 +628,7 @@ mod tests {
             graphics_panes: Arc::new(Mutex::new(HashMap::new())),
             status: Mutex::new(None),
             process: Mutex::new(None),
+            cwd: Mutex::new(None),
             session: RwLock::new(None),
         })
     }
@@ -672,6 +715,7 @@ mod tests {
             graphics_panes: Arc::new(Mutex::new(HashMap::new())),
             status: Mutex::new(None),
             process: Mutex::new(None),
+            cwd: Mutex::new(None),
             session: RwLock::new(None),
         });
         let (tx, mut rx) = tokio::sync::mpsc::channel(2);

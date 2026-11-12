@@ -183,6 +183,8 @@ fn server_fixtures() -> Vec<AppServerMessage> {
                 pane: Some("pane-3".into()),
             }],
             pane_create_allowed: Some(true),
+            cwd_hostname: Some("mirror-host".into()),
+            cwd_is_local: Some(false),
         },
         S::Connected {
             cols: 1,
@@ -199,6 +201,8 @@ fn server_fixtures() -> Vec<AppServerMessage> {
             readonly: None,
             pointer_shape: None,
             pane_create_allowed: None,
+            cwd_hostname: None,
+            cwd_is_local: None,
         },
         S::Refresh {
             cols: 7,
@@ -217,6 +221,7 @@ fn server_fixtures() -> Vec<AppServerMessage> {
             hostname: Some("host".into()),
             username: Some("user".into()),
             timestamp: Some(12),
+            is_local: Some(false),
         },
         S::TriggerMatched {
             trigger_id: 13,
@@ -765,6 +770,8 @@ fn lossy_server_inputs() -> Vec<(&'static str, pb::ServerMessage)> {
                 readonly: None,
                 pointer_shape: None,
                 pane_create_allowed: Some(false),
+                cwd_hostname: None,
+                cwd_is_local: None,
                 graphics: vec![pb::InlineImage {
                     image_id: 1,
                     pane_id: None,

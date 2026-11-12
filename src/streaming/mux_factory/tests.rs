@@ -1723,6 +1723,170 @@ fn late_joiner_connects_with_the_current_process_state() {
     wait_mirror(&rejoined, "BACK");
 }
 
+/// Card 01a1ce6a criterion 2: a plain shell `cd` (no OSC 7 integration)
+/// still reaches a streaming client — the mirror's pane-info poll picks
+/// up the daemon's cwd token within one poll and broadcasts `CwdChanged`
+/// with the sender's locality verdict.
+#[test]
+fn a_plain_shell_cd_reaches_a_streaming_client_as_cwd_changed() {
+    let rt = runtime();
+    let _entered = rt.enter();
+    let (_dir, socket, _serving, mut control, pane) = daemon();
+    let target = tempfile::Builder::new()
+        .prefix("cwd-mirror-test-")
+        .tempdir()
+        .expect("target dir");
+    let target_path = target.path().display().to_string();
+
+    let server = streaming(&socket);
+    let session = mirror(&server, &pane);
+    let mut updates = session.broadcast_tx.subscribe();
+
+    type_line(&session, &format!("cd {target_path}"));
+    wait("the daemon's pane cwd token to name the target", || {
+        let row = control
+            .send(&format!("pane-info -t {pane} -M"))
+            .expect("pane-info");
+        match super::control::parse_cwd_token(row.join("").as_str()) {
+            Some(cwd) if cwd == target_path => None,
+            state => Some(format!("{state:?}")),
+        }
+    });
+
+    wait("the streaming client to receive the CwdChanged", || {
+        while let Ok(msg) = updates.try_recv() {
+            if let ServerMessage::CwdChanged {
+                new_cwd,
+                hostname,
+                is_local,
+                ..
+            } = &msg
+            {
+                if new_cwd == &target_path {
+                    // The shell may carry the local host in its OSC 7
+                    // (macOS zsh does); either way the verdict is
+                    // local — never a foreign host.
+                    assert_ne!(hostname.as_deref(), Some("remote.invalid"));
+                    assert_eq!(is_local, &Some(true), "the pane's own host is local");
+                    return None;
+                }
+            }
+        }
+        Some("no matching CwdChanged yet".to_string())
+    });
+}
+
+/// Card 01a1ce6a criterion 1: `Connected` names the pane's cwd even when
+/// the mirror saw no OSC 7 — the attach's pane-info row is the source —
+/// and criterion 3's locality verdict says local, with no hostname.
+#[test]
+fn connected_carries_the_daemon_known_cwd_without_osc7() {
+    let rt = runtime();
+    let _entered = rt.enter();
+    let (_dir, socket, _serving, mut control, pane) = daemon();
+
+    let server = streaming(&socket);
+    let session = mirror(&server, &pane);
+    let connected = session.build_connect_message("test-client", false, false);
+    let ServerMessage::Connected {
+        cwd,
+        cwd_hostname,
+        cwd_is_local,
+        ..
+    } = connected
+    else {
+        panic!("not a Connected");
+    };
+    // The daemon knows the pane's cwd (the shell's kernel cwd) though no
+    // OSC 7 has crossed a mirror.
+    let row = control
+        .send(&format!("pane-info -t {pane} -M"))
+        .expect("pane-info")
+        .join("");
+    let daemon_cwd = super::control::parse_cwd_token(&row).expect("the row carries cwd=");
+    assert_eq!(cwd.as_deref(), Some(daemon_cwd.as_str()));
+    // The shell may have already emitted a local-host OSC 7; the verdict
+    // must be local either way — never a foreign host.
+    assert_ne!(cwd_hostname.as_deref(), Some("remote.invalid"));
+    assert_eq!(cwd_is_local, Some(true), "the pane's own host is local");
+}
+
+/// Card 01a1ce6a criterion 3: an OSC 7 report naming a remote host is
+/// forwarded with `is_local: false` and the hostname, and the handshake
+/// that follows names both — a client can tell local from remote without
+/// guessing (SEC-128 rule).
+#[test]
+fn a_remote_osc7_report_arrives_marked_remote() {
+    let rt = runtime();
+    let _entered = rt.enter();
+    let (_dir, socket, _serving, mut control, pane) = daemon();
+    let server = streaming(&socket);
+    let session = mirror(&server, &pane);
+    let mut updates = session.broadcast_tx.subscribe();
+
+    // Respawn the pane as `cat`: no shell prompt of its own, so no
+    // later OSC 7 overwrites the injected state, and the PTY echo (plus
+    // cat itself) carries the raw sequence to both terminals.
+    control
+        .send(&format!("respawn-pane -k -t {pane} cat"))
+        .expect("respawn-pane");
+    wait("the pane to respawn as cat", || {
+        match control
+            .send(&format!("pane-info -t {pane} -M"))
+            .expect("pane-info")
+            .join("")
+            .split_whitespace()
+            .find(|t| t.starts_with("cmd="))
+            .map(|t| t.trim_start_matches("cmd=").to_string())
+        {
+            Some(cmd) if cmd == "Y2F0" => None, // base64("cat")
+            state => Some(format!("{state:?}")),
+        }
+    });
+
+    // Feed the pane the OSC 7 sequence for a REMOTE host. The trailing
+    // newline flushes cat's line-buffered stdout.
+    let osc7 = "\x1b]7;file://remote.invalid/remote/path\x07\n";
+    let hex: Vec<String> = osc7.bytes().map(|b| format!("{b:02x}")).collect();
+    control
+        .send(&format!("send-keys -t {pane} -H {}", hex.join(" ")))
+        .expect("send-keys -H");
+
+    wait("the mirror to forward the remote CwdChanged", || {
+        while let Ok(msg) = updates.try_recv() {
+            if let ServerMessage::CwdChanged {
+                new_cwd,
+                hostname,
+                is_local,
+                ..
+            } = &msg
+            {
+                if new_cwd == "/remote/path" {
+                    assert_eq!(hostname.as_deref(), Some("remote.invalid"));
+                    assert_eq!(is_local, &Some(false), "a foreign host is not local");
+                    return None;
+                }
+            }
+        }
+        Some("no remote CwdChanged yet".to_string())
+    });
+
+    // The handshake agrees: the mirror terminal now holds the OSC 7 state.
+    let connected = session.build_connect_message("test-client", false, false);
+    let ServerMessage::Connected {
+        cwd,
+        cwd_hostname,
+        cwd_is_local,
+        ..
+    } = connected
+    else {
+        panic!("not a Connected");
+    };
+    assert_eq!(cwd.as_deref(), Some("/remote/path"));
+    assert_eq!(cwd_hostname.as_deref(), Some("remote.invalid"));
+    assert_eq!(cwd_is_local, Some(false));
+}
+
 /// Card 01a1957a criterion 2, retargeting: a `workspace-active` mirror
 /// that lands on a held-dead pane publishes THAT pane's state (id plus
 /// status) from the resolution's pane-info row; switching back to a live

@@ -133,9 +133,78 @@ impl ShellIntegration {
     }
 }
 
+/// This machine's hostname, or `None` when the OS will not say.
+#[cfg(unix)]
+pub fn local_hostname() -> Option<String> {
+    let mut buf = [0u8; 256];
+    // SAFETY: `buf` is a live, writable 256-byte buffer and the length
+    // passed is its exact size, so gethostname(3) writes only inside it.
+    let rc = unsafe { libc::gethostname(buf.as_mut_ptr().cast(), buf.len()) };
+    if rc != 0 {
+        return None;
+    }
+    // POSIX leaves a truncated name unterminated; treat that as unknown.
+    let end = buf.iter().position(|&b| b == 0)?;
+    let name = std::str::from_utf8(&buf[..end]).ok()?;
+    (!name.is_empty()).then(|| name.to_string())
+}
+
+/// This machine's hostname, or `None` when the OS will not say.
+#[cfg(windows)]
+pub fn local_hostname() -> Option<String> {
+    std::env::var("COMPUTERNAME").ok().filter(|n| !n.is_empty())
+}
+
+/// This machine's hostname, or `None` when the OS will not say.
+#[cfg(not(any(unix, windows)))]
+pub fn local_hostname() -> Option<String> {
+    None
+}
+
+/// Whether an OSC 7 hostname names this machine (SEC-128). `None` is local:
+/// the parser folds an empty host and `localhost` into it, and shells
+/// commonly emit `file://$HOSTNAME/$path` even locally, so an absent host
+/// must not reject every local integration. Any other name must match the
+/// local hostname, full or short form, case insensitively; an unknown
+/// local name trusts nothing.
+///
+/// The single locality authority for cwd reporting: the mux daemon uses
+/// it for respawn targeting, and both streaming send paths (standalone
+/// server and mux mirror) use it to stamp `is_local` on the
+/// `CwdChanged`/`Connected` messages a streaming client receives (card
+/// 01a1ce6a).
+pub fn osc7_host_is_local(host: Option<&str>) -> bool {
+    let Some(host) = host else {
+        return true;
+    };
+    let Some(local) = local_hostname() else {
+        return false;
+    };
+    let short = |name: &str| name.split('.').next().unwrap_or(name).to_string();
+    host.eq_ignore_ascii_case(&local) || short(host).eq_ignore_ascii_case(&short(&local))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// SEC-128: an OSC 7 host is local only when it is absent (the parser's
+    /// fold of empty/`localhost`) or matches this machine's name, full or
+    /// short form, in any case.
+    #[test]
+    fn osc7_host_is_local_matches_only_this_machine() {
+        assert!(osc7_host_is_local(None));
+        let local = local_hostname().expect("hostname");
+        let short = local.split('.').next().unwrap().to_string();
+        assert!(osc7_host_is_local(Some(&local)));
+        assert!(osc7_host_is_local(Some(&local.to_uppercase())));
+        assert!(osc7_host_is_local(Some(&short)));
+        assert!(osc7_host_is_local(Some(&format!(
+            "{short}.example.invalid"
+        ))));
+        assert!(!osc7_host_is_local(Some("remote.invalid")));
+        assert!(!osc7_host_is_local(Some(&format!("{short}x"))));
+    }
 
     #[test]
     fn test_shell_integration_markers() {

@@ -160,8 +160,18 @@ pub fn cwd_changed_from(kwargs: Option<&Bound<'_, PyDict>>) -> PyResult<ServerMe
     let hostname = get_str("hostname");
     let username = get_str("username");
     let timestamp = get_u64("timestamp");
+    let is_local = kwargs
+        .and_then(|k| k.get_item("is_local").ok().flatten())
+        .and_then(|v| v.extract::<bool>().ok());
     Ok(match timestamp {
-        Some(ts) => ServerMessage::cwd_changed_full(old_cwd, new_cwd, hostname, username, ts),
+        Some(ts) => ServerMessage::cwd_changed_full(
+            old_cwd,
+            new_cwd,
+            hostname,
+            username,
+            ts,
+            is_local.unwrap_or(true),
+        ),
         None => ServerMessage::cwd_changed(new_cwd),
     })
 }
