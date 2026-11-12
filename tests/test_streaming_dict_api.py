@@ -553,9 +553,14 @@ CLIENT_CASES = [
     (
         "pane_create_request",
         {"correlation_id": "c1", "session_id": "$0"},
-        {"correlation_id": "c1", "session_id": "$0"},
+        {"correlation_id": "c1", "session_id": "$0", "name": None},
     ),
-    ("pane_create_request", {}, {"correlation_id": "", "session_id": ""}),
+    (
+        "pane_create_request",
+        {"correlation_id": "c2", "session_id": "$0", "name": "agent-bench"},
+        {"correlation_id": "c2", "session_id": "$0", "name": "agent-bench"},
+    ),
+    ("pane_create_request", {}, {"correlation_id": "", "session_id": "", "name": None}),
 ]
 
 
