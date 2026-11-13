@@ -2032,6 +2032,57 @@ fn test_build_graphic_new_frame_starts_from_its_base_or_its_background() {
 }
 
 #[test]
+fn test_animation_control_root_gap_before_the_first_append_is_kept() {
+    let red = [255, 0, 0, 255];
+    let mut store = GraphicsStore::new();
+    kitty_command(
+        &mut store,
+        &format!("a=t,f=32,s=1,v=1,i=5;{}", rgba_b64(&[red])),
+    )
+    .unwrap();
+
+    // The spec-mandated flow: set the root frame's gap right after
+    // transmission, before any a=f append. The entry is created here with the
+    // root frame sharing the image buffer.
+    kitty_command(&mut store, "a=a,i=5,r=1,z=1000;").unwrap();
+    let anim = store
+        .get_animation(5)
+        .expect("entry created for the root gap");
+    assert_eq!(anim.get_frame(1).unwrap().delay_ms, 1000);
+    let (_, _, root) = store.get_kitty_image(5).unwrap();
+    assert!(Arc::ptr_eq(&anim.get_frame(1).unwrap().pixels, &root));
+
+    // The append keeps the root gap and adds frame 2.
+    let b64 = rgba_b64(&[[0, 255, 0, 255]]);
+    kitty_command(&mut store, &format!("a=f,f=32,s=1,v=1,i=5;{b64}")).unwrap();
+    let anim = store.get_animation(5).unwrap();
+    assert_eq!(anim.frame_count(), 2);
+    assert_eq!(anim.get_frame(1).unwrap().delay_ms, 1000);
+}
+
+#[test]
+fn test_build_graphic_base_frame_out_of_range_is_an_error() {
+    let mut store = GraphicsStore::new();
+    let b64 = rgba_b64(&[[1, 2, 3, 255]]);
+    kitty_command(&mut store, &format!("a=t,f=32,s=1,v=1,i=6;{b64}")).unwrap();
+    // c= referencing a nonexistent frame errors (kitty replies ENOENT)
+    // instead of silently filling from the background color.
+    let result = kitty_command(&mut store, &format!("a=f,f=32,s=1,v=1,x=1,i=6,c=5;{b64}"));
+    assert!(result.unwrap_err().to_string().contains("does not exist"));
+    assert!(store.get_animation(6).is_none());
+}
+
+#[test]
+fn test_build_graphic_r_zero_appends_a_new_frame() {
+    let mut store = GraphicsStore::new();
+    let b64 = rgba_b64(&[[1, 2, 3, 255]]);
+    kitty_command(&mut store, &format!("a=t,f=32,s=1,v=1,i=8;{b64}")).unwrap();
+    // The control-data default r=0 means "create a new frame".
+    kitty_command(&mut store, &format!("a=f,f=32,s=1,v=1,i=8,r=0;{b64}")).unwrap();
+    assert_eq!(store.get_animation(8).unwrap().frame_count(), 2);
+}
+
+#[test]
 fn test_build_graphic_frame_edit_of_a_missing_frame_is_an_error() {
     let mut store = GraphicsStore::new();
     let b64 = rgba_b64(&[[1, 2, 3, 255]]);

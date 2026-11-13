@@ -47,25 +47,37 @@ impl GraphicsStore {
             .cloned()
             .ok_or_else(|| GraphicsError::KittyError("Image not found".to_string()))?;
         let count = self.kitty_frame_count(image_id);
+        // The spec's control-data default for r= is 0, meaning "a new frame
+        // is created", so r=0 behaves as if it were absent.
         let number = match edit.frame {
-            Some(number) if number >= 1 && number <= count => number,
+            Some(0) | None => count + 1,
+            Some(number) if number <= count => number,
             Some(number) => {
                 return Err(GraphicsError::KittyError(format!(
                     "Frame {number} does not exist"
                 )))
             }
-            None => count + 1,
         };
         let whole = edit.x == 0 && edit.y == 0 && edit.width == width && edit.height == height;
         let pixels = if whole && edit.replace {
             edit.pixels
         } else {
+            // An explicit c= that references no existing frame is an error
+            // (kitty replies ENOENT); without c= a new frame starts from the
+            // background-color canvas.
             let start = if number <= count {
                 self.kitty_frame_pixels(image_id, number, &root)
             } else {
-                edit.base
-                    .filter(|base| *base >= 1 && *base <= count)
-                    .and_then(|base| self.kitty_frame_pixels(image_id, base, &root))
+                match edit.base.filter(|base| *base >= 1 && *base <= count) {
+                    Some(base) => self.kitty_frame_pixels(image_id, base, &root),
+                    None if edit.base.is_some() => {
+                        return Err(GraphicsError::KittyError(format!(
+                            "Base frame {:?} does not exist",
+                            edit.base
+                        )))
+                    }
+                    None => None,
+                }
             };
             let mut canvas = match start {
                 Some(pixels) => pixels.as_ref().clone(),
@@ -134,7 +146,19 @@ impl GraphicsStore {
     }
 
     /// `a=a,r=N,z=G` (or `z` on `a=f`): frame N lasts G milliseconds.
+    /// The spec-mandated flow sets the root frame's gap with
+    /// `a=a,r=1,z=G` right after transmission, before any `a=f` append —
+    /// when no animation entry exists yet, it is created here (root frame
+    /// sharing the image's buffer, already budget-counted) so the gap is
+    /// not silently dropped.
     pub(crate) fn set_kitty_frame_gap(&mut self, image_id: u32, number: u32, gap_ms: u32) {
+        if !self.animations.contains_key(&image_id) {
+            let Some((width, height, root)) = self.shared_images.get(&image_id).cloned() else {
+                return;
+            };
+            let animation = self.get_or_create_animation(image_id, gap_ms.max(100));
+            animation.add_frame(AnimationFrame::new_shared(1, root, width, height));
+        }
         if let Some(frame) = self
             .animations
             .get_mut(&image_id)
