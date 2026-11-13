@@ -1186,6 +1186,43 @@ impl GraphicsStore {
         self.sync_shared_budget();
     }
 
+    /// Free the stored data of kitty image ids (shared image plus any
+    /// animation), with memory-accounting resync. Placements keep their own
+    /// pixel `Arc`s and stay visible until deleted or replaced, and
+    /// scrollback copies keep theirs — the spec's "the stored image data is
+    /// not deleted if it is still referenced, for example in the scrollback"
+    /// falls out of the shared `Arc`. Returns the ids that actually had
+    /// stored data.
+    pub fn free_kitty_data(&mut self, ids: impl IntoIterator<Item = u32>) -> Vec<u32> {
+        let mut freed = Vec::new();
+        for id in ids {
+            let had =
+                self.shared_images.remove(&id).is_some() || self.animations.remove(&id).is_some();
+            if had {
+                freed.push(id);
+                self.resync_kitty_entry(id);
+            }
+        }
+        if !freed.is_empty() {
+            self.sync_shared_budget();
+        }
+        freed
+    }
+
+    /// Drop an image's animation with all its frames, with memory-accounting
+    /// resync. The shared image entry (the static image itself) is kept, so
+    /// the image remains displayable — the lowercase `d=f` form. Returns
+    /// whether an animation existed.
+    pub fn remove_kitty_animation(&mut self, image_id: u32) -> bool {
+        if self.animations.remove(&image_id).is_some() {
+            self.resync_kitty_entry(image_id);
+            self.sync_shared_budget();
+            true
+        } else {
+            false
+        }
+    }
+
     // --- Virtual placements ---
 
     /// Add or update a virtual placement
@@ -1487,8 +1524,34 @@ pub enum GraphicsError {
     ImageError(String),
     /// Kitty protocol error.
     KittyError(String),
+    /// Kitty protocol error: the command named an image/placement/frame id
+    /// that does not exist. Answers `ENOENT` in the graphics reply (the
+    /// plain [`GraphicsError::KittyError`] answers `EINVAL`).
+    KittyNotFound(String),
     /// iTerm2 inline image protocol error.
     ITermError(String),
+}
+
+impl GraphicsError {
+    /// The kitty graphics-protocol reply code for this error: `ENOENT` for
+    /// unknown/missing ids, `EINVAL` for malformed or invalid commands.
+    /// Other protocols' errors also carry `EINVAL` — the reply path is
+    /// kitty-only.
+    pub fn kitty_code(&self) -> &'static str {
+        match self {
+            GraphicsError::KittyNotFound(_) => "ENOENT",
+            _ => "EINVAL",
+        }
+    }
+
+    /// The message body for a kitty graphics reply, stripped of the Display
+    /// prefix — the spec's reply shape is `<code>:<detailed message>`.
+    pub fn kitty_message(&self) -> String {
+        match self {
+            GraphicsError::KittyNotFound(msg) | GraphicsError::KittyError(msg) => msg.clone(),
+            other => other.to_string(),
+        }
+    }
 }
 
 impl std::fmt::Display for GraphicsError {
@@ -1505,6 +1568,7 @@ impl std::fmt::Display for GraphicsError {
             GraphicsError::Base64Error(msg) => write!(f, "Invalid base64: {}", msg),
             GraphicsError::ImageError(msg) => write!(f, "Image decode failed: {}", msg),
             GraphicsError::KittyError(msg) => write!(f, "Kitty protocol error: {}", msg),
+            GraphicsError::KittyNotFound(msg) => write!(f, "Kitty image not found: {}", msg),
             GraphicsError::ITermError(msg) => write!(f, "iTerm protocol error: {}", msg),
         }
     }

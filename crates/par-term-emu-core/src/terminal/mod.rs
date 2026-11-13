@@ -876,8 +876,10 @@ impl Terminal {
                         }
                         self.kitty_parser.reset();
                     } else {
-                        // Errors here are non-fatal.
+                        // Errors here are non-fatal: they become graphics
+                        // replies per the spec's q= matrix below.
                         let position = (self.cursor.col, self.cursor.row);
+                        let mut failure: Option<crate::graphics::GraphicsError> = None;
                         let dropped_before = self.graphics.graphics_store.dropped_count();
                         match self
                             .kitty_parser
@@ -921,7 +923,7 @@ impl Terminal {
                                 }
                                 | crate::graphics::kitty::KittyGraphicResult::None,
                             ) => {}
-                            Err(crate::graphics::GraphicsError::ImageTooLarge(pixels, _)) => {
+                            Err(crate::graphics::GraphicsError::ImageTooLarge(pixels, max)) => {
                                 // A size/budget refusal: publish the unified
                                 // budget event (ENH-062) so an oversized
                                 // payload is visible alongside the per-store
@@ -933,9 +935,13 @@ impl Terminal {
                                     crate::graphics::budget::BudgetStore::Graphics,
                                     bytes,
                                 );
+                                failure = Some(crate::graphics::GraphicsError::ImageTooLarge(
+                                    pixels, max,
+                                ));
                             }
                             Err(err) => {
                                 crate::debug_log!("KITTY", "kitty command failed: {}", err);
+                                failure = Some(err);
                             }
                         }
                         let dropped_after = self.graphics.graphics_store.dropped_count();
@@ -946,11 +952,42 @@ impl Terminal {
                                 0,
                             );
                         }
+                        // Reply on the graphics channel per the spec's
+                        // quietness matrix: q=0 sends OK responses for
+                        // successful commands and error responses for
+                        // failures, q=1 suppresses the OK responses only,
+                        // q=2 suppresses all replies. Error codes are
+                        // ENOENT for unknown ids and EINVAL for malformed
+                        // commands; the response echoes the command's
+                        // i=/p= keys (see KittyParser::response_id_prefix).
+                        let quietness = self.kitty_parser.quietness;
+                        let reply = if quietness < 2 {
+                            match failure {
+                                Some(err) => Some(
+                                    self.kitty_parser
+                                        .error_response(err.kitty_code(), &err.kitty_message()),
+                                ),
+                                None if quietness == 0 => Some(self.kitty_parser.ok_response()),
+                                None => None,
+                            }
+                        } else {
+                            None
+                        };
+                        if let Some(reply) = reply {
+                            self.response_buffer.extend_from_slice(reply.as_bytes());
+                        }
                         self.kitty_parser.reset();
                     }
                 }
-                Err(_) => {
-                    // Malformed chunk — reset and continue.
+                Err(err) => {
+                    // Malformed chunk: EINVAL reply per the q= matrix (q=2
+                    // suppresses), then reset and continue.
+                    if self.kitty_parser.quietness < 2 {
+                        let response = self
+                            .kitty_parser
+                            .error_response(err.kitty_code(), &err.kitty_message());
+                        self.response_buffer.extend_from_slice(response.as_bytes());
+                    }
                     self.kitty_parser.reset();
                 }
             }

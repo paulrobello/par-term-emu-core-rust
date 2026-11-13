@@ -166,19 +166,61 @@ fn query_without_image_id_emits_ok_without_id() {
 }
 
 #[test]
-fn transmit_does_not_emit_response() {
+fn transmit_emits_ok_response_and_q1_suppresses_it() {
     let mut term = Terminal::new(80, 24);
 
-    // Phase 1-style transmit: must register the image and produce no reply bytes.
+    // Phase 1-style transmit: registers the image and, at q=0, replies OK
+    // per the quietness matrix. q=1 suppresses the OK reply.
     term.process(b"\x1b_Ga=t,f=24,i=77,s=2,v=2;AAAAAAAAAAAAAAAA\x1b\\");
-
     assert!(
         term.graphics.graphics_store.get_kitty_image(77).is_some(),
         "transmit should still register the image"
     );
+    assert_eq!(
+        term.drain_responses(),
+        b"\x1b_Gi=77;OK\x1b\\",
+        "q=0 successful commands reply OK"
+    );
+
+    let mut term = Terminal::new(80, 24);
+    term.process(b"\x1b_Ga=t,f=24,i=77,q=1,s=2,v=2;AAAAAAAAAAAAAAAA\x1b\\");
+    assert!(term.graphics.graphics_store.get_kitty_image(77).is_some());
     assert!(
         !term.has_pending_responses(),
-        "non-query actions must not write to response_buffer"
+        "q=1 must suppress the OK reply (got: {:?})",
+        term.drain_responses()
+    );
+}
+
+#[test]
+fn failed_put_replies_enoent_and_q2_suppresses_it() {
+    let mut term = Terminal::new(80, 24);
+
+    // a=p of an image that was never transmitted: ENOENT, per the spec's
+    // `_Gi=<id>;ENOENT:<some detailed error msg>` response example.
+    term.process(b"\x1b_Ga=p,i=9,q=0;\x1b\\");
+    let response = term.drain_responses();
+    assert!(
+        response.starts_with(b"\x1b_Gi=9;ENOENT:"),
+        "missing-id put must reply ENOENT, got: {:?}",
+        String::from_utf8_lossy(&response)
+    );
+
+    // q=1 keeps error replies (it suppresses OK replies only).
+    let mut term = Terminal::new(80, 24);
+    term.process(b"\x1b_Ga=p,i=9,q=1;\x1b\\");
+    assert!(
+        term.drain_responses().starts_with(b"\x1b_Gi=9;ENOENT:"),
+        "q=1 must keep error replies"
+    );
+
+    // q=2 suppresses all replies.
+    let mut term = Terminal::new(80, 24);
+    term.process(b"\x1b_Ga=p,i=9,q=2;\x1b\\");
+    assert!(
+        !term.has_pending_responses(),
+        "q=2 must suppress error replies (got: {:?})",
+        term.drain_responses()
     );
 }
 
@@ -645,4 +687,91 @@ fn root_frame_edits_repaint_the_placement_in_place() {
         );
         assert_eq!((term.cursor().col, term.cursor().row), (0, 0));
     }
+}
+
+#[test]
+fn frame_edits_and_frame_switches_freeze_the_scrollback_copy() {
+    // Kitty's model freezes history: a scrollback copy keeps the frame it
+    // showed at scroll time, even after the image is edited or switches
+    // frames, while live placements follow the current frame.
+    let mut term = Terminal::new(80, 24);
+    let red = base64::Engine::encode(
+        &base64::engine::general_purpose::STANDARD,
+        [255u8, 0, 0, 255],
+    );
+    let green = base64::Engine::encode(
+        &base64::engine::general_purpose::STANDARD,
+        [0u8, 255, 0, 255],
+    );
+    let blue = base64::Engine::encode(
+        &base64::engine::general_purpose::STANDARD,
+        [0u8, 0, 255, 255],
+    );
+
+    // Place a red image (row 0) and scroll it into history.
+    term.process(format!("\x1b_Ga=T,f=32,s=1,v=1,i=7;{red}\x1b\\").as_bytes());
+    term.process(b"\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n");
+    assert!(
+        term.graphics
+            .graphics_store
+            .scrollback_entries()
+            .iter()
+            .any(|g| g.kitty_image_id == Some(7)),
+        "the placement should have scrolled into history"
+    );
+
+    // A second, live placement of the same image on the new screen.
+    term.process(b"\x1b_Ga=p,i=7,p=2;\x1b\\");
+
+    // Edit the root frame in place: the live placement follows, the
+    // scrollback copy stays frozen at red.
+    term.process(format!("\x1b_Ga=f,f=32,s=1,v=1,i=7,r=1,X=1;{green}\x1b\\").as_bytes());
+    let store = &term.graphics.graphics_store;
+    let live = store
+        .all_graphics()
+        .iter()
+        .find(|g| g.kitty_image_id == Some(7))
+        .expect("live placement");
+    assert_eq!(
+        live.pixels.as_slice(),
+        [0, 255, 0, 255],
+        "live placement shows the edit"
+    );
+    let scrolled = store
+        .scrollback_entries()
+        .iter()
+        .find(|g| g.kitty_image_id == Some(7))
+        .expect("scrollback copy");
+    assert_eq!(
+        scrolled.pixels.as_slice(),
+        [255, 0, 0, 255],
+        "scrollback copy must stay frozen at the frame it showed at scroll time"
+    );
+
+    // A frame switch (a=a,c=N) likewise leaves the scrollback copy alone.
+    // Frame 2 carries blue so a follow would repaint the scrollback copy to
+    // blue and the freeze assertion below would catch it.
+    term.process(format!("\x1b_Ga=f,f=32,s=1,v=1,i=7;{blue}\x1b\\").as_bytes());
+    term.process(b"\x1b_Ga=a,i=7,c=2;\x1b\\");
+    let store = &term.graphics.graphics_store;
+    let live = store
+        .all_graphics()
+        .iter()
+        .find(|g| g.kitty_image_id == Some(7))
+        .unwrap();
+    assert_eq!(
+        live.pixels.as_slice(),
+        [0, 0, 255, 255],
+        "frame switch shows frame 2"
+    );
+    let scrolled = store
+        .scrollback_entries()
+        .iter()
+        .find(|g| g.kitty_image_id == Some(7))
+        .unwrap();
+    assert_eq!(
+        scrolled.pixels.as_slice(),
+        [255, 0, 0, 255],
+        "scrollback copy still frozen at its original frame"
+    );
 }
