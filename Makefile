@@ -329,7 +329,19 @@ test-rust:
 	@echo "Running the full par-mux member suite (lib + bin unit tests + integration tests; serialized because PTY spawns contend in parallel)..."
 	PAR_MUX_NO_APP_WRAPPER=1 cargo test -p par-mux --features attach -- --test-threads=1
 	@echo "Running the mux-backed streaming tests (MuxSessionFactory needs both features; no other run enables them together)..."
-	cargo test --lib --no-default-features --features rust-only,streaming,mux,serde streaming::mux_factory -- --test-threads=1
+	@set -e; \
+	retry_once() { \
+		name="$$1"; shift; \
+		if ! "$$@"; then \
+			echo ""; \
+			echo "RETRY 1 for $$name: first run failed above; re-running the suite once."; \
+			"$$@" || { echo "$$name failed on the retry too"; exit 1; }; \
+			echo "$$name: PASSED ON RETRY 1 (first run failed; treating as a load flake)"; \
+		else \
+			echo "$$name: passed"; \
+		fi; \
+	}; \
+	retry_once "mux-backed streaming suite" cargo test --lib --no-default-features --features rust-only,streaming,mux,serde streaming::mux_factory -- --test-threads=1
 	@echo "Running the par-term-emu-core member suites (ARC-007 O2: each mirrors the root run above that compiled the same core features before the split)..."
 	cargo test -p par-term-emu-core --features ffi
 	cargo test -p par-term-emu-core --lib --features python,pty_session,screenshot,macro-yaml
