@@ -489,6 +489,14 @@ impl Terminal {
     ///
     /// Returns `true` when the character was consumed here.
     fn try_apply_combining_mark(&mut self, c: char, cols: usize) -> bool {
+        // With per-code-point widths (`Terminal::set_codepoint_widths`) a
+        // skin tone modifier is a character of its own, and nothing that
+        // attaches to a cell changes its width.
+        let codepoint_widths = self.unicode_state.codepoint_widths;
+        if codepoint_widths && grapheme::is_skin_tone_modifier(c) {
+            return false;
+        }
+
         if grapheme::is_variation_selector(c)
             || grapheme::is_zwj(c)
             || grapheme::is_skin_tone_modifier(c)
@@ -539,7 +547,8 @@ impl Terminal {
                 // half-written, so at the last column the mark still attaches
                 // but the cell keeps width 1.
                 let grapheme = target_cell.get_grapheme();
-                if target_col + 1 < cols
+                if !codepoint_widths
+                    && target_col + 1 < cols
                     && grapheme::is_wide_grapheme(&grapheme)
                     && target_cell.width() == 1
                 {
@@ -566,6 +575,11 @@ impl Terminal {
                 self.triggers.mark_written(target_row);
             }
             return true;
+        }
+
+        // With per-code-point widths an emoji after a ZWJ takes its own cells.
+        if codepoint_widths {
+            return false;
         }
 
         // Check if previous cell has ZWJ - if so, this char is part of ZWJ sequence
@@ -855,6 +869,80 @@ mod tests {
         assert_eq!(cell.c, 'A');
         assert_eq!(term.cursor.col, 1);
         assert_eq!(term.cursor.row, 0);
+    }
+
+    #[test]
+    fn emoji_sequences_keep_their_own_widths_with_codepoint_widths() {
+        fn terminal() -> Terminal {
+            let mut term = Terminal::new(10, 3);
+            term.set_codepoint_widths(true);
+            term
+        }
+
+        // VS16 does not widen the heart: one column, as wcwidth counts it,
+        // and the next character lands right after it.
+        let mut term = terminal();
+        term.process("\u{2764}\u{FE0F}xyz".as_bytes());
+        let grid = term.active_grid();
+        assert_eq!(grid.get(0, 0).unwrap().get_grapheme(), "\u{2764}\u{FE0F}");
+        assert_eq!(grid.get(0, 0).unwrap().width(), 1);
+        assert_eq!(grid.row_text(0).trim_end(), "\u{2764}\u{FE0F}xyz");
+        assert_eq!(term.cursor.col, 4);
+
+        // After a ZWJ the next emoji takes its own cells: 2 + 0 + 2 columns.
+        let mut term = terminal();
+        term.process("\u{1F468}\u{200D}\u{1F4BB}x".as_bytes());
+        let grid = term.active_grid();
+        assert_eq!(grid.get(0, 0).unwrap().get_grapheme(), "\u{1F468}\u{200D}");
+        assert_eq!(grid.get(2, 0).unwrap().c, '\u{1F4BB}');
+        assert_eq!(grid.get(4, 0).unwrap().c, 'x');
+        assert_eq!(term.cursor.col, 5);
+
+        // A narrow base joined by ZWJ does not widen either.
+        let mut term = terminal();
+        term.process("\u{2764}\u{FE0F}\u{200D}\u{1F525}x".as_bytes());
+        let grid = term.active_grid();
+        assert_eq!(grid.get(0, 0).unwrap().width(), 1);
+        assert_eq!(grid.get(1, 0).unwrap().c, '\u{1F525}');
+        assert_eq!(grid.get(3, 0).unwrap().c, 'x');
+
+        // A skin tone modifier is a wide character of its own.
+        let mut term = terminal();
+        term.process("\u{1F44D}\u{1F3FD}x".as_bytes());
+        let grid = term.active_grid();
+        assert_eq!(grid.get(2, 0).unwrap().c, '\u{1F3FD}');
+        assert_eq!(grid.get(4, 0).unwrap().c, 'x');
+        assert_eq!(term.cursor.col, 5);
+
+        // A combining mark still attaches, and a flag is still one
+        // two-column cell.
+        let mut term = terminal();
+        term.process("e\u{301}\u{1F1FA}\u{1F1F8}x".as_bytes());
+        let grid = term.active_grid();
+        assert_eq!(grid.get(0, 0).unwrap().get_grapheme(), "\u{e9}");
+        assert_eq!(grid.get(1, 0).unwrap().get_grapheme(), "\u{1F1FA}\u{1F1F8}");
+        assert_eq!(grid.get(3, 0).unwrap().c, 'x');
+    }
+
+    #[test]
+    fn codepoint_widths_are_off_by_default_and_survive_ris() {
+        // The default counts grapheme clusters: VS16 widens the heart and a
+        // skin tone modifier joins the cell before it.
+        let mut term = Terminal::new(10, 3);
+        assert!(!term.codepoint_widths());
+        term.process("\u{2764}\u{FE0F}".as_bytes());
+        assert_eq!(term.active_grid().get(0, 0).unwrap().width(), 2);
+        term.process("\r\n\u{1F44D}\u{1F3FD}".as_bytes());
+        assert_eq!(
+            term.active_grid().get(0, 1).unwrap().get_grapheme(),
+            "\u{1F44D}\u{1F3FD}"
+        );
+
+        term.set_codepoint_widths(true);
+        term.process(b"\x1bc");
+        assert!(term.codepoint_widths());
+        term.process("\u{2764}\u{FE0F}".as_bytes());
+        assert_eq!(term.active_grid().get(0, 0).unwrap().width(), 1);
     }
 
     #[test]
