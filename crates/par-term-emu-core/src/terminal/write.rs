@@ -372,30 +372,34 @@ impl Terminal {
                     }
                 }
 
-                // Recalculate width if needed (e.g., emoji with variation selector)
+                // Recalculate width if needed (e.g., emoji with variation
+                // selector). The cell only widens when there is room for the
+                // spacer after it: a wide pair must never end the row
+                // half-written, so at the last column the mark still attaches
+                // but the cell keeps width 1.
                 let grapheme = target_cell.get_grapheme();
-                let new_width = grapheme::is_wide_grapheme(&grapheme);
-                if new_width && target_cell.width() == 1 {
+                if target_col + 1 < cols
+                    && grapheme::is_wide_grapheme(&grapheme)
+                    && target_cell.width() == 1
+                {
                     target_cell.width = 2;
                     target_cell.flags.set_wide_char(true);
 
-                    if target_col + 1 < cols {
-                        let mut spacer_flags = target_cell.flags;
-                        spacer_flags.set_wide_char(false);
-                        spacer_flags.set_wide_char_spacer(true);
+                    let mut spacer_flags = target_cell.flags;
+                    spacer_flags.set_wide_char(false);
+                    spacer_flags.set_wide_char_spacer(true);
 
-                        let spacer = Cell {
-                            c: ' ',
-                            combining: None,
-                            fg: target_cell.fg,
-                            bg: target_cell.bg,
-                            underline_color: target_cell.underline_color,
-                            flags: spacer_flags,
-                            width: 1,
-                        };
-                        self.active_grid_mut()
-                            .set(target_col + 1, target_row, spacer);
-                    }
+                    let spacer = Cell {
+                        c: ' ',
+                        combining: None,
+                        fg: target_cell.fg,
+                        bg: target_cell.bg,
+                        underline_color: target_cell.underline_color,
+                        flags: spacer_flags,
+                        width: 1,
+                    };
+                    self.active_grid_mut()
+                        .set(target_col + 1, target_row, spacer);
                 }
 
                 self.triggers.mark_written(target_row);
@@ -427,30 +431,32 @@ impl Terminal {
                     {
                         target_cell_mut.combining_push(c);
 
-                        // Recalculate width if needed
+                        // Recalculate width if needed. As in the combining
+                        // path above, the cell only widens when the spacer
+                        // still fits on the row.
                         let grapheme = target_cell_mut.get_grapheme();
-                        let new_width = grapheme::is_wide_grapheme(&grapheme);
-                        if new_width && target_cell_mut.width() == 1 {
+                        if target_col + 1 < cols
+                            && grapheme::is_wide_grapheme(&grapheme)
+                            && target_cell_mut.width() == 1
+                        {
                             target_cell_mut.width = 2;
                             target_cell_mut.flags.set_wide_char(true);
 
-                            if target_col + 1 < cols {
-                                let mut spacer_flags = target_cell_mut.flags;
-                                spacer_flags.set_wide_char(false);
-                                spacer_flags.set_wide_char_spacer(true);
+                            let mut spacer_flags = target_cell_mut.flags;
+                            spacer_flags.set_wide_char(false);
+                            spacer_flags.set_wide_char_spacer(true);
 
-                                let spacer = Cell {
-                                    c: ' ',
-                                    combining: None,
-                                    fg: target_cell_mut.fg,
-                                    bg: target_cell_mut.bg,
-                                    underline_color: target_cell_mut.underline_color,
-                                    flags: spacer_flags,
-                                    width: 1,
-                                };
-                                self.active_grid_mut()
-                                    .set(target_col + 1, target_row, spacer);
-                            }
+                            let spacer = Cell {
+                                c: ' ',
+                                combining: None,
+                                fg: target_cell_mut.fg,
+                                bg: target_cell_mut.bg,
+                                underline_color: target_cell_mut.underline_color,
+                                flags: spacer_flags,
+                                width: 1,
+                            };
+                            self.active_grid_mut()
+                                .set(target_col + 1, target_row, spacer);
                         }
 
                         self.triggers.mark_written(target_row);
@@ -639,6 +645,29 @@ mod tests {
 
     fn create_test_terminal() -> Terminal {
         Terminal::new(80, 24)
+    }
+
+    #[test]
+    fn test_vs16_in_last_column_defers_widening() {
+        let mut term = Terminal::new(4, 3);
+        // x lands in the last column with wrap pending; VS16 must attach but
+        // not widen, or the row ends in a spacerless width-2 cell.
+        term.process("abcx\u{FE0F}".as_bytes());
+        let cell = term.active_grid().get(3, 0).unwrap();
+        assert_eq!(cell.width(), 1, "no room for the spacer: keep width 1");
+        assert!(!cell.flags.wide_char());
+        assert!(cell.combining_has('\u{FE0F}'));
+    }
+
+    #[test]
+    fn test_vs16_expands_when_the_spacer_fits() {
+        let mut term = Terminal::new(4, 3);
+        term.process("a\u{FE0F}".as_bytes());
+        let cell = term.active_grid().get(0, 0).unwrap();
+        assert_eq!(cell.width(), 2);
+        assert!(cell.flags.wide_char());
+        let spacer = term.active_grid().get(1, 0).unwrap();
+        assert!(spacer.flags.wide_char_spacer());
     }
 
     #[test]
