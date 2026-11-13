@@ -52,6 +52,11 @@ pub enum KittyAction {
     Frame, // f - animation frame
     /// Animation control (`a`).
     AnimationControl, // a - animation control
+    /// Compose a new image from existing ones (`c`, kitty 0.22). Parsed
+    /// distinctly so it is rejected instead of falling through to the
+    /// default and being processed as a transmission, which would replace
+    /// the image under the id and drop its placements.
+    Compose, // c - compose images
 }
 
 impl KittyAction {
@@ -65,6 +70,7 @@ impl KittyAction {
             'd' => Some(KittyAction::Delete),
             'f' => Some(KittyAction::Frame),
             'a' => Some(KittyAction::AnimationControl),
+            'c' => Some(KittyAction::Compose),
             _ => None,
         }
     }

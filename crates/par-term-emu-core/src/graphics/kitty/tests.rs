@@ -2061,6 +2061,19 @@ fn test_animation_control_root_gap_before_the_first_append_is_kept() {
 }
 
 #[test]
+fn test_build_graphic_compose_is_rejected_not_treated_as_transmit() {
+    // a=c (kitty 0.22 compose) parsed as a transmission would REPLACE the
+    // image under the id and drop its placements; it is rejected cleanly.
+    let mut store = GraphicsStore::new();
+    let b64 = rgba_b64(&[[1, 2, 3, 255]]);
+    kitty_command(&mut store, &format!("a=t,f=32,s=1,v=1,i=9;{b64}")).unwrap();
+    let result = kitty_command(&mut store, &format!("a=c,i=9,f=32,s=1,v=1;{b64}"));
+    assert!(result.unwrap_err().to_string().contains("not supported"));
+    // The original image survives.
+    assert!(store.get_kitty_image(9).is_some());
+}
+
+#[test]
 fn test_build_graphic_base_frame_out_of_range_is_an_error() {
     let mut store = GraphicsStore::new();
     let b64 = rgba_b64(&[[1, 2, 3, 255]]);

@@ -392,6 +392,10 @@ impl KittyParser {
             KittyAction::Frame => self.apply_frame_command(store),
 
             KittyAction::AnimationControl => self.apply_animation_control(store),
+
+            KittyAction::Compose => Err(GraphicsError::KittyError(
+                "Compose (a=c) is not supported".to_string(),
+            )),
         }
     }
 }

@@ -934,7 +934,9 @@ impl Terminal {
                                     bytes,
                                 );
                             }
-                            Err(_) => {}
+                            Err(err) => {
+                                crate::debug_log!("KITTY", "kitty command failed: {}", err);
+                            }
                         }
                         let dropped_after = self.graphics.graphics_store.dropped_count();
                         if dropped_after > dropped_before {
