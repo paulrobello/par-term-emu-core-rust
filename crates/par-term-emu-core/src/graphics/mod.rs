@@ -13,11 +13,14 @@
 
 pub mod animation;
 pub mod budget;
+mod frames;
 pub mod iterm;
 pub mod kitty;
 pub mod placeholder;
 pub mod serialization;
 pub mod snapshot;
+
+pub(crate) use frames::FrameEdit;
 
 use std::collections::HashMap;
 use std::sync::Arc;

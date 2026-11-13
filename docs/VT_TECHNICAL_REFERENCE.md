@@ -1123,7 +1123,7 @@ DCS (Device Control String) sequences follow: `ESC P ... ESC \`
 | Query | `a=q` | Query terminal graphics support |
 | Display | `a=p` | Display previously transmitted image |
 | Delete | `a=d` | Delete images by ID or position |
-| Frame | `a=f` | Add animation frame to image |
+| Frame | `a=f` | Add an animation frame to an image, or edit one in place (`r=`) |
 | Animation Control | `a=a` | Control animation playback |
 
 #### Transmission Format
@@ -1181,9 +1181,12 @@ DCS (Device Control String) sequences follow: `ESC P ... ESC \`
 - Managed by `GraphicsStore` with Arc-based pixel sharing
 
 **Animation Support:**
-- Multi-frame animations via `a=f` action
-- Frame timing control with `g=<ms>` parameter
-- Composition modes: alpha blend (0) or overwrite (1)
+- Multi-frame animations via `a=f` action: frame 1 is the transmitted image, `a=f` appends
+  a frame or, with `r=<frame>`, edits one in place (a rectangle at `x=`,`y=`); no placement
+  is created and the cursor does not move
+- Frame timing control with the `z=<ms>` gap (`a=a,r=<frame>,z=<ms>` for an existing frame)
+- Composition modes (`X=`): alpha blend (0) or overwrite (1)
+- A new frame starts from frame `c=` or the background color `Y=`; `a=a,c=<frame>` shows a frame
 - Animation state stored in `GraphicsStore`
 - Playback controlled via `a=a` action
 

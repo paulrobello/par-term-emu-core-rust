@@ -103,20 +103,19 @@ impl KittyParser {
                     self.height = value.parse().ok();
                 }
             }
-            "c" => {
-                // Frame composition mode (for Frame action) takes priority
-                if self.action == KittyAction::Frame {
-                    if let Some(first_char) = value.chars().next() {
-                        self.frame_composition = CompositionMode::from_char(first_char);
-                    }
-                } else {
-                    // Otherwise it's columns
-                    self.columns = value.parse().ok();
-                }
-            }
+            // `c=` is the base frame of a new frame (`a=f`) and the frame to show
+            // (`a=a`); the composition mode is `X=`.
+            "c" => match self.action {
+                KittyAction::Frame => self.base_frame = value.parse().ok(),
+                KittyAction::AnimationControl => self.current_frame = value.parse().ok(),
+                _ => self.columns = value.parse().ok(),
+            },
             "r" => {
                 // Frame number (for Frame action) takes priority
-                if self.action == KittyAction::Frame {
+                if matches!(
+                    self.action,
+                    KittyAction::Frame | KittyAction::AnimationControl
+                ) {
                     self.frame_number = value.parse().ok();
                 } else {
                     // Otherwise it's rows
@@ -135,11 +134,21 @@ impl KittyParser {
             "h" => {
                 self.source_height = value.parse().ok();
             }
+            // On `a=f`, `X=` is the composition mode and `Y=` the background color.
             "X" => {
-                self.x_offset = value.parse().ok();
+                if self.action == KittyAction::Frame {
+                    self.frame_composition =
+                        value.chars().next().and_then(CompositionMode::from_char);
+                } else {
+                    self.x_offset = value.parse().ok();
+                }
             }
             "Y" => {
-                self.y_offset = value.parse().ok();
+                if self.action == KittyAction::Frame {
+                    self.background_color = value.parse().ok();
+                } else {
+                    self.y_offset = value.parse().ok();
+                }
             }
             "m" => {
                 self.more_chunks = value == "1";
@@ -183,7 +192,10 @@ impl KittyParser {
             }
             "z" => {
                 // z= is overloaded: frame delay for animations, z-index for placements
-                if self.action == KittyAction::Frame {
+                if matches!(
+                    self.action,
+                    KittyAction::Frame | KittyAction::AnimationControl
+                ) {
                     self.frame_delay_ms = value.parse().ok();
                 } else {
                     self.z_index = value.parse().ok();
@@ -377,7 +389,7 @@ impl KittyParser {
                 self.apply_transmit_command(position, store)
             }
 
-            KittyAction::Frame => self.apply_frame_command(position, store),
+            KittyAction::Frame => self.apply_frame_command(store),
 
             KittyAction::AnimationControl => self.apply_animation_control(store),
         }
