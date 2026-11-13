@@ -280,6 +280,14 @@ impl Terminal {
                 .insert_chars(cursor_col, cursor_row, char_width);
         }
 
+        // A wide character this one half overwrites is blanked.
+        let bg = cell.bg;
+        self.active_grid_mut().split_wide_chars_at(
+            cursor_row,
+            cursor_col,
+            cursor_col + char_width.max(1),
+            bg,
+        );
         self.active_grid_mut().set(cursor_col, cursor_row, cell);
         // New text landed: render damage plus trigger scan
         self.triggers.mark_written(cursor_row);
@@ -560,6 +568,18 @@ impl Terminal {
                 None
             };
 
+            // The spacer overwrites the cursor's cell: blank a wide
+            // character it half overwrites (before the indicator widens).
+            if let Some(spacer) = &spacer {
+                let bg = spacer.bg;
+                self.active_grid_mut().split_wide_chars_at(
+                    cursor_row,
+                    cursor_col,
+                    cursor_col + 1,
+                    bg,
+                );
+            }
+
             // Previous cell is a lone regional indicator - combine them
             if let Some(target_cell) = self.active_grid_mut().get_mut(prev_col, prev_row) {
                 target_cell.combining_push(c);
@@ -655,6 +675,9 @@ impl Terminal {
                 .insert_chars(cursor_col, cursor_row, 1);
         }
 
+        let bg = cell.bg;
+        self.active_grid_mut()
+            .split_wide_chars_at(cursor_row, cursor_col, cursor_col + 1, bg);
         self.active_grid_mut().set(cursor_col, cursor_row, cell);
         self.triggers.mark_written(cursor_row);
 
@@ -1250,5 +1273,80 @@ mod tests {
         // Should wrap to left margin
         assert_eq!(term.cursor.col, 11);
         assert_eq!(term.cursor.row, 1);
+    }
+
+    /// Row `row`'s text, after checking that every wide character there
+    /// has its spacer and every spacer its wide character.
+    fn row_with_whole_wide_chars(term: &Terminal, row: usize) -> String {
+        let grid = term.active_grid();
+        let cells = grid.row(row).unwrap();
+        for (col, cell) in cells.iter().enumerate() {
+            if cell.flags.wide_char() && col + 1 < cells.len() {
+                assert!(
+                    cells[col + 1].flags.wide_char_spacer(),
+                    "the wide character in column {col} lost its spacer"
+                );
+            }
+            if cell.flags.wide_char_spacer() {
+                assert!(
+                    col > 0 && cells[col - 1].flags.wide_char(),
+                    "the spacer in column {col} lost its wide character"
+                );
+            }
+        }
+        grid.row_text(row).trim_end().to_string()
+    }
+
+    #[test]
+    fn overwriting_half_a_wide_character_blanks_the_other_half() {
+        // The right half: X shows instead of hiding under the 中.
+        let mut term = Terminal::new(6, 3);
+        term.process("中\x1b[1;2HX".as_bytes());
+        assert_eq!(row_with_whole_wide_chars(&term, 0), " X");
+        // The left half, through the per-character path too.
+        for text in ["中\x1b[1;1HX", "中\x1b[1;1H\u{e9}"] {
+            let mut term = Terminal::new(6, 3);
+            term.process(text.as_bytes());
+            let first = text.chars().last().unwrap();
+            assert_eq!(row_with_whole_wide_chars(&term, 0), first.to_string());
+        }
+        // A wide character over the right half of another.
+        let mut term = Terminal::new(6, 3);
+        term.process("中中\x1b[1;2H日".as_bytes());
+        assert_eq!(row_with_whole_wide_chars(&term, 0), " 日");
+        // Insert mode splits the wide character it is typed into.
+        let mut term = Terminal::new(6, 3);
+        term.process("a中b\x1b[1;3H\x1b[4hX".as_bytes());
+        assert_eq!(row_with_whole_wide_chars(&term, 0), "a X b");
+    }
+
+    #[test]
+    fn editing_half_a_wide_character_blanks_the_other_half() {
+        // Columns: a 中 (spacer) b c, the cursor on the spacer or the 中.
+        let cases = [
+            ("\x1b[1;3H\x1b[P", "a bc"),   // DCH on the spacer
+            ("\x1b[1;2H\x1b[P", "a bc"),   // DCH on the wide character
+            ("\x1b[1;3H\x1b[@", "a   bc"), // ICH on the spacer
+            ("\x1b[1;3H\x1b[X", "a  bc"),  // ECH on the spacer
+            ("\x1b[1;2H\x1b[X", "a  bc"),  // ECH on the wide character
+            ("\x1b[1;3H\x1b[K", "a"),      // EL 0 from the spacer
+            ("\x1b[1;2H\x1b[1K", "   bc"), // EL 1 to the wide character
+        ];
+        for (edit, expected) in cases {
+            let mut term = Terminal::new(8, 3);
+            term.process(format!("a中bc{edit}").as_bytes());
+            assert_eq!(row_with_whole_wide_chars(&term, 0), expected, "{edit:?}");
+        }
+        // ICH pushing a wide character half off the row blanks it.
+        let mut term = Terminal::new(6, 3);
+        term.process("abcd中\x1b[1;1H\x1b[@".as_bytes());
+        assert_eq!(row_with_whole_wide_chars(&term, 0), " abcd");
+        // A colored erase blanks the other half in its color.
+        let mut term = Terminal::new(8, 3);
+        term.process("a中bc\x1b[44m\x1b[1;3H\x1b[X".as_bytes());
+        assert_eq!(
+            term.active_grid().get(1, 0).unwrap().bg(),
+            crate::color::Color::Named(crate::color::NamedColor::Blue)
+        );
     }
 }

@@ -47,6 +47,7 @@ impl Grid {
     /// Clear from cursor to end of line, filling cells with the given background color (BCE)
     pub fn clear_line_right(&mut self, col: usize, row: usize, bg: Color) {
         if row < self.rows {
+            self.split_wide_chars_at(row, col, self.cols, PackedColor::pack(bg));
             for c in col..self.cols {
                 if let Some(cell) = self.get_mut(c, row) {
                     cell.reset();
@@ -59,6 +60,7 @@ impl Grid {
     /// Clear from beginning of line to cursor, filling cells with the given background color (BCE)
     pub fn clear_line_left(&mut self, col: usize, row: usize, bg: Color) {
         if row < self.rows {
+            self.split_wide_chars_at(row, 0, col.saturating_add(1), PackedColor::pack(bg));
             for c in 0..=col.min(self.cols - 1) {
                 if let Some(cell) = self.get_mut(c, row) {
                     cell.reset();
@@ -88,6 +90,7 @@ impl Grid {
     pub fn erase_characters(&mut self, col: usize, row: usize, n: usize, bg: Color) {
         if row < self.rows {
             let end = (col + n).min(self.cols);
+            self.split_wide_chars_at(row, col, end, PackedColor::pack(bg));
             for c in col..end {
                 if let Some(cell) = self.get_mut(c, row) {
                     cell.reset();
