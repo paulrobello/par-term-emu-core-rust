@@ -84,6 +84,16 @@ impl Terminal {
             .graphics_store
             .adjust_for_scroll_up_with_scrollback(n, top, bottom, old_scrollback_len);
 
+        // At-capacity scrollback eviction shifted every scrollback line up:
+        // the store's scrollback graphics follow, and the evicted lines'
+        // graphics leave the store.
+        let evictions = self.active_grid_mut().take_scrollback_evictions();
+        if evictions > 0 {
+            self.graphics
+                .graphics_store
+                .rebase_scrollback_after_shrink(evictions);
+        }
+
         // Guard before formatting: this runs on every scrolled line feed, and
         // `debug::log` would otherwise format + lock the logger per scroll.
         if debug::is_enabled(debug::DebugLevel::Debug) {

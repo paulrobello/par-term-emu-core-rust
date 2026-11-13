@@ -356,6 +356,41 @@ fn assert_whole_wide_pairs(term: &Terminal, row: usize) {
 }
 
 #[test]
+fn scrollback_graphics_follow_at_capacity_eviction() {
+    let mut term = Terminal::with_scrollback(10, 3, 3);
+    // A 2x1 kitty image on the top row.
+    term.process(b"\x1b_Ga=T,f=32,s=2,v=2;/////////////////////w==\x1b\\");
+    assert_eq!(term.all_graphics().len(), 1);
+
+    // Scroll 12 lines at a 3-line cap: the image enters the scrollback with
+    // its line, then every eviction shifts its anchor, until its line leaves
+    // and the entry drops.
+    for _ in 0..12 {
+        term.process(b"L\r\n");
+    }
+    let sb = term.graphics.graphics_store.all_scrollback_graphics();
+    if let Some(graphic) = sb.first() {
+        assert!(
+            graphic.scrollback_row.unwrap() < term.grid().scrollback_len(),
+            "anchor drifted from its line (stale anchor {} vs {} lines)",
+            graphic.scrollback_row.unwrap(),
+            term.grid().scrollback_len()
+        );
+    }
+
+    // Past its line's lifetime the entry is gone from the store.
+    for _ in 0..18 {
+        term.process(b"L\r\n");
+    }
+    assert!(term
+        .graphics
+        .graphics_store
+        .all_scrollback_graphics()
+        .is_empty());
+    assert_eq!(term.grid().scrollback_len(), 3);
+}
+
+#[test]
 fn decfra_over_a_spacer_blanks_the_orphaned_base() {
     let mut term = Terminal::new(6, 3);
     term.process("a中b".as_bytes());
