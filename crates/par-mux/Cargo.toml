@@ -12,7 +12,6 @@ authors = ["Paul Robello <probello@gmail.com>"]
 description = "par-mux terminal multiplexer: tmux control-mode daemon, session tree, persistence, and attach client for par-term-emu-core"
 license = "MIT"
 repository = "https://github.com/paulrobello/par-term-emu-core-rust"
-homepage = "https://github.com/paulrobello/par-term-emu-core-rust"
 documentation = "https://github.com/paulrobello/par-term-emu-core-rust/blob/main/docs/MUX.md"
 keywords = ["terminal", "multiplexer", "tmux", "pty"]
 categories = ["command-line-utilities", "development-tools"]

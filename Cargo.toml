@@ -43,7 +43,6 @@ description = "Comprehensive terminal emulator library in Rust with Python bindi
 readme = "README.md"
 license = "MIT"
 repository = "https://github.com/paulrobello/par-term-emu-core-rust"
-homepage = "https://github.com/paulrobello/par-term-emu-core-rust"
 documentation = "https://github.com/paulrobello/par-term-emu-core-rust/blob/main/README.md"
 keywords = ["terminal", "emulator", "vt100", "pty", "sixel"]
 categories = ["command-line-utilities", "development-tools", "api-bindings"]
