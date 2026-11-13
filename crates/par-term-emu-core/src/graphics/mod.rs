@@ -219,6 +219,20 @@ impl ImageDimension {
     }
 }
 
+/// Which screen buffer a placement was made on. Stamped from the screen
+/// state when the placement enters the store, so an xterm-style resize can
+/// move it with its own buffer's reflow ([`Self::default`] matches snapshots
+/// taken before the marker existed: they owned the primary buffer, the only
+/// one placements followed).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+pub enum PlacementBuffer {
+    /// The primary (normal) screen buffer.
+    #[default]
+    Primary,
+    /// The alternate screen buffer.
+    Alternate,
+}
+
 /// Unified image placement metadata across protocols
 ///
 /// Abstracts placement info from Kitty and iTerm2 so the frontend can implement
@@ -255,6 +269,10 @@ pub struct ImagePlacement {
     /// Source crop height in pixels (Kitty h= parameter; 0 = to bottom edge)
     #[serde(default)]
     pub source_height: u32,
+    /// The screen buffer this placement belongs to, stamped at placement
+    /// time; a resize remaps it by that buffer's reflow.
+    #[serde(default)]
+    pub buffer: PlacementBuffer,
 }
 
 impl ImagePlacement {
@@ -896,14 +914,23 @@ impl GraphicsStore {
         }
     }
 
-    /// Move the on-screen placements with their lines after a resize moved the
-    /// screen's lines (`Grid::resize_xterm`). `top_row` maps a placement's top edge, a screen
-    /// row that is negative while the image's top has scrolled above the screen, to its row
-    /// after the resize.
-    pub fn move_placements(&mut self, mut top_row: impl FnMut(isize) -> isize) {
+    /// Move the on-screen placements with their lines after an xterm-style
+    /// resize moved each buffer's lines (`Grid::resize_xterm`). Each placement
+    /// follows its own buffer ([`ImagePlacement::buffer`]): `primary_row` maps
+    /// a primary placement's top edge, `alternate_row` an alternate
+    /// placement's — a screen row, negative while the image's top has
+    /// scrolled above the screen, to its row after the resize.
+    pub fn move_placements(
+        &mut self,
+        mut primary_row: impl FnMut(isize) -> isize,
+        mut alternate_row: impl FnMut(isize) -> isize,
+    ) {
         for graphic in &mut self.placements {
             let top = graphic.position.1 as isize - graphic.scroll_offset_rows as isize;
-            let moved = top_row(top);
+            let moved = match graphic.placement.buffer {
+                PlacementBuffer::Primary => primary_row(top),
+                PlacementBuffer::Alternate => alternate_row(top),
+            };
             graphic.position.1 = moved.max(0) as usize;
             graphic.scroll_offset_rows = (-moved).max(0) as usize;
         }

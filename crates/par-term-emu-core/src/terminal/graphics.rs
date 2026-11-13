@@ -45,6 +45,26 @@ impl Terminal {
         self.graphics.graphics_store.clear();
     }
 
+    /// The buffer a placement made now belongs to: the alternate screen's
+    /// while it is shown, the primary's otherwise. Stamped onto every
+    /// placement when it enters the store, so an xterm-style resize moves
+    /// it with its own buffer's reflow.
+    pub(crate) fn placement_buffer(&self) -> crate::graphics::PlacementBuffer {
+        if self.alt_screen_active {
+            crate::graphics::PlacementBuffer::Alternate
+        } else {
+            crate::graphics::PlacementBuffer::Primary
+        }
+    }
+
+    /// Stamp a placement's owning buffer from the screen state and add it
+    /// to the store. Every protocol path goes through this, so ownership
+    /// can never be left at its default.
+    pub(crate) fn add_placement(&mut self, mut graphic: TerminalGraphic) {
+        graphic.placement.buffer = self.placement_buffer();
+        self.graphics.graphics_store.add_graphic(graphic);
+    }
+
     /// Get immutable access to graphics store
     pub fn graphics_store(&self) -> &crate::graphics::GraphicsStore {
         &self.graphics.graphics_store
@@ -696,7 +716,7 @@ impl Terminal {
                     }
 
                     // Add to graphics store (limit enforced internally)
-                    self.graphics.graphics_store.add_graphic(graphic.clone());
+                    self.add_placement(graphic.clone());
 
                     // Announce placement like the Sixel path (dcs) does so
                     // graphics subscribers hear iTerm2 images too.

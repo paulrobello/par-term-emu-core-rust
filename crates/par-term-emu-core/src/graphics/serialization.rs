@@ -780,6 +780,7 @@ mod tests {
             source_y: 5,
             source_width: 80,
             source_height: 40,
+            buffer: crate::graphics::PlacementBuffer::Primary,
         };
 
         let sg = SerializableGraphic::from(&g);
@@ -832,5 +833,40 @@ mod tests {
         assert_eq!(restored.placement.source_width, 0);
         assert_eq!(restored.placement.source_height, 0);
         assert_eq!(restored.placement.x_offset, 2);
+    }
+
+    #[test]
+    fn test_placement_buffer_marker_survives_a_round_trip() {
+        // The buffer-ownership marker serializes with the placement, so a
+        // restored snapshot keeps following its own buffer's reflow.
+        let mut g = create_test_graphic();
+        g.placement.buffer = crate::graphics::PlacementBuffer::Alternate;
+        let sg = SerializableGraphic::from(&g);
+        let deserialized: SerializableGraphic =
+            serde_json::from_str(&serde_json::to_string(&sg).unwrap()).unwrap();
+        let restored = deserialized.to_terminal_graphic().unwrap();
+        assert_eq!(
+            restored.placement.buffer,
+            crate::graphics::PlacementBuffer::Alternate
+        );
+    }
+
+    #[test]
+    fn test_placement_json_without_buffer_marker_defaults_to_primary() {
+        // Snapshots written before the marker existed must still deserialize:
+        // #[serde(default)] fills Primary, the only buffer placements
+        // followed then.
+        let mut g = create_test_graphic();
+        g.placement.buffer = crate::graphics::PlacementBuffer::Alternate;
+        let sg = SerializableGraphic::from(&g);
+        let mut value = serde_json::to_value(&sg).unwrap();
+        let placement = value.get_mut("placement").expect("placement field");
+        placement.as_object_mut().unwrap().remove("buffer");
+        let deserialized: SerializableGraphic = serde_json::from_value(value).unwrap();
+        let restored = deserialized.to_terminal_graphic().unwrap();
+        assert_eq!(
+            restored.placement.buffer,
+            crate::graphics::PlacementBuffer::Primary
+        );
     }
 }

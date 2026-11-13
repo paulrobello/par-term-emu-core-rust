@@ -100,6 +100,118 @@ fn images_keep_their_lines() {
     assert_eq!(term.all_graphics()[0].scroll_offset_rows, 0);
 }
 
+/// A 2x2 kitty image at the cursor.
+fn place_image(term: &mut Terminal) {
+    term.process(b"\x1b_Ga=T,f=32,s=2,v=2;/////////////////////w==\x1b\\");
+}
+
+/// A primary image and an alternate-screen image, each screen's cursor left
+/// on its last row, so an 8→4 row resize moves the two buffers differently:
+/// the primary pushes its top four lines into scrollback while the
+/// alternate's (scrollback-less) top four lines drop away.
+fn terminal_with_images_on_both_buffers() -> Terminal {
+    let mut term = terminal(10, 8, 100);
+    term.process(b"0123456789abc\r\n");
+    // The primary image sits on row 2, below the wrapped pair; the primary
+    // cursor moves to the last row.
+    place_image(&mut term);
+    term.process(b"\x1b[8;1H");
+    term.process(b"\x1b[?1049h");
+    // On the alternate screen: text and an image on the second-to-last row.
+    term.process(b"\x1b[7;1Halt");
+    place_image(&mut term);
+    term
+}
+
+#[test]
+fn placements_stamp_their_owning_buffer() {
+    let mut term = terminal(10, 8, 100);
+    place_image(&mut term);
+    assert_eq!(
+        term.all_graphics()[0].placement.buffer,
+        crate::graphics::PlacementBuffer::Primary
+    );
+    term.process(b"\x1b[?1049h");
+    place_image(&mut term);
+    assert_eq!(
+        term.all_graphics()[1].placement.buffer,
+        crate::graphics::PlacementBuffer::Alternate
+    );
+    term.process(b"\x1b[?1049l");
+    place_image(&mut term);
+    assert_eq!(
+        term.all_graphics()[2].placement.buffer,
+        crate::graphics::PlacementBuffer::Primary
+    );
+}
+
+#[test]
+fn a_resize_while_the_alternate_screen_is_shown_moves_each_image_with_its_own_buffer() {
+    let mut term = terminal_with_images_on_both_buffers();
+    assert_eq!(term.all_graphics()[0].position.1, 2);
+    assert_eq!(term.all_graphics()[1].position.1, 6);
+    term.resize(10, 4);
+    // The alternate screen dropped its top four lines (its text proves it);
+    // its image followed them from row 6 to row 2.
+    assert_eq!(screen(term.alt_grid())[2], "alt");
+    assert_eq!(term.all_graphics()[1].position.1, 2);
+    assert_eq!(term.all_graphics()[1].scroll_offset_rows, 0);
+    // The primary screen pushed its top four lines into scrollback; its
+    // image's top edge went with them even though the alternate screen is
+    // shown (rows 0-1 held the wrapped pair).
+    assert_eq!(term.grid().scrollback_len(), 4);
+    assert_eq!(term.all_graphics()[0].position.1, 0);
+    assert_eq!(term.all_graphics()[0].scroll_offset_rows, 2);
+}
+
+#[test]
+fn a_resize_while_the_primary_screen_is_shown_moves_each_image_with_its_own_buffer() {
+    let mut term = terminal_with_images_on_both_buffers();
+    term.process(b"\x1b[?1049l");
+    term.resize(10, 4);
+    // The alternate screen dropped its top four lines; its image followed.
+    assert_eq!(screen(term.alt_grid())[2], "alt");
+    assert_eq!(term.all_graphics()[1].position.1, 2);
+    // The primary screen pushed its top four lines into scrollback; its
+    // image's top edge went with them.
+    assert_eq!(term.grid().scrollback_len(), 4);
+    assert_eq!(term.all_graphics()[0].position.1, 0);
+    assert_eq!(term.all_graphics()[0].scroll_offset_rows, 2);
+}
+
+#[test]
+fn a_width_change_moves_only_the_primary_images_while_the_alternate_screen_is_shown() {
+    let mut term = terminal_with_images_on_both_buffers();
+    term.resize(20, 8);
+    // The primary screen rewraps: the wrapped pair above its image joins and
+    // the image's line follows onto the joined pair.
+    assert_eq!(screen(term.grid())[0], "0123456789abc");
+    assert_eq!(term.all_graphics()[0].position.1, 1);
+    // The alternate screen never rewraps: its lines stay put, its image
+    // with them.
+    assert_eq!(screen(term.alt_grid())[6], "alt");
+    assert_eq!(term.all_graphics()[1].position.1, 6);
+}
+
+#[test]
+fn a_legacy_resize_never_moves_placements() {
+    let mut term = Terminal::with_scrollback(10, 8, 100);
+    term.set_compact_scrollback(true);
+    // The default resize mode never reflows, so neither buffer's lines move
+    // and neither image does either.
+    term.process(b"0123456789abc\r\n");
+    place_image(&mut term);
+    term.process(b"\x1b[?1049h");
+    term.process(b"\x1b[6;1Halt");
+    place_image(&mut term);
+    term.process(b"\x1b[?1049l");
+    term.resize(10, 4);
+    assert_eq!(term.all_graphics()[0].position.1, 2);
+    assert_eq!(term.all_graphics()[0].scroll_offset_rows, 0);
+    assert_eq!(term.all_graphics()[1].position.1, 5);
+    assert_eq!(term.all_graphics()[1].scroll_offset_rows, 0);
+}
+
 #[test]
 fn the_switch_survives_a_reset() {
     let mut term = terminal(10, 3, 100);
