@@ -1490,7 +1490,7 @@ sections; the numbers live here.
 | `DEFAULT_MAX_NOTIFICATIONS` | 128 | `crates/par-term-emu-core/src/terminal/state.rs:82` | Terminal notifications queued from processed escape-sequence output. |
 | `DEFAULT_MAX_CLIPBOARD_SYNC_EVENTS` | 256 | `crates/par-term-emu-core/src/terminal/state.rs:84` | Clipboard sync events queued from processed escape-sequence output. |
 | `DEFAULT_MAX_CLIPBOARD_EVENT_BYTES` | 4 KiB | `crates/par-term-emu-core/src/terminal/state.rs:86` | Bytes retained for one queued clipboard sync event. |
-| `DEFAULT_MAX_OSC_DATA_LENGTH` | 1 MiB | `crates/par-term-emu-core/src/terminal/state.rs:964` | Payload bytes accepted for one OSC sequence from terminal output. |
+| `DEFAULT_MAX_OSC_DATA_LENGTH` | 1 MiB | `crates/par-term-emu-core/src/terminal/state.rs:971` | Payload bytes accepted for one OSC sequence from terminal output. |
 | `MAX_ARCHIVE_BYTES` | 50 MiB | `src/bin/streaming_server/frontend_download.rs:34` | Bytes accepted from a downloaded web-frontend archive response. |
 | `MAX_SIDECAR_BYTES` | 1 KiB | `src/bin/streaming_server/frontend_download.rs:71` | Bytes accepted from a `.sha256` checksum sidecar response (SEC-203). |
 | `MAX_DECOMPRESSED_SIZE` | 9 MiB | `src/streaming/proto.rs:48` | Decompressed bytes accepted from one zlib-compressed streaming frame. |
