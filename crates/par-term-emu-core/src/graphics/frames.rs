@@ -103,7 +103,7 @@ impl GraphicsStore {
             if !self.animations.contains_key(&image_id) {
                 // The root frame joins the animation, sharing the image's buffer (already
                 // counted against the store budget).
-                self.get_or_create_animation(image_id, 100)
+                self.get_or_create_animation(image_id, 40)
                     .add_frame(AnimationFrame::new_shared(1, root, width, height));
             }
             self.add_animation_frame(
@@ -156,7 +156,7 @@ impl GraphicsStore {
             let Some((width, height, root)) = self.shared_images.get(&image_id).cloned() else {
                 return;
             };
-            let animation = self.get_or_create_animation(image_id, gap_ms.max(100));
+            let animation = self.get_or_create_animation(image_id, gap_ms.max(40));
             animation.add_frame(AnimationFrame::new_shared(1, root, width, height));
         }
         if let Some(frame) = self

@@ -1279,7 +1279,8 @@ impl GraphicsStore {
             );
             return;
         }
-        let default_delay = frame.delay_ms.max(100); // Default to 100ms if not specified
+        // The protocol default frame gap is 40 ms.
+        let default_delay = frame.delay_ms.max(40);
         let anim = self.get_or_create_animation(image_id, default_delay);
         anim.add_frame(frame);
         debug_info!(
