@@ -24,6 +24,47 @@ fn test_alt_screen() {
     assert!(content.contains("Primary"));
 }
 
+/// Leaving the alternate screen with DECRST 1049 runs the DECRC restore
+/// against the shared saved-cursor slot (xterm): the entry DECSC save, any
+/// later ESC 7 overwrite, cursor and SGR pen together. 1047 does not save;
+/// the 1049 restore is unconditional, like xterm's CursorRestore. A program
+/// that exits with a background color set must not leave it for the shell's
+/// next erase.
+#[test]
+fn test_alt_screen_1049_restores_the_pen() {
+    use crate::color::Color;
+
+    let mut term = Terminal::new(80, 24);
+    term.process(b"\x1b[31m\x1b[?1049h\x1b[38;5;0;48;5;230mfire");
+    assert_eq!(term.attrs.bg, Color::Indexed(230));
+    term.process(b"\x1b[?1049l");
+    assert_eq!(term.attrs.fg, Color::Named(crate::color::NamedColor::Red));
+    assert_eq!(term.attrs.bg, TextAttributes::default().bg);
+
+    term.process(b"\x1b[0m\x1b[?1047h\x1b[48;5;230m\x1b[?1047l");
+    assert_eq!(
+        term.attrs.bg,
+        Color::Indexed(230),
+        "1047 keeps the pen, as in xterm"
+    );
+
+    // A DECSC inside the alternate screen overwrites the 1049 entry save, and
+    // the exit restores that latest save including its pen (xterm mixed-
+    // sequence parity).
+    term.process(b"\x1b[0m\x1b[44m\x1b[?1049h\x1b7\x1b[41;101minside");
+    term.process(b"\x1b[?1049l");
+    assert_eq!(
+        term.attrs.bg,
+        Color::Named(crate::color::NamedColor::Blue),
+        "1049l restores the ESC 7 pen, not the entry pen"
+    );
+
+    // The exit restore is unconditional (xterm's CursorRestore): a bare 1049l
+    // restores the slot again.
+    term.process(b"\x1b[?1049l");
+    assert_eq!(term.attrs.bg, Color::Named(crate::color::NamedColor::Blue));
+}
+
 #[test]
 fn test_mouse_modes() {
     let mut term = Terminal::new(80, 24);

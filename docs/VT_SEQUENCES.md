@@ -248,7 +248,7 @@ DEC Private Mode sequences.
 - `?47` - Use alternate screen (no clear, no cursor save)
 - `?1047` - Use alternate screen, cleared on entry and exit
 - `?1048` - Save/restore cursor (like DECSC/DECRC)
-- `?1049` - Save cursor and use alternate screen
+- `?1049` - Save cursor as in DECSC and use alternate screen; DECRST restores as in DECRC (cursor and SGR pen, shared slot with ESC 7/ESC 8)
 
 ### Standard Modes
 
