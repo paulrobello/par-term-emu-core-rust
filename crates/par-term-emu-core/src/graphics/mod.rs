@@ -869,6 +869,33 @@ impl GraphicsStore {
         self.sync_shared_budget();
     }
 
+    /// Remove a graphic by ID from the placements and the scrollback, for
+    /// a host that enforces its own image storage limit and evicts the
+    /// oldest images wherever they are ([`Self::remove_graphic`] only
+    /// reaches the placements on screen).
+    pub fn remove_graphic_everywhere(&mut self, id: u64) {
+        self.placements.retain(|g| g.id != id);
+        self.scrollback.retain(|g| g.id != id);
+    }
+
+    /// Rebase scrollback graphics anchors after `excess` oldest scrollback
+    /// lines were dropped at once (a scrollback-capacity shrink): graphics
+    /// anchored on a dropped line are removed, survivors shift up by
+    /// `excess`. The normal scroll path rebases these anchors one line at a
+    /// time; this is its bulk counterpart.
+    pub fn rebase_scrollback_after_shrink(&mut self, excess: usize) {
+        if excess == 0 {
+            return;
+        }
+        self.scrollback
+            .retain(|g| g.scrollback_row.is_none_or(|row| row >= excess));
+        for graphic in self.scrollback.iter_mut() {
+            if let Some(row) = graphic.scrollback_row.as_mut() {
+                *row -= excess;
+            }
+        }
+    }
+
     /// Get graphics at a specific row
     pub fn graphics_at_row(&self, row: usize) -> Vec<&TerminalGraphic> {
         self.placements
@@ -1670,6 +1697,58 @@ mod tests {
                 .collect::<Vec<_>>(),
             vec![1, 2]
         );
+    }
+
+    /// `remove_graphic` reaches the placements on screen only;
+    /// `remove_graphic_everywhere` also takes the graphic out of the
+    /// scrollback, and leaves the others alone.
+    #[test]
+    fn remove_graphic_everywhere_reaches_the_scrollback() {
+        let mut store = GraphicsStore::new();
+        let on_screen =
+            TerminalGraphic::new(1, GraphicProtocol::Sixel, (0, 0), 10, 10, vec![255; 400]);
+        store.add_graphic(on_screen);
+        for id in [2, 3] {
+            let mut scrolled =
+                TerminalGraphic::new(id, GraphicProtocol::Sixel, (0, 0), 10, 10, vec![255; 400]);
+            scrolled.scrollback_row = Some(id as usize);
+            store.scrollback.push(scrolled);
+        }
+
+        // The on-screen removal does not see a scrollback graphic.
+        store.remove_graphic(2);
+        assert_eq!((store.graphics_count(), store.scrollback_count()), (1, 2));
+
+        store.remove_graphic_everywhere(2);
+        assert_eq!((store.graphics_count(), store.scrollback_count()), (1, 1));
+        assert_eq!(store.scrollback[0].id, 3);
+
+        store.remove_graphic_everywhere(1);
+        assert_eq!((store.graphics_count(), store.scrollback_count()), (0, 1));
+    }
+
+    /// A scrollback-capacity shrink that drops `excess` oldest lines removes
+    /// the graphics anchored on those lines and shifts the survivors up, so
+    /// anchors keep naming the line their image sits on.
+    #[test]
+    fn rebase_scrollback_after_shrink_drops_dropped_line_anchors_and_shifts() {
+        let mut store = GraphicsStore::new();
+        for id in [1u64, 2, 3] {
+            let mut scrolled =
+                TerminalGraphic::new(id, GraphicProtocol::Sixel, (0, 0), 10, 10, vec![255; 400]);
+            scrolled.scrollback_row = Some(id as usize); // anchors 1, 2, 3
+            store.scrollback.push(scrolled);
+        }
+
+        store.rebase_scrollback_after_shrink(2);
+        assert_eq!(store.scrollback.len(), 2, "anchor 1 sat on a dropped line");
+        assert_eq!(store.scrollback[0].id, 2);
+        assert_eq!(store.scrollback[0].scrollback_row, Some(0));
+        assert_eq!(store.scrollback[1].id, 3);
+        assert_eq!(store.scrollback[1].scrollback_row, Some(1));
+
+        store.rebase_scrollback_after_shrink(0);
+        assert_eq!(store.scrollback.len(), 2, "a zero shrink changes nothing");
     }
 
     /// Retransmitting an existing image ID must delete all its placements

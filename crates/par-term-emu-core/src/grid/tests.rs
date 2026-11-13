@@ -57,6 +57,42 @@ fn scroll_eviction_drops_one_row_not_a_buffer_rebuild() {
 }
 
 #[test]
+fn a_smaller_scrollback_drops_the_oldest_lines_as_trimmed() {
+    // The scrollback preference changes on a running terminal.
+    let mut grid = Grid::new(10, 3, 10);
+    for i in 0..8 {
+        grid.set(0, 0, Cell::new((b'A' + i as u8) as char));
+        grid.scroll_up(1);
+    }
+    assert_eq!(grid.scrollback_len(), 8);
+    assert_eq!(grid.total_lines_scrolled(), 8);
+
+    grid.set_max_scrollback(5);
+    assert_eq!(grid.max_scrollback(), 5);
+    assert_eq!(grid.scrollback_len(), 5);
+    // The oldest lines went; the count of scrolled lines is kept, so the
+    // remaining lines keep their absolute numbers.
+    assert_eq!(grid.total_lines_scrolled(), 8);
+    assert_eq!(grid.scrollback_line(0).unwrap()[0].c, 'D');
+    assert_eq!(grid.scrollback_line(4).unwrap()[0].c, 'H');
+
+    // Growing keeps every line and lets more in.
+    grid.set_max_scrollback(20);
+    assert_eq!(grid.scrollback_len(), 5);
+    for i in 0..10 {
+        grid.set(0, 0, Cell::new((b'a' + i as u8) as char));
+        grid.scroll_up(1);
+    }
+    assert_eq!(grid.scrollback_len(), 15);
+
+    // None at all.
+    grid.set_max_scrollback(0);
+    assert_eq!(grid.scrollback_len(), 0);
+    grid.scroll_up(1);
+    assert_eq!(grid.scrollback_len(), 0);
+}
+
+#[test]
 fn snapshot_round_trips_per_line_storage() {
     // Acceptance 2/3 companion: capture flattens per-line rows into the
     // flat snapshot payload; restore re-slices it per line. Content and

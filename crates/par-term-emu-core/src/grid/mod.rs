@@ -418,6 +418,32 @@ impl Grid {
         self.max_scrollback
     }
 
+    /// Change the scrollback capacity of a running grid (a preference
+    /// change, like xterm.js's `options.scrollback`). A smaller capacity
+    /// drops the oldest lines, as a scroll at capacity evicts them: the
+    /// lines count as trimmed (`total_lines_scrolled` is kept) and zones
+    /// below the new floor are evicted. A larger one keeps every line and
+    /// lets more in. Returns how many oldest lines were dropped, so graphics
+    /// anchors can follow the same shrink.
+    pub fn set_max_scrollback(&mut self, max_scrollback: usize) -> usize {
+        self.max_scrollback = max_scrollback;
+        if self.scrollback_rows.len() <= max_scrollback {
+            return 0;
+        }
+        let excess = self.scrollback_rows.len() - max_scrollback;
+        self.scrollback_rows.drain(..excess);
+        self.scrollback_wrapped.drain(..excess);
+        self.scrollback_lines = self.scrollback_rows.len();
+        let floor = self
+            .total_lines_scrolled
+            .saturating_sub(self.scrollback_lines);
+        self.evict_zones(floor);
+        // The buffer's lines moved under every remembered position.
+        self.invalidate_scroll_log();
+        self.mark_rows_content(0, self.rows.saturating_sub(1));
+        excess
+    }
+
     /// Check if a line is wrapped
     pub fn is_line_wrapped(&self, row: usize) -> bool {
         self.wrapped.get(row).copied().unwrap_or(false)
