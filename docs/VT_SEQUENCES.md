@@ -130,6 +130,7 @@ VT100/ECMA-48 text styling sequences.
 - `CSI 7 m` - Reverse
 - `CSI 8 m` - Hidden
 - `CSI 9 m` - Strikethrough
+- `CSI 21 m` - Double underline
 - `CSI 53 m` - Overline
 - `CSI 55 m` - Not overlined
 
