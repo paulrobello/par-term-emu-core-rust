@@ -9,12 +9,45 @@
 //! - Character attributes and hyperlinks
 //! - Grapheme clusters (variation selectors, ZWJ, skin tone modifiers, regional indicators)
 
-use crate::cell::{Cell, PackedColor, PackedOptionColor};
+use crate::cell::{Cell, CellFlags, PackedColor, PackedOptionColor};
 use crate::debug;
 use crate::grapheme;
 use crate::terminal::{Charset, Terminal};
 
 impl Terminal {
+    /// DECALN (`ESC # 8`): fill the screen with default-attribute `E`s,
+    /// reset the margins, clear origin mode and home the cursor, as xterm
+    /// does (its DECALN clears ORIGIN and calls resetRendition, so the E
+    /// cells and the ongoing pen carry default attributes, not the active
+    /// pen). Used to check a screen's alignment, and by vttest.
+    pub(crate) fn screen_alignment_pattern(&mut self) {
+        let (cols, rows) = self.size();
+        self.modes.origin_mode = false;
+        self.attrs.flags = CellFlags::default();
+        self.attrs.fg = self.theme.default_fg;
+        self.attrs.bg = self.theme.default_bg;
+        self.attrs.underline_color = None;
+        let cell = Cell {
+            c: 'E',
+            combining: None,
+            fg: PackedColor::pack(self.theme.default_fg),
+            bg: PackedColor::pack(self.theme.default_bg),
+            underline_color: PackedOptionColor::pack(None),
+            flags: Default::default(),
+            width: 1,
+        };
+        self.active_grid_mut().fill_screen(&cell);
+        self.margins.scroll_region_top = 0;
+        self.margins.scroll_region_bottom = rows.saturating_sub(1);
+        self.margins.left_margin = 0;
+        self.margins.right_margin = cols.saturating_sub(1);
+        self.cursor.goto(0, 0);
+        self.pending_wrap = false;
+        for row in 0..rows {
+            self.triggers.mark_written(row);
+        }
+    }
+
     /// Write a character to the terminal at the current cursor position
     pub(super) fn write_char(&mut self, c: char) {
         // Apply ACS (Alternate Character Set) translation when the active charset

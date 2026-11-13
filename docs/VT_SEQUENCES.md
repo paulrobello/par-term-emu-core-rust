@@ -70,6 +70,10 @@ VT100 screen clearing and erasing sequences.
 - `n=1` - Clear from beginning of line to cursor
 - `n=2` - Clear entire line
 
+### Screen Alignment Pattern (DECALN)
+
+`ESC # 8` - Fill the screen with `E`, reset the margins and home the cursor
+
 ## Line/Character Editing
 
 VT220 insert/delete operations.
