@@ -373,17 +373,17 @@ mod tests {
 
     #[test]
     fn test_decaln_fills_the_screen_with_e_and_resets_the_margins() {
-        use crate::color::{Color, NamedColor};
-
         let mut term = Terminal::new(4, 3);
         // Wrapped text, a scroll region, left/right margins and a pen color.
-        term.process(b"abcdef\x1b[2;3r\x1b[?69h\x1b[2;3s\x1b[3;3H\x1b[44m\x1b#8");
+        term.process(b"abcdef\x1b[2;3r\x1b[?69h\x1b[2;3s\x1b[?6h\x1b[3;3H\x1b[44m\x1b#8");
         for row in 0..3 {
             assert_eq!(term.active_grid().row_text(row), "EEEE");
             assert!(!term.active_grid().is_line_wrapped(row));
         }
+        // xterm's DECALN resets the rendition: E cells carry the theme
+        // default colors, not the active pen (bg 44 here).
         let cell = term.active_grid().get(3, 2).unwrap();
-        assert_eq!(cell.bg(), Color::Named(NamedColor::Blue));
+        assert_eq!(cell.bg(), term.theme.default_bg);
         assert!(!cell.flags.wide_char());
         assert_eq!((term.cursor.col, term.cursor.row), (0, 0));
         assert!(!term.pending_wrap);
@@ -393,6 +393,12 @@ mod tests {
             (term.margins.left_margin, term.margins.right_margin),
             (0, 3)
         );
+
+        // xterm's DECALN clears origin mode before homing, so the next CUP
+        // is absolute rather than margin-relative.
+        assert!(!term.modes.origin_mode);
+        term.process(b"\x1b[2;2H");
+        assert_eq!((term.cursor.col, term.cursor.row), (1, 1));
     }
 
     #[test]

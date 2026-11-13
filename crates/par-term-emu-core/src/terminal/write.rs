@@ -9,22 +9,29 @@
 //! - Character attributes and hyperlinks
 //! - Grapheme clusters (variation selectors, ZWJ, skin tone modifiers, regional indicators)
 
-use crate::cell::{Cell, PackedColor, PackedOptionColor};
+use crate::cell::{Cell, CellFlags, PackedColor, PackedOptionColor};
 use crate::debug;
 use crate::grapheme;
 use crate::terminal::{Charset, Terminal};
 
 impl Terminal {
-    /// DECALN (`ESC # 8`): fill the screen with `E` in the pen's colors,
-    /// reset the margins and home the cursor, as xterm does. Used to check a
-    /// screen's alignment, and by vttest.
+    /// DECALN (`ESC # 8`): fill the screen with default-attribute `E`s,
+    /// reset the margins, clear origin mode and home the cursor, as xterm
+    /// does (its DECALN clears ORIGIN and calls resetRendition, so the E
+    /// cells and the ongoing pen carry default attributes, not the active
+    /// pen). Used to check a screen's alignment, and by vttest.
     pub(crate) fn screen_alignment_pattern(&mut self) {
         let (cols, rows) = self.size();
+        self.modes.origin_mode = false;
+        self.attrs.flags = CellFlags::default();
+        self.attrs.fg = self.theme.default_fg;
+        self.attrs.bg = self.theme.default_bg;
+        self.attrs.underline_color = None;
         let cell = Cell {
             c: 'E',
             combining: None,
-            fg: PackedColor::pack(self.attrs.fg),
-            bg: PackedColor::pack(self.attrs.bg),
+            fg: PackedColor::pack(self.theme.default_fg),
+            bg: PackedColor::pack(self.theme.default_bg),
             underline_color: PackedOptionColor::pack(None),
             flags: Default::default(),
             width: 1,
