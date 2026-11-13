@@ -34,8 +34,13 @@ struct Control(UnixStream, BufReader<UnixStream>);
 impl Control {
     fn connect(path: &std::path::Path) -> Self {
         let stream = UnixStream::connect(path).expect("daemon accepts control client");
+        // A poll slice, not a latency assertion: on expiry the reads below
+        // treat WouldBlock as "retry until the deadline", the shared
+        // harness's positive-wait discipline. A fixed 5 s budget expired on
+        // the daemon's `%agent-telemetry-changed` push at host load 35-47
+        // and the bare expect turned it into a WouldBlock panic.
         stream
-            .set_read_timeout(Some(Duration::from_secs(5)))
+            .set_read_timeout(Some(Duration::from_millis(250)))
             .expect("timeout installs");
         let reader = BufReader::new(stream.try_clone().expect("clone"));
         Control(stream, reader)
@@ -45,30 +50,50 @@ impl Control {
     fn command(&mut self, line: &str) -> Vec<String> {
         writeln!(self.0, "{line}").expect("write command");
         self.0.flush().expect("flush");
+        let deadline = Instant::now() + common::CEILING;
         let mut out = Vec::new();
         loop {
             let mut buf = String::new();
-            let n = self.1.read_line(&mut buf).expect("read reply");
-            assert!(n > 0, "server closed while answering {line:?}");
-            let done = buf.starts_with("%end") || buf.starts_with("%error");
-            out.push(buf);
-            if done {
-                return out;
+            match self.1.read_line(&mut buf) {
+                Ok(0) => panic!("server closed while answering {line:?}"),
+                Ok(_) => {
+                    let done = buf.starts_with("%end") || buf.starts_with("%error");
+                    out.push(buf);
+                    if done {
+                        return out;
+                    }
+                }
+                Err(err) if timed_out(&err) => {}
+                Err(err) => panic!("read error: {err}"),
             }
+            assert!(
+                Instant::now() < deadline,
+                "{line:?} never completed within {deadline:?}: {out:?}"
+            );
         }
     }
 
     /// The next line satisfying `ready`, skipping everything else.
     fn line_until(&mut self, ready: impl Fn(&str) -> bool, what: &str) -> String {
-        let deadline = Instant::now() + Duration::from_secs(10);
+        let deadline = Instant::now() + common::CEILING;
         loop {
             let mut buf = String::new();
-            let n = self.1.read_line(&mut buf).expect("read line");
-            assert!(n > 0, "server closed while waiting for {what}");
-            if ready(buf.trim_end()) {
-                return buf;
+            match self.1.read_line(&mut buf) {
+                Ok(0) => panic!("server closed while waiting for {what}"),
+                Ok(_) => {
+                    if ready(buf.trim_end()) {
+                        return buf;
+                    }
+                    assert!(Instant::now() < deadline, "never saw {what}: {buf}");
+                }
+                Err(err) if timed_out(&err) => {
+                    assert!(
+                        Instant::now() < deadline,
+                        "never saw {what} within {deadline:?}"
+                    );
+                }
+                Err(err) => panic!("read error: {err}"),
             }
-            assert!(Instant::now() < deadline, "never saw {what}: {buf}");
         }
     }
 
@@ -89,6 +114,15 @@ impl Control {
             .map(str::to_string)
             .collect()
     }
+}
+
+/// The read timeout's expiry, handled as "keep polling" by every read loop
+/// above instead of panicking.
+fn timed_out(err: &std::io::Error) -> bool {
+    matches!(
+        err.kind(),
+        std::io::ErrorKind::WouldBlock | std::io::ErrorKind::TimedOut
+    )
 }
 
 /// Run the env-renamed herdr kimi script for one action, optionally
@@ -266,7 +300,9 @@ fn a_restart_resumes_the_agent_session_rather_than_starting_fresh() {
         script.display()
     ));
 
-    let deadline = Instant::now() + Duration::from_secs(10);
+    // Positive wait on the hang ceiling: the marker's arrival is delayed,
+    // not owed, by host load.
+    let deadline = Instant::now() + common::CEILING;
     let mut startup_seen = false;
     while Instant::now() < deadline {
         let screen = control
