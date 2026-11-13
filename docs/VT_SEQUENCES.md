@@ -83,6 +83,7 @@ VT220 insert/delete operations.
 - `CSI <n> @` - Insert n blank characters (ICH)
 - `CSI <n> P` - Delete n characters (DCH)
 - `CSI <n> X` - Erase n characters (ECH)
+- `CSI <n> b` - Repeat the preceding graphic character n times (REP)
 
 ## Rectangle Operations
 
