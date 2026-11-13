@@ -334,6 +334,66 @@ fn fill_rectangle_marks_targeted_rows_dirty() {
     assert_eq!(dirty, vec![1, 2, 3]);
 }
 
+/// Every cell of `row` holds the pair invariant: a wide base has its spacer
+/// beside it, a spacer has its base.
+fn assert_whole_wide_pairs(term: &Terminal, row: usize) {
+    let grid = term.active_grid();
+    let cells = grid.row(row).unwrap();
+    for (col, cell) in cells.iter().enumerate() {
+        if cell.flags.wide_char() {
+            assert!(
+                col + 1 < cells.len() && cells[col + 1].flags.wide_char_spacer(),
+                "wide base at col {col} lost its spacer"
+            );
+        }
+        if cell.flags.wide_char_spacer() {
+            assert!(
+                col > 0 && cells[col - 1].flags.wide_char(),
+                "spacer at col {col} lost its base"
+            );
+        }
+    }
+}
+
+#[test]
+fn decfra_over_a_spacer_blanks_the_orphaned_base() {
+    let mut term = Terminal::new(6, 3);
+    term.process("a中b".as_bytes());
+    // Fill only the spacer's column: the base at col 1 must be blanked.
+    term.process(b"\x1b[88;1;3;1;3$x");
+    assert_whole_wide_pairs(&term, 0);
+    assert_eq!(term.active_grid().row_text(0), "a Xb  ");
+}
+
+#[test]
+fn decera_over_a_spacer_blanks_the_orphaned_base() {
+    let mut term = Terminal::new(6, 3);
+    term.process("a中b".as_bytes());
+    term.process(b"\x1b[1;3;1;3$z");
+    assert_whole_wide_pairs(&term, 0);
+    assert_eq!(term.active_grid().row_text(0), "a  b  ");
+}
+
+#[test]
+fn deccra_split_at_a_source_edge_leaves_no_lone_halves() {
+    let mut term = Terminal::new(8, 3);
+    term.process("a中bc".as_bytes());
+    // Copy the spacer+b onto cols 0-1: the source edge cut the pair, and the
+    // copy lands a lone spacer at col 0 and orphans 中's spacer at col 2.
+    term.process(b"\x1b[1;3;1;4;1;1;1$v");
+    assert_whole_wide_pairs(&term, 0);
+    assert_eq!(term.active_grid().row_text(0), " b bc   ");
+}
+
+#[test]
+fn decsera_over_a_spacer_blanks_the_unprotected_orphaned_base() {
+    let mut term = Terminal::new(6, 3);
+    term.process("a中b".as_bytes());
+    term.process(b"\x1b[1;3;1;3${");
+    assert_whole_wide_pairs(&term, 0);
+    assert_eq!(term.active_grid().row_text(0), "a  b  ");
+}
+
 #[test]
 fn erase_rectangle_clears_cells_to_spaces() {
     let mut term = Terminal::new(10, 3);
