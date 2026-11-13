@@ -1956,3 +1956,17 @@ fn delete_lines_with_n_past_region_size_empties_region_not_panics() {
         assert_eq!(grid.get(0, i).unwrap().c, ' ');
     }
 }
+
+/// A plain resize (not `Grid::resize_xterm`) leaves the scrollback alone.
+#[test]
+fn without_the_switch_the_scrollback_keeps_its_widths() {
+    let mut grid = Grid::new(10, 2, 100);
+    for (col, ch) in "0123456789".chars().enumerate() {
+        grid.set(col, 0, Cell::new(ch));
+    }
+    grid.scroll_up(1);
+    grid.resize(4, 2);
+    assert_eq!(grid.scrollback_len(), 1);
+    assert_eq!(grid.scrollback_line(0).unwrap().len(), 10);
+    assert!(grid.take_buffer_reflow().is_none());
+}

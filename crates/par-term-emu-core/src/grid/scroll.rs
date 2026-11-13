@@ -1,6 +1,7 @@
 //! Scrolling and reflow logic for the terminal grid
 
 use crate::cell::Cell;
+
 use crate::grid::Grid;
 
 impl Grid {
@@ -221,7 +222,7 @@ impl Grid {
     /// Reset per-row damage generations to the new row count and mark every
     /// row: a resize moves content even when the cell data survives
     /// unchanged.
-    fn reset_damage_for_resize(&mut self) {
+    pub(in crate::grid) fn reset_damage_for_resize(&mut self) {
         self.row_gen = vec![0u64; self.rows];
         self.row_content_gen = vec![0u64; self.rows];
         self.mark_rows_content(0, self.rows.saturating_sub(1));
@@ -262,12 +263,12 @@ impl Grid {
             return;
         }
 
-        // Width changed: reflow the visible screen only. Scrollback lines
-        // keep their original widths — resizing cost is bounded by the
-        // viewport rows, never the scrollback.
+        // Width changed: reflow the visible screen. Scrollback lines keep
+        // their original widths — resizing cost is bounded by the viewport
+        // rows, never the scrollback. (`Grid::resize_xterm` is the other
+        // way: the scrollback and the screen reflow as one buffer.)
         let old_cols = self.cols;
         let old_rows = self.rows;
-
         self.reflow_main_grid(old_cols, old_rows, cols, rows);
         self.reset_damage_for_resize();
     }
@@ -397,7 +398,7 @@ impl Grid {
         let mut current_col = 0;
 
         for cell in line {
-            let char_width = cell.width as usize;
+            let char_width = cell.width();
             if current_col + char_width > width {
                 while current_col < width {
                     new_cells.push(Cell::default());
