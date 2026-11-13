@@ -41,6 +41,16 @@ impl Grid {
 
     /// Evict zones whose entire range is before the given floor
     pub fn evict_zones(&mut self, floor: usize) {
+        // Runs on every line that reaches the scrollback: when every zone
+        // starts at or past the floor, none is evicted or clamped, so skip
+        // the rebuild below.
+        if self
+            .zones
+            .iter()
+            .all(|z| z.abs_row_start >= floor && z.abs_row_end >= floor)
+        {
+            return;
+        }
         let (evicted, mut remaining): (Vec<_>, Vec<_>) =
             self.zones.drain(..).partition(|z| z.abs_row_end < floor);
         self.evicted_zones.extend(evicted);

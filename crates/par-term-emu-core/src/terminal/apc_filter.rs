@@ -85,7 +85,46 @@ pub(crate) fn feed<F>(
 ) where
     F: FnMut(CompletedKittyApc<'_>, usize),
 {
-    for &byte in data {
+    let mut index = 0;
+    while index < data.len() {
+        // Runs of bytes that cannot change the state are moved at once:
+        // text up to the next ESC, and payload (or discarded overflow) up to
+        // the next byte that may terminate the APC.
+        let rest = &data[index..];
+        match *state {
+            ApcFilterState::Outside => {
+                let run = memchr::memchr(0x1b, rest).unwrap_or(rest.len());
+                if run > 0 {
+                    passthrough.extend_from_slice(&rest[..run]);
+                    index += run;
+                    continue;
+                }
+            }
+            ApcFilterState::InKittyApc => {
+                let run = memchr::memchr2(0x1b, 0x9c, rest).unwrap_or(rest.len());
+                if run > 0 {
+                    // `push_capped` byte by byte: what fits is kept, the
+                    // first byte past the cap starts the overflow.
+                    let room = MAX_KITTY_APC_BYTES.saturating_sub(apc_buffer.len());
+                    apc_buffer.extend_from_slice(&rest[..run.min(room)]);
+                    if run > room {
+                        *state = ApcFilterState::KittyApcOverflow;
+                    }
+                    index += run;
+                    continue;
+                }
+            }
+            ApcFilterState::KittyApcOverflow => {
+                let run = memchr::memchr2(0x1b, 0x9c, rest).unwrap_or(rest.len());
+                if run > 0 {
+                    index += run;
+                    continue;
+                }
+            }
+            _ => {}
+        }
+        let byte = data[index];
+        index += 1;
         match *state {
             ApcFilterState::Outside => {
                 if byte == 0x1b {
@@ -423,5 +462,45 @@ mod tests {
         assert_eq!(completed, 0, "the split bomb is dropped whole");
         assert!(buf.len() <= MAX_KITTY_APC_BYTES);
         assert_eq!(state, ApcFilterState::Outside);
+    }
+
+    /// Passthrough, payloads and their offsets for `data` cut into `chunks`.
+    fn run_cut(data: &[u8], cuts: &[usize]) -> (Vec<u8>, Vec<(Vec<u8>, usize)>) {
+        let mut state = ApcFilterState::Outside;
+        let mut buf = Vec::new();
+        let mut pass = Vec::new();
+        let mut completed = Vec::new();
+        let mut rest = data;
+        for &cut in cuts.iter().chain(std::iter::once(&usize::MAX)) {
+            let (head, tail) = rest.split_at(cut.min(rest.len()));
+            feed(&mut state, &mut buf, head, &mut pass, |apc, offset| {
+                completed.push((apc.payload.to_vec(), offset));
+            });
+            rest = tail;
+        }
+        (pass, completed)
+    }
+
+    /// Moving runs at once gives what one byte at a time gives, however
+    /// the stream is cut.
+    #[test]
+    fn runs_match_one_byte_at_a_time() {
+        const ALPHABET: &[u8] = b"\x1b\x1b\x1b__GGX\\\x9cab;=A";
+        let mut seed = 0x853c_49e6_748f_ea9bu64;
+        let mut next = |bound: usize| {
+            seed ^= seed << 13;
+            seed ^= seed >> 7;
+            seed ^= seed << 17;
+            (seed % bound as u64) as usize
+        };
+        for _ in 0..3000 {
+            let len = next(120);
+            let data: Vec<u8> = (0..len).map(|_| ALPHABET[next(ALPHABET.len())]).collect();
+            let bytewise: Vec<usize> = vec![1; len];
+            let cuts: Vec<usize> = (0..next(4)).map(|_| next(len + 1)).collect();
+            let expected = run_cut(&data, &bytewise);
+            assert_eq!(run_cut(&data, &[]), expected, "{data:?}");
+            assert_eq!(run_cut(&data, &cuts), expected, "{data:?} cut {cuts:?}");
+        }
     }
 }
