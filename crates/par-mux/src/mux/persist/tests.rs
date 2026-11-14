@@ -3865,14 +3865,17 @@ fi
     );
     drop(red);
     let restored = MuxTree::from_persist_state(&state, factory()).unwrap();
+    // Poll the marker's CONTENT, not its existence: `printf restored >
+    // $AGENT_MARKER` opens the empty file before the write lands, so an
+    // existence poll can read "" in that window under gate load
+    // (2026-11-13 checkall-ci run).
     let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
-    while !marker.exists() {
+    while !fs::read_to_string(&marker).is_ok_and(|s| s == "restored") {
         assert!(
             std::time::Instant::now() < deadline,
             "restored agent failed its environment checks"
         );
         std::thread::sleep(std::time::Duration::from_millis(20));
     }
-    assert_eq!(fs::read_to_string(&marker).unwrap(), "restored");
     drop(restored);
 }

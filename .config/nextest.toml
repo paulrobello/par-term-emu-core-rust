@@ -23,6 +23,15 @@ slow-timeout = { period = "30s", terminate-after = 8 }
 # tolerate.
 test-threads = 8
 
+# Measurement harnesses self-label "(not a gate)" and CI's mux-test leg
+# runs the ci profile WITHOUT --run-ignored, so the local gate's
+# --run-ignored all was pulling a harness in that CI never runs; the
+# 2026-11-13 gate run timed one out at the 240 s harness kill. Exclude
+# them from every ci-profile run; manual measurement runs
+# (cargo test … --ignored --nocapture) don't read this file and are
+# unaffected.
+default-filter = 'not (test(=~"click_latency_harness"))'
+
 # The chords test is legitimately long, not wedged: ~123s in isolation
 # (several waits consume most of their 10s deadline), which straddles the
 # old 30s x4 kill. Give it 30s x12 (above the 8x default) instead of
