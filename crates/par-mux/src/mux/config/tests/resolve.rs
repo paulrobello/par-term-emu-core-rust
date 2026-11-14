@@ -164,6 +164,40 @@ fn exit_empty_defaults_to_on() {
     assert!(eff.exit_empty);
 }
 
+/// The `--keep-alive` flag tier votes exit-empty off above the file: a
+/// default resolve keeps the daemon's self-exit, a stated
+/// `exit-empty = true` keeps it too, and the flag beats both so a
+/// bootstrap daemon started ahead of its first window stays up whatever
+/// the file says. Absent (the no-flags resolutions — reload diffs,
+/// clients) never moves the setting.
+#[test]
+fn keep_alive_flag_turns_exit_empty_off_above_the_file_tier() {
+    let file: ConfigFile = toml::from_str("[daemon]\nexit-empty = true").expect("parse the file");
+    let eff = resolve(&file, &Overrides::default());
+    assert!(eff.exit_empty, "the file and the default keep the exit");
+    let eff = resolve(
+        &file,
+        &Overrides {
+            keep_alive: Some(true),
+            ..Default::default()
+        },
+    );
+    assert!(!eff.exit_empty, "the flag tier wins over the file");
+    // The file voting off needs no flag: the two agree.
+    let off: ConfigFile = toml::from_str("[daemon]\nexit-empty = false").expect("parse the file");
+    assert!(!resolve(&off, &Overrides::default()).exit_empty);
+    assert!(
+        !resolve(
+            &off,
+            &Overrides {
+                keep_alive: Some(true),
+                ..Default::default()
+            },
+        )
+        .exit_empty
+    );
+}
+
 /// The product default: remain-on-exit is OFF (auto-remove) — both the
 /// built-in default and a file silent on the key.
 #[test]

@@ -139,6 +139,10 @@ pub struct Overrides {
     pub pane_endpoints: Option<bool>,
     /// `--expose-control-socket` passed.
     pub expose_control_socket: Option<bool>,
+    /// `--keep-alive` passed (daemon start): the flag tier of
+    /// `exit-empty` — the flag votes the exit-when-empty off so a
+    /// daemon started ahead of its first window can wait for it.
+    pub keep_alive: Option<bool>,
     /// `$PAR_MUX_SOCKET` (non-empty), the env tier of the socket target.
     pub env_socket: Option<String>,
 }
@@ -202,6 +206,12 @@ pub fn resolve(file: &ConfigFile, o: &Overrides) -> EffectiveConfig {
     };
     if let Some(v) = file.daemon.exit_empty {
         eff.exit_empty = v;
+    }
+    // --keep-alive rides the flag tier above the file: a bootstrap start
+    // must keep a fresh, still-empty daemon up regardless of what the
+    // file (or the default) says about exit-empty.
+    if o.keep_alive == Some(true) {
+        eff.exit_empty = false;
     }
     // split-start-dir is file-only daemon behavior (no flag or env
     // tier); an unknown spelling keeps the home default.

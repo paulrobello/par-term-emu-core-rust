@@ -153,6 +153,7 @@ par-mux                     Same as par-mux default
 par-mux --state-dir <dir>   Override the platform state directory the tree is persisted under
 par-mux [<name>] --foreground        Serve in the foreground of this process — no daemonize, no attach
 par-mux [<name>] --no-attach         Daemonize as usual but exit daemon-only, without attaching
+par-mux [<name>] --keep-alive        Daemonize and keep serving after the tree empties (disables exit-when-empty for this run)
 par-mux [<name>] --stop     Stop the daemon on this socket cleanly and wait for it to exit
 par-mux [<name>] --restart  Stop, then start a fresh daemon on the same socket (detached, attach)
 par-mux [<name>] --cmd CMD  Send one control command to the running daemon and print the reply
@@ -179,6 +180,18 @@ The daemon unlinks the socket only AFTER its final state save is on disk, so the
 Before the fork, the invocation reports on the terminal what the fresh daemon will restore: nothing (with the reason — no saved state, or the previous daemon saved an empty tree) when the restore will be empty, and where the details live.
 The fresh daemon's stderr is routed to `<state file>.log` beside the state file (created `0600`, appended across restarts) instead of discarded, so a startup failure — a bind error, a restore failure, an exit-when-empty — leaves evidence there after the terminal is gone.
 The daemon detaches by default (fork + `setsid`; stdin/stdout to `/dev/null`), so no `&` is needed and closing the terminal it was typed into leaves the daemon and its panes running — herdr's launch shape: `par-mux <name>` starts the daemon and ATTACHES the invoking terminal to it, and `--restart` lands in the fresh daemon the same way. The launch process waits (10 s bound) for the socket to accept, then either execs the attach client in place (`par-mux attach --socket …`) or exits: `--no-attach` skips the attach on request, and a start whose stdin is not a terminal (a script, a boot job) stays daemon-only by itself. A socket that never accepts is an error naming the daemon log, because after the fork the child's failures are only visible there. `--foreground` is the escape: this exact process serves, no fork and no attach — the debugging and supervision shape, and the one every programmatic spawner uses (`MuxClient`'s auto-spawn and the test harness pass it, because they kill the child they spawned and a detached grandchild could never be named). On Windows the daemon always serves in the foreground of the invoking process (the fork shape is unix); `--foreground` and `--no-attach` parse there but have no one to attach. `--restart` composes with both modifiers.
+
+**Headless fleet bootstrap.** A daemon started ahead of its first window needs `--keep-alive`: without it the exit-when-empty default self-exits a fresh, empty daemon after the 5 s grace (the process is gone — socket gone — before any later session can reach it), and creating the first window in the same ssh session as the start races the daemon's boot. Start it detached from the staging session, keep it waiting, then reach it from any later session:
+
+```bash
+# session 1 — stage the daemon (it survives this session closing):
+ssh host "par-mux start --socket ~/.par-mux/host.sock --state-dir ~/.local/state/par-mux/host --no-attach --keep-alive"
+# session 2 — attach, or create the first window from a client:
+ssh host "par-mux --socket ~/.par-mux/host.sock --cmd 'new-session -s main'"
+ssh host "par-mux --socket ~/.par-mux/host.sock --cmd 'list-sessions'"
+```
+
+The detached start already survives the invoking ssh session closing (fork + `setsid` put the daemon in its own session with stdin/stdout on `/dev/null` and SIGHUP ignored), and `--keep-alive` is the one-shot flag tier of `[daemon] exit-empty = false` — the file key still wins live on a later `reload-config` that states it. Without the flag the default is untouched: an empty daemon still self-exits after the grace.
 
 **Daemon log.** The detached child's stderr is the daemon log, opened append from boot. The default instance (socket `par-mux-default.sock`, no `--state-dir`) logs to `~/Library/Logs/par-mux/daemon.log` on macOS (`daemon.log` beside the state file elsewhere) — the same file the Par-mux.app launcher and launchd append to — so a `--restart` self-relaunch continues its predecessor's record. Any other instance, or any run with an explicit `--state-dir`, logs to `<state file>.log` beside its state file. No flag enables it. The log carries info-and-above records plus one debug line per hook report (`DEBUG: par-mux: hook report pane %N method M: accepted|rejected`), the restart-roster forensics trail;  other debug records stay off. A rejected or unparseable control command logs the peer's transport attribution in the same line — `pid N` plus the image path where the platform exposes peer credentials (Linux, Windows, FreeBSD), `uid N` on xucred transports (macOS) — so a reconnect storm is attributable from one log line (card 01a1b228). Pinned by `restart_relaunch_writes_the_default_daemon_log_with_hook_debug_lines`.
 
@@ -729,7 +742,7 @@ pane-endpoints = false
 expose-control-socket = false
 remain-on-exit = false  # hold a pane whose child exited instead of removing it (the attach respawn cue; under the default auto-remove a shown pane's death flashes the affordance instead)
 exit-action = "remove"  # the default exit action: remove, hold, or shell (see Pane Reaping); absent folds remain-on-exit = true to hold
-exit-empty = true       # exit after the 5 s grace once no sessions (or only dead panes) remain; attached clients do not hold it
+exit-empty = true       # exit after the 5 s grace once no sessions (or only dead panes) remain; attached clients do not hold it. Startup flag tier: --keep-alive (one-shot for this run; a stated key still wins live on reload)
 split-start-dir = "home-dir"  # what a split-window pane starts in with no -c: "home-dir", "previous-pane-dir" (the target pane's live cwd), or "workspace-dir" (the workspace's launch folder)
 agent-resume-prompt = "You were interrupted by a daemon restart. Before doing anything else, re-ground yourself: check the par-mux roster, any background tasks, gates, and running processes for what survived, then continue the work you were doing when the session ended."  # what a daemon restart passes to a resumed agent so it picks its work back up instead of idling at its prompt; empty disables the injection
 
