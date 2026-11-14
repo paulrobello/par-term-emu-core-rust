@@ -1647,7 +1647,11 @@ fn flood_short_lines_do_not_evict_a_lagging_observer() {
     // flood runs.
     let observer = UnixStream::connect(fixture.socket()).expect("observer connects");
     observer
-        .set_read_timeout(Some(Duration::from_millis(200)))
+        // 5 s, not a tight bound: this covers the registration reply AND the
+        // post-flood drain reads; both are content-asserted, and a 200 ms
+        // here died on WouldBlock during the registration reply at host
+        // load 60+ (2026-11-13 synthetic-load evidence run).
+        .set_read_timeout(Some(Duration::from_millis(5000)))
         .expect("read timeout installs");
     let mut observer_writer = observer.try_clone().expect("clone for write");
     std::io::Write::write_all(&mut observer_writer, b"list-panes\n").expect("register");
