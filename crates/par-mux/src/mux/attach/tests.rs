@@ -3438,6 +3438,7 @@ fn nonblocking_stdin_wouldblock_does_not_end_the_reader() {
 /// can delay any single wake past the tick, but five consecutive
 /// all-slow runs would mean the wake is quantized again.
 #[test]
+#[ignore = "load-sensitive: timing assertions; run via make test-rust-sensitive"]
 #[cfg(unix)]
 fn pump_wait_wakes_on_stdin_off_the_poll_tick() {
     // A real pipe whose write end gets click bytes mid-wait; the read
