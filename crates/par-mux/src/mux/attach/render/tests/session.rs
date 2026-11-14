@@ -3105,7 +3105,7 @@ fn settings_prompt_rows_edit_numbers_hex_and_chords() {
     settle(&mut session, &mut conn);
     let written = std::fs::read_to_string(&path).unwrap();
     assert!(written.contains("prefix = \"C-a\""), "{written}");
-    assert_eq!(session.prefix, 0x01, "rebound live");
+    assert_eq!(session.input_route.prefix, 0x01, "rebound live");
     // Escape from a prompt returns to the dialog, not out of it.
     session.route_stdin_bytes(&mut conn, b"\r\x1b");
     assert!(matches!(session.modal, Modal::Settings(_)));
@@ -3348,7 +3348,7 @@ fn split_paste_across_pump_ticks_is_opaque_and_rewrapped() {
     assert!(!session.route_stdin_bytes(&mut conn, b"\x02xcd\x1b[201~"));
     settle(&mut session, &mut conn);
     assert!(
-        !session.prefix_pending,
+        !session.input_route.prefix_pending,
         "a pasted prefix byte never arms the prefix"
     );
     let lines = drained(&rx);
@@ -3402,10 +3402,10 @@ fn paste_cancels_a_pending_prefix() {
     let (rx, mut conn, mut session) = paste_session("paste-prefix");
     session.route_stdin_bytes(&mut conn, &[crate::mux::attach::C_B]);
     settle(&mut session, &mut conn);
-    assert!(session.prefix_pending);
+    assert!(session.input_route.prefix_pending);
     session.route_stdin_bytes(&mut conn, b"\x1b[200~xd\x1b[201~");
     settle(&mut session, &mut conn);
-    assert!(!session.prefix_pending);
+    assert!(!session.input_route.prefix_pending);
     let lines = drained(&rx);
     assert_eq!(lines, vec![hex_wire("%1", b"xd")], "{lines:?}");
 }
@@ -3539,7 +3539,7 @@ fn border_colors_survive_a_reseed_rebuild() {
     );
     session.set_pane_borders(true);
     session.set_border_colors(Some(active), Some(plain));
-    session.reseed_window(&mut conn, "@0");
+    session.reseed_window(&mut conn, "@0", false);
     assert_eq!(session.renderer.layout().len(), 2, "the reseed re-laid");
     assert_ring_colors(&mut session, 0, 80, active, plain);
 }
@@ -3681,7 +3681,7 @@ fn resize_keeps_border_colors() {
         .expect("resize");
     assert_eq!(session.renderer.frame_size(), (100, 23));
     assert_ring_colors(&mut session, 0, 100, active, plain);
-    session.reseed_window(&mut conn, "@0");
+    session.reseed_window(&mut conn, "@0", false);
     assert_eq!(session.renderer.layout().len(), 2, "the reseed re-laid");
     assert_ring_colors(&mut session, 0, 100, active, plain);
 }
@@ -3767,7 +3767,7 @@ fn reseed_to_another_window_replays_every_pane() {
         },
     );
     session.renderer.set_user_title(1, "old window title");
-    session.reseed_window(&mut conn, "@1");
+    session.reseed_window(&mut conn, "@1", false);
     let lines = drained(&rx);
     assert_eq!(
         replay_lines(&lines),
@@ -3860,7 +3860,10 @@ fn reland_repaints_the_cells_the_new_view_leaves_blank() {
     // Re-land on @1, whose panes are nearly blank: the %layout-change
     // rides the size report, so the reseed installs the new layout
     // synchronously.
-    assert!(session.reseed_window(&mut conn, "@1"), "the reseed landed");
+    assert!(
+        session.reseed_window(&mut conn, "@1", false),
+        "the reseed landed"
+    );
     session.renderer.feed_output(5, b"$");
     session.renderer.feed_output(6, b"$");
     let mut view_b = RecordingSink::default();
@@ -3909,7 +3912,10 @@ fn reland_via_lagging_layout_leaves_no_stale_fragments() {
 
     // The reseed's drain misses the broadcast (nothing notify-scripted);
     // the layout arrives afterwards and parks for the pump.
-    assert!(session.reseed_window(&mut conn, "@1"), "the reseed landed");
+    assert!(
+        session.reseed_window(&mut conn, "@1", false),
+        "the reseed landed"
+    );
     session.on_layout_change(layout, layout, "*");
     session
         .apply_pending(&mut conn, &mut RecordingSink::default())
@@ -3978,7 +3984,10 @@ fn reseed_window_deletes_the_previous_views_kitty_graphics() {
         String::from_utf8_lossy(&view_a.raw)
     );
 
-    assert!(session.reseed_window(&mut conn, "@1"), "the reseed landed");
+    assert!(
+        session.reseed_window(&mut conn, "@1", false),
+        "the reseed landed"
+    );
     let mut view_b = RecordingSink::default();
     session.frame(&mut view_b);
     let drawn = String::from_utf8_lossy(&view_b.raw);
@@ -4025,7 +4034,10 @@ fn reseed_window_deletes_the_kitty_graphics_even_when_the_layout_lags() {
     );
 
     // The reseed's drain misses the broadcast; the old layout stands.
-    assert!(session.reseed_window(&mut conn, "@1"), "the reseed landed");
+    assert!(
+        session.reseed_window(&mut conn, "@1", false),
+        "the reseed landed"
+    );
     let mut interim = RecordingSink::default();
     session.frame(&mut interim);
     assert!(
@@ -4173,7 +4185,7 @@ fn status_refresh_round_trips_are_bounded() {
     );
     assert!(sent.len() <= 6);
     assert_eq!(session.status.session_id.as_deref(), Some("$4"));
-    assert!(!session.status_dirty);
+    assert!(!session.status_inflight.dirty);
 }
 
 /// A daemon that stops answering costs the pump at most the status
@@ -4206,7 +4218,7 @@ fn status_refresh_times_out_and_keeps_replies_aligned() {
         "bounded by the status timeout: {took:?}"
     );
     assert!(
-        !session.status_dirty,
+        !session.status_inflight.dirty,
         "a timeout leaves the re-query to the next poll or event — an immediate \
          re-issue queues behind the same slow reply, one 500 ms bound per pass"
     );
@@ -4742,7 +4754,7 @@ fn agent_insert_marks_status_dirty_and_rows_trail_ungrouped() {
     let (rx, mut conn) = fake_daemon("snapinsert", script);
     let mut session = snapshot_session();
     session.refresh_status_facts(&mut conn).expect("seed");
-    session.status_dirty = false;
+    session.status_inflight.dirty = false;
     drained(&rx);
 
     session.handle_event(TmuxNotification::AgentStateChanged {
@@ -4753,7 +4765,7 @@ fn agent_insert_marks_status_dirty_and_rows_trail_ungrouped() {
         ws: String::new(),
         msg: String::new(),
     });
-    assert!(session.status_dirty);
+    assert!(session.status_inflight.dirty);
     let sections = session.renderer.sidebar_sections.clone().expect("sections");
     assert_eq!(
         sections[1].rows,
@@ -5032,7 +5044,7 @@ fn a_refresh_that_already_saw_the_new_state_still_lets_its_push_toast() {
         .apply_layout(parse_layout("0000,90x24,0,0,9").expect("parses"));
     drained(&rx);
 
-    session.status_dirty = true;
+    session.status_inflight.dirty = true;
     assert_eq!(session.refresh_status(&mut conn), EventOutcome::Continue);
     settle(&mut session, &mut conn);
     assert_eq!(
@@ -5068,7 +5080,7 @@ fn status_snapshot_issues_without_blocking_and_applies_on_dispatch() {
     let mut session = snapshot_session();
     drained(&rx);
 
-    session.status_dirty = true;
+    session.status_inflight.dirty = true;
     let started = std::time::Instant::now();
     assert_eq!(session.refresh_status(&mut conn), EventOutcome::Continue);
     assert!(
@@ -5076,9 +5088,12 @@ fn status_snapshot_issues_without_blocking_and_applies_on_dispatch() {
         "the snapshot writes without waiting: {:?}",
         started.elapsed()
     );
-    assert!(!session.status_dirty, "the issue consumed the dirty mark");
     assert!(
-        session.status_snapshot_inflight.is_some(),
+        !session.status_inflight.dirty,
+        "the issue consumed the dirty mark"
+    );
+    assert!(
+        session.status_inflight.flight.is_some(),
         "the reply is owed: one snapshot in flight"
     );
     wait_recorded(&rx, "client-snapshot");
@@ -5094,7 +5109,7 @@ fn status_snapshot_issues_without_blocking_and_applies_on_dispatch() {
         "the reply's roster committed"
     );
     assert!(
-        session.status_snapshot_inflight.is_none(),
+        session.status_inflight.flight.is_none(),
         "the application releases the in-flight slot"
     );
     assert!(
@@ -5105,7 +5120,7 @@ fn status_snapshot_issues_without_blocking_and_applies_on_dispatch() {
 
 /// The nothing-left-to-show `End` rides the continuation: the `%error`
 /// snapshot reply lands `SessionGone`, the landing resolves nothing,
-/// and the continuation raises the pump-visible `status_end` that the
+/// and the continuation raises the pump-visible `status_inflight.end` that the
 /// status step checks on that tick.
 #[test]
 fn status_snapshot_end_lands_through_the_continuation() {
@@ -5115,12 +5130,15 @@ fn status_snapshot_end_lands_through_the_continuation() {
     let mut session = snapshot_session();
     drained(&rx);
 
-    session.status_dirty = true;
+    session.status_inflight.dirty = true;
     assert_eq!(session.refresh_status(&mut conn), EventOutcome::Continue);
-    assert!(!session.status_end, "nothing ends before the reply");
+    assert!(
+        !session.status_inflight.end,
+        "nothing ends before the reply"
+    );
     settle(&mut session, &mut conn);
     assert!(
-        session.status_end,
+        session.status_inflight.end,
         "the SessionGone landing found nothing left to show"
     );
 }
@@ -5138,13 +5156,16 @@ fn a_reseed_issues_its_snapshot_without_blocking_and_applies_on_dispatch() {
     let mut session = snapshot_session();
     drained(&rx);
 
-    session.reseed_window(&mut conn, "@0");
+    session.reseed_window(&mut conn, "@0", false);
     assert_eq!(session.window, "@0", "the view re-seeded onto @0");
     assert!(
-        session.status_snapshot_inflight.is_some(),
+        session.status_inflight.flight.is_some(),
         "the snapshot rides the machinery, not an inline round trip"
     );
-    assert!(!session.status_dirty, "the issue consumed the dirty mark");
+    assert!(
+        !session.status_inflight.dirty,
+        "the issue consumed the dirty mark"
+    );
     let wire = received_within_300ms(&rx);
     assert_eq!(
         wire.iter()
@@ -5156,7 +5177,7 @@ fn a_reseed_issues_its_snapshot_without_blocking_and_applies_on_dispatch() {
 
     settle(&mut session, &mut conn);
     assert!(
-        session.status_snapshot_inflight.is_none(),
+        session.status_inflight.flight.is_none(),
         "the application releases the in-flight slot"
     );
     assert_eq!(
@@ -5216,7 +5237,7 @@ fn a_gone_window_lands_on_the_cached_sibling_without_queries() {
     let (rx, mut conn, mut session) = cached_landing_fixture("cachedlanding", &[]);
     drained(&rx);
 
-    session.status_dirty = true;
+    session.status_inflight.dirty = true;
     assert_eq!(session.refresh_status(&mut conn), EventOutcome::Continue);
     settle(&mut session, &mut conn);
     let wire = drained(&rx);
@@ -5236,7 +5257,7 @@ fn a_gone_window_lands_on_the_cached_sibling_without_queries() {
         "the view landed on the cached sibling"
     );
     assert!(
-        !session.status_end,
+        !session.status_inflight.end,
         "a survivor existed, so the view stands"
     );
 }
@@ -5258,7 +5279,7 @@ fn a_dead_cached_landing_falls_back_to_the_interactive_ladder() {
     );
     drained(&rx);
 
-    session.status_dirty = true;
+    session.status_inflight.dirty = true;
     assert_eq!(session.refresh_status(&mut conn), EventOutcome::Continue);
     settle(&mut session, &mut conn);
     let wire = drained(&rx);
@@ -5272,7 +5293,10 @@ fn a_dead_cached_landing_falls_back_to_the_interactive_ladder() {
             "the ladder ran: {query} was asked"
         );
     }
-    assert!(session.status_end, "the ladder found nothing left to show");
+    assert!(
+        session.status_inflight.end,
+        "the ladder found nothing left to show"
+    );
 }
 
 /// The storm rule survives the async path: a snapshot still owed past
@@ -5290,7 +5314,7 @@ fn status_snapshot_timeout_abandons_without_re_issuing() {
     let mut session = snapshot_session();
     drained(&rx);
 
-    session.status_dirty = true;
+    session.status_inflight.dirty = true;
     assert_eq!(session.refresh_status(&mut conn), EventOutcome::Continue);
     wait_recorded(&rx, "client-snapshot");
 
@@ -5299,11 +5323,11 @@ fn status_snapshot_timeout_abandons_without_re_issuing() {
     // sleep gates the leg: only dispatch_replies applies the reply and
     // clears the slot, and none has run — the flag itself proves the
     // refresh cannot reach the abandon branch.
-    assert!(session.status_snapshot_inflight.is_some());
-    session.status_dirty = true;
+    assert!(session.status_inflight.flight.is_some());
+    session.status_inflight.dirty = true;
     assert_eq!(session.refresh_status(&mut conn), EventOutcome::Continue);
     assert!(
-        session.status_dirty,
+        session.status_inflight.dirty,
         "the mid-flight mark survives for the post-reply re-issue"
     );
     assert!(drained(&rx).is_empty(), "no re-issue while in flight");
@@ -5311,10 +5335,14 @@ fn status_snapshot_timeout_abandons_without_re_issuing() {
     // Past the bound: the abandon clears the in-flight slot and the
     // dirty mark — nothing re-queues behind the wedged reply (the
     // storm rule; the next poll tick or event re-queries).
-    session.status_snapshot_inflight = Some(std::time::Instant::now() - status::STATUS_TIMEOUT);
+    let flight = session
+        .status_inflight
+        .flight
+        .expect("the reply is still owed");
+    session.status_inflight.flight = Some(flight.backdated(status::STATUS_TIMEOUT));
     assert_eq!(session.refresh_status(&mut conn), EventOutcome::Continue);
     assert!(
-        !session.status_dirty,
+        !session.status_inflight.dirty,
         "the abandon leaves the re-query to the next poll or event"
     );
     assert!(drained(&rx).is_empty(), "no re-issue after the abandon");
@@ -5533,7 +5561,7 @@ fn a_push_handled_mid_seed_stays_out_of_the_baseline_and_its_rebroadcast_toasts(
     // while it is in flight. The fake writes the push ahead of the
     // reply block; the bounded drain waits out that write.
     session.seed_status_snapshot(&mut conn, Vec::new());
-    assert!(session.status_snapshot_inflight.is_some());
+    assert!(session.status_inflight.flight.is_some());
     let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
     while session.renderer.toast.is_none() {
         assert!(
@@ -5557,7 +5585,7 @@ fn a_push_handled_mid_seed_stays_out_of_the_baseline_and_its_rebroadcast_toasts(
     // The reply's continuation adopts the baseline; the raced pane
     // stays out of it.
     settle(&mut session, &mut conn);
-    assert!(session.status_snapshot_inflight.is_none());
+    assert!(session.status_inflight.flight.is_none());
     let baseline = session
         .notify
         .transitions
@@ -5572,7 +5600,7 @@ fn a_push_handled_mid_seed_stays_out_of_the_baseline_and_its_rebroadcast_toasts(
     // applied before it wrote the snapshot) toasts: there is no
     // push-stream record to suppress it on. It rides the pump's own
     // refresh (the way a late registration replay arrives).
-    session.status_dirty = true;
+    session.status_inflight.dirty = true;
     assert_eq!(session.refresh_status(&mut conn), EventOutcome::Continue);
     let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
     while session.notify.outbox.len() < 2 {
@@ -6054,7 +6082,7 @@ fn agent_event_patches_without_a_query() {
     let (rx, mut conn) = fake_daemon("snapagent", snapshot_script());
     let mut session = snapshot_session();
     session.refresh_status_facts(&mut conn).expect("seed");
-    session.status_dirty = false;
+    session.status_inflight.dirty = false;
     drained(&rx);
 
     let rows = |session: &WindowSession| -> Vec<SidebarRow> {
@@ -6074,7 +6102,7 @@ fn agent_event_patches_without_a_query() {
         ws: "+1".to_string(),
         msg: String::new(),
     });
-    assert!(!session.status_dirty);
+    assert!(!session.status_inflight.dirty);
     assert!(
         rows(&session).contains(&arow(3, Some("side"), "kimi", "working", false)),
         "the ws token groups the inserted row under its workspace: {:?}",
@@ -6092,7 +6120,7 @@ fn agent_event_patches_without_a_query() {
         pane_id: "%3".to_string(),
         agent: "kimi".to_string(),
     });
-    assert!(!session.status_dirty);
+    assert!(!session.status_inflight.dirty);
     assert!(
         !rows(&session)
             .iter()
@@ -6108,12 +6136,12 @@ fn agent_event_patches_without_a_query() {
 #[test]
 fn telemetry_event_does_not_mark_status_dirty() {
     let mut session = snapshot_session();
-    session.status_dirty = false;
+    session.status_inflight.dirty = false;
     session.handle_event(TmuxNotification::AgentTelemetryChanged {
         pane_id: "%1".to_string(),
         agent: "claude".to_string(),
     });
-    assert!(!session.status_dirty);
+    assert!(!session.status_inflight.dirty);
 }
 
 /// `%window-renamed` and a set `%pane-title-changed` patch the tab and
@@ -6123,7 +6151,7 @@ fn rename_and_title_events_patch_without_a_query() {
     let (rx, mut conn) = fake_daemon("snaprename", snapshot_script());
     let mut session = snapshot_session();
     session.refresh_status_facts(&mut conn).expect("seed");
-    session.status_dirty = false;
+    session.status_inflight.dirty = false;
     drained(&rx);
 
     session.handle_event(TmuxNotification::WindowRenamed {
@@ -6134,7 +6162,7 @@ fn rename_and_title_events_patch_without_a_query() {
         pane_id: "%1".to_string(),
         title: "deploy".to_string(),
     });
-    assert!(!session.status_dirty);
+    assert!(!session.status_inflight.dirty);
     assert_eq!(session.status.windows()[1].1, "tail");
     assert_eq!(session.status.pane_title(), "deploy");
     assert_eq!(session.renderer.border_label(1), "deploy");
@@ -6474,13 +6502,16 @@ fn focus_pane_on_the_shown_window_does_not_land() {
             ..FakeScript::default()
         },
     );
-    session.status_dirty = false;
+    session.status_inflight.dirty = false;
     session.focus_pane(&mut conn, 2);
     settle(&mut session, &mut conn);
     let lines = drained(&rx);
     assert_eq!(lines, vec!["select-pane -t %2", "switch-client -t %2"]);
     assert_eq!(session.window, "@0");
-    assert!(session.status_dirty, "the highlight repaint is scheduled");
+    assert!(
+        session.status_inflight.dirty,
+        "the highlight repaint is scheduled"
+    );
 }
 
 /// The landing's focus survives a LAGGING `%layout-change`: when the
@@ -7312,7 +7343,7 @@ fn unbound_alt_chord_with_prefix_armed_is_consumed() {
     let (rx, mut conn, mut session) = layout_chord_session("altunbound");
     session.route_stdin_bytes(&mut conn, &[0x02, 0x1b, b'7']);
     assert!(received_within_300ms(&rx).is_empty());
-    assert!(!session.prefix_pending, "the prefix is spent");
+    assert!(!session.input_route.prefix_pending, "the prefix is spent");
 }
 
 /// Without the prefix an Alt key still reaches the pane program.
@@ -7385,7 +7416,7 @@ fn alt_non_ascii_chord_with_prefix_flashes_the_ascii_hint() {
             session.chrome.flash_text(),
             Some(non_ascii_chord_hint(ch).as_str())
         );
-        assert!(!session.prefix_pending);
+        assert!(!session.input_route.prefix_pending);
     }
     assert!(received_within_300ms(&rx).is_empty());
 }

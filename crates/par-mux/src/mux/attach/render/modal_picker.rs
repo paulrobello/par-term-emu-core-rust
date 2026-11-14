@@ -150,8 +150,12 @@ impl WindowSession {
         let rows: Vec<HelpRow> = commands
             .iter()
             .map(|(i, label)| {
-                let chord =
-                    palette_action_chord(*i, self.prefix, self.reload_key, &self.management);
+                let chord = palette_action_chord(
+                    *i,
+                    self.input_route.prefix,
+                    self.input_route.reload_key,
+                    &self.management,
+                );
                 let text = match chord {
                     Some(chord) => format!(" {label:<width$}  {chord} "),
                     None => format!(" {label:<width$} "),
@@ -516,7 +520,7 @@ impl WindowSession {
                     self.refresh_picker();
                 }
                 b if b >= 0x80 => {
-                    if let Some(ch) = self.text_utf8.push_printable(b) {
+                    if let Some(ch) = self.input_route.text_utf8.push_printable(b) {
                         picker.filter.push(ch);
                         self.refresh_picker();
                     }

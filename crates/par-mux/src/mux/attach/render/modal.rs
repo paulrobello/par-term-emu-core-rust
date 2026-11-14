@@ -62,7 +62,7 @@ impl WindowSession {
             self.exit_copy_state();
         }
         self.modal = modal;
-        self.text_utf8 = Default::default();
+        self.input_route.text_utf8 = Default::default();
     }
 
     /// Enter the sticky resize mode (the `resize` chord): arrows adjust
@@ -352,7 +352,7 @@ impl WindowSession {
                 self.draw_status_row();
             }
             b if b >= 0x80 => {
-                if let Some(ch) = self.text_utf8.push_printable(b) {
+                if let Some(ch) = self.input_route.text_utf8.push_printable(b) {
                     self.with_copy_state(|s| s.search_query.push(ch));
                     let query = self
                         .with_copy_state(|s| s.search_query.clone())

@@ -6,12 +6,56 @@ use super::{
     DividerHit, DragState, MenuTarget, Modal, PickerState, PromptTarget, Selection, TextDrag,
     WindowSession,
 };
-use crate::mux::attach::input::SgrMouse;
+use crate::mux::attach::input::{InputParser, SgrMouse};
 use crate::mux::attach::layout::PaneRect;
 use crate::mux::attach::text_input::{fold_fullwidth_ascii, Utf8Assembler, Utf8Step};
 use crate::mux::attach::ManagementKey;
 use crate::mux::config::ChordKey;
+use crate::mux::config::Chords;
 use par_term_emu_core::keyboard::TermKeyEvent;
+
+/// Input routing's live state: the prefix chord machinery, the
+/// typed-character assemblers, and the stdin tokenizer. Session-level
+/// (not per pump call) because a paste or escape sequence can span two
+/// stdin bursts, and the pump returns between them every frame tick.
+pub(super) struct InputRouteState {
+    /// The reload chord: the key byte matched after the prefix, and the
+    /// detach prefix itself — both live-rebindable by the reload.
+    pub(super) prefix: u8,
+    pub(super) reload_key: u8,
+    /// The prefix chord is armed — sent, awaiting its second key. The
+    /// status row shows the cue while it is up ([`WindowSession::arm_prefix`]
+    /// repaints on every flip).
+    pub(super) prefix_pending: bool,
+    /// A non-ASCII character is arriving as the prefix chord's key (IME
+    /// / CJK input): its remaining bytes are swallowed whole, never
+    /// forwarded as a torn UTF-8 tail.
+    pub(super) prefix_utf8: Option<Utf8Assembler>,
+    /// Reassembles multi-byte characters typed into the modal text
+    /// fields (prompt, picker/help filters, scroll search).
+    pub(super) text_utf8: Utf8Assembler,
+    /// The literal prefix byte to forward when the user types prefix
+    /// prefix (rebindable, so it is state, not the C_B constant).
+    pub(super) literal: u8,
+    /// The stdin tokenizer.
+    pub(super) parser: InputParser,
+}
+
+impl InputRouteState {
+    /// The chords start at the canonical defaults (ARC-131: one source,
+    /// `Chords::with_defaults`); the launch config overrides them.
+    pub(super) fn from_chords(chords: &Chords) -> Self {
+        Self {
+            prefix: chords.prefix,
+            reload_key: chords.reload,
+            prefix_pending: false,
+            prefix_utf8: None,
+            text_utf8: Utf8Assembler::default(),
+            literal: chords.prefix,
+            parser: InputParser::default(),
+        }
+    }
+}
 
 /// The status flash for a prefix chord typed as a non-ASCII character:
 /// chords are ASCII bytes, so an IME left in a non-Latin mode can only
@@ -186,10 +230,10 @@ impl WindowSession {
             // armed while the character's bytes arrive, then a fullwidth
             // form folds to its ASCII chord byte and anything else is
             // consumed with a hint. No byte of it reaches the pane.
-            if let Some(mut utf8) = self.prefix_utf8.take() {
+            if let Some(mut utf8) = self.input_route.prefix_utf8.take() {
                 match utf8.push(raw) {
                     Utf8Step::Pending => {
-                        self.prefix_utf8 = Some(utf8);
+                        self.input_route.prefix_utf8 = Some(utf8);
                         continue;
                     }
                     Utf8Step::Char(ch) => match fold_fullwidth_ascii(ch) {
@@ -208,16 +252,16 @@ impl WindowSession {
                         }
                     }
                 }
-            } else if self.prefix_pending && raw >= 0x80 {
+            } else if self.input_route.prefix_pending && raw >= 0x80 {
                 let mut utf8 = Utf8Assembler::default();
                 if utf8.push(raw) == Utf8Step::Pending {
-                    self.prefix_utf8 = Some(utf8);
+                    self.input_route.prefix_utf8 = Some(utf8);
                 } else {
                     self.arm_prefix(false);
                 }
                 continue;
             }
-            if self.prefix_pending {
+            if self.input_route.prefix_pending {
                 self.arm_prefix(false);
                 match self.prefix_chord(byte) {
                     PrefixChord::Reload => self.reload_config(conn),
@@ -251,7 +295,7 @@ impl WindowSession {
                         }
                     }
                 }
-            } else if byte == self.prefix {
+            } else if byte == self.input_route.prefix {
                 self.arm_prefix(true);
             } else if matches!(self.modal, Modal::Copy(_)) {
                 // Copy mode's plain keys: q exits, everything graphic
@@ -282,12 +326,12 @@ impl WindowSession {
     /// up (tmux's status-line prefix indication).
     pub(super) fn arm_prefix(&mut self, on: bool) {
         if !on {
-            self.prefix_utf8 = None;
+            self.input_route.prefix_utf8 = None;
         }
-        if self.prefix_pending == on {
+        if self.input_route.prefix_pending == on {
             return;
         }
-        self.prefix_pending = on;
+        self.input_route.prefix_pending = on;
         self.draw_status_row();
     }
 
@@ -402,7 +446,7 @@ impl WindowSession {
     /// and picker, then the fixed `d`/`[`/switch arms, then the literal
     /// prefix; anything else is unbound and consumed.
     pub(super) fn prefix_chord(&self, byte: u8) -> PrefixChord {
-        if byte == self.reload_key && byte != b'd' {
+        if byte == self.input_route.reload_key && byte != b'd' {
             return PrefixChord::Reload;
         }
         if let Some(key) = self.management_key(ChordKey::plain(byte)) {
@@ -422,7 +466,7 @@ impl WindowSession {
             b'[' => PrefixChord::CopyMode,
             b'e' => PrefixChord::EditScrollback,
             b'n' | b'p' | b'(' | b')' | b'o' => PrefixChord::Switch,
-            b if b == self.literal => PrefixChord::Literal,
+            b if b == self.input_route.literal => PrefixChord::Literal,
             _ => PrefixChord::Unbound,
         }
     }
@@ -487,7 +531,7 @@ impl WindowSession {
         conn: &mut crate::mux::attach::conn::AttachConn,
         ev: &TermKeyEvent,
     ) {
-        if self.prefix_pending {
+        if self.input_route.prefix_pending {
             self.arm_prefix(false);
             // An Alt+printable-ASCII key is an Alt chord: bound runs, unbound
             // is consumed (tmux drops it too) rather than reaching the arrows.
@@ -1502,7 +1546,7 @@ impl WindowSession {
             |s, _c, reply| {
                 if reply.ok {
                     s.chrome.tab_strip.reset_scroll();
-                    s.status_dirty = true;
+                    s.status_inflight.dirty = true;
                     s.draw_tab_strip();
                 }
             },

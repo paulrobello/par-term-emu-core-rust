@@ -115,9 +115,10 @@ impl WindowSession {
                 self.refresh_prompt();
             }
             b if b >= 0x80 => {
-                if let (Some(ch), Modal::Prompt(prompt)) =
-                    (self.text_utf8.push_printable(b), &mut self.modal)
-                {
+                if let (Some(ch), Modal::Prompt(prompt)) = (
+                    self.input_route.text_utf8.push_printable(b),
+                    &mut self.modal,
+                ) {
                     prompt.text.push(ch);
                     self.refresh_prompt();
                 }
@@ -191,7 +192,7 @@ impl WindowSession {
                 );
                 let _ = conn.send_forget(&command);
                 self.leave_prompt();
-                self.status_dirty = true;
+                self.status_inflight.dirty = true;
             }
             PromptTarget::Window(id) => {
                 // rename-window takes the REST OF THE LINE verbatim (the
@@ -208,13 +209,13 @@ impl WindowSession {
                 };
                 let _ = conn.send_forget(&format!("rename-window -t {id} {guard}{text}"));
                 self.leave_prompt();
-                self.status_dirty = true;
+                self.status_inflight.dirty = true;
             }
             PromptTarget::Workspace(id) => {
                 let _ =
                     conn.send_forget(&format!("rename-workspace -t {id} {}", wire_quote(&text)));
                 self.leave_prompt();
-                self.status_dirty = true;
+                self.status_inflight.dirty = true;
             }
             PromptTarget::NewWindow => {
                 let Some(session) = self.status.session_id.clone() else {
