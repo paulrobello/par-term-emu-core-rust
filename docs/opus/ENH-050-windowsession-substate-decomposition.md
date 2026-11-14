@@ -55,6 +55,8 @@ Four changes, each behaviour-preserving:
   | Sidebar | `sidebar_on` | 17 | `navigate`, `session`, `sidebar`, `mod`, tests |
 
   `status_dirty` (44 uses) and `status` (`StatusState`) stay on `WindowSession`. They are the event/refresh coupling, and moving them is churn without a seam.
+
+  > Superseded 2026-11-13 (QA-003, commit `f446235d`): the seed/status flags folded into the typed `StatusInflight` sub-struct (`render/status_inflight.rs`); `dirty` and `end` are its fields and `flight: Option<SnapshotFlight>` makes the seed/landing coordination unrepresentable in illegal states. The field-count and seam concerns this note raised were re-weighed when the invariant moved into the type.
 - **`handle_event` arms to move** (`mod.rs`):
   - `PaneTitleChanged` (`:1197-1220`);
   - `AgentStateChanged` and `AgentReleased` (`:1221-1237`), which ARC-136 rewrites to also rebuild the panel's agent section;
