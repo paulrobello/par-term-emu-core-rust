@@ -664,8 +664,53 @@ impl WindowSession {
                 self.menu_hover(x, y);
             }
         }
-        match self.mouse_hit(&mouse) {
-            Hit::Consumed => {}
+        let hit = self.mouse_hit(&mouse);
+        if hit != Hit::Consumed && self.apply_hit(conn, &mouse, hit) {
+            // A client-consumed wheel or press (the pane group) ends
+            // routing here: the pointer update would run against the
+            // state the handler already changed.
+            return;
+        }
+        // After the dispatch, not before: a release that ends a drag
+        // must already see `drag` cleared, or the pointer would keep
+        // the resize shape until an unrelated motion report arrives.
+        self.update_pointer(&mouse);
+    }
+
+    /// Apply one dispatched [`Hit`] along concern lines: the overlay
+    /// surfaces, the side panel, the tab/session strips, and the pane
+    /// content area. Returns true when the hit consumed the event
+    /// client-side and [`Self::route_mouse`] must stop — skipping its
+    /// pointer update — and false otherwise.
+    fn apply_hit(
+        &mut self,
+        conn: &mut crate::mux::attach::conn::AttachConn,
+        mouse: &SgrMouse,
+        hit: Hit,
+    ) -> bool {
+        if let Some(consumed) = self.apply_overlay_hit(conn, mouse, hit.clone()) {
+            return consumed;
+        }
+        if let Some(consumed) = self.apply_sidebar_hit(conn, mouse, hit.clone()) {
+            return consumed;
+        }
+        if let Some(consumed) = self.apply_strip_hit(conn, mouse, hit.clone()) {
+            return consumed;
+        }
+        self.apply_pane_hit(conn, mouse, hit).unwrap_or(false)
+    }
+
+    /// The overlay surfaces: the context menus, the settings and
+    /// layouts dialogs, the picker, the help panel, the toast, and the
+    /// tab context menu. None of these consume the event client-side;
+    /// routing continues to the pointer update.
+    fn apply_overlay_hit(
+        &mut self,
+        conn: &mut crate::mux::attach::conn::AttachConn,
+        _mouse: &SgrMouse,
+        hit: Hit,
+    ) -> Option<bool> {
+        match hit {
             Hit::MenuRow(row) => self.menu_click(conn, row),
             Hit::SettingsAt { row, col } => self.settings_click(conn, row, col),
             Hit::SettingsClose => self.leave_settings(),
@@ -675,6 +720,26 @@ impl WindowSession {
             Hit::LayoutsClose => self.leave_layouts(),
             Hit::MenuClose => self.leave_menu(),
             Hit::ToastPress { pane } => self.toast_press(conn, pane),
+            Hit::PickerMove(delta) => self.picker_move(delta),
+            Hit::PickerFilter => self.picker_open_filter(),
+            Hit::PickerRow(content) => self.picker_click_row(conn, content),
+            Hit::HelpScroll(delta) => self.help_scroll_by(delta),
+            Hit::TabMenu { id, anchor } => self.open_tab_menu(id, anchor),
+            _ => return None,
+        }
+        Some(false)
+    }
+
+    /// The side panel: workspace and agent rows, the chips, and the
+    /// panel's width/split drags. None of these consume the event
+    /// client-side; routing continues to the pointer update.
+    fn apply_sidebar_hit(
+        &mut self,
+        conn: &mut crate::mux::attach::conn::AttachConn,
+        mouse: &SgrMouse,
+        hit: Hit,
+    ) -> Option<bool> {
+        match hit {
             Hit::SidebarNewWorkspace => self.enter_prompt(PromptTarget::NewWorkspace),
             Hit::SidebarMenu => self.open_sidebar_menu(),
             Hit::SidebarCollapse => self.toggle_sidebar_collapse(conn),
@@ -687,12 +752,21 @@ impl WindowSession {
             Hit::SidebarResize => self.start_sidebar_width_drag(mouse.col - 1),
             Hit::SidebarSplitDrag => self.start_sidebar_split_drag(mouse.row - 1),
             Hit::SidebarDrag { x, y, release } => self.sidebar_drag_event(x, y, release),
-            Hit::Drag { x, y, release } => self.drag_event(conn, x, y, release),
-            Hit::PickerMove(delta) => self.picker_move(delta),
-            Hit::PickerFilter => self.picker_open_filter(),
-            Hit::PickerRow(content) => self.picker_click_row(conn, content),
-            Hit::HelpScroll(delta) => self.help_scroll_by(delta),
-            Hit::TabMenu { id, anchor } => self.open_tab_menu(id, anchor),
+            _ => return None,
+        }
+        Some(false)
+    }
+
+    /// The tab and session strips: presses switch or focus, wheels
+    /// shift an overflowing strip. None of these consume the event
+    /// client-side; routing continues to the pointer update.
+    fn apply_strip_hit(
+        &mut self,
+        conn: &mut crate::mux::attach::conn::AttachConn,
+        _mouse: &SgrMouse,
+        hit: Hit,
+    ) -> Option<bool> {
+        match hit {
             Hit::TabPress(rx) => self.tab_click(conn, rx),
             Hit::SessionPress(rx) => self.session_click(conn, rx),
             Hit::SessionWheel(delta) => {
@@ -704,26 +778,42 @@ impl WindowSession {
                 self.draw_tab_strip();
             }
             Hit::TabDrop(rx) => self.tab_drop(conn, rx),
+            _ => return None,
+        }
+        Some(false)
+    }
+
+    /// The pane content area: divider/text drags, the wheel (scrollback
+    /// scroll or forward), forwarding for mouse-owning panes, presses,
+    /// and drag arming. The wheel and the press can consume the event
+    /// client-side, which stops route_mouse before its pointer update.
+    fn apply_pane_hit(
+        &mut self,
+        conn: &mut crate::mux::attach::conn::AttachConn,
+        mouse: &SgrMouse,
+        hit: Hit,
+    ) -> Option<bool> {
+        let mut consumed = false;
+        match hit {
+            Hit::Drag { x, y, release } => self.drag_event(conn, x, y, release),
             Hit::Wheel { rect, x, cy, delta } => {
-                if self.pane_wheel(conn, &mouse, &rect, x, cy, delta) {
-                    return; // consumed client-side
+                if self.pane_wheel(conn, mouse, &rect, x, cy, delta) {
+                    consumed = true;
                 }
             }
-            Hit::PaneForward(rect) => self.forward_mouse(conn, &rect, &mouse),
+            Hit::PaneForward(rect) => self.forward_mouse(conn, &rect, mouse),
             Hit::DragStart { divider, x, y } => {
                 self.drag = Some(DragState::Pending { divider, x, y });
             }
             Hit::TextDrag { x, y, release } => self.text_drag_event(x, y, release),
             Hit::PanePress(rect) => {
-                if self.pane_press(conn, &mouse, &rect) {
-                    return;
+                if self.pane_press(conn, mouse, &rect) {
+                    consumed = true;
                 }
             }
+            _ => return None,
         }
-        // After the dispatch, not before: a release that ends a drag
-        // must already see `drag` cleared, or the pointer would keep
-        // the resize shape until an unrelated motion report arrives.
-        self.update_pointer(&mouse);
+        Some(consumed)
     }
 
     /// A press on the in-app toast: dismiss it and focus its agent's pane.
