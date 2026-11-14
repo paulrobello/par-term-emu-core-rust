@@ -179,7 +179,7 @@ pub(super) fn handle_client(
     // Bounded per ARC-011: a client that stops draining is evicted by
     // [`push_to_clients`] once its queue fills, rather than buffering every
     // `%output` line forever.
-    let (tx, rx) = sync_channel::<String>(CLIENT_QUEUE_DEPTH);
+    let (tx, rx) = sync_channel::<String>(CLIENT_QUEUE_MAX_ITEMS);
     // Eviction's signal to this connection's threads (ENH-012). Both run
     // with send/recv timeouts where the transport supports them (Unix): a
     // wedged writer wakes every poll, sees the flag, and exits — dropping
@@ -276,10 +276,22 @@ fn spawn_writer(
         match rx.recv_timeout(EVICTION_POLL) {
             Ok(line) => {
                 // Every line that leaves the queue passes here while the
-                // entry is live; a counter left above zero only delays the
-                // aggregate bound, never underflows (guard below).
-                if queued.load(Ordering::Relaxed) > 0 {
-                    queued.fetch_sub(1, Ordering::Relaxed);
+                // entry is live; the counter is the fan-out's queued-byte
+                // estimate (broadcast pushes add the line's bytes; replies
+                // and replays are uncounted), so a drain subtracts only
+                // what may have been counted — clamped at zero. The clamp
+                // biases the stall counter low for draining clients, the
+                // approximation the stall bound affords: a stalled client
+                // never drains, so its counter climbs monotonically
+                // toward eviction.
+                let drained = line.len();
+                let current = queued.load(Ordering::Relaxed);
+                if current > 0 {
+                    if drained >= current {
+                        queued.store(0, Ordering::Relaxed);
+                    } else {
+                        queued.fetch_sub(drained, Ordering::Relaxed);
+                    }
                 }
                 let (last, line) = take_final_marker(line);
                 let line = match take_stream_marker(line) {
@@ -427,8 +439,9 @@ pub(super) fn pane_stream_passes(line: &str, pane: &str) -> bool {
 fn end_connection_with(clients: &Clients, client_id: u64, line: &str) {
     let guard = clients.lock();
     if let Some((_, tx, queued, evicted, _)) = guard.iter().find(|(id, ..)| *id == client_id) {
-        if tx.try_send(final_item(line)).is_ok() {
-            queued.fetch_add(1, Ordering::Relaxed);
+        let item = final_item(line);
+        if tx.try_send(item.clone()).is_ok() {
+            queued.fetch_add(item.len(), Ordering::Relaxed);
         } else {
             evicted.store(true, Ordering::Relaxed);
         }

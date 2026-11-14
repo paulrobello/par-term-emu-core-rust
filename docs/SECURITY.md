@@ -1180,12 +1180,15 @@ adversary:
   line gets the connection closed, and a pending command reports
   "server closed the connection" (`ConnectionAborted`) instead of the
   client process growing without bound.
-- **Per-client broadcast queue (`CLIENT_QUEUE_DEPTH` lines):** a `%output`
+- **Per-client broadcast queue (`CLIENT_QUEUE_BYTES`):** a `%output`
   line carries one PTY read (up to 16 KiB raw, roughly doubled by escape
-  encoding), so a client that stops draining pins at most
-  `CLIENT_QUEUE_DEPTH` such lines (about 128 MiB at the current depth)
-  before it is evicted and disconnected, and the disconnect frees the
-  queue.
+  encoding), so a client that stops draining pins a known amount — the
+  8 MiB byte budget — before it is evicted and disconnected, and the
+  disconnect frees the queue. The budget is counted in bytes, not lines:
+  a line cap pinned an amount that swung with the line size (~160 KiB
+  for short PTY fragments, ~128 MiB for full-size lines, at the same
+  4096-line count), and the fragment shape evicted a modestly lagging
+  observer mid-flood.
 
 ### Debug Logging
 
@@ -1444,9 +1447,10 @@ sections; the numbers live here.
 | `MAX_PERSISTED_SCROLLBACK_CELLS` | 100,000 | `crates/par-mux/src/mux/persist/format.rs:35` | Scrollback cells restored per pane from an untrusted on-disk state file. |
 | `MAX_RESTORED_COLS` | 1,000 | `crates/par-mux/src/mux/persist/format.rs:45` | Columns one restored window may claim from an untrusted state file. |
 | `MAX_RESTORED_ROWS` | 500 | `crates/par-mux/src/mux/persist/format.rs:47` | Rows one restored window may claim from an untrusted state file. |
-| `CLIENT_QUEUE_DEPTH` | 4,096 | `crates/par-mux/src/mux/server/mod.rs:88` | Broadcast lines queued per control-socket client before the daemon evicts it. |
-| `CLIENT_QUEUE_AGGREGATE_DEPTH` | `CLIENT_QUEUE_DEPTH * 2` | `crates/par-mux/src/mux/server/mod.rs:100` | Broadcast lines queued across all control-socket clients before the daemon evicts the deepest queue. |
-| `MAX_CONTROL_LINE_BYTES` | 1 MiB | `crates/par-mux/src/mux/server/mod.rs:109` | Bytes accumulated from one control-socket client line before the daemon closes it. |
+| `CLIENT_QUEUE_BYTES` | 8 MiB | `crates/par-mux/src/mux/server/mod.rs:96` | Bytes of broadcast lines queued per control-socket client before the daemon evicts it. |
+| `CLIENT_QUEUE_AGGREGATE_BYTES` | `CLIENT_QUEUE_BYTES * 2` | `crates/par-mux/src/mux/server/mod.rs:108` | Bytes of broadcast lines queued across all control-socket clients before the daemon evicts the deepest queue. |
+| `CLIENT_QUEUE_MAX_ITEMS` | `CLIENT_QUEUE_BYTES / MIN_BROADCAST_LINE_BYTES` | `crates/par-mux/src/mux/server/mod.rs:123` | Broadcast queue items per control-socket client before the daemon evicts it (backstop to the CLIENT_QUEUE_BYTES budget). |
+| `MAX_CONTROL_LINE_BYTES` | 1 MiB | `crates/par-mux/src/mux/server/mod.rs:132` | Bytes accumulated from one control-socket client line before the daemon closes it. |
 | `MAX_UPLOAD_CHUNK_BYTES` | 64 KiB | `crates/par-mux/src/mux/uploads.rs:33` | Base64-decoded bytes accepted for one `upload-chunk`. |
 | `MAX_UPLOAD_TOTAL_BYTES` | 100 MiB | `crates/par-mux/src/mux/uploads.rs:36` | Total bytes one upload may stage. |
 | `MAX_UPLOAD_CHUNKS` | 4,096 | `crates/par-mux/src/mux/uploads.rs:39` | Chunks one upload may accept (bounds a tiny-chunk flood below the |

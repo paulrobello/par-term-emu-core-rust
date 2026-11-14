@@ -546,7 +546,7 @@ fn seed_export_racing_output_stays_ordered() {
 /// covered, so a raced byte must never land in that discard window
 /// uncovered). A hammering connection whose send-keys the tty echoes
 /// continuously keeps the capture-to-enqueue gap hot.
-#[ignore = "load-sensitive: seed-race timing fails under host load (2/2 gate runs 2026-11-02 at load 32-58, 2/2 isolated passes); run via make test-rust-sensitive or checkall-ci"]
+#[ignore = "load-sensitive: seed-race timing fails under host load (2/2 gate runs 2026-11-02 at load 32-58, 2/2 isolated passes; ~95 s first-run seed-reply wait expiries at load 14-20, now budgeted at 2x CEILING); run via make test-rust-sensitive or checkall-ci"]
 #[test]
 fn refresh_client_replay_stays_ordered_under_output() {
     let fixture = MuxFixture::new("replay-race");
@@ -602,10 +602,20 @@ fn refresh_client_replay_stays_ordered_under_output() {
     // real use; the contract must hold on EVERY round that raced.
     let mut seed = String::new();
     let mut raced_markers: Vec<String> = Vec::new();
+    // The seed reply's wait budget is 2x CEILING rather than the shared
+    // ceiling: the daemon composes the reply through export #1 under the
+    // tree lock plus — with the hammer keeping the output epoch racing —
+    // a SECOND multi-megabyte re-export performed while HOLDING the
+    // clients lock (on_ordered_replay, server/client.rs), which stalls
+    // every pane's %output fan-out for its duration, then drains the
+    // multi-MB reply through the socket. Under a load storm that chain
+    // legitimately exceeds one 90 s ceiling (~95 s first-run failures at
+    // host load 14-20); the ordering contract itself is sound. 180 s
+    // stays under the ci profile's harness kill (slow-timeout 30 s x 8).
     for _round in 0..4 {
         seeder.send("refresh-client -t %0");
         let mut reply = Vec::new();
-        let deadline = Instant::now() + common::CEILING;
+        let deadline = Instant::now() + common::CEILING + common::CEILING;
         loop {
             let mut buf = String::new();
             // WouldBlock-tolerant read: under a full-gate load storm a

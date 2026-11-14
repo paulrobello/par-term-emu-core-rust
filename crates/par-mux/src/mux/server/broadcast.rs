@@ -7,18 +7,19 @@ use crate::mux::ids::SessionId;
 /// Push one line to every connected client, dropping the senders whose
 /// client has gone — the single fan-out every broadcast and sink shares.
 ///
-/// ARC-011: the queues are bounded at [`CLIENT_QUEUE_DEPTH`]; a client
-/// whose queue is full (it stopped reading the socket) is EVICTED here,
-/// tmux's policy for a control client that stops draining. Eviction also
-/// raises the client's flag so its own connection threads tear it down:
-/// dropping the queue sender alone cannot free a wedged client — its
-/// writer stays blocked in a full socket buffer and its reader parked on
-/// input, retaining the queued lines (ENH-012, measured live). The flagged
-/// threads exit, the queue drops, and the client observes a clean
-/// disconnect within about two [`EVICTION_POLL`]s. On Windows the flag
-/// alone is not enough — named pipes never wake a parked reader or writer
-/// on a timeout — so eviction also aborts the blocked I/O through the
-/// entry's [`ConnectionAbort`].
+/// ARC-011, byte-budgeted: the queues are bounded at
+/// [`CLIENT_QUEUE_BYTES`]; a client whose queue exceeds the budget (it
+/// stopped reading the socket) is EVICTED here, tmux's policy for a
+/// control client that stops draining. Eviction also raises the client's
+/// flag so its own connection threads tear it down: dropping the queue
+/// sender alone cannot free a wedged client — its writer stays blocked
+/// in a full socket buffer and its reader parked on input, retaining the
+/// queued lines (ENH-012, measured live). The flagged threads exit, the
+/// queue drops, and the client observes a clean disconnect within about
+/// two [`EVICTION_POLL`]s. On Windows the flag alone is not enough —
+/// named pipes never wake a parked reader or writer on a timeout — so
+/// eviction also aborts the blocked I/O through the entry's
+/// [`ConnectionAbort`].
 pub(crate) fn push_to_clients(clients: &Clients, line: String) {
     push_to_clients_skipping(clients, None, line);
 }
@@ -31,25 +32,26 @@ pub(super) fn push_to_clients_except(clients: &Clients, skip: u64, line: String)
 
 pub(super) fn push_to_clients_skipping(clients: &Clients, skip: Option<u64>, line: String) {
     let mut clients = clients.lock();
-    // Aggregate bound (ARC-008): the per-client depth alone lets K stalled
-    // clients pin K x CLIENT_QUEUE_DEPTH lines, so once the summed queue
-    // counters cross [`CLIENT_QUEUE_AGGREGATE_DEPTH`] the client holding
-    // the deepest queue is evicted on this push. Only a queue at a quarter
-    // of the per-client depth can be the victim: the sum crossing the cap
-    // through shallow queues is a healthy crowd, not a stall, and the
-    // per-client bound remains their correct bound. The counters are an
-    // approximation of the channel length (reply lines are uncounted, and
-    // a drain lags its push), which a stall bound can afford: a stalled
-    // client's counter climbs monotonically toward eviction.
+    // Aggregate byte bound (ARC-008): the per-client budget alone lets K
+    // stalled clients pin K x CLIENT_QUEUE_BYTES, so once the summed queue
+    // byte counters cross [`CLIENT_QUEUE_AGGREGATE_BYTES`] the client
+    // holding the deepest queue is evicted on this push. Only a queue at a
+    // quarter of the per-client budget can be the victim: the sum crossing
+    // the cap through shallow queues is a healthy crowd, not a stall, and
+    // the per-client bound remains their correct bound. The counters are an
+    // approximation of the channel's queued bytes (reply lines are
+    // uncounted, and a drain lags its push), which a stall bound can
+    // afford: a stalled client's counter climbs monotonically toward
+    // eviction.
     let aggregate: usize = clients
         .iter()
         .map(|(_, _, queued, _, _)| queued.load(Ordering::Relaxed))
         .sum();
-    let victim = if aggregate >= CLIENT_QUEUE_AGGREGATE_DEPTH {
+    let victim = if aggregate >= CLIENT_QUEUE_AGGREGATE_BYTES {
         clients
             .iter()
             .filter(|(id, _, queued, _, _)| {
-                skip != Some(*id) && queued.load(Ordering::Relaxed) >= CLIENT_QUEUE_DEPTH / 4
+                skip != Some(*id) && queued.load(Ordering::Relaxed) >= CLIENT_QUEUE_BYTES / 4
             })
             .max_by_key(|(_, _, queued, _, _)| queued.load(Ordering::Relaxed))
             .map(|(id, _, _, _, _)| *id)
@@ -62,8 +64,8 @@ pub(super) fn push_to_clients_skipping(clients: &Clients, skip: Option<u64>, lin
         }
         if victim == Some(*id) {
             log::warn!(
-                "par-mux: evicting client {id}: {aggregate} broadcast lines queued across \
-                 all clients exceeds the {CLIENT_QUEUE_AGGREGATE_DEPTH} aggregate bound \
+                "par-mux: evicting client {id}: {aggregate} broadcast bytes queued across \
+                 all clients exceeds the {CLIENT_QUEUE_AGGREGATE_BYTES} aggregate bound \
                  (deepest queue, stalled)"
             );
             evicted.store(true, Ordering::Relaxed);
@@ -72,13 +74,25 @@ pub(super) fn push_to_clients_skipping(clients: &Clients, skip: Option<u64>, lin
         }
         match tx.try_send(line.clone()) {
             Ok(()) => {
-                queued.fetch_add(1, Ordering::Relaxed);
-                true
+                let total = queued.fetch_add(line.len(), Ordering::Relaxed) + line.len();
+                if total >= CLIENT_QUEUE_BYTES {
+                    log::warn!(
+                        "par-mux: evicting client {id}: {total} broadcast bytes queued \
+                         exceeds the {CLIENT_QUEUE_BYTES} per-client byte budget \
+                         (stalled, or draining slower than the burst)"
+                    );
+                    evicted.store(true, Ordering::Relaxed);
+                    abort.cancel_blocked_io();
+                    false
+                } else {
+                    true
+                }
             }
             Err(std::sync::mpsc::TrySendError::Full(_)) => {
                 log::warn!(
-                    "par-mux: evicting client {id}: {CLIENT_QUEUE_DEPTH} broadcast lines \
-                     undelivered (queue full — stalled, or draining slower than the burst)"
+                    "par-mux: evicting client {id}: {CLIENT_QUEUE_MAX_ITEMS} broadcast queue \
+                     items undelivered (pathological item backstop — stalled, or draining \
+                     slower than the burst)"
                 );
                 evicted.store(true, Ordering::Relaxed);
                 abort.cancel_blocked_io();
