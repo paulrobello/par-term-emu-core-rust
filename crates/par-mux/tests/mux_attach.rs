@@ -1663,14 +1663,17 @@ fn flood_short_lines_do_not_evict_a_lagging_observer() {
         }
     }
 
-    // The flood: ~8000 paced short writes (~11 B payload per fragment,
-    // ~21 KB of pane bytes — the WIRE lines with %output framing and the
-    // octal-escaped newline land near ~26 B each, ~208 KB total) so the
-    // %output line count crosses the old 4096-line cap while the byte
-    // total stays under the 8 MiB budget; the marked payload rides behind
-    // them as the tail the old eviction dropped.
+    // The flood: 5000 paced short writes (~11 B payload per fragment —
+    // the WIRE lines with %output framing and the octal-escaped newline
+    // land near ~26 B each, ~130 KB total) so the %output line count
+    // crosses the old 4096-line cap while the byte total stays under the
+    // 8 MiB budget; the marked payload rides behind them as the tail the
+    // old eviction dropped. Budgets are load-scaled (flood 150 s, above
+    // the 90 s CEILING; harness override 30s x 12 in .config/nextest.toml)
+    // because the sleep pacing stretches under host load — measured
+    // gate-run failure at the 90 s ceiling, 2026-11-13.
     let flood_cmd = format!(
-        "i=0; while [ $i -lt 8000 ]; do printf frag-%05d\\n $i; sleep 0.001; i=$((i+1)); \
+        "i=0; while [ $i -lt 5000 ]; do printf frag-%05d\\n $i; sleep 0.001; i=$((i+1)); \
          done; cat {}",
         payload_path.display()
     );
@@ -1683,7 +1686,7 @@ fn flood_short_lines_do_not_evict_a_lagging_observer() {
 
     // The flood is done when the payload's END marker reaches the healthy
     // (draining) fixture client.
-    let flood_done = Instant::now() + Duration::from_secs(90);
+    let flood_done = Instant::now() + Duration::from_secs(150);
     loop {
         match client
             .notifications()

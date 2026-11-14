@@ -38,3 +38,13 @@ slow-timeout = { period = "30s", terminate-after = 12 }
 [[profile.ci.overrides]]
 filter = "test(resize_storm_post_reply_output_matches_daemon_ground_truth)"
 slow-timeout = { period = "30s", terminate-after = 12 }
+
+# The short-line flood regression (byte-budgeted eviction) is paced by
+# 5000 shell sleeps, which stretch under host load: the 2026-11-13 gate
+# run expired the test's original 90 s flood budget on the retry leg.
+# The flood budget now sits at 150 s and this override lifts the harness
+# kill to 30s x12 (360 s) so a loaded-host pacing stretch cannot look
+# wedged. Same rationale as the chords and resize-storm tests.
+[[profile.ci.overrides]]
+filter = "test(flood_short_lines_do_not_evict_a_lagging_observer)"
+slow-timeout = { period = "30s", terminate-after = 12 }
