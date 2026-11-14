@@ -5295,8 +5295,11 @@ fn status_snapshot_timeout_abandons_without_re_issuing() {
     wait_recorded(&rx, "client-snapshot");
 
     // Mid-flight dirty mark: nothing re-issues while the reply is owed,
-    // and the mark survives for a re-issue once the reply applies.
-    std::thread::sleep(std::time::Duration::from_millis(200));
+    // and the mark survives for a re-issue once the reply applies. No
+    // sleep gates the leg: only dispatch_replies applies the reply and
+    // clears the slot, and none has run — the flag itself proves the
+    // refresh cannot reach the abandon branch.
+    assert!(session.status_snapshot_inflight.is_some());
     session.status_dirty = true;
     assert_eq!(session.refresh_status(&mut conn), EventOutcome::Continue);
     assert!(
@@ -5308,7 +5311,7 @@ fn status_snapshot_timeout_abandons_without_re_issuing() {
     // Past the bound: the abandon clears the in-flight slot and the
     // dirty mark — nothing re-queues behind the wedged reply (the
     // storm rule; the next poll tick or event re-queries).
-    std::thread::sleep(std::time::Duration::from_millis(400));
+    session.status_snapshot_inflight = Some(std::time::Instant::now() - status::STATUS_TIMEOUT);
     assert_eq!(session.refresh_status(&mut conn), EventOutcome::Continue);
     assert!(
         !session.status_dirty,
