@@ -689,7 +689,11 @@ fn refresh_client_replay_stays_ordered_under_output() {
     let mut anchor = Conn::connect(fixture.socket());
     anchor.command("send-keys -t %0 ANCHORMARK REPLAYS Enter");
     let mut post_reply = Vec::new();
-    let deadline = Instant::now() + common::CEILING;
+    // The post-reply anchor drain gets the seed reply's 2x CEILING: the
+    // anchor echo sits behind the same load-stormed pane, and the 1x
+    // budget expired in the gate's first run at 94 s (2026-11-14 gate 7)
+    // with markers still streaming.
+    let deadline = Instant::now() + common::CEILING + common::CEILING;
     loop {
         let mut buf = String::new();
         // Same WouldBlock-tolerant polling as the seed reply: the anchor
