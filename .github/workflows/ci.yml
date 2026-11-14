@@ -233,11 +233,17 @@ jobs:
       # DIFFERENT load-sensitive PTY test to the 8-on-3-vCPU
       # oversubscription (runs 39700463900..39710987499), so CI caps at
       # the ubuntu/windows vCPU count.
-      run: cargo nextest run --profile ci --locked -p par-mux --features attach --test-threads 4
+      # --retries 1: mirrors the local gate's retry-once on this
+      # daemon-spawning leg (Makefile test-mux-ci retry_once, card
+      # 01a1d67a82807290bcb85e9ab6bf2f79) — a first run lost to host-load
+      # flake re-runs the failing test once before the leg goes red.
+      run: cargo nextest run --profile ci --locked -p par-mux --features attach --test-threads 4 --retries 1
 
     - name: Run root tests with the mux re-export on
       # mux_feature_isolation + the root lib compiled against par-mux.
-      run: cargo nextest run --profile ci --locked --no-default-features --features rust-only,mux-bin,serde,attach
+      # --retries 1: same daemon-spawn load-flake retry as the mux leg
+      # above and the local gate's retry_once wrapper.
+      run: cargo nextest run --profile ci --locked --no-default-features --features rust-only,mux-bin,serde,attach --retries 1
 
     - name: Run par-term-emu-core member tests with the mux feature set
       # ARC-007 O2: the core (incl. PtySession) unit tests moved to the
