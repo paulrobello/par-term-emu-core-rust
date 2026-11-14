@@ -1619,6 +1619,19 @@ impl WindowSession {
         conn: &mut crate::mux::attach::conn::AttachConn,
         stdin: &mut super::Stdin,
     ) -> std::ops::ControlFlow<()> {
+        self.wait_next_push_with_tick(conn, stdin, crossbeam_channel::after(super::POLL))
+    }
+
+    /// [`Self::wait_next_push`] with the tick receiver in from the
+    /// caller (production: the `after(POLL)` channel). The receiver
+    /// seam is what lets a test park stdin ahead of a tick it fires
+    /// itself instead of racing the fixed 16 ms bound (card 01a1d8e1).
+    fn wait_next_push_with_tick(
+        &mut self,
+        conn: &mut crate::mux::attach::conn::AttachConn,
+        stdin: &mut super::Stdin,
+        tick: crossbeam_channel::Receiver<std::time::Instant>,
+    ) -> std::ops::ControlFlow<()> {
         crossbeam_channel::select! {
             recv(conn.notifications()) -> event => {
                 match event {
@@ -1634,7 +1647,7 @@ impl WindowSession {
                 }
             }
             recv(stdin.wake_rx()) -> msg => stdin.stash_wake(msg),
-            recv(crossbeam_channel::after(super::POLL)) -> _ => {}
+            recv(tick) -> _ => {}
         }
         self.dispatch_replies(conn);
         self.drain_popup(conn);

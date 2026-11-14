@@ -7431,3 +7431,87 @@ fn palette_layout_row_sends_select_layout() {
     settle(&mut session, &mut conn);
     assert_eq!(drained(&rx), vec!["select-layout tiled -t @0"]);
 }
+
+/// Pump step 9's wake, event-wise (card 01a19d78): the wait's stdin arm
+/// consumes a host click the moment it arrives instead of the wait
+/// blocking on the daemon channel alone until the 16 ms tick — input
+/// used to wait out the poll remainder. The tick enters as a channel the
+/// test fires itself, so the assertion is ordering (the chunk stashed by
+/// the stdin arm while the test's tick is still pending), not a
+/// wall-clock bound racing the gate's own load — the fixed bound flaked
+/// at load 9-100 (card 01a1d8e1). Unix-only: a real pipe carries the
+/// click through the production reader thread.
+#[test]
+#[cfg(unix)]
+fn pump_wait_wakes_on_stdin_off_the_poll_tick() {
+    let (_replies, mut conn) = recording_conn("pump-wait-stdin");
+    let mut session = WindowSession::new(80, 25);
+
+    // The host-tty shape: a real pipe whose read end the production
+    // reader thread drains into the wake channel.
+    let mut fds = [0 as libc::c_int; 2];
+    assert_eq!(unsafe { libc::pipe(fds.as_mut_ptr()) }, 0);
+    let (read_fd, write_fd) = (fds[0], fds[1]);
+    struct FdReader(libc::c_int);
+    impl std::io::Read for FdReader {
+        fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
+            loop {
+                let n = unsafe { libc::read(self.0, buf.as_mut_ptr().cast(), buf.len()) };
+                if n < 0 {
+                    let err = std::io::Error::last_os_error();
+                    if err.kind() == std::io::ErrorKind::Interrupted {
+                        continue;
+                    }
+                    return Err(err);
+                }
+                return Ok(n as usize);
+            }
+        }
+    }
+    impl Drop for FdReader {
+        fn drop(&mut self) {
+            unsafe { libc::close(self.0) };
+        }
+    }
+    let (tx, rx) = crossbeam_channel::bounded::<crate::mux::attach::StdinMsg>(64);
+    crate::mux::attach::Stdin::spawn_reader(FdReader(read_fd), tx);
+    let mut stdin = crate::mux::attach::Stdin { rx, front: None };
+
+    // The test's own tick: pending, undelivered. The thread behind it is
+    // only the fail-safe that bounds a regressed daemon-only wait (which
+    // would otherwise hang the suite) — a stdin wake never waits it out.
+    let (tick_tx, tick_rx) = crossbeam_channel::bounded::<std::time::Instant>(1);
+    std::thread::spawn(move || {
+        std::thread::sleep(std::time::Duration::from_secs(2));
+        let _ = tick_tx.send(std::time::Instant::now());
+    });
+
+    // The click lands ahead of the wait; the reader thread delivers it
+    // whenever scheduled, and the wait wakes on that delivery. There is
+    // no tick boundary left to race.
+    let bytes = b"\x1b[<0;10;5M";
+    assert_eq!(
+        unsafe { libc::write(write_fd, bytes.as_ptr().cast(), bytes.len()) },
+        bytes.len() as isize
+    );
+
+    let outcome = session.wait_next_push_with_tick(&mut conn, &mut stdin, tick_rx.clone());
+    assert!(
+        matches!(outcome, std::ops::ControlFlow::Continue(())),
+        "the stdin wake must not end the view"
+    );
+
+    // The stdin arm consumed the click into the stash while the test's
+    // tick is still pending — the wake off-tick, asserted event-wise.
+    let stashed = stdin
+        .front
+        .take()
+        .expect("the wait's stdin arm parked the click");
+    assert_eq!(stashed.expect("the chunk is Ok"), bytes.to_vec());
+    assert_eq!(
+        tick_rx.try_recv().unwrap_err(),
+        crossbeam_channel::TryRecvError::Empty,
+        "the test's tick must still be pending"
+    );
+    unsafe { libc::close(write_fd) };
+}
