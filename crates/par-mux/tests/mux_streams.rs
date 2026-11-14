@@ -528,6 +528,14 @@ fn seed_export_racing_output_stays_ordered() {
     // arrives — the wait then sits silent to its read ceiling, which is
     // exactly the load-run failures this suite saw.
     let mut anchor = Conn::connect(fixture.socket());
+    // The same tty-backlog unjam as refresh_client_replay below: a send-keys
+    // write blocks while the pane's tty input queue holds the hammer's
+    // backlog, so the anchor can land typed-ahead behind ~300 un-executed
+    // markers and surface only after the shell consumes all of them. ^C
+    // flushes the pending queue, so the anchor executes within the drain's
+    // read ceiling under load. The flush drops only un-executed markers,
+    // which this test's stream-stays-live probe never checks.
+    anchor.command("send-keys -t %0 -H 03");
     anchor.command("send-keys -t %0 ANCHORMARK STREAMS Enter");
     hammer.join().expect("hammer finished");
     let tail = observer.until(|l| l.contains("ANCHORMARK"), "the post-seed anchor marker");
@@ -687,6 +695,20 @@ fn refresh_client_replay_stays_ordered_under_output() {
     // (an anchor racing the hammer's tail would stop the drain early).
     hammer.join().expect("hammer finished");
     let mut anchor = Conn::connect(fixture.socket());
+    // A joined hammer is not a drained pane. A PTY master write blocks
+    // while the pane's tty input queue holds the backlog, so the joined
+    // hammer can still leave ~130 un-executed markers typed ahead in the
+    // kernel queue — gate 9 (2026-11-14, load 9-11) expired this 2x-CEILING
+    // drain with only markers 004-068 executed, its tail full of the tty's
+    // partially dropped echo of that backlog (the period-15 "RACE…" runs:
+    // surviving prefix bytes of 15-byte marker echoes past a stalled
+    // output drain). ^C is the terminal's own unjam: ISIG flushes the
+    // pending input queue (NOFLSH off) and interrupts ZLE's current line,
+    // so ANCHORMARK is the shell's next input whatever the backlog was.
+    // The flush cannot weaken the probe below: markers it discards never
+    // executed and never reached the screen, and the probe checks only
+    // markers the screen shows.
+    anchor.command("send-keys -t %0 -H 03");
     anchor.command("send-keys -t %0 ANCHORMARK REPLAYS Enter");
     let mut post_reply = Vec::new();
     // The post-reply anchor drain gets the seed reply's 2x CEILING: the
