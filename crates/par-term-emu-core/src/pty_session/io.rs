@@ -119,6 +119,9 @@ pub(super) fn send_sigwinch(pid: u32, tag: &str, context: &str) -> std::io::Resu
             tag,
             &format!("SIGWINCH delivery failed for {context}: group {group_err}, pid {pid_err}"),
         );
+        log::warn!(
+            "par-term-emu: SIGWINCH delivery failed for {context}: group {group_err}, pid {pid_err}"
+        );
         Err(pid_err)
     }
 }
@@ -222,21 +225,29 @@ impl PtySession {
 
     /// Resize the PTY and terminal
     ///
-    /// Sends SIGWINCH to the child process
+    /// The PTY half runs first: a failed ioctl (or SIGWINCH delivery)
+    /// returns before the grid reflows, so the grid can never run ahead of
+    /// the child's kernel winsize (card 01a1dd15). On success both halves
+    /// land at the same size; on failure a caller retry re-runs the pair.
     ///
     /// # Arguments
     /// * `cols` - New number of columns
     /// * `rows` - New number of rows
     pub fn resize(&mut self, cols: u16, rows: u16) -> Result<(), PtyError> {
-        self.resize_terminal(cols, rows).deliver();
-        self.resize_pty(cols, rows)
+        let result = self.resize_pty(cols, rows);
+        if result.is_ok() {
+            self.resize_terminal(cols, rows).deliver();
+        }
+        result
     }
 
     /// [`Self::resize`] without delivering observer events: the batch is
     /// returned for the caller to deliver once every lock it holds around
-    /// this session is released (a mux tree mutex, for one). The batch
-    /// comes back even when the PTY resize fails, because the terminal has
-    /// already resized and its events are real.
+    /// this session is released (a mux tree mutex, for one). Same PTY-first
+    /// ordering as [`Self::resize`]: on a failed PTY resize the terminal is
+    /// left untouched and the batch comes back empty — the old
+    /// reflow-first ordering delivered real events for a resize the child
+    /// never agreed to (card 01a1dd15).
     #[cfg(feature = "mux")]
     #[doc(hidden)]
     pub fn resize_deferred(
@@ -244,8 +255,12 @@ impl PtySession {
         cols: u16,
         rows: u16,
     ) -> (Result<(), PtyError>, ObserverDispatchBatch) {
-        let dispatch_batch = self.resize_terminal(cols, rows);
-        (self.resize_pty(cols, rows), dispatch_batch)
+        let result = self.resize_pty(cols, rows);
+        if let Ok(()) = result {
+            let batch = self.resize_terminal(cols, rows);
+            return (result, batch);
+        }
+        (result, ObserverDispatchBatch::default())
     }
 
     /// The terminal half of a resize: grid and geometry, with observer
@@ -280,14 +295,21 @@ impl PtySession {
         pixel_width: u16,
         pixel_height: u16,
     ) -> Result<(), PtyError> {
-        self.resize_terminal_with_pixels(cols, rows, pixel_width, pixel_height)
-            .deliver();
-        self.resize_pty_with_pixels(cols, rows, pixel_width, pixel_height)
+        let result = self.resize_pty_with_pixels(cols, rows, pixel_width, pixel_height);
+        if result.is_ok() {
+            self.resize_terminal_with_pixels(cols, rows, pixel_width, pixel_height)
+                .deliver();
+        }
+        result
     }
 
     /// [`Self::resize_with_pixels`] without delivering observer events —
     /// the pixel-aware counterpart of [`Self::resize_deferred`], with the
     /// same batch-on-failure contract.
+    /// [`Self::resize_with_pixels`] without delivering observer events —
+    /// the pixel-aware counterpart of [`Self::resize_deferred`], with the
+    /// same PTY-first ordering and the same empty-batch-on-failure
+    /// contract.
     #[cfg(feature = "mux")]
     #[doc(hidden)]
     pub fn resize_with_pixels_deferred(
@@ -297,12 +319,12 @@ impl PtySession {
         pixel_width: u16,
         pixel_height: u16,
     ) -> (Result<(), PtyError>, ObserverDispatchBatch) {
-        let dispatch_batch =
-            self.resize_terminal_with_pixels(cols, rows, pixel_width, pixel_height);
-        (
-            self.resize_pty_with_pixels(cols, rows, pixel_width, pixel_height),
-            dispatch_batch,
-        )
+        let result = self.resize_pty_with_pixels(cols, rows, pixel_width, pixel_height);
+        if let Ok(()) = result {
+            let batch = self.resize_terminal_with_pixels(cols, rows, pixel_width, pixel_height);
+            return (result, batch);
+        }
+        (result, ObserverDispatchBatch::default())
     }
 
     /// The terminal half of a pixel-aware resize: grid, pixel size, and
@@ -339,6 +361,18 @@ impl PtySession {
         pixel_width: u16,
         pixel_height: u16,
     ) -> Result<(), PtyError> {
+        // Test seam (card 01a1dd15): inject an ioctl failure without a real
+        // failing master.
+        #[cfg(all(test, unix))]
+        if self
+            .fail_next_resize_step
+            .load(std::sync::atomic::Ordering::Relaxed)
+            == 1
+        {
+            return Err(PtyError::ResizeError(
+                "injected master.resize failure".into(),
+            ));
+        }
         // Resize the PTY (sends SIGWINCH to child)
         if let Some(ref master) = self.pty_master {
             let pty_size = PtySize {
@@ -361,6 +395,7 @@ impl PtySession {
                     "PTY_RESIZE",
                     &format!("Failed to resize PTY: {}", e),
                 );
+                log::warn!("par-term-emu: PTY ioctl resize to {cols}x{rows} failed: {e}");
                 PtyError::ResizeError(e.to_string())
             })?;
             debug::log(
@@ -381,30 +416,55 @@ impl PtySession {
         // Manually deliver SIGWINCH after the pty resize: portable-pty's
         // resize() updates the kernel winsize but may not reliably deliver
         // the signal in all scenarios. Group-then-PID delivery and failure
-        // logging live in [`send_sigwinch`].
+        // logging live in [`send_sigwinch`]. A delivery failure surfaces to
+        // the caller (card 01a1dd15): the kernel winsize has already moved,
+        // so the caller's reflow (which only runs after this returns Ok)
+        // is skipped and the grid cannot run ahead of a child that was
+        // never notified.
         #[cfg(unix)]
-        self.signal_winch(
+        if let Err(err) = self.signal_winch(
             "PTY_RESIZE",
             &format!("resize {cols}x{rows} ({pixel_width}x{pixel_height} px)"),
-        );
+        ) {
+            log::warn!(
+                "par-term-emu: SIGWINCH delivery failed after PTY resize to {cols}x{rows}: {err}"
+            );
+            return Err(PtyError::ResizeError(format!(
+                "SIGWINCH delivery failed: {err}"
+            )));
+        }
 
         Ok(())
     }
 
     /// Deliver SIGWINCH to the child unless it has been reaped (SEC-125):
     /// the reap record stays locked across the delivery, so no reap can
-    /// release the PID between the check and the `kill(2)`.
+    /// release the PID between the check and the `kill(2)`. The delivery
+    /// result propagates, so a failed resize is observable and the reflow
+    /// can be skipped (card 01a1dd15).
     #[cfg(unix)]
-    pub(super) fn signal_winch(&self, tag: &str, context: &str) {
+    pub(super) fn signal_winch(&self, tag: &str, context: &str) -> std::io::Result<()> {
         let record = self.reaped.lock();
         if record.is_some() {
-            return;
+            return Ok(());
         }
         if let Some(pid) = self.child_pid {
             #[cfg(test)]
+            if self
+                .fail_next_resize_step
+                .load(std::sync::atomic::Ordering::Relaxed)
+                == 2
+            {
+                return Err(std::io::Error::new(
+                    std::io::ErrorKind::PermissionDenied,
+                    "injected SIGWINCH failure",
+                ));
+            }
+            #[cfg(test)]
             self.signals_sent.fetch_add(1, Ordering::SeqCst);
-            let _ = send_sigwinch(pid, tag, context);
+            send_sigwinch(pid, tag, context)
+        } else {
+            Ok(())
         }
-        drop(record);
     }
 }
