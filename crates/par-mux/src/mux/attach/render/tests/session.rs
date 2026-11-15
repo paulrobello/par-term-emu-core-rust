@@ -929,6 +929,7 @@ fn text_selection_release_under_a_full_pointer_modal_ends_the_selection() {
 /// keep arriving faster, and the release flushes what is left so the
 /// drag lands exactly where it is let go.
 #[test]
+#[ignore = "load-sensitive: timing assertions; run via make test-rust-sensitive"]
 fn drag_resizes_throttle_and_the_release_flushes_the_remainder() {
     let (rx, mut conn) = recording_conn("drag-throttle");
     let mut session = WindowSession::new(80, 25);
