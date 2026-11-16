@@ -3926,6 +3926,7 @@ class StreamingConfig:
         kitty_file_media: Any = "temp_only",
         allow_pane_create: Any = False,
         allow_blob_connect_src: Any = False,
+        csp_connect_origins: Any = None,
     ) -> None: ...
     @property
     def allow_api_key_in_query(self) -> Any:
@@ -3965,6 +3966,26 @@ class StreamingConfig:
         """
     @allow_blob_connect_src.setter
     def allow_blob_connect_src(self, value: Any) -> None: ...
+    @property
+    def csp_connect_origins(self) -> Any:
+        """Get the opt-in HTTPS origins appended to the CSP's connect-src
+
+        For custom web roots that fetch public APIs directly. Values use the
+        strict https://host[:port] form and are validated at config time.
+
+        Returns:
+            list[str] | None: Origins appended to connect-src (default None)
+
+        Example:
+            >>> config = StreamingConfig()
+            >>> config.csp_connect_origins is None
+            True
+            >>> config.csp_connect_origins = ["https://api.zippopotam.us", "https://api.weather.gov"]
+            >>> config.csp_connect_origins
+            ['https://api.zippopotam.us', 'https://api.weather.gov']
+        """
+    @csp_connect_origins.setter
+    def csp_connect_origins(self, value: Any) -> None: ...
     @property
     def allow_pane_create(self) -> Any:
         """Get whether clients may create panes on the backing mux daemon

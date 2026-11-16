@@ -29,8 +29,10 @@ pub(crate) struct FrameEdit {
     pub replace: bool,
     /// A new frame's color without a base frame (`Y=`, 32-bit RGBA).
     pub background: u32,
-    /// The frame's gap in milliseconds (`z=`).
-    pub gap_ms: Option<u32>,
+    /// The frame's gap in milliseconds (`z=`). Signed per the spec: a
+    /// positive value sets the gap, zero is ignored (as if `z` were
+    /// unspecified), and a negative value makes the frame gapless (0 ms).
+    pub gap_ms: Option<i32>,
 }
 
 impl GraphicsStore {
@@ -45,7 +47,7 @@ impl GraphicsStore {
             .shared_images
             .get(&image_id)
             .cloned()
-            .ok_or_else(|| GraphicsError::KittyError("Image not found".to_string()))?;
+            .ok_or_else(|| GraphicsError::KittyNotFound("Image not found".to_string()))?;
         let count = self.kitty_frame_count(image_id);
         // The spec's control-data default for r= is 0, meaning "a new frame
         // is created", so r=0 behaves as if it were absent.
@@ -53,7 +55,7 @@ impl GraphicsStore {
             Some(0) | None => count + 1,
             Some(number) if number <= count => number,
             Some(number) => {
-                return Err(GraphicsError::KittyError(format!(
+                return Err(GraphicsError::KittyNotFound(format!(
                     "Frame {number} does not exist"
                 )))
             }
@@ -71,7 +73,7 @@ impl GraphicsStore {
                 match edit.base.filter(|base| *base >= 1 && *base <= count) {
                     Some(base) => self.kitty_frame_pixels(image_id, base, &root),
                     None if edit.base.is_some() => {
-                        return Err(GraphicsError::KittyError(format!(
+                        return Err(GraphicsError::KittyNotFound(format!(
                             "Base frame {:?} does not exist",
                             edit.base
                         )))
@@ -103,7 +105,7 @@ impl GraphicsStore {
             if !self.animations.contains_key(&image_id) {
                 // The root frame joins the animation, sharing the image's buffer (already
                 // counted against the store budget).
-                self.get_or_create_animation(image_id, 100)
+                self.get_or_create_animation(image_id, 40)
                     .add_frame(AnimationFrame::new_shared(1, root, width, height));
             }
             self.add_animation_frame(
@@ -111,8 +113,8 @@ impl GraphicsStore {
                 AnimationFrame::new_shared(number, pixels.clone(), width, height),
             );
         }
-        if let Some(gap) = edit.gap_ms.filter(|gap| *gap > 0) {
-            self.set_kitty_frame_gap(image_id, number, gap);
+        if let Some(gap) = edit.gap_ms.filter(|gap| *gap != 0) {
+            self.set_kitty_frame_gap(image_id, number, gap.max(0) as u32);
         }
         let current = self
             .animations
@@ -156,7 +158,7 @@ impl GraphicsStore {
             let Some((width, height, root)) = self.shared_images.get(&image_id).cloned() else {
                 return;
             };
-            let animation = self.get_or_create_animation(image_id, gap_ms.max(100));
+            let animation = self.get_or_create_animation(image_id, gap_ms.max(40));
             animation.add_frame(AnimationFrame::new_shared(1, root, width, height));
         }
         if let Some(frame) = self
@@ -196,9 +198,14 @@ impl GraphicsStore {
             .map(|frame| frame.pixels.clone())
     }
 
-    /// Every placement of the image, on screen and in the scrollback, shows `pixels`.
+    /// Live placements of the image show `pixels`. Scrollback copies are
+    /// deliberately left alone: kitty's model freezes history, so a copy
+    /// already scrolled off-screen keeps the frame it showed at scroll
+    /// time even when the image is edited or switches frames later (the
+    /// animation tick path always behaved this way; the scrollback
+    /// rewrite here was the divergence).
     fn show_kitty_pixels(&mut self, image_id: u32, pixels: &Arc<Vec<u8>>) {
-        for graphic in self.placements.iter_mut().chain(self.scrollback.iter_mut()) {
+        for graphic in self.placements.iter_mut() {
             if graphic.kitty_image_id == Some(image_id) && !graphic.is_virtual {
                 graphic.pixels = pixels.clone();
             }

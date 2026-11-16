@@ -209,7 +209,7 @@ _par__mux() {
 
     case "${cmd}" in
         par__mux)
-            opts="-c -h -V --check-update --self-update --force-self-update --socket --state-dir --machine --stop --restart --foreground --par-mux-in-app-wrapper --yes --no-attach --otel-enabled --otel-endpoint --otel-protocol --otel-headers --otel-service-name --cmd --list-servers --pane-endpoints --expose-control-socket --gen-config --force --install-skill --skills-dir --install-agent-hooks --uninstall-agent-hooks --agent-hooks-status --integration-status --install-agent-extensions --uninstall-agent-extensions --heal-agent-hooks --print-schema --print-completions --help --version start stop restart status ls attach config observe control completion machine plugin update help"
+            opts="-c -h -V --check-update --self-update --force-self-update --socket --state-dir --machine --stop --restart --foreground --par-mux-in-app-wrapper --yes --no-attach --keep-alive --otel-enabled --otel-endpoint --otel-protocol --otel-headers --otel-service-name --cmd --list-servers --pane-endpoints --expose-control-socket --gen-config --force --install-skill --skills-dir --install-agent-hooks --uninstall-agent-hooks --agent-hooks-status --integration-status --install-agent-extensions --uninstall-agent-extensions --heal-agent-hooks --print-schema --print-completions --help --version start stop restart status ls attach config observe control completion machine plugin update help"
             if [[ ${cur} == -* || ${COMP_CWORD} -eq 1 ]] ; then
                 COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
                 return 0
@@ -1231,7 +1231,7 @@ _par__mux() {
             return 0
             ;;
         par__subcmd__mux__subcmd__start)
-            opts="-h --socket --state-dir --foreground --no-attach --pane-endpoints --expose-control-socket --machine --help"
+            opts="-h --socket --state-dir --foreground --no-attach --keep-alive --pane-endpoints --expose-control-socket --machine --help"
             if [[ ${cur} == -* || ${COMP_CWORD} -eq 2 ]] ; then
                 COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
                 return 0

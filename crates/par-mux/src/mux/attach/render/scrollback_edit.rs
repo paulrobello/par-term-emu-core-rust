@@ -173,7 +173,7 @@ impl WindowSession {
                     .and_then(|id| id.trim().strip_prefix('%'))
                     .and_then(|n| n.parse::<u32>().ok());
                 let window = s.window.clone();
-                s.reseed_window(c, &window);
+                s.reseed_window(c, &window, false);
                 let Some(new_pane) = new_pane else {
                     return;
                 };

@@ -33,8 +33,8 @@ impl WindowSession {
         };
         let (filter, filtering, scroll) = (help.filter.clone(), help.filtering, help.scroll);
         let rows = help_rows(
-            self.prefix,
-            self.reload_key,
+            self.input_route.prefix,
+            self.input_route.reload_key,
             self.management,
             self.resize_step,
         );
@@ -127,7 +127,7 @@ impl WindowSession {
                     self.refresh_help();
                 }
                 b if b >= 0x80 => {
-                    if let Some(ch) = self.text_utf8.push_printable(b) {
+                    if let Some(ch) = self.input_route.text_utf8.push_printable(b) {
                         help.filter.push(ch);
                         self.refresh_help();
                     }

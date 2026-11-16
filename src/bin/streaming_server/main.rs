@@ -420,6 +420,20 @@ async fn main() -> Result<()> {
     // --api-key-file form behaves identically to an inline --api-key.
     args.api_key = bootstrap::resolve_api_key(&args)?;
 
+    // CSP allowlist origins (card 01a1d798): each must be the strict
+    // https://host[:port] form; anything else refuses to start naming the
+    // value, before any listener exists.
+    if let Some(origins) = &args.csp_connect_origins {
+        for origin in origins {
+            if let Err(why) =
+                par_term_emu_core_rust::streaming::server::validate_csp_connect_origin(origin)
+            {
+                eprintln!("par-term-streamer: {why}");
+                std::process::exit(2);
+            }
+        }
+    }
+
     // OpenTelemetry metrics (kanban 01a18331): installs the global meter
     // provider when --otel-enabled / PAR_TERM_STREAMER_OTEL_ENABLED is set;
     // otherwise zero OTLP exports. The guard must live for the whole
@@ -655,6 +669,7 @@ fn build_config(
         kitty_file_media: args.kitty_file_media,
         allow_pane_create: args.allow_pane_create,
         allow_blob_connect_src: args.csp_allow_blob_connect,
+        csp_connect_origins: args.csp_connect_origins.clone(),
     }
 }
 

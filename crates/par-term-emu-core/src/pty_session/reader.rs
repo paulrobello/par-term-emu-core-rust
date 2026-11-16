@@ -246,13 +246,17 @@ impl PtySession {
                                         signals_sent.fetch_add(1, Ordering::SeqCst);
                                         // Current dimensions, not stale captured values
                                         let (current_cols, current_rows) = term.size();
-                                        let _ = send_sigwinch(
+                                        if let Err(err) = send_sigwinch(
                                             pid,
                                             "ALT_SCREEN",
                                             &format!(
                                                 "alt-screen entry {current_cols}x{current_rows}"
                                             ),
-                                        );
+                                        ) {
+                                            log::warn!(
+                                                "par-term-emu: alt-screen SIGWINCH pulse failed: {err}"
+                                            );
+                                        }
                                     }
                                 }
                             }

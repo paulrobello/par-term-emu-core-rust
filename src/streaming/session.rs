@@ -985,6 +985,14 @@ impl StreamSessionState {
     /// damage flush with the maximum generation and the coalesced union
     /// of their ranges — every row any chunk changed is redrawn, and no
     /// row that stayed clean is claimed.
+    ///
+    /// A batch never mixes kinds: a plain chunk arriving into a batch that
+    /// already holds damage-bearing chunks — or a damage-bearing chunk
+    /// arriving into a plain-poisoned batch — flushes first. Under load the
+    /// daemon's mark chunks (OSC 7/133 fragments that change no rows, so the
+    /// mux gate sends no damage line) arrive as plain chunks between
+    /// damage-bearing ones; letting them merge would erase the pending
+    /// frames' damage and force a client full-scan.
     pub async fn output_broadcaster_loop(&self) {
         let mut rx = self.output_rx.lock().await;
         let mut buffer = String::new();
@@ -1007,6 +1015,24 @@ impl StreamSessionState {
                     match msg {
                         Some(chunk) => {
                             if !chunk.data.is_empty() {
+                                // A batch never mixes kinds (see the method
+                                // doc): the batch's kind follows its damage
+                                // state — `Some(Some(_))` holds only
+                                // damage-bearing chunks, `Some(None)` was
+                                // poisoned by a plain chunk. On a mismatch
+                                // with data pending, flush first so the
+                                // pending frames keep their damage; the
+                                // incoming chunk then starts a fresh
+                                // same-kind batch.
+                                let chunk_damaged = chunk.damage_generation.is_some();
+                                let batch_damaged = matches!(batch, Some(Some(_)));
+                                if batch.is_some() && chunk_damaged != batch_damaged {
+                                    self.flush_output_batch(&mut buffer, &mut batch);
+                                    self.metrics
+                                        .last_broadcast_time
+                                        .store(now_millis(), Ordering::Relaxed);
+                                    last_flush = tokio::time::Instant::now();
+                                }
                                 chunk.merge_into(&mut batch);
                                 buffer.push_str(&chunk.data);
                                 if buffer.len() > MAX_BATCH_SIZE {
@@ -1380,6 +1406,140 @@ mod tests {
         assert!(
             saw_output,
             "the batch-window flush produced an output frame"
+        );
+
+        session.shutdown("done".to_string());
+        broadcaster.await.expect("broadcaster task");
+    }
+
+    /// One drained broadcaster `Output` frame as a test tuple: (data,
+    /// damage generation, (start_row, end_row) ranges).
+    type Frame = (String, Option<u64>, Vec<(u32, u32)>);
+
+    /// A batch never mixes kinds: a plain chunk queued between two
+    /// damage-bearing chunks must not erase their damage. The three chunks
+    /// below land inside one 16 ms window, so the pre-boundary code merged
+    /// them into one frame and flushed it damageless — under load the
+    /// daemon's mark chunks (OSC 7/133, no rows changed, no damage line
+    /// from the mux gate) arrive exactly like this and every frame a client
+    /// drained carried `damage_generation: None`. The damage-bearing chunks
+    /// must flush with their own generation and ranges; the plain chunk
+    /// flushes as its own damageless frame.
+    #[tokio::test]
+    async fn output_broadcaster_plain_chunk_does_not_poison_pending_damage() {
+        let terminal = Arc::new(RwLock::new(Terminal::new(80, 24)));
+        let session = Arc::new(StreamSessionState::new(
+            "poison".to_string(),
+            terminal,
+            None,
+            true,
+        ));
+        let mut rx = session.broadcast_tx.subscribe();
+        let tx = session.get_output_sender();
+        let broadcaster_session = Arc::clone(&session);
+        let broadcaster =
+            tokio::spawn(async move { broadcaster_session.output_broadcaster_loop().await });
+
+        tx.send(OutputChunk::with_damage("A".into(), 5, vec![(0, 2)]))
+            .await
+            .expect("queued");
+        tx.send(OutputChunk::plain("\x1b]7;file:///tmp cwd\x07".into()))
+            .await
+            .expect("queued");
+        tx.send(OutputChunk::with_damage("B".into(), 6, vec![(4, 6)]))
+            .await
+            .expect("queued");
+        // The batch window flushes the final segment; the boundary flushes
+        // happen as each kind change arrives.
+        tokio::time::sleep(Duration::from_millis(80)).await;
+
+        let mut frames: Vec<Frame> = Vec::new();
+        while let Ok(msg) = rx.try_recv() {
+            if let ServerMessage::Output {
+                data,
+                damage,
+                damage_generation,
+                ..
+            } = msg
+            {
+                frames.push((
+                    data,
+                    damage_generation,
+                    damage
+                        .iter()
+                        .map(|r| (r.start_row, r.end_row))
+                        .collect::<Vec<_>>(),
+                ));
+            }
+        }
+        assert_eq!(
+            frames,
+            vec![
+                ("A".to_string(), Some(5), vec![(0, 2)]),
+                ("\x1b]7;file:///tmp cwd\x07".to_string(), None, Vec::new()),
+                ("B".to_string(), Some(6), vec![(4, 6)]),
+            ],
+            "a plain chunk splits the batch instead of erasing the pending damage"
+        );
+
+        session.shutdown("done".to_string());
+        broadcaster.await.expect("broadcaster task");
+    }
+
+    /// The boundary also protects the reverse order: damage arriving into a
+    /// plain-poisoned batch flushes the plain frame first instead of staying
+    /// poisoned, so the damage chunk keeps its generation and ranges. A
+    /// plain-only stream still coalesces into one damageless frame (the
+    /// conservative default is unchanged).
+    #[tokio::test]
+    async fn output_broadcaster_damage_chunk_flushes_pending_plain_batch() {
+        let terminal = Arc::new(RwLock::new(Terminal::new(80, 24)));
+        let session = Arc::new(StreamSessionState::new(
+            "split-plain".to_string(),
+            terminal,
+            None,
+            true,
+        ));
+        let mut rx = session.broadcast_tx.subscribe();
+        let tx = session.get_output_sender();
+        let broadcaster_session = Arc::clone(&session);
+        let broadcaster =
+            tokio::spawn(async move { broadcaster_session.output_broadcaster_loop().await });
+
+        tx.send(OutputChunk::plain("\x1b]133;D\x07".into()))
+            .await
+            .expect("queued");
+        tx.send(OutputChunk::with_damage("C".into(), 7, vec![(1, 3)]))
+            .await
+            .expect("queued");
+        tokio::time::sleep(Duration::from_millis(80)).await;
+
+        let mut frames: Vec<Frame> = Vec::new();
+        while let Ok(msg) = rx.try_recv() {
+            if let ServerMessage::Output {
+                data,
+                damage,
+                damage_generation,
+                ..
+            } = msg
+            {
+                frames.push((
+                    data,
+                    damage_generation,
+                    damage
+                        .iter()
+                        .map(|r| (r.start_row, r.end_row))
+                        .collect::<Vec<_>>(),
+                ));
+            }
+        }
+        assert_eq!(
+            frames,
+            vec![
+                ("\x1b]133;D\x07".to_string(), None, Vec::new()),
+                ("C".to_string(), Some(7), vec![(1, 3)]),
+            ],
+            "damage after a plain chunk flushes the plain frame instead of inheriting its poison"
         );
 
         session.shutdown("done".to_string());

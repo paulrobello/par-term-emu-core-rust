@@ -243,12 +243,14 @@ fn merge_verb(cli: &mut Cli, sub: Sub) -> Result<Verb, ExitCode> {
                 state_dir,
                 foreground,
                 no_attach,
+                keep_alive,
                 pane_endpoints,
                 expose_control_socket,
             } = args;
             merge(name, socket, state_dir);
             cli.foreground |= foreground;
             cli.no_attach |= no_attach;
+            cli.keep_alive |= keep_alive;
             cli.pane_endpoints |= pane_endpoints;
             cli.expose_control_socket |= expose_control_socket;
         }

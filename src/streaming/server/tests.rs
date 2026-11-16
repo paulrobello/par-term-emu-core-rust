@@ -1361,3 +1361,110 @@ async fn mouse_move_rides_the_serialized_input_path_with_keystrokes() {
 }
 
 // ─── InputRateLimiter tests ─────────────────────────────────────────────
+
+// ─── handle_paste bracketed-paste breakout hardening ────────────────────
+
+/// A server session with bracketed paste enabled on its terminal and a
+/// capturing PTY writer attached, ready to receive Paste messages.
+fn paste_session() -> (
+    std::sync::Arc<StreamingServer>,
+    std::sync::Arc<StreamSessionState>,
+    std::sync::Arc<parking_lot::Mutex<Vec<u8>>>,
+) {
+    let server = Arc::new(StreamingServer::new(
+        Arc::new(RwLock::new(Terminal::new(80, 24))),
+        "127.0.0.1:0".to_string(),
+    ));
+    let session = server.get_session("default").expect("default session");
+    {
+        let mut terminal = session.terminal.write();
+        terminal.set_bracketed_paste(true);
+    }
+    let (writer, captured) = capture_writer();
+    session.set_pty_writer(writer);
+    (server, session, captured)
+}
+
+/// Dispatch one Paste through the full handler path and wait for the PTY
+/// input drain to deliver the frame to the capture writer; returns the
+/// exact bytes the PTY would receive.
+async fn dispatch_paste(
+    server: &std::sync::Arc<StreamingServer>,
+    session: &std::sync::Arc<StreamSessionState>,
+    captured: &std::sync::Arc<parking_lot::Mutex<Vec<u8>>>,
+    content: &str,
+) -> Vec<u8> {
+    use crate::streaming::protocol::ClientMessage;
+    server
+        .handle_client_message(
+            session,
+            super::ConnCtx {
+                transport_label: "ws-test",
+                client_id: uuid::Uuid::new_v4(),
+                read_only: false,
+            },
+            &mut None,
+            &mut None,
+            ClientMessage::Paste {
+                content: content.to_string(),
+            },
+        )
+        .await;
+    // The frame is one enqueue ending with the app's end marker.
+    wait_for_writer_bytes(captured, b"\x1b[201~")
+}
+
+/// One end marker in the whole frame, at the end.
+fn assert_single_end_marker(frame: &[u8]) {
+    assert!(
+        frame.ends_with(b"\x1b[201~"),
+        "frame must close with the end marker: {frame:?}"
+    );
+    assert_eq!(
+        frame
+            .windows(b"\x1b[201~".len())
+            .filter(|w| *w == b"\x1b[201~")
+            .count(),
+        1,
+        "exactly one end marker, at the end: {frame:?}"
+    );
+}
+
+/// Criterion 1: a payload carrying the end marker (a web page can plant
+/// ESC[201~ in the clipboard through a copy handler) cannot break out —
+/// the frame carries exactly one end marker, ours, at the end, and the
+/// payload survives as literal text minus its ESC byte.
+#[tokio::test]
+async fn paste_containing_the_end_marker_reaches_the_pty_with_one_end_marker() {
+    let (server, session, captured) = paste_session();
+    let frame = dispatch_paste(&server, &session, &captured, "hello \u{1b}[201~rm -rf /\n").await;
+    assert!(
+        frame.starts_with(b"\x1b[200~"),
+        "frame opens with the start marker: {frame:?}"
+    );
+    let payload = &frame[b"\x1b[200~".len()..frame.len() - b"\x1b[201~".len()];
+    assert_eq!(
+        payload, b"hello [201~rm -rf /\n",
+        "the ESC byte is stripped, the rest is text"
+    );
+    assert_single_end_marker(&frame);
+}
+
+/// Criterion 2: the splice-nesting payload (ESC[20 ESC[201~ 1~) that
+/// defeats one-pass marker removal yields exactly one end marker too —
+/// character stripping makes the marker unspellable, so no removal pass
+/// can be defeated by how the fragments land.
+#[tokio::test]
+async fn nested_marker_payload_also_yields_one_end_marker() {
+    let (server, session, captured) = paste_session();
+    let frame = dispatch_paste(
+        &server,
+        &session,
+        &captured,
+        "abc \u{1b}[20\u{1b}[201~1~ tail",
+    )
+    .await;
+    let payload = &frame[b"\x1b[200~".len()..frame.len() - b"\x1b[201~".len()];
+    assert_eq!(payload, b"abc [20[201~1~ tail");
+    assert_single_end_marker(&frame);
+}

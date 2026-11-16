@@ -407,6 +407,14 @@ pub struct StreamingConfig {
     /// the ENH-059 baseline. Security review: Paul, 2026-11-01
     /// (card 01a19895bd).
     pub allow_blob_connect_src: bool,
+    /// Opt-in HTTPS origins appended to the Content-Security-Policy's
+    /// `connect-src` so a custom web root can `fetch()` public APIs
+    /// directly (e.g. weather endpoints). Each value must pass
+    /// [`crate::streaming::server::validate_csp_connect_origin`] — the
+    /// streamer CLI and the Python binding reject anything else at config
+    /// time; `None` (default) keeps the policy byte-identical to the
+    /// ENH-059 baseline.
+    pub csp_connect_origins: Option<Vec<String>>,
 }
 
 /// Redacting `Debug` (SEC-009): mirrors the derived output field-for-field
@@ -446,6 +454,7 @@ impl std::fmt::Debug for StreamingConfig {
             .field("kitty_file_media", &self.kitty_file_media)
             .field("allow_pane_create", &self.allow_pane_create)
             .field("allow_blob_connect_src", &self.allow_blob_connect_src)
+            .field("csp_connect_origins", &self.csp_connect_origins)
             .finish()
     }
 }
@@ -476,6 +485,7 @@ impl Default for StreamingConfig {
             kitty_file_media: crate::graphics::kitty::FileMediaMode::default(),
             allow_pane_create: false,
             allow_blob_connect_src: false,
+            csp_connect_origins: None,
         }
     }
 }

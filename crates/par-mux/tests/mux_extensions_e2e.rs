@@ -214,8 +214,10 @@ fn embedded_extension_drives_the_daemon(agent: &str, file: &str, expected: usize
     let mut released = false;
     let mut trace: Vec<String> = Vec::new();
     // Notifications queued on the control socket while the driver ran are
-    // still buffered, so this loop reads them after the fact.
-    let deadline = Instant::now() + Duration::from_secs(30);
+    // still buffered, so this loop reads them after the fact. The hang
+    // ceiling, not an idle-calibrated budget: at full-gate load the
+    // daemon's fan-out of 50+ notifications trails the driver's exit.
+    let deadline = Instant::now() + common::CEILING;
     while Instant::now() < deadline {
         for line in control.poll_lines() {
             let line = line.trim_end();

@@ -191,12 +191,19 @@ impl KittyParser {
                 }
             }
             "z" => {
-                // z= is overloaded: frame delay for animations, z-index for placements
+                // z= is overloaded, and the two meanings are separate fields
+                // with separate parse paths. Image commands (t/T/p and the
+                // delete forms) take a SIGNED z-index — per the spec's
+                // layout section, "negative z-index values mean that the
+                // images will be drawn under the text". Animation commands
+                // (a=f, a=a) take the frame gap, also signed per the spec's
+                // animation section: positive sets the gap in ms, z=0 is
+                // ignored, and negative creates a gapless frame.
                 if matches!(
                     self.action,
                     KittyAction::Frame | KittyAction::AnimationControl
                 ) {
-                    self.frame_delay_ms = value.parse().ok();
+                    self.frame_gap_ms = value.parse().ok();
                 } else {
                     self.z_index = value.parse().ok();
                 }
@@ -242,26 +249,47 @@ impl KittyParser {
     }
 
     /// Resolve delete target specification after all parameters are parsed.
+    ///
+    /// The letters are the spec's deleting-section grammar (each has a
+    /// lowercase form that keeps stored data and an uppercase form that
+    /// frees it): `a`/`A` every placement on screen, `c`/`C` intersecting
+    /// the cursor, `f`/`F` the animation frames of image `i=`, `i`/`I` the
+    /// image `i=` names (with `p=` only that placement), `p`/`P` the cell
+    /// at `x=`,`y=`, `q`/`Q` that cell with z-index `z=`, `r`/`R` ids in
+    /// `x=`..`y=` (kitty 0.33+), `x`/`X` column `x=`, `y`/`Y` row `y=`,
+    /// `z`/`Z` z-index `z=`. Identifying parameters may follow `d=` (as in
+    /// Herdr's `a=d,d=I,i=<id>` / `a=d,d=i,i=<id>,p=<pid>` ordering).
     pub(super) fn parse_delete_target(&mut self, value: &str) {
-        // Identifying parameters may follow `d=` (as in Herdr's
-        // `a=d,d=I,i=<id>` / `a=d,d=i,i=<id>,p=<pid>` ordering).
-        if let Some(c) = value.chars().next() {
-            self.delete_target = match c {
-                'a' | 'A' => Some(KittyDeleteTarget::All),
-                'c' | 'C' => Some(KittyDeleteTarget::AtCursor),
-                'z' | 'Z' => Some(KittyDeleteTarget::OnScreen),
-                'i' | 'I' => self.image_id.map(|iid| match self.placement_id {
-                    Some(pid) => KittyDeleteTarget::ByPlacement(iid, Some(pid)),
-                    None => KittyDeleteTarget::ById(iid),
-                }),
-                'p' | 'P' => self
-                    .image_id
-                    .map(|iid| KittyDeleteTarget::ByPlacement(iid, self.placement_id)),
-                'x' | 'X' => self.source_x.map(KittyDeleteTarget::ByColumn),
-                'y' | 'Y' => self.source_y.map(KittyDeleteTarget::ByRow),
+        self.delete_frees_data = false;
+        let Some(c) = value.chars().next() else {
+            self.delete_target = None;
+            return;
+        };
+        self.delete_frees_data = c.is_ascii_uppercase();
+        self.delete_target = match c.to_ascii_lowercase() {
+            'a' => Some(KittyDeleteTarget::All),
+            'c' => Some(KittyDeleteTarget::AtCursor),
+            'f' => Some(KittyDeleteTarget::Frames),
+            'i' => self
+                .image_id
+                .map(|iid| KittyDeleteTarget::ById(iid, self.placement_id)),
+            'p' => match (self.source_x, self.source_y) {
+                (Some(x), Some(y)) => Some(KittyDeleteTarget::ByCell(x, y)),
                 _ => None,
-            };
-        }
+            },
+            'q' => match (self.source_x, self.source_y, self.z_index) {
+                (Some(x), Some(y), Some(z)) => Some(KittyDeleteTarget::ByCellZ(x, y, z)),
+                _ => None,
+            },
+            'r' => match (self.source_x, self.source_y) {
+                (Some(x), Some(y)) => Some(KittyDeleteTarget::ByIdRange(x, y)),
+                _ => None,
+            },
+            'x' => self.source_x.map(KittyDeleteTarget::ByColumn),
+            'y' => self.source_y.map(KittyDeleteTarget::ByRow),
+            'z' => self.z_index.map(KittyDeleteTarget::ByZIndex),
+            _ => None,
+        };
     }
 
     /// Get accumulated data, decompressing if necessary.
@@ -392,6 +420,10 @@ impl KittyParser {
             KittyAction::Frame => self.apply_frame_command(store),
 
             KittyAction::AnimationControl => self.apply_animation_control(store),
+
+            KittyAction::Compose => Err(GraphicsError::KittyError(
+                "Compose (a=c) is not supported".to_string(),
+            )),
         }
     }
 }

@@ -45,6 +45,26 @@ impl Terminal {
         self.graphics.graphics_store.clear();
     }
 
+    /// The buffer a placement made now belongs to: the alternate screen's
+    /// while it is shown, the primary's otherwise. Stamped onto every
+    /// placement when it enters the store, so an xterm-style resize moves
+    /// it with its own buffer's reflow.
+    pub(crate) fn placement_buffer(&self) -> crate::graphics::PlacementBuffer {
+        if self.alt_screen_active {
+            crate::graphics::PlacementBuffer::Alternate
+        } else {
+            crate::graphics::PlacementBuffer::Primary
+        }
+    }
+
+    /// Stamp a placement's owning buffer from the screen state and add it
+    /// to the store. Every protocol path goes through this, so ownership
+    /// can never be left at its default.
+    pub(crate) fn add_placement(&mut self, mut graphic: TerminalGraphic) {
+        graphic.placement.buffer = self.placement_buffer();
+        self.graphics.graphics_store.add_graphic(graphic);
+    }
+
     /// Get immutable access to graphics store
     pub fn graphics_store(&self) -> &crate::graphics::GraphicsStore {
         &self.graphics.graphics_store
@@ -83,6 +103,16 @@ impl Terminal {
         self.graphics
             .graphics_store
             .adjust_for_scroll_up_with_scrollback(n, top, bottom, old_scrollback_len);
+
+        // At-capacity scrollback eviction shifted every scrollback line up:
+        // the store's scrollback graphics follow, and the evicted lines'
+        // graphics leave the store.
+        let evictions = self.active_grid_mut().take_scrollback_evictions();
+        if evictions > 0 {
+            self.graphics
+                .graphics_store
+                .rebase_scrollback_after_shrink(evictions);
+        }
 
         // Guard before formatting: this runs on every scrolled line feed, and
         // `debug::log` would otherwise format + lock the logger per scroll.
@@ -686,7 +716,7 @@ impl Terminal {
                     }
 
                     // Add to graphics store (limit enforced internally)
-                    self.graphics.graphics_store.add_graphic(graphic.clone());
+                    self.add_placement(graphic.clone());
 
                     // Announce placement like the Sixel path (dcs) does so
                     // graphics subscribers hear iTerm2 images too.

@@ -129,6 +129,11 @@ pub struct Grid {
     /// Where the last xterm.js resize moved each line
     /// ([`Grid::resize_xterm`]).
     pub(in crate::grid) last_buffer_reflow: Option<BufferReflow>,
+    /// Scrollback lines dropped by at-capacity eviction since the count was
+    /// last drained ([`Grid::take_scrollback_evictions`]). The graphics
+    /// store drains it after each scroll so its scrollback anchors follow
+    /// the eviction, one line at a time.
+    pub(in crate::grid) scrollback_evictions: usize,
 }
 
 impl Grid {
@@ -155,6 +160,7 @@ impl Grid {
             scroll_epoch: 0,
             gen: 0,
             last_buffer_reflow: None,
+            scrollback_evictions: 0,
         }
     }
 
@@ -543,6 +549,14 @@ impl Grid {
         self.compact_scrollback
     }
 
+    /// How many scrollback lines at-capacity eviction dropped since the
+    /// last drain, resetting the count. The graphics store's scrollback
+    /// anchors follow the same evictions (one line shifts every anchor, and
+    /// the evicted lines' graphics leave the store).
+    pub fn take_scrollback_evictions(&mut self) -> usize {
+        std::mem::take(&mut self.scrollback_evictions)
+    }
+
     /// Check if a line is wrapped
     pub fn is_line_wrapped(&self, row: usize) -> bool {
         self.wrapped.get(row).copied().unwrap_or(false)
@@ -631,6 +645,7 @@ impl Grid {
         while self.scrollback_rows.len() >= self.max_scrollback {
             evicted = self.scrollback_rows.pop_front();
             self.scrollback_wrapped.pop_front();
+            self.scrollback_evictions += 1;
         }
         self.scrollback_rows.push_back(row);
         self.scrollback_wrapped.push_back(wrapped);

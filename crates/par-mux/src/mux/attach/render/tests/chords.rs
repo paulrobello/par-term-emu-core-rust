@@ -146,7 +146,7 @@ fn kill_chord_lands_on_the_survivor_or_marks_the_view_stale() {
 
     // No survivor: list-panes comes back empty.
     let (rx, mut conn, mut session) = two_pane_session("kill-last", FakeScript::default());
-    session.status_dirty = false;
+    session.status_inflight.dirty = false;
     chord(&mut session, &mut conn, b'x');
     assert_eq!(
         drained(&rx),
@@ -156,7 +156,7 @@ fn kill_chord_lands_on_the_survivor_or_marks_the_view_stale() {
         ],
         "no reseed, no select"
     );
-    assert!(session.status_dirty, "the refresh ends the view");
+    assert!(session.status_inflight.dirty, "the refresh ends the view");
 }
 
 /// Swap prev/next pick the layout-order neighbor and wrap; a single
@@ -447,7 +447,7 @@ fn border_cycle_reaches_herdr_boxes_that_survive_a_reseed() {
     assert_eq!(session.render_opts.glyphs, Glyphs::Herdr);
     assert!(session.render_opts.pane_borders && session.renderer.pane_borders);
     assert_eq!(session.chrome.flash_text(), Some("border style: herdr"));
-    session.reseed_window(&mut conn, "@0");
+    session.reseed_window(&mut conn, "@0", false);
     assert!(
         session.renderer.pane_borders,
         "the re-fit renderer keeps the herdr boxes"
@@ -731,7 +731,7 @@ fn workspace_landing_takes_the_resumed_session_not_the_first_listed() {
 #[test]
 fn landing_on_an_empty_workspace_only_marks_the_status_stale() {
     let (rx, mut conn, mut session) = two_pane_session("ws-empty", FakeScript::default());
-    session.status_dirty = false;
+    session.status_inflight.dirty = false;
     session.land_on_workspace(&mut conn, "+3");
     settle(&mut session, &mut conn);
     assert_eq!(
@@ -743,7 +743,7 @@ fn landing_on_an_empty_workspace_only_marks_the_status_stale() {
         ]
     );
     assert_eq!(session.window, "@0");
-    assert!(session.status_dirty);
+    assert!(session.status_inflight.dirty);
 }
 
 /// The workspace-picker chord lists the roster, opens on the active
@@ -828,12 +828,15 @@ fn prompt_commits_send_each_targets_wire_spelling() {
         ),
     ] {
         session.enter_prompt(target.clone());
-        session.status_dirty = false;
+        session.status_inflight.dirty = false;
         type_and_commit(&mut session, &mut conn, typed);
         assert_eq!(drained(&rx), vec![wire.to_string()], "{target:?}");
         assert!(!session.is_prompt(), "{target:?}: the commit closes");
         assert_eq!(session.renderer.overlay, None);
-        assert!(session.status_dirty, "{target:?}: the status re-queries");
+        assert!(
+            session.status_inflight.dirty,
+            "{target:?}: the status re-queries"
+        );
     }
 }
 
@@ -1003,14 +1006,14 @@ fn new_workspace_prompt_creates_and_lands_or_stops_on_error() {
 #[test]
 fn closing_an_unshown_tab_only_kills_it() {
     let (rx, mut conn, mut session) = two_pane_session("close-other", FakeScript::default());
-    session.status_dirty = false;
+    session.status_inflight.dirty = false;
     session.open_menu(MenuTarget::Tab("@7".to_string()));
     session.menu_click(&mut conn, 2);
     settle(&mut session, &mut conn);
     assert!(session.menu().is_none());
     assert_eq!(drained(&rx), vec!["kill-window -t @7".to_string()]);
     assert_eq!(session.window, "@0");
-    assert!(session.status_dirty);
+    assert!(session.status_inflight.dirty);
 }
 
 /// Closing the SHOWN tab lands on the session's `*`-marked survivor
@@ -1042,7 +1045,7 @@ fn closing_the_shown_tab_lands_on_the_marked_survivor() {
     assert_eq!(session.window, "@2");
 
     let (rx, mut conn, mut session) = two_pane_session("close-last", FakeScript::default());
-    session.status_dirty = false;
+    session.status_inflight.dirty = false;
     session.open_menu(MenuTarget::Tab("@0".to_string()));
     session.menu_click(&mut conn, 2);
     settle(&mut session, &mut conn);
@@ -1054,7 +1057,7 @@ fn closing_the_shown_tab_lands_on_the_marked_survivor() {
         ]
     );
     assert_eq!(session.window, "@0");
-    assert!(session.status_dirty);
+    assert!(session.status_inflight.dirty);
 }
 
 /// The tab menu's move rows: one row per move for the RIGHT-CLICKED
@@ -1073,12 +1076,12 @@ fn tab_menu_move_rows_reorder_the_targeted_tab() {
         "pane %0",
         "pane %1",
     ]));
-    session.status_dirty = false;
+    session.status_inflight.dirty = false;
     session.open_menu(MenuTarget::Tab("@1".to_string()));
     session.menu_click(&mut conn, 6); // the "move to start" row
     settle(&mut session, &mut conn);
     assert_eq!(drained(&rx), vec!["move-window -s @1 -t 0".to_string()]);
-    assert!(session.status_dirty);
+    assert!(session.status_inflight.dirty);
 
     // The first tab's move left flashes and sends nothing.
     let (rx, mut conn, mut session) = two_pane_session("tab-move-edge", FakeScript::default());
@@ -1091,7 +1094,7 @@ fn tab_menu_move_rows_reorder_the_targeted_tab() {
         "pane %0",
         "pane %1",
     ]));
-    session.status_dirty = false;
+    session.status_inflight.dirty = false;
     session.open_menu(MenuTarget::Tab("@0".to_string()));
     session.menu_click(&mut conn, 4); // the "move left" row
     settle(&mut session, &mut conn);
@@ -1191,7 +1194,7 @@ fn closing_a_workspace_lands_on_a_survivor_only_when_it_was_shown() {
             ..FakeScript::default()
         },
     );
-    session.status_dirty = false;
+    session.status_inflight.dirty = false;
     session.open_menu(MenuTarget::Workspace("+5".to_string()));
     session.menu_click(&mut conn, 2);
     settle(&mut session, &mut conn);
@@ -1202,7 +1205,7 @@ fn closing_a_workspace_lands_on_a_survivor_only_when_it_was_shown() {
             "kill-workspace -t +5".to_string()
         ]
     );
-    assert!(session.status_dirty);
+    assert!(session.status_inflight.dirty);
 
     // The last workspace: nothing survives to land on.
     let mut replies = std::collections::HashMap::new();
@@ -1217,7 +1220,7 @@ fn closing_a_workspace_lands_on_a_survivor_only_when_it_was_shown() {
             ..FakeScript::default()
         },
     );
-    session.status_dirty = false;
+    session.status_inflight.dirty = false;
     session.open_menu(MenuTarget::Workspace("+0".to_string()));
     session.menu_click(&mut conn, 2);
     settle(&mut session, &mut conn);
@@ -1229,7 +1232,7 @@ fn closing_a_workspace_lands_on_a_survivor_only_when_it_was_shown() {
             "list-workspaces".to_string()
         ]
     );
-    assert!(session.status_dirty);
+    assert!(session.status_inflight.dirty);
     assert_eq!(session.window, "@0");
 }
 
@@ -1265,7 +1268,7 @@ fn refused_workspace_close_flashes_and_arms_the_group_close() {
             ..FakeScript::default()
         },
     );
-    session.status_dirty = false;
+    session.status_inflight.dirty = false;
     session.open_menu(MenuTarget::Workspace("+0".to_string()));
     assert_eq!(overlay_text(&session)[2].trim(), "close");
     session.menu_click(&mut conn, 2);
@@ -1283,7 +1286,7 @@ fn refused_workspace_close_flashes_and_arms_the_group_close() {
         flash.contains("2 linked worktrees") && flash.contains("-g"),
         "{flash}"
     );
-    assert!(!session.status_dirty, "nothing closed");
+    assert!(!session.status_inflight.dirty, "nothing closed");
 
     // The same workspace's menu now offers the group close in place.
     session.open_menu(MenuTarget::Workspace("+0".to_string()));
@@ -1610,7 +1613,7 @@ fn plain_router_forwards_literals_and_consumes_unbound_keys() {
     // A prefix at the END of one run completes in the next run.
     assert!(!session.route_plain(&[crate::mux::attach::C_B], &mut conn));
     settle(&mut session, &mut conn);
-    assert!(session.prefix_pending);
+    assert!(session.input_route.prefix_pending);
     assert!(session.route_plain(b"d", &mut conn), "d detaches");
     settle(&mut session, &mut conn);
 
@@ -1632,12 +1635,12 @@ fn non_ascii_chord_key_is_swallowed_whole_or_folded() {
     let kanji = "中".as_bytes();
     assert!(!session.route_plain(&[crate::mux::attach::C_B, kanji[0]], &mut conn));
     assert!(
-        session.prefix_pending,
+        session.input_route.prefix_pending,
         "armed until the character completes"
     );
     assert!(!session.route_plain(&kanji[1..], &mut conn));
     settle(&mut session, &mut conn);
-    assert!(!session.prefix_pending);
+    assert!(!session.input_route.prefix_pending);
     assert!(drained(&rx).is_empty(), "no byte of it reached the pane");
     assert_eq!(
         session.chrome.flash_text(),
@@ -3109,10 +3112,10 @@ fn prefix_chord_classifies_bytes_in_precedence_order() {
         PrefixChord::Management(ManagementKey::Zoom)
     );
     // The reload key never shadows detach.
-    session.reload_key = b'd';
+    session.input_route.reload_key = b'd';
     assert_eq!(session.prefix_chord(b'd'), PrefixChord::Detach);
     // Reload outranks a management chord on the same byte.
-    session.reload_key = b'%';
+    session.input_route.reload_key = b'%';
     assert_eq!(session.prefix_chord(b'%'), PrefixChord::Reload);
 }
 
@@ -3176,14 +3179,14 @@ fn prefix_indicator_paints_the_row_and_clears_on_the_next_key() {
         !session.route_plain(&[crate::mux::attach::C_B], &mut conn),
         "the prefix alone never detaches"
     );
-    assert!(session.prefix_pending, "the chord is armed");
+    assert!(session.input_route.prefix_pending, "the chord is armed");
     assert!(
         status_row_text(&mut session).contains("prefix"),
         "the armed prefix paints the row cue"
     );
     assert!(!session.route_plain(b"Q", &mut conn));
     assert!(
-        !session.prefix_pending,
+        !session.input_route.prefix_pending,
         "the unbound key consumed the chord"
     );
     assert!(
@@ -3205,7 +3208,7 @@ fn reload_chord_flash_paints_on_the_arming_tick() {
     std::fs::write(&path, "[client]\n").unwrap();
     session.settings_path = Some(path);
     drained(&rx);
-    let reload = session.reload_key;
+    let reload = session.input_route.reload_key;
     assert!(!session.route_plain(&[crate::mux::attach::C_B, reload], &mut conn));
     session.tick_flash(std::time::Instant::now());
     assert!(

@@ -2125,9 +2125,9 @@ fn group_boundaries_groups_and_sorts_along() {
 fn session_defaults_come_from_chords_with_defaults() {
     let defaults = crate::mux::config::Chords::with_defaults();
     let mut session = WindowSession::new(80, 25);
-    assert_eq!(session.prefix, defaults.prefix);
-    assert_eq!(session.literal, defaults.prefix);
-    assert_eq!(session.reload_key, defaults.reload);
+    assert_eq!(session.input_route.prefix, defaults.prefix);
+    assert_eq!(session.input_route.literal, defaults.prefix);
+    assert_eq!(session.input_route.reload_key, defaults.reload);
     assert_eq!(session.management, defaults.management);
     assert_eq!(session.resize_step, defaults.resize_step);
 
