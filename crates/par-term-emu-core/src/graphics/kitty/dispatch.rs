@@ -89,7 +89,7 @@ impl KittyParser {
                         .placements
                         .iter()
                         .filter(|g| g.protocol == GraphicProtocol::Kitty)
-                        .filter(|g| g.kitty_image_id.is_some_and(&in_range))
+                        .filter(|g| g.kitty_image_id.is_some_and(in_range))
                         .filter_map(|g| g.kitty_image_id),
                 );
                 affected.extend(
@@ -101,7 +101,7 @@ impl KittyParser {
                 );
                 affected.extend(store.animations.keys().copied().filter(|id| in_range(*id)));
                 store.placements.retain(|g| {
-                    g.protocol != GraphicProtocol::Kitty || !g.kitty_image_id.is_some_and(&in_range)
+                    g.protocol != GraphicProtocol::Kitty || !g.kitty_image_id.is_some_and(in_range)
                 });
                 store
                     .virtual_placements
