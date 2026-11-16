@@ -465,6 +465,50 @@ const STREAM_END_GRACE: Duration = Duration::from_secs(5);
 /// connection with `%exit`; returns early once the connection itself is
 /// gone. Polled at the eviction cadence: a pane's removal has no
 /// per-connection signal to park on.
+/// The seed/replay export's race budget: how many times a raced export
+/// re-runs OFF the clients lock before one final export runs UNDER it.
+const MAX_SEED_EXPORT_RETRIES: u32 = 3;
+
+/// The observe-pane seed's and the refresh-client replay's export race
+/// check, retried off the clients lock. `first` is the export already in
+/// hand with `first_baseline` the epoch sampled before it ran; each raced
+/// check drops the lock, re-samples, and re-exports OFF the lock — the
+/// seed content advances toward the live grid while every pane's fan-out
+/// keeps flowing — and returns the value whose check passed, still under
+/// the lock, for the caller's enqueue. A check that races
+/// `MAX_SEED_EXPORT_RETRIES` times runs one final export UNDER the
+/// clients lock — no marker can enqueue between it and the reply, the
+/// original ordered shape — so a pathologically busy server converges
+/// instead of starving the seed.
+fn stabilize_seed_export<'a, T>(
+    first: T,
+    first_baseline: u64,
+    reexport: impl Fn() -> T,
+    epoch: &OutputEpoch,
+    clients: &'a Clients,
+) -> (T, parking_lot::MutexGuard<'a, Vec<ClientEntry>>) {
+    let mut value = first;
+    let mut before = first_baseline;
+    let mut retries = MAX_SEED_EXPORT_RETRIES;
+    loop {
+        let guard = clients.lock();
+        let raced = epoch.load(std::sync::atomic::Ordering::Acquire) != before;
+        if !raced {
+            return (value, guard);
+        }
+        drop(guard);
+        if retries == 0 {
+            // The original ordered shape: export under the lock so no
+            // marker can enqueue between it and the reply.
+            let guard = clients.lock();
+            return (reexport(), guard);
+        }
+        retries -= 1;
+        before = epoch.load(std::sync::atomic::Ordering::Acquire);
+        value = reexport();
+    }
+}
+
 fn spawn_pane_stream_watch(
     tree: Arc<Mutex<MuxTree>>,
     clients: Clients,
@@ -747,16 +791,14 @@ impl Connection {
             // The seed must reach this client BEFORE any %output the seed
             // does not already reflect, and every %output enqueue needs
             // the clients lock — so the ORDERING needs the lock, not the
-            // export. Export off the lock (a pane with deep scrollback
-            // would otherwise pause every pane's fan-out for the whole
-            // export), then take the lock and re-check the output epoch:
-            // it only bumped if some pane produced output meanwhile, and
-            // then the export raced a fan-out — re-export under the lock
-            // instead (the original, ordered shape; bounded by one
-            // re-export, and a quiet pane never pays it).
-            // The epoch baseline is sampled BEFORE the export: any marker
-            // processed while the export runs bumps the epoch, so the
-            // re-check under the lock sees it and re-exports. (Sampling
+            // export. Export off the lock, re-sampling the output epoch
+            // around each raced attempt via `stabilize_seed_export`
+            // (MAX_SEED_EXPORT_RETRIES off-lock re-exports before one
+            // lock-held fallback): a pane with deep scrollback no longer
+            // pauses every pane's fan-out even when its export races
+            // output. The epoch baseline is sampled BEFORE the export: any
+            // marker processed while the export runs bumps the epoch, so
+            // the re-check under the lock sees it and re-exports. (Sampling
             // after the export only covers the lock-acquisition gap — the
             // seed_export_racing_output_stays_ordered failure on the
             // macos runner: a load-slowed export lost markers that raced
@@ -767,18 +809,18 @@ impl Connection {
                 let term = terminal.read();
                 (term.export_screen_restore_sequence(), term.size())
             };
-            let _clients = self.clients.lock();
-            let raced = self.output_epoch.load(std::sync::atomic::Ordering::Acquire) != before;
-            let item = if raced {
-                let (seed, (cols, rows)) = {
+            let (seed, _clients) = stabilize_seed_export(
+                (seed, (cols, rows)),
+                before,
+                || {
                     let terminal = pane.terminal();
                     let term = terminal.read();
                     (term.export_screen_restore_sequence(), term.size())
-                };
-                seed_item(&seed, cols, rows)
-            } else {
-                seed_item(&seed, cols, rows)
-            };
+                },
+                &self.output_epoch,
+                &self.clients,
+            );
+            let item = seed_item(&seed.0, (seed.1).0, (seed.1).1);
             match self.tx.try_send(item) {
                 Ok(()) => pane_id,
                 Err(_) => return Flow::Close,
@@ -857,18 +899,26 @@ impl Connection {
             let id = self.tree.lock().resolve_pane_target(target).ok();
             id.and_then(|id| self.tree.lock().pane(id).map(|pane| (id, pane.terminal())))
         });
-        let _clients = self.clients.lock();
-        let raced = self.output_epoch.load(std::sync::atomic::Ordering::Acquire) != before;
-        let reply = if raced {
-            match terminal {
-                Some((_id, terminal)) => {
+        // The raced re-export runs through `stabilize_seed_export`: the
+        // dispatched capture is the first export (baseline `before`), and a
+        // raced check re-exports OFF the clients lock until a stable window
+        // (the lock-held export remains the bounded fallback), so a pane
+        // with deep scrollback never pauses every client's fan-out during a
+        // refresh replay. A pane that resolved for the dispatch but vanished
+        // since keeps the first reply — an error block, whose ordering is
+        // irrelevant.
+        let (reply, _clients) = match terminal {
+            Some((_id, terminal)) => stabilize_seed_export(
+                reply,
+                before,
+                || {
                     let term = terminal.read();
                     emit_block(command_number, &replay_reply_body(&term, graphics), true)
-                }
-                None => reply,
-            }
-        } else {
-            reply
+                },
+                &self.output_epoch,
+                &self.clients,
+            ),
+            None => (reply, self.clients.lock()),
         };
         match self.tx.try_send(reply) {
             Ok(()) => Flow::Continue,
@@ -1125,4 +1175,93 @@ pub(super) fn test_writer_delay_arm() {
 #[cfg(test)]
 pub(super) fn test_writer_delay_release() {
     TEST_WRITER_DELAY.store(false, Ordering::Relaxed);
+}
+
+/// The seed/replay export race check's retry contract, pinned against the
+/// scripted epoch: a stable epoch keeps the first export without calling
+/// the re-export at all; a race that lands during the first export
+/// converges with one off-lock re-export; a race that never settles takes
+/// the lock-held fallback after exactly `MAX_SEED_EXPORT_RETRIES`
+/// off-lock attempts (four re-export calls total), and terminates.
+#[cfg(test)]
+mod seed_export_tests {
+    use super::*;
+
+    #[test]
+    fn a_stable_epoch_keeps_the_first_export_without_reexporting() {
+        let epoch: OutputEpoch = Arc::default();
+        let clients: Clients = Arc::default();
+        let calls = Arc::new(AtomicUsize::new(0));
+        let counter = Arc::clone(&calls);
+        let (value, _guard) = stabilize_seed_export(
+            "v0".to_string(),
+            epoch.load(Ordering::Acquire),
+            move || {
+                counter.fetch_add(1, Ordering::Relaxed);
+                "v1".to_string()
+            },
+            &epoch,
+            &clients,
+        );
+        assert_eq!(value, "v0");
+        assert_eq!(calls.load(Ordering::Relaxed), 0);
+    }
+
+    #[test]
+    fn a_single_race_converges_with_one_off_lock_reexport() {
+        let epoch: OutputEpoch = Arc::default();
+        let clients: Clients = Arc::default();
+        let calls = Arc::new(AtomicUsize::new(0));
+        let counter = Arc::clone(&calls);
+        let before = epoch.load(Ordering::Acquire);
+        // The racing output lands during the caller's first export.
+        let first = {
+            epoch.fetch_add(1, Ordering::Release);
+            "v0".to_string()
+        };
+        let (value, _guard) = stabilize_seed_export(
+            first,
+            before,
+            move || {
+                counter.fetch_add(1, Ordering::Relaxed);
+                "v1".to_string()
+            },
+            &epoch,
+            &clients,
+        );
+        assert_eq!(value, "v1");
+        assert_eq!(calls.load(Ordering::Relaxed), 1);
+    }
+
+    #[test]
+    fn a_sustained_race_takes_the_lock_held_fallback_after_the_retry_budget() {
+        let epoch: OutputEpoch = Arc::default();
+        let clients: Clients = Arc::default();
+        let calls = Arc::new(AtomicUsize::new(0));
+        let counter = Arc::clone(&calls);
+        let racing = Arc::clone(&epoch);
+        let before = epoch.load(Ordering::Acquire);
+        let first = {
+            epoch.fetch_add(1, Ordering::Release);
+            "v0".to_string()
+        };
+        let (value, _guard) = stabilize_seed_export(
+            first,
+            before,
+            move || {
+                let n = counter.fetch_add(1, Ordering::Relaxed) + 1;
+                // Every re-export races fresh output, the sustained-flood shape.
+                racing.fetch_add(1, Ordering::Release);
+                format!("v{n}")
+            },
+            &epoch,
+            &clients,
+        );
+        assert_eq!(
+            calls.load(Ordering::Relaxed),
+            (MAX_SEED_EXPORT_RETRIES + 1) as usize,
+            "three off-lock retries then the lock-held fallback"
+        );
+        assert_eq!(value, format!("v{}", MAX_SEED_EXPORT_RETRIES + 1));
+    }
 }
