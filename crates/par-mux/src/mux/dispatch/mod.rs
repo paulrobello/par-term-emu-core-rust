@@ -23,7 +23,7 @@ use crate::mux::pane::{MuxError, OutputSink, PaneFactory};
 use crate::mux::persist::{PersistState, SaveOrigin};
 use crate::mux::server::{
     broadcast_layout_change, capture_range, layout_change_notification, pane_output_sink,
-    record_and_broadcast, replay_pane_exited_lines, Clients, OutputEpoch,
+    record_and_broadcast, replay_pane_exited_lines, replay_window_add_lines, Clients, OutputEpoch,
 };
 use crate::mux::tree::{MuxTree, SpawnPlan};
 use base64::Engine as _;
@@ -60,6 +60,10 @@ mod worktrees;
 use agents::*;
 use buffers::*;
 use client::*;
+// The ordered replay re-export (server/client.rs) rebuilds the seed reply
+// through the same body builder as the dispatch handler, so the two export
+// forms cannot drift (card 01a19947).
+pub(super) use client::replay_reply_body;
 use layouts::*;
 use panes::*;
 use sessions::*;
@@ -254,9 +258,11 @@ fn route_command(
         | MuxCommand::PaneTitle { .. }
         | MuxCommand::PaneInfo { .. }
         | MuxCommand::PaneExitedReplay
+        | MuxCommand::WindowAddReplay { .. }
         | MuxCommand::ClearHistory { .. }
         | MuxCommand::ResizePane { .. }
         | MuxCommand::SwapPanes { .. }
+        | MuxCommand::SelectLayout { .. }
         | MuxCommand::BreakPane { .. }
         | MuxCommand::JoinPane { .. }
         | MuxCommand::RespawnPane { .. }) => route_pane_command(ctx, command, issuer),
@@ -421,31 +427,15 @@ fn spawn_and_wire<P: SpawnPlan>(
 /// between creation and this read degrades to the bare-id form.
 fn window_add_notification(tree: &Arc<Mutex<MuxTree>>, window_id: WindowId) -> TmuxNotification {
     let guard = tree.lock();
-    let Some(window) = guard.window(window_id) else {
-        return TmuxNotification::WindowAdd {
+    crate::mux::server::window_add_notification(&guard, window_id)
+        // A window that vanished between creation and this read degrades
+        // to the bare-id form.
+        .unwrap_or_else(|| TmuxNotification::WindowAdd {
             window_id: window_id.to_string(),
             window_layout: String::new(),
             window_visible_layout: String::new(),
             window_raw_flags: String::new(),
-        };
-    };
-    let layout = window
-        .layout
-        .render(0, 0, window.cols as usize, window.rows as usize);
-    let (visible_layout, raw_flags) = match window.zoomed {
-        Some(pane) => (
-            // The single-pane form render_node produces for a leaf.
-            format!("0000,{}x{},0,0,{}", window.cols, window.rows, pane.0),
-            "Z".to_string(),
-        ),
-        None => (layout.clone(), String::new()),
-    };
-    TmuxNotification::WindowAdd {
-        window_id: window_id.to_string(),
-        window_layout: layout,
-        window_visible_layout: visible_layout,
-        window_raw_flags: raw_flags,
-    }
+        })
 }
 
 /// What [`kill_target`] reports for a kill that landed.
@@ -458,21 +448,28 @@ struct Killed<I, T> {
     /// Whether the workspace roster (set or selection) differs from its
     /// pre-kill snapshot.
     workspaces_changed: bool,
+    /// The `(pane_id, agent)` pairs of every claimed pane under the killed
+    /// target, snapshotted before the kill — each queues an
+    /// `%agent-released` ahead of the removal geometry.
+    claims: Vec<(String, String)>,
 }
 
 /// The resolve-then-kill step shared by the kill-window, kill-session, and
 /// kill-workspace handlers: resolve the target under its own lock (released
-/// before the kill), snapshot the workspace roster, run the tree's kill, and
-/// report the roster delta. A resolve failure, then a kill failure, becomes
-/// the command's error reply; each handler keeps only its notifications.
+/// before the kill), snapshot the killed target's agent claims and the
+/// workspace roster, run the tree's kill, and report the roster delta. A
+/// resolve failure, then a kill failure, becomes the command's error reply;
+/// each handler keeps only its notifications.
 fn kill_target<I: Copy, T>(
     ctx: &Ctx<'_>,
     target: Target<I>,
     resolve: impl FnOnce(&MuxTree, Target<I>) -> Result<I, MuxError>,
     kill: impl FnOnce(&mut MuxTree, I) -> Result<T, MuxError>,
+    claims: impl FnOnce(&MuxTree, I) -> Vec<(String, String)>,
 ) -> Result<Killed<I, T>, Outcome> {
     let resolved = resolve(&ctx.tree.lock(), target);
     let id = resolved.map_err(|err| Outcome::err(ctx, &err.to_string()))?;
+    let claims = claims(&ctx.tree.lock(), id);
     let fingerprint = workspace_roster_fingerprint(ctx.tree);
     let killed = kill(&mut ctx.tree.lock(), id);
     let removed = killed.map_err(|err| Outcome::err(ctx, &err.to_string()))?;
@@ -480,7 +477,23 @@ fn kill_target<I: Copy, T>(
         id,
         removed,
         workspaces_changed: workspace_roster_changed(ctx.tree, &fingerprint),
+        claims,
     })
+}
+
+/// Queue one `%agent-released` per claimed pane — kill-pane's ghost-row
+/// rule generalized to the cascade kills: the notices queue AHEAD of the
+/// removal geometry (`%window-close` / `%sessions-changed`), so roster
+/// consumers empty the claimed row before the window/session it lived in
+/// disappears (otherwise the row ghosts in every later snapshot).
+fn notify_agent_releases(mut outcome: Outcome, claims: &[(String, String)]) -> Outcome {
+    for (pane_id, agent) in claims {
+        outcome = outcome.notifying(TmuxNotification::AgentReleased {
+            pane_id: pane_id.clone(),
+            agent: agent.clone(),
+        });
+    }
+    outcome
 }
 
 /// Queue one `%window-close` per killed window, in kill order.

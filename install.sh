@@ -295,25 +295,33 @@ install_one() { # $1=streamer|streamer-mux|mux  $2=version $3=os $4=arch $5=dest
   fi
 }
 
-main() {
-  local want_streamer=false want_mux=false want_streamer_mux=false pinned="" bin_dir="${HOME}/.cargo/bin"
+# ---------------------------------------------------------------- main phases
+#
+# main() coordinates a small set of script-level variables (the WANT_* flags,
+# PINNED_VERSION, BIN_DIR, OS/ARCH, VERSION, TMP_DIR) that each phase function
+# sets, so `die` inside a phase kills the whole script instead of a subshell.
+
+# Phase 1: parse argv into the WANT_*/PINNED_VERSION/BIN_DIR globals.
+parse_args() {
+  WANT_STREAMER=false WANT_MUX=false WANT_STREAMER_MUX=false
+  PINNED_VERSION="" BIN_DIR="${HOME}/.cargo/bin"
   while [ $# -gt 0 ]; do
     case "$1" in
-      --streamer) want_streamer=true ;;
-      --streamer-mux) want_streamer_mux=true ;;
-      --mux) want_mux=true ;;
+      --streamer) WANT_STREAMER=true ;;
+      --streamer-mux) WANT_STREAMER_MUX=true ;;
+      --mux) WANT_MUX=true ;;
       --version)
         [ $# -ge 2 ] || die "--version requires a value"
-        pinned=$2
+        PINNED_VERSION=$2
         shift
         ;;
-      --version=*) pinned=${1#--version=} ;;
+      --version=*) PINNED_VERSION=${1#--version=} ;;
       --bin-dir)
         [ $# -ge 2 ] || die "--bin-dir requires a value"
-        bin_dir=$2
+        BIN_DIR=$2
         shift
         ;;
-      --bin-dir=*) bin_dir=${1#--bin-dir=} ;;
+      --bin-dir=*) BIN_DIR=${1#--bin-dir=} ;;
       --self-test)
         if self_test; then exit 0; else exit 1; fi ;;
       -h | --help) usage; exit 0 ;;
@@ -324,12 +332,15 @@ main() {
   if $want_streamer && $want_streamer_mux; then
     die "--streamer and --streamer-mux are mutually exclusive (pick one streamer variant per run)"
   fi
-  if ! $want_streamer && ! $want_mux && ! $want_streamer_mux; then
-    want_streamer=true
-    want_mux=true
+  if ! $WANT_STREAMER && ! $WANT_MUX && ! $WANT_STREAMER_MUX; then
+    WANT_STREAMER=true
+    WANT_MUX=true
   fi
+}
 
-  local os arch version
+# Phase 2: detect the platform, normalizing uname output into OS/ARCH.
+detect_platform() {
+  local os arch
   os=$(uname -s)
   case "$os" in
     Darwin) os=darwin ;;
@@ -342,9 +353,14 @@ main() {
     x86_64) arch=x86_64 ;;
     *) die "unsupported architecture: $(uname -m); supported: arm64/aarch64, x86_64" ;;
   esac
+  OS=$os ARCH=$arch
+}
 
-  if [ -n "$pinned" ]; then
-    version=$(normalize_version "$pinned") || die "invalid --version value: $pinned (expected vX.Y.Z)"
+# Phase 3: resolve VERSION from --version or the latest GitHub release.
+resolve_version() {
+  local version
+  if [ -n "$PINNED_VERSION" ]; then
+    version=$(normalize_version "$PINNED_VERSION") || die "invalid --version value: $PINNED_VERSION (expected vX.Y.Z)"
   else
     log "resolving latest release"
     local json tag
@@ -354,35 +370,54 @@ main() {
     tag=$(printf '%s' "$json" | parse_tag_name) || die "could not parse tag_name from the release API response"
     version=$(normalize_version "$tag") || die "release tag is not a plain version: ${tag}"
   fi
+  VERSION=$version
+}
 
-  local tmp
-  tmp=$(mktemp -d) || die "could not create a temporary directory"
-  trap 'rm -rf "$tmp"' EXIT
+# Phase 4: create the download scratch directory in TMP_DIR; cleaned on exit.
+prepare_tmpdir() {
+  TMP_DIR=$(mktemp -d) || die "could not create a temporary directory"
+  trap 'rm -rf "$TMP_DIR"' EXIT
+}
 
-  if $want_streamer; then
-    install_one streamer "$version" "$os" "$arch" "$bin_dir" "$tmp"
+# Phase 5: download and install each requested binary.
+install_selected() {
+  if $WANT_STREAMER; then
+    install_one streamer "$VERSION" "$OS" "$ARCH" "$BIN_DIR" "$TMP_DIR"
   fi
-  if $want_streamer_mux; then
-    install_one streamer-mux "$version" "$os" "$arch" "$bin_dir" "$tmp"
+  if $WANT_STREAMER_MUX; then
+    install_one streamer-mux "$VERSION" "$OS" "$ARCH" "$BIN_DIR" "$TMP_DIR"
   fi
-  if $want_mux; then
-    install_one mux "$version" "$os" "$arch" "$bin_dir" "$tmp"
+  if $WANT_MUX; then
+    install_one mux "$VERSION" "$OS" "$ARCH" "$BIN_DIR" "$TMP_DIR"
   fi
+}
 
+# Phase 6: PATH warning and the post-install summary.
+finish_report() {
   case ":${PATH}:" in
-    *":${bin_dir}:"*) ;;
-    *) log "warning: ${bin_dir} is not on your PATH; add it to your shell profile" ;;
+    *":${BIN_DIR}:"*) ;;
+    *) log "warning: ${BIN_DIR} is not on your PATH; add it to your shell profile" ;;
   esac
 
   log ""
-  log "done (v${version}). Next steps:"
-  if $want_streamer || $want_streamer_mux; then
-    log "  par-term-streamer: ${bin_dir}/par-term-streamer"
+  log "done (v${VERSION}). Next steps:"
+  if $WANT_STREAMER || $WANT_STREAMER_MUX; then
+    log "  par-term-streamer: ${BIN_DIR}/par-term-streamer"
     log "    serve the web terminal:  par-term-streamer --port 8099  (then open http://127.0.0.1:8099)"
   fi
-  if $want_mux; then
-    log "  par-mux: ${bin_dir}/par-mux  (running 'par-mux' starts the daemon)"
+  if $WANT_MUX; then
+    log "  par-mux: ${BIN_DIR}/par-mux  (running 'par-mux' starts the daemon)"
   fi
+}
+
+# Thin coordinator: run the phases in order.
+main() {
+  parse_args "$@"
+  detect_platform
+  resolve_version
+  prepare_tmpdir
+  install_selected
+  finish_report
 }
 
 main "$@"

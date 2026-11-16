@@ -218,10 +218,10 @@ fn char_selection_text_slices_rows_in_reading_order() {
     );
 }
 
-/// The copy-mode extension (the TUI audit's R1): `v` anchors the line
-/// selection at the viewport top, scrolling extends it, `y` copies the
-/// selected lines as an OSC 52 write in the frame's outbox, and `/`
-/// searches the pane's text with the match landing in view.
+/// Copy mode (the TUI audit's R1, now the full vi form): `V` anchors a
+/// line selection the motions extend, `y` copies the selected lines as
+/// an OSC 52 write in the frame's outbox and exits, and `/` searches
+/// the pane's text with n walking the committed matches.
 #[test]
 fn copy_mode_selects_copies_and_searches() {
     let (rx, mut conn, mut session) = two_pane_session("copymode", FakeScript::default());
@@ -233,23 +233,27 @@ fn copy_mode_selects_copies_and_searches() {
             .feed_output(1, format!("line {i:03} marker\n").as_bytes());
     }
     session.renderer.focus(1);
-    // prefix [ enters the scroll viewport.
+    // prefix [ enters copy mode; a yank does not exit here.
     session.route_stdin_bytes(&mut conn, &[0x02, b'[']);
     drained(&rx);
-    // `v` anchors at the viewport top; scrolling extends the head.
-    session.toggle_line_selection(1);
+    session.copy_mode_auto_exit = false;
+    // gg to the buffer top first (entry lands at the pane's live
+    // cursor, the buffer's bottom row), then `V` anchors a line
+    // selection the motions extend.
+    session.route_plain(b"g", &mut conn);
+    session.route_plain(b"g", &mut conn);
+    session.route_plain(b"V", &mut conn);
     let Selection::Lines { pane, a, b } = session.renderer.selection.expect("selection up") else {
-        panic!("copy mode selects whole lines");
+        panic!("line mode paints whole lines");
     };
-    assert_eq!((pane, a, b), (1, a, a), "the anchor starts the span");
-    session.renderer.scroll_viewport(1, 6);
-    session.update_selection_head(1);
+    assert_eq!((pane, a, b), (1, 0, 0), "the anchor is the buffer top");
+    session.route_plain(b"jjj", &mut conn);
     let Selection::Lines { a, b, .. } = session.renderer.selection.expect("still up") else {
         panic!("still a line selection");
     };
-    assert!(b > a, "the head moved past the anchor: {a}..{b}");
+    assert_eq!((a, b), (0, 3), "three j extend the head");
     // `y` copies: an OSC 52 write rides the frame's outbox.
-    session.copy_selection();
+    session.route_plain(b"y", &mut conn);
     let osc = session
         .notify
         .outbox
@@ -262,19 +266,26 @@ fn copy_mode_selects_copies_and_searches() {
         session.notify.outbox
     );
     assert!(session.renderer.selection.is_none(), "copied clears");
-    // `/` searches; Enter commits; the match lands in the viewport.
-    session.begin_scroll_search();
-    for byte in b"line 042" {
-        assert!(session.search_typing_byte(*byte), "typing continues");
-    }
-    assert!(!session.search_typing_byte(b'\r'), "Enter closes the line");
+    assert!(session.is_copy(), "auto-exit off: the mode stays up");
+    // `/` searches; Enter commits; n walks the committed matches.
+    session.route_plain(b"/line 042\r", &mut conn);
+    assert!(
+        !session.copy_state().is_searching,
+        "Enter committed the query"
+    );
     assert!(
         !session.scroll_matches.is_empty(),
         "the query matched the fed scrollback"
     );
-    session.scroll_search(1);
-    let offset = session.renderer.scroll_offset_of(1);
-    assert!(offset > 0, "the viewport landed on the match");
+    session.route_plain(b"n", &mut conn);
+    let landed = session.copy_state().cursor_absolute_line;
+    let landed_text = session.copy_line_text(landed);
+    assert!(
+        landed_text.to_lowercase().contains("line 042"),
+        "n landed on a match: line {landed} {landed_text:?}"
+    );
+    session.route_plain(b"q", &mut conn);
+    assert!(!session.is_copy(), "q leaves");
     drained(&rx);
 }
 
@@ -356,6 +367,32 @@ fn tab_wheel_scrolls_an_overflowing_strip() {
         session.chrome.tab_strip.hit_test(0),
         before,
         "the offset clamps back to 0"
+    );
+}
+
+/// A width change rebuilds the strip's buffers for the new cols, and
+/// the rebuild must carry the configured width bounds across
+/// (`palette` already rides it): without that, `tab-width-min`/`-max`
+/// silently reset to 0 on every resize and on the geometry re-set a
+/// daemon restart's re-land performs — the settings dialog reads the
+/// live strip, so the floor vanished until the value was re-entered.
+#[test]
+fn width_change_keeps_tab_bounds() {
+    let mut session = WindowSession::new(80, 24);
+    session.chrome.tab_strip.bounds = crate::mux::attach::tabs::TabBounds { min: 12, max: 30 };
+    session.draw_tab_strip();
+    assert_eq!(
+        session.chrome.tab_strip.bounds,
+        crate::mux::attach::tabs::TabBounds { min: 12, max: 30 },
+        "a same-width draw leaves the bounds in place"
+    );
+    // A width change takes the rebuild branch.
+    session.geometry.host_cols = 100;
+    session.draw_tab_strip();
+    assert_eq!(
+        session.chrome.tab_strip.bounds,
+        crate::mux::attach::tabs::TabBounds { min: 12, max: 30 },
+        "the rebuild preserves the configured tab width bounds"
     );
 }
 
@@ -892,6 +929,7 @@ fn text_selection_release_under_a_full_pointer_modal_ends_the_selection() {
 /// keep arriving faster, and the release flushes what is left so the
 /// drag lands exactly where it is let go.
 #[test]
+#[ignore = "load-sensitive: timing assertions; run via make test-rust-sensitive"]
 fn drag_resizes_throttle_and_the_release_flushes_the_remainder() {
     let (rx, mut conn) = recording_conn("drag-throttle");
     let mut session = WindowSession::new(80, 25);
@@ -1110,10 +1148,11 @@ fn help_chord_opens_filters_and_dismissal_restores_the_frame() {
     assert_eq!(left, "LEFT", "the prior frame's cells restore");
 }
 
-/// The picker chord: prefix w opens the modal (sessions with nested
-/// windows, the current one emphasized), j moves the cursor, Enter
-/// activates — the select+resync contract's select-window rides the
-/// wire — and `q` dismisses without selecting.
+/// The picker chord: prefix w opens the modal live-filtered (every
+/// session's windows as one flat list, the shown window emphasized,
+/// no session rows), Down moves the cursor without leaving the
+/// filter, Enter activates — the select+resync contract's
+/// select-window rides the wire — and esc dismisses without selecting.
 #[test]
 fn picker_chord_opens_navigates_and_selects_with_resync() {
     let replies = std::collections::HashMap::from([
@@ -1147,36 +1186,46 @@ fn picker_chord_opens_navigates_and_selects_with_resync() {
     assert_eq!(overlay, crate::mux::attach::PICKER_OVERLAY_TITLE);
     let joined = overlay_text(&session).join("\n");
     assert!(
-        joined.contains(">$0: work"),
-        "the current session is >-marked: {joined}"
+        joined.contains("▸ >  @0: main"),
+        "the shown window is selected and >-marked: {joined}"
+    );
+    assert!(
+        !joined.contains("$0:") && !joined.contains("$1:"),
+        "no session rows: {joined}"
     );
     assert!(
         joined.contains("@1: vim *"),
         "the active window carries *: {joined}"
     );
 
-    // j j moves the cursor to the second window row; Enter activates
-    // — the wire sees the switch-client landing and the re-seed's
-    // queries (the resync).
-    session.picker_byte(&mut conn, b'j');
-    session.picker_byte(&mut conn, b'j');
+    // Down moves the cursor to the second window row without leaving
+    // the live filter; Enter activates — the wire sees the
+    // switch-client landing and the re-seed's queries (the resync).
+    session.picker_key(
+        &mut conn,
+        &par_term_emu_core::keyboard::TermKeyEvent::functional(
+            par_term_emu_core::keyboard::TermKey::Down,
+            0,
+        ),
+    );
     session.picker_byte(&mut conn, b'\r');
     settle(&mut session, &mut conn);
     assert!(!session.is_picker(), "activation dismisses the modal");
     assert_eq!(
         wait_recorded(&rx, "switch-client"),
         "switch-client -t @1",
-        "the session header's active window is the landing target"
+        "the picked window row is the landing target"
     );
     let _ = wait_recorded(&rx, "list-panes");
     let _ = wait_recorded(&rx, "refresh-client");
     assert_eq!(session.window, "@1", "the view re-seeded onto @1");
 
-    // Re-open and dismiss with q: no select goes out.
+    // Re-open (the filter live again) and dismiss with esc: no select
+    // goes out.
     assert!(!session.route_plain(&[crate::mux::attach::C_B, b'w'], &mut conn,));
     settle(&mut session, &mut conn);
     assert!(session.is_picker());
-    assert!(!session.picker_byte(&mut conn, b'q'));
+    assert!(!session.picker_byte(&mut conn, 0x1b));
     assert!(!session.is_picker());
 }
 
@@ -2963,7 +3012,7 @@ fn settings_choice_rows_cycle_with_the_arrows() {
     // On the general tab's `resize step` (a Number row) ← keeps
     // switching sections instead of opening the prompt.
     session.route_stdin_bytes(&mut conn, b"h");
-    session.route_stdin_bytes(&mut conn, b"jjj");
+    session.route_stdin_bytes(&mut conn, b"jjjj");
     session.route_key(&mut conn, &TermKeyEvent::functional(TermKey::Right, 0));
     settle(&mut session, &mut conn);
     let Modal::Settings(state) = &session.modal else {
@@ -2997,9 +3046,9 @@ fn settings_prompt_rows_edit_numbers_hex_and_chords() {
     std::fs::write(&path, "[client]\n").unwrap();
     session.settings_path = Some(path.clone());
     session.enter_settings();
-    // General tab (two Tabs), `resize step` (row 3): Enter opens the
+    // General tab (two Tabs), `resize step` (row 4): Enter opens the
     // prompt seeded with 1.
-    session.route_stdin_bytes(&mut conn, b"\t\tjjj\r");
+    session.route_stdin_bytes(&mut conn, b"\t\tjjjj\r");
     let Modal::Prompt(prompt) = &session.modal else {
         panic!("prompt opened: {:?}", session.modal)
     };
@@ -3057,7 +3106,7 @@ fn settings_prompt_rows_edit_numbers_hex_and_chords() {
     settle(&mut session, &mut conn);
     let written = std::fs::read_to_string(&path).unwrap();
     assert!(written.contains("prefix = \"C-a\""), "{written}");
-    assert_eq!(session.prefix, 0x01, "rebound live");
+    assert_eq!(session.input_route.prefix, 0x01, "rebound live");
     // Escape from a prompt returns to the dialog, not out of it.
     session.route_stdin_bytes(&mut conn, b"\r\x1b");
     assert!(matches!(session.modal, Modal::Settings(_)));
@@ -3083,10 +3132,10 @@ fn settings_keys_section_scrolls_to_every_row() {
     assert_eq!(state.selected, 0);
     assert_eq!(state.top, 0);
     // Down to the last row: the window follows the selection (the keys
-    // section holds every management chord plus prefix and reload — 29
+    // section holds every management chord plus prefix and reload — 35
     // rows with break-pane, join-pane, the move-tab and tab-strip
-    // chords, and notify-jump aboard).
-    session.route_stdin_bytes(&mut conn, &[b'j'; 29][..]);
+    // chords, notify-jump, and the five layout chords aboard).
+    session.route_stdin_bytes(&mut conn, &[b'j'; 34][..]);
     let Modal::Settings(state) = &session.modal else {
         panic!("open")
     };
@@ -3099,7 +3148,7 @@ fn settings_keys_section_scrolls_to_every_row() {
     assert!(last_row.contains("respawn dead pane"), "{last_row}");
     assert!(last_row.trim_end().ends_with(" r"), "{last_row}");
     // Up to the first: the window snaps back.
-    session.route_stdin_bytes(&mut conn, &[b'k'; 29][..]);
+    session.route_stdin_bytes(&mut conn, &[b'k'; 34][..]);
     let Modal::Settings(state) = &session.modal else {
         panic!("open")
     };
@@ -3300,7 +3349,7 @@ fn split_paste_across_pump_ticks_is_opaque_and_rewrapped() {
     assert!(!session.route_stdin_bytes(&mut conn, b"\x02xcd\x1b[201~"));
     settle(&mut session, &mut conn);
     assert!(
-        !session.prefix_pending,
+        !session.input_route.prefix_pending,
         "a pasted prefix byte never arms the prefix"
     );
     let lines = drained(&rx);
@@ -3354,10 +3403,10 @@ fn paste_cancels_a_pending_prefix() {
     let (rx, mut conn, mut session) = paste_session("paste-prefix");
     session.route_stdin_bytes(&mut conn, &[crate::mux::attach::C_B]);
     settle(&mut session, &mut conn);
-    assert!(session.prefix_pending);
+    assert!(session.input_route.prefix_pending);
     session.route_stdin_bytes(&mut conn, b"\x1b[200~xd\x1b[201~");
     settle(&mut session, &mut conn);
-    assert!(!session.prefix_pending);
+    assert!(!session.input_route.prefix_pending);
     let lines = drained(&rx);
     assert_eq!(lines, vec![hex_wire("%1", b"xd")], "{lines:?}");
 }
@@ -3491,7 +3540,7 @@ fn border_colors_survive_a_reseed_rebuild() {
     );
     session.set_pane_borders(true);
     session.set_border_colors(Some(active), Some(plain));
-    session.reseed_window(&mut conn, "@0");
+    session.reseed_window(&mut conn, "@0", false);
     assert_eq!(session.renderer.layout().len(), 2, "the reseed re-laid");
     assert_ring_colors(&mut session, 0, 80, active, plain);
 }
@@ -3633,7 +3682,7 @@ fn resize_keeps_border_colors() {
         .expect("resize");
     assert_eq!(session.renderer.frame_size(), (100, 23));
     assert_ring_colors(&mut session, 0, 100, active, plain);
-    session.reseed_window(&mut conn, "@0");
+    session.reseed_window(&mut conn, "@0", false);
     assert_eq!(session.renderer.layout().len(), 2, "the reseed re-laid");
     assert_ring_colors(&mut session, 0, 100, active, plain);
 }
@@ -3719,7 +3768,7 @@ fn reseed_to_another_window_replays_every_pane() {
         },
     );
     session.renderer.set_user_title(1, "old window title");
-    session.reseed_window(&mut conn, "@1");
+    session.reseed_window(&mut conn, "@1", false);
     let lines = drained(&rx);
     assert_eq!(
         replay_lines(&lines),
@@ -3812,7 +3861,10 @@ fn reland_repaints_the_cells_the_new_view_leaves_blank() {
     // Re-land on @1, whose panes are nearly blank: the %layout-change
     // rides the size report, so the reseed installs the new layout
     // synchronously.
-    assert!(session.reseed_window(&mut conn, "@1"), "the reseed landed");
+    assert!(
+        session.reseed_window(&mut conn, "@1", false),
+        "the reseed landed"
+    );
     session.renderer.feed_output(5, b"$");
     session.renderer.feed_output(6, b"$");
     let mut view_b = RecordingSink::default();
@@ -3861,7 +3913,10 @@ fn reland_via_lagging_layout_leaves_no_stale_fragments() {
 
     // The reseed's drain misses the broadcast (nothing notify-scripted);
     // the layout arrives afterwards and parks for the pump.
-    assert!(session.reseed_window(&mut conn, "@1"), "the reseed landed");
+    assert!(
+        session.reseed_window(&mut conn, "@1", false),
+        "the reseed landed"
+    );
     session.on_layout_change(layout, layout, "*");
     session
         .apply_pending(&mut conn, &mut RecordingSink::default())
@@ -3930,7 +3985,10 @@ fn reseed_window_deletes_the_previous_views_kitty_graphics() {
         String::from_utf8_lossy(&view_a.raw)
     );
 
-    assert!(session.reseed_window(&mut conn, "@1"), "the reseed landed");
+    assert!(
+        session.reseed_window(&mut conn, "@1", false),
+        "the reseed landed"
+    );
     let mut view_b = RecordingSink::default();
     session.frame(&mut view_b);
     let drawn = String::from_utf8_lossy(&view_b.raw);
@@ -3977,7 +4035,10 @@ fn reseed_window_deletes_the_kitty_graphics_even_when_the_layout_lags() {
     );
 
     // The reseed's drain misses the broadcast; the old layout stands.
-    assert!(session.reseed_window(&mut conn, "@1"), "the reseed landed");
+    assert!(
+        session.reseed_window(&mut conn, "@1", false),
+        "the reseed landed"
+    );
     let mut interim = RecordingSink::default();
     session.frame(&mut interim);
     assert!(
@@ -4125,7 +4186,7 @@ fn status_refresh_round_trips_are_bounded() {
     );
     assert!(sent.len() <= 6);
     assert_eq!(session.status.session_id.as_deref(), Some("$4"));
-    assert!(!session.status_dirty);
+    assert!(!session.status_inflight.dirty);
 }
 
 /// A daemon that stops answering costs the pump at most the status
@@ -4158,7 +4219,7 @@ fn status_refresh_times_out_and_keeps_replies_aligned() {
         "bounded by the status timeout: {took:?}"
     );
     assert!(
-        !session.status_dirty,
+        !session.status_inflight.dirty,
         "a timeout leaves the re-query to the next poll or event — an immediate \
          re-issue queues behind the same slow reply, one 500 ms bound per pass"
     );
@@ -4207,8 +4268,8 @@ fn slow_switch_returns_at_once_and_keeps_replies_aligned() {
     assert_eq!(reply.body, vec!["%1 @0 40x24".to_string()]);
 }
 
-/// ENH-049: `focus_pane` writes the select and the lookup back to back; a
-/// slow select delays neither the call nor the lookup's write.
+/// ENH-049: `focus_pane` writes the select and the merged switch back to
+/// back; a slow select delays neither the call nor the switch's write.
 #[test]
 fn focus_pane_returns_before_a_slow_select_answers() {
     let mut script = FakeScript::default();
@@ -4228,7 +4289,7 @@ fn focus_pane_returns_before_a_slow_select_answers() {
     settle(&mut session, &mut conn);
     assert_eq!(
         drained(&rx),
-        vec!["select-pane -t %7", "pane-info -t %7"],
+        vec!["select-pane -t %7", "switch-client -t %7"],
         "pipelined in order"
     );
     assert_eq!(session.chrome.flash_text(), None);
@@ -4323,6 +4384,8 @@ fn roster_entry(pane: u32, agent: &str, state: &str, workspace: Option<&str>) ->
         agent: agent.to_string(),
         state: state.to_string(),
         workspace: workspace.map(str::to_string),
+        session: None,
+        window: None,
         project: None,
         message: None,
     }
@@ -4692,7 +4755,7 @@ fn agent_insert_marks_status_dirty_and_rows_trail_ungrouped() {
     let (rx, mut conn) = fake_daemon("snapinsert", script);
     let mut session = snapshot_session();
     session.refresh_status_facts(&mut conn).expect("seed");
-    session.status_dirty = false;
+    session.status_inflight.dirty = false;
     drained(&rx);
 
     session.handle_event(TmuxNotification::AgentStateChanged {
@@ -4703,7 +4766,7 @@ fn agent_insert_marks_status_dirty_and_rows_trail_ungrouped() {
         ws: String::new(),
         msg: String::new(),
     });
-    assert!(session.status_dirty);
+    assert!(session.status_inflight.dirty);
     let sections = session.renderer.sidebar_sections.clone().expect("sections");
     assert_eq!(
         sections[1].rows,
@@ -4775,7 +4838,7 @@ fn snapshot_refresh_is_one_round_trip() {
     );
     let text: String = session
         .status
-        .compose(200, None, false)
+        .compose(200, None, None, false)
         .iter()
         .map(|s| s.text.as_str())
         .collect();
@@ -4982,7 +5045,7 @@ fn a_refresh_that_already_saw_the_new_state_still_lets_its_push_toast() {
         .apply_layout(parse_layout("0000,90x24,0,0,9").expect("parses"));
     drained(&rx);
 
-    session.status_dirty = true;
+    session.status_inflight.dirty = true;
     assert_eq!(session.refresh_status(&mut conn), EventOutcome::Continue);
     settle(&mut session, &mut conn);
     assert_eq!(
@@ -5018,7 +5081,7 @@ fn status_snapshot_issues_without_blocking_and_applies_on_dispatch() {
     let mut session = snapshot_session();
     drained(&rx);
 
-    session.status_dirty = true;
+    session.status_inflight.dirty = true;
     let started = std::time::Instant::now();
     assert_eq!(session.refresh_status(&mut conn), EventOutcome::Continue);
     assert!(
@@ -5026,9 +5089,12 @@ fn status_snapshot_issues_without_blocking_and_applies_on_dispatch() {
         "the snapshot writes without waiting: {:?}",
         started.elapsed()
     );
-    assert!(!session.status_dirty, "the issue consumed the dirty mark");
     assert!(
-        session.status_snapshot_inflight.is_some(),
+        !session.status_inflight.dirty,
+        "the issue consumed the dirty mark"
+    );
+    assert!(
+        session.status_inflight.flight.is_some(),
         "the reply is owed: one snapshot in flight"
     );
     wait_recorded(&rx, "client-snapshot");
@@ -5044,7 +5110,7 @@ fn status_snapshot_issues_without_blocking_and_applies_on_dispatch() {
         "the reply's roster committed"
     );
     assert!(
-        session.status_snapshot_inflight.is_none(),
+        session.status_inflight.flight.is_none(),
         "the application releases the in-flight slot"
     );
     assert!(
@@ -5055,7 +5121,7 @@ fn status_snapshot_issues_without_blocking_and_applies_on_dispatch() {
 
 /// The nothing-left-to-show `End` rides the continuation: the `%error`
 /// snapshot reply lands `SessionGone`, the landing resolves nothing,
-/// and the continuation raises the pump-visible `status_end` that the
+/// and the continuation raises the pump-visible `status_inflight.end` that the
 /// status step checks on that tick.
 #[test]
 fn status_snapshot_end_lands_through_the_continuation() {
@@ -5065,12 +5131,15 @@ fn status_snapshot_end_lands_through_the_continuation() {
     let mut session = snapshot_session();
     drained(&rx);
 
-    session.status_dirty = true;
+    session.status_inflight.dirty = true;
     assert_eq!(session.refresh_status(&mut conn), EventOutcome::Continue);
-    assert!(!session.status_end, "nothing ends before the reply");
+    assert!(
+        !session.status_inflight.end,
+        "nothing ends before the reply"
+    );
     settle(&mut session, &mut conn);
     assert!(
-        session.status_end,
+        session.status_inflight.end,
         "the SessionGone landing found nothing left to show"
     );
 }
@@ -5088,13 +5157,16 @@ fn a_reseed_issues_its_snapshot_without_blocking_and_applies_on_dispatch() {
     let mut session = snapshot_session();
     drained(&rx);
 
-    session.reseed_window(&mut conn, "@0");
+    session.reseed_window(&mut conn, "@0", false);
     assert_eq!(session.window, "@0", "the view re-seeded onto @0");
     assert!(
-        session.status_snapshot_inflight.is_some(),
+        session.status_inflight.flight.is_some(),
         "the snapshot rides the machinery, not an inline round trip"
     );
-    assert!(!session.status_dirty, "the issue consumed the dirty mark");
+    assert!(
+        !session.status_inflight.dirty,
+        "the issue consumed the dirty mark"
+    );
     let wire = received_within_300ms(&rx);
     assert_eq!(
         wire.iter()
@@ -5106,7 +5178,7 @@ fn a_reseed_issues_its_snapshot_without_blocking_and_applies_on_dispatch() {
 
     settle(&mut session, &mut conn);
     assert!(
-        session.status_snapshot_inflight.is_none(),
+        session.status_inflight.flight.is_none(),
         "the application releases the in-flight slot"
     );
     assert_eq!(
@@ -5166,7 +5238,7 @@ fn a_gone_window_lands_on_the_cached_sibling_without_queries() {
     let (rx, mut conn, mut session) = cached_landing_fixture("cachedlanding", &[]);
     drained(&rx);
 
-    session.status_dirty = true;
+    session.status_inflight.dirty = true;
     assert_eq!(session.refresh_status(&mut conn), EventOutcome::Continue);
     settle(&mut session, &mut conn);
     let wire = drained(&rx);
@@ -5186,7 +5258,7 @@ fn a_gone_window_lands_on_the_cached_sibling_without_queries() {
         "the view landed on the cached sibling"
     );
     assert!(
-        !session.status_end,
+        !session.status_inflight.end,
         "a survivor existed, so the view stands"
     );
 }
@@ -5208,7 +5280,7 @@ fn a_dead_cached_landing_falls_back_to_the_interactive_ladder() {
     );
     drained(&rx);
 
-    session.status_dirty = true;
+    session.status_inflight.dirty = true;
     assert_eq!(session.refresh_status(&mut conn), EventOutcome::Continue);
     settle(&mut session, &mut conn);
     let wire = drained(&rx);
@@ -5222,7 +5294,10 @@ fn a_dead_cached_landing_falls_back_to_the_interactive_ladder() {
             "the ladder ran: {query} was asked"
         );
     }
-    assert!(session.status_end, "the ladder found nothing left to show");
+    assert!(
+        session.status_inflight.end,
+        "the ladder found nothing left to show"
+    );
 }
 
 /// The storm rule survives the async path: a snapshot still owed past
@@ -5240,17 +5315,20 @@ fn status_snapshot_timeout_abandons_without_re_issuing() {
     let mut session = snapshot_session();
     drained(&rx);
 
-    session.status_dirty = true;
+    session.status_inflight.dirty = true;
     assert_eq!(session.refresh_status(&mut conn), EventOutcome::Continue);
     wait_recorded(&rx, "client-snapshot");
 
     // Mid-flight dirty mark: nothing re-issues while the reply is owed,
-    // and the mark survives for a re-issue once the reply applies.
-    std::thread::sleep(std::time::Duration::from_millis(200));
-    session.status_dirty = true;
+    // and the mark survives for a re-issue once the reply applies. No
+    // sleep gates the leg: only dispatch_replies applies the reply and
+    // clears the slot, and none has run — the flag itself proves the
+    // refresh cannot reach the abandon branch.
+    assert!(session.status_inflight.flight.is_some());
+    session.status_inflight.dirty = true;
     assert_eq!(session.refresh_status(&mut conn), EventOutcome::Continue);
     assert!(
-        session.status_dirty,
+        session.status_inflight.dirty,
         "the mid-flight mark survives for the post-reply re-issue"
     );
     assert!(drained(&rx).is_empty(), "no re-issue while in flight");
@@ -5258,10 +5336,14 @@ fn status_snapshot_timeout_abandons_without_re_issuing() {
     // Past the bound: the abandon clears the in-flight slot and the
     // dirty mark — nothing re-queues behind the wedged reply (the
     // storm rule; the next poll tick or event re-queries).
-    std::thread::sleep(std::time::Duration::from_millis(400));
+    let flight = session
+        .status_inflight
+        .flight
+        .expect("the reply is still owed");
+    session.status_inflight.flight = Some(flight.backdated(status::STATUS_TIMEOUT));
     assert_eq!(session.refresh_status(&mut conn), EventOutcome::Continue);
     assert!(
-        !session.status_dirty,
+        !session.status_inflight.dirty,
         "the abandon leaves the re-query to the next poll or event"
     );
     assert!(drained(&rx).is_empty(), "no re-issue after the abandon");
@@ -5480,7 +5562,7 @@ fn a_push_handled_mid_seed_stays_out_of_the_baseline_and_its_rebroadcast_toasts(
     // while it is in flight. The fake writes the push ahead of the
     // reply block; the bounded drain waits out that write.
     session.seed_status_snapshot(&mut conn, Vec::new());
-    assert!(session.status_snapshot_inflight.is_some());
+    assert!(session.status_inflight.flight.is_some());
     let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
     while session.renderer.toast.is_none() {
         assert!(
@@ -5504,7 +5586,7 @@ fn a_push_handled_mid_seed_stays_out_of_the_baseline_and_its_rebroadcast_toasts(
     // The reply's continuation adopts the baseline; the raced pane
     // stays out of it.
     settle(&mut session, &mut conn);
-    assert!(session.status_snapshot_inflight.is_none());
+    assert!(session.status_inflight.flight.is_none());
     let baseline = session
         .notify
         .transitions
@@ -5519,7 +5601,7 @@ fn a_push_handled_mid_seed_stays_out_of_the_baseline_and_its_rebroadcast_toasts(
     // applied before it wrote the snapshot) toasts: there is no
     // push-stream record to suppress it on. It rides the pump's own
     // refresh (the way a late registration replay arrives).
-    session.status_dirty = true;
+    session.status_inflight.dirty = true;
     assert_eq!(session.refresh_status(&mut conn), EventOutcome::Continue);
     let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
     while session.notify.outbox.len() < 2 {
@@ -5760,7 +5842,10 @@ fn notify_jump_chord_focuses_the_last_notified_pane() {
     session.notify.states = vec!["blocked".to_string()];
     session.refresh_status_facts(&mut conn).expect("seed");
     drained(&rx);
-    assert_eq!(session.management.notify_jump, b'j');
+    assert_eq!(
+        session.management.notify_jump,
+        crate::mux::config::ChordKey::plain(b'j')
+    );
     // Nothing delivered yet: a flash, no command.
     chord(&mut session, &mut conn, b'j');
     assert_eq!(
@@ -5998,7 +6083,7 @@ fn agent_event_patches_without_a_query() {
     let (rx, mut conn) = fake_daemon("snapagent", snapshot_script());
     let mut session = snapshot_session();
     session.refresh_status_facts(&mut conn).expect("seed");
-    session.status_dirty = false;
+    session.status_inflight.dirty = false;
     drained(&rx);
 
     let rows = |session: &WindowSession| -> Vec<SidebarRow> {
@@ -6018,7 +6103,7 @@ fn agent_event_patches_without_a_query() {
         ws: "+1".to_string(),
         msg: String::new(),
     });
-    assert!(!session.status_dirty);
+    assert!(!session.status_inflight.dirty);
     assert!(
         rows(&session).contains(&arow(3, Some("side"), "kimi", "working", false)),
         "the ws token groups the inserted row under its workspace: {:?}",
@@ -6036,7 +6121,7 @@ fn agent_event_patches_without_a_query() {
         pane_id: "%3".to_string(),
         agent: "kimi".to_string(),
     });
-    assert!(!session.status_dirty);
+    assert!(!session.status_inflight.dirty);
     assert!(
         !rows(&session)
             .iter()
@@ -6052,12 +6137,12 @@ fn agent_event_patches_without_a_query() {
 #[test]
 fn telemetry_event_does_not_mark_status_dirty() {
     let mut session = snapshot_session();
-    session.status_dirty = false;
+    session.status_inflight.dirty = false;
     session.handle_event(TmuxNotification::AgentTelemetryChanged {
         pane_id: "%1".to_string(),
         agent: "claude".to_string(),
     });
-    assert!(!session.status_dirty);
+    assert!(!session.status_inflight.dirty);
 }
 
 /// `%window-renamed` and a set `%pane-title-changed` patch the tab and
@@ -6067,7 +6152,7 @@ fn rename_and_title_events_patch_without_a_query() {
     let (rx, mut conn) = fake_daemon("snaprename", snapshot_script());
     let mut session = snapshot_session();
     session.refresh_status_facts(&mut conn).expect("seed");
-    session.status_dirty = false;
+    session.status_inflight.dirty = false;
     drained(&rx);
 
     session.handle_event(TmuxNotification::WindowRenamed {
@@ -6078,7 +6163,7 @@ fn rename_and_title_events_patch_without_a_query() {
         pane_id: "%1".to_string(),
         title: "deploy".to_string(),
     });
-    assert!(!session.status_dirty);
+    assert!(!session.status_inflight.dirty);
     assert_eq!(session.status.windows()[1].1, "tail");
     assert_eq!(session.status.pane_title(), "deploy");
     assert_eq!(session.renderer.border_label(1), "deploy");
@@ -6157,9 +6242,10 @@ fn exit_drained_in_a_resize_parks_pending_end() {
     );
 }
 
-/// A `pane:N` agent-row click on a pane in ANOTHER window: select the
-/// pane, look up its window, then land there (switch-client) and
-/// re-seed onto it (QA-245).
+/// A `pane:N` agent-row click on a pane in ANOTHER window: one merged
+/// round trip — `switch-client -t %pane` resolves the pane's window,
+/// switches, and replies the landed window, which drives the re-seed
+/// straight from the reply (QA-245, card 01a1995a6).
 #[test]
 fn focus_pane_on_another_window_selects_looks_up_and_lands() {
     let layout = "0000,80x23,0,0{40x23,0,0,5,40x23,40,0,6}";
@@ -6169,7 +6255,7 @@ fn focus_pane_on_another_window_selects_looks_up_and_lands() {
         format!("%layout-change @1 {layout} {layout} *"),
     );
     let mut replies = std::collections::HashMap::new();
-    replies.insert("pane-info -t %5".to_string(), "%5 @1 40x23".to_string());
+    replies.insert("switch-client -t %5".to_string(), "@1".to_string());
     reseed_replies(&mut replies, "@0 main\n@1 * other", "@1", "%5\n%6");
     let (rx, mut conn, mut session) = two_pane_session(
         "qa245-otherwin",
@@ -6183,12 +6269,8 @@ fn focus_pane_on_another_window_selects_looks_up_and_lands() {
     settle(&mut session, &mut conn);
     let lines = drained(&rx);
     assert_eq!(
-        &lines[..3],
-        &[
-            "select-pane -t %5",
-            "pane-info -t %5",
-            "switch-client -t @1"
-        ],
+        &lines[..2],
+        &["select-pane -t %5", "switch-client -t %5"],
         "wire: {lines:?}"
     );
     assert_eq!(session.window, "@1", "the view landed on the pane's window");
@@ -6210,7 +6292,7 @@ fn focus_pane_on_another_window_lands_focused_on_the_clicked_pane() {
         format!("%layout-change @1 {layout} {layout} *"),
     );
     let mut replies = std::collections::HashMap::new();
-    replies.insert("pane-info -t %6".to_string(), "%6 @1 40x23".to_string());
+    replies.insert("switch-client -t %6".to_string(), "@1".to_string());
     reseed_replies(&mut replies, "@0 main\n@1 * other", "@1", "%5\n%6");
     let (rx, mut conn, mut session) = two_pane_session(
         "roster-second-pane",
@@ -6224,12 +6306,8 @@ fn focus_pane_on_another_window_lands_focused_on_the_clicked_pane() {
     settle(&mut session, &mut conn);
     let lines = drained(&rx);
     assert_eq!(
-        &lines[..3],
-        &[
-            "select-pane -t %6",
-            "pane-info -t %6",
-            "switch-client -t @1"
-        ],
+        &lines[..2],
+        &["select-pane -t %6", "switch-client -t %6"],
         "wire: {lines:?}"
     );
     assert_eq!(session.window, "@1", "the view landed on the pane's window");
@@ -6240,12 +6318,184 @@ fn focus_pane_on_another_window_lands_focused_on_the_clicked_pane() {
     );
 }
 
+/// The roster-click follow race (card 01a1989b5): the
+/// `%session-window-changed` the landing's own `switch-client`
+/// broadcasts parks a shared-selection follow; when the pump's
+/// `apply_pending` consumes it BEFORE the `switch-client` reply is
+/// dispatched (the event beats the reply to the client under load —
+/// the daemon emits broadcasts before the reply), the follow re-seed
+/// lands the window's FIRST pane (`focused_pane_or_first`, focus=None)
+/// and the reply's clicked-pane landing is then nav-vetoed
+/// (`self.window` already moved). The in-flight landing suppresses the
+/// follow aimed at its own window, so the reply's landing carries the
+/// clicked pane through.
+#[test]
+fn roster_click_landing_survives_the_parked_session_window_follow() {
+    let layout = "0000,80x23,0,0{40x23,0,0,5,40x23,40,0,6}";
+    let mut notify = std::collections::HashMap::new();
+    // The target window's `%layout-change`: the follow re-seed's size
+    // report seeds it at %5, the landing's at %6 (whichever re-seed runs).
+    notify.insert(
+        "refresh-client -t %5 -C 80x23".to_string(),
+        format!("%layout-change @1 {layout} {layout} *"),
+    );
+    notify.insert(
+        "refresh-client -t %6 -C 80x23".to_string(),
+        format!("%layout-change @1 {layout} {layout} *"),
+    );
+    let mut replies = std::collections::HashMap::new();
+    replies.insert("switch-client -t %6".to_string(), "@1".to_string());
+    reseed_replies(&mut replies, "@0 main\n@1 * other", "@1", "%5\n%6");
+    let (rx, mut conn, mut session) = two_pane_session(
+        "roster-follow-race",
+        FakeScript {
+            replies,
+            notify,
+            // The reply lags its line by one pump beat, the way a loaded
+            // daemon's broadcast beats its reply to the client: the test
+            // can park the follow while the landing is genuinely in
+            // flight, deterministically.
+            delays: [(
+                "switch-client -t %6".to_string(),
+                std::time::Duration::from_millis(300),
+            )]
+            .into_iter()
+            .collect(),
+            ..FakeScript::default()
+        },
+    );
+    session.focus_pane(&mut conn, 6);
+    // The pane-info reply starts the landing (`switch-client` on the
+    // wire). Dispatch while waiting for the line, and park the broadcast
+    // the MOMENT it appears — the delayed reply cannot have been
+    // dispatched yet. Every line the fake records lands in `wire`.
+    let mut wire: Vec<String> = Vec::new();
+    let started = std::time::Instant::now();
+    loop {
+        session.dispatch_replies(&mut conn);
+        wire.extend(drained(&rx));
+        if wire.iter().any(|line| line.starts_with("switch-client")) {
+            break;
+        }
+        assert!(
+            started.elapsed() < std::time::Duration::from_secs(5),
+            "the landing never started"
+        );
+        std::thread::sleep(std::time::Duration::from_millis(2));
+    }
+    // The broadcast the daemon queues while executing the landing's own
+    // `switch-client`, BEFORE its reply is written.
+    session.handle_event(TmuxNotification::SessionWindowChanged {
+        session_id: "$0".to_string(),
+        window_id: "@1".to_string(),
+    });
+    // The pump order that loses the race: parked work (the follow)
+    // applies before the next reply dispatch.
+    let mut sink = RecordingSink::default();
+    let _ = session.apply_pending(&mut conn, &mut sink);
+    // The reply (delayed one pump beat) and the landing it drives.
+    settle(&mut session, &mut conn);
+    assert_eq!(session.window, "@1", "the view still lands on the window");
+    assert_eq!(
+        session.renderer.focused(),
+        Some(6),
+        "the landing focuses the clicked pane even when its own \
+         broadcast parked a follow first"
+    );
+    // The suppressed follow left no follow re-seed on the wire: the only
+    // size report is the landing's own, on the clicked pane (%6), not the
+    // follow's first-pane seed (%5).
+    wire.extend(drained(&rx));
+    assert_eq!(
+        wire.iter()
+            .filter(|line| line.starts_with("refresh-client -t %") && line.contains(" -C "))
+            .map(|line| line.split_whitespace().nth(2).unwrap().to_string())
+            .collect::<Vec<_>>(),
+        vec!["%6".to_string()],
+        "one re-seed, on the clicked pane: {wire:?}"
+    );
+}
+
+/// The same race through the cross-session flavor: the
+/// `%client-session-changed` a cross-workspace click's `switch-client`
+/// broadcasts parks `follow_session`; consumed before the reply, it
+/// re-seeds the followed session's active window with no pane and
+/// vetoes the clicked-pane landing.
+#[test]
+fn roster_click_landing_survives_the_parked_client_session_follow() {
+    let layout = "0000,80x23,0,0{40x23,0,0,5,40x23,40,0,6}";
+    let mut notify = std::collections::HashMap::new();
+    // The target window's `%layout-change`, riding either re-seed's size
+    // report (see the sibling test).
+    notify.insert(
+        "refresh-client -t %5 -C 80x23".to_string(),
+        format!("%layout-change @1 {layout} {layout} *"),
+    );
+    notify.insert(
+        "refresh-client -t %6 -C 80x23".to_string(),
+        format!("%layout-change @1 {layout} {layout} *"),
+    );
+    let mut replies = std::collections::HashMap::new();
+    replies.insert("switch-client -t %6".to_string(), "@1".to_string());
+    // The follow's resolution: the followed session's active window.
+    replies.insert("list-windows -t $1".to_string(), "@1 * other".to_string());
+    reseed_replies(&mut replies, "@0 main\n@1 * other", "@1", "%5\n%6");
+    let (rx, mut conn, mut session) = two_pane_session(
+        "roster-follow-race-ws",
+        FakeScript {
+            replies,
+            notify,
+            // The same one-pump-beat reply lag (see the sibling test).
+            delays: [(
+                "switch-client -t %6".to_string(),
+                std::time::Duration::from_millis(300),
+            )]
+            .into_iter()
+            .collect(),
+            ..FakeScript::default()
+        },
+    );
+    session.focus_pane(&mut conn, 6);
+    // The pane-info reply starts the landing (see the sibling test).
+    let started = std::time::Instant::now();
+    loop {
+        session.dispatch_replies(&mut conn);
+        if drained(&rx)
+            .iter()
+            .any(|line| line.starts_with("switch-client"))
+        {
+            break;
+        }
+        assert!(
+            started.elapsed() < std::time::Duration::from_secs(5),
+            "the landing never started"
+        );
+        std::thread::sleep(std::time::Duration::from_millis(2));
+    }
+    session.handle_event(TmuxNotification::ClientSessionChanged {
+        client: String::new(),
+        session_id: "$1".to_string(),
+        name: String::new(),
+    });
+    let mut sink = RecordingSink::default();
+    let _ = session.apply_pending(&mut conn, &mut sink);
+    // The reply (delayed one pump beat) and the landing it drives.
+    settle(&mut session, &mut conn);
+    assert_eq!(session.window, "@1", "the view still lands on the window");
+    assert_eq!(
+        session.renderer.focused(),
+        Some(6),
+        "the landing focuses the clicked pane even when its own \
+         broadcast parked a follow first"
+    );
+}
+
 /// Same-window click: select + lookup only, no landing; the status is
 /// marked so the throttled refresh repaints the highlight (QA-245).
 #[test]
 fn focus_pane_on_the_shown_window_does_not_land() {
     let mut replies = std::collections::HashMap::new();
-    replies.insert("pane-info -t %2".to_string(), "%2 @0 40x23".to_string());
+    replies.insert("switch-client -t %2".to_string(), "@0".to_string());
     let (rx, mut conn, mut session) = two_pane_session(
         "qa245-samewin",
         FakeScript {
@@ -6253,13 +6503,16 @@ fn focus_pane_on_the_shown_window_does_not_land() {
             ..FakeScript::default()
         },
     );
-    session.status_dirty = false;
+    session.status_inflight.dirty = false;
     session.focus_pane(&mut conn, 2);
     settle(&mut session, &mut conn);
     let lines = drained(&rx);
-    assert_eq!(lines, vec!["select-pane -t %2", "pane-info -t %2"]);
+    assert_eq!(lines, vec!["select-pane -t %2", "switch-client -t %2"]);
     assert_eq!(session.window, "@0");
-    assert!(session.status_dirty, "the highlight repaint is scheduled");
+    assert!(
+        session.status_inflight.dirty,
+        "the highlight repaint is scheduled"
+    );
 }
 
 /// The landing's focus survives a LAGGING `%layout-change`: when the
@@ -6273,7 +6526,7 @@ fn focus_pane_on_the_shown_window_does_not_land() {
 fn focus_pane_landing_focus_survives_a_lagging_layout_event() {
     let layout = "0000,80x23,0,0{40x23,0,0,5,40x23,40,0,6}";
     let mut replies = std::collections::HashMap::new();
-    replies.insert("pane-info -t %6".to_string(), "%6 @1 40x23".to_string());
+    replies.insert("switch-client -t %6".to_string(), "@1".to_string());
     reseed_replies(&mut replies, "@0 main\n@1 * other", "@1", "%5\n%6");
     // No `notify`: the %layout-change lags the landing, riding the pump
     // stream after the re-seed has already set `window`.
@@ -6343,13 +6596,14 @@ fn split_focus_survives_a_lagging_layout_event() {
     );
 }
 
-/// A refused `select-pane` (the pane is gone) ends the click silently:
-/// no `pane-info`, no landing, no busy flash (ARC-141's early return;
-/// the timed-out case is `focus_pane_chain_stops_at_the_first_timeout`).
+/// A refused merged switch (the pane is gone) ends the click silently:
+/// no landing, no busy flash (the select-pane fire-and-forget leg cannot
+/// refuse visibly; the timed-out case is
+/// `focus_pane_chain_stops_at_the_first_timeout`).
 #[test]
 fn focus_pane_stops_when_select_pane_fails() {
     let mut failing = std::collections::HashSet::new();
-    failing.insert("select-pane -t %9".to_string());
+    failing.insert("switch-client -t %9".to_string());
     let (rx, mut conn, mut session) = two_pane_session(
         "qa245-gone",
         FakeScript {
@@ -6359,9 +6613,11 @@ fn focus_pane_stops_when_select_pane_fails() {
     );
     session.focus_pane(&mut conn, 9);
     settle(&mut session, &mut conn);
-    // Pipelined: the pane-info rides behind the select without waiting for
-    // its refusal; the refused select leaves no pane-info row to land on.
-    assert_eq!(drained(&rx), vec!["select-pane -t %9", "pane-info -t %9"]);
+    // Pipelined: the select rides the wire before the refusal comes back.
+    assert_eq!(
+        drained(&rx),
+        vec!["select-pane -t %9", "switch-client -t %9"]
+    );
     assert_eq!(session.window, "@0", "the view stays put");
     assert_eq!(
         session.chrome.flash_text(),
@@ -6383,7 +6639,7 @@ fn slow_daemon_does_not_block_key_forwarding() {
     );
     script
         .replies
-        .insert("pane-info -t %2".to_string(), "%2 @0 40x23".to_string());
+        .insert("switch-client -t %2".to_string(), "@0".to_string());
     let (rx, mut conn, mut session) = two_pane_session("enh049-slow", script);
     show_sidebar(&mut session);
     session
@@ -6412,7 +6668,7 @@ fn slow_daemon_does_not_block_key_forwarding() {
             .unwrap_or_else(|| panic!("no {needle} line: {lines:?}"))
     };
     let select = position("select-pane -t %2");
-    let info = position("pane-info -t %2");
+    let info = position("switch-client -t %2");
     let keys = lines
         .iter()
         .position(|l| l.starts_with("send-keys -t ") && l.ends_with("-H 61 62 63"))
@@ -6434,16 +6690,15 @@ fn focus_pane_chain_pipelines_and_ignores_a_stale_landing() {
         );
     }
     let mut replies = std::collections::HashMap::new();
-    replies.insert("pane-info -t %5".to_string(), "%5 @2 40x23".to_string());
+    replies.insert("switch-client -t %5".to_string(), "@2".to_string());
     reseed_replies(&mut replies, "@0 * main\n@3 - other", "@3", "%9 @3 * z");
-    replies.insert("list-panes -t @2".to_string(), "%5 @2 * y".to_string());
     let mut script = FakeScript {
         replies,
         notify,
         ..FakeScript::default()
     };
     script.delays.insert(
-        "pane-info -t %5".to_string(),
+        "switch-client -t %5".to_string(),
         std::time::Duration::from_millis(300),
     );
     let (rx, mut conn, mut session) = two_pane_session("enh049-stale", script);
@@ -6514,6 +6769,8 @@ fn settings_row_toggles_the_session_picker() {
     session.settings_path = Some(path.clone());
     session.enter_settings();
     session.route_stdin_bytes(&mut conn, b"\t\t");
+    // The general tab scrolls — reach the picker row before asserting.
+    session.route_stdin_bytes(&mut conn, b"jjjjjjjjjj");
     let rows = overlay_text(&session);
     assert!(
         rows.iter()
@@ -6521,7 +6778,7 @@ fn settings_row_toggles_the_session_picker() {
         "the row shows the default in force: {rows:#?}"
     );
     assert!(!session.session_picker);
-    session.route_stdin_bytes(&mut conn, b"jjjjjjj\r");
+    session.route_stdin_bytes(&mut conn, b"\r");
     settle(&mut session, &mut conn);
     let written = std::fs::read_to_string(&path).unwrap();
     assert!(written.contains("session-picker = true"), "{written}");
@@ -6540,10 +6797,10 @@ fn settings_row_toggles_the_git_badge() {
     session.settings_path = Some(path.clone());
     session.enter_settings();
     session.route_stdin_bytes(&mut conn, b"\t\t");
-    // The general tab now carries nine fixed rows (the tab-width rows
+    // The general tab now carries ten fixed rows (the tab-width rows
     // included) and the panel scrolls — reach the git row before
     // asserting on it.
-    session.route_stdin_bytes(&mut conn, b"jjjjjjjj");
+    session.route_stdin_bytes(&mut conn, b"jjjjjjjjjjjj");
     let rows = overlay_text(&session);
     assert!(
         rows.iter()
@@ -7028,4 +7285,234 @@ fn layouts_escape_from_load_confirm_backs_out_without_sending() {
     );
     settle(&mut session, &mut conn);
     assert!(!drained(&rx).iter().any(|l| l.starts_with("load-layout")));
+}
+
+/// A session on the three-pane snapshot layout, wire drained.
+fn layout_chord_session(
+    tag: &str,
+) -> (
+    std::sync::mpsc::Receiver<(String, String)>,
+    crate::mux::attach::conn::AttachConn,
+    WindowSession,
+) {
+    let (rx, conn) = fake_daemon(tag, FakeScript::default());
+    let mut session = WindowSession::new(90, 26);
+    session
+        .renderer
+        .apply_layout(parse_layout(THREE_PANE).expect("parses"));
+    session.window = "@0".to_string();
+    drained(&rx);
+    (rx, conn, session)
+}
+
+/// prefix + M-1..M-5 each send `select-layout <preset> -t <shown window>`.
+#[test]
+fn alt_digit_chords_send_select_layout_per_preset() {
+    let presets = [
+        (b'1', "even-horizontal"),
+        (b'2', "even-vertical"),
+        (b'3', "main-horizontal"),
+        (b'4', "main-vertical"),
+        (b'5', "tiled"),
+    ];
+    for (digit, name) in presets {
+        let (rx, mut conn, mut session) = layout_chord_session("altlayout");
+        session.route_stdin_bytes(&mut conn, &[0x02, 0x1b, digit]);
+        assert_eq!(
+            received_within_300ms(&rx),
+            vec![format!("select-layout {name} -t @0")],
+            "M-{}",
+            digit as char
+        );
+    }
+}
+
+#[test]
+fn m1_chord_sends_select_layout_even_horizontal() {
+    let (rx, mut conn, mut session) = layout_chord_session("m1layout");
+    session.route_stdin_bytes(&mut conn, &[0x02, 0x1b, b'1']);
+    assert_eq!(
+        received_within_300ms(&rx),
+        vec!["select-layout even-horizontal -t @0".to_string()]
+    );
+}
+
+/// An unbound Alt chord after the prefix is consumed: nothing on the wire,
+/// nothing forwarded to the pane.
+#[test]
+fn unbound_alt_chord_with_prefix_armed_is_consumed() {
+    let (rx, mut conn, mut session) = layout_chord_session("altunbound");
+    session.route_stdin_bytes(&mut conn, &[0x02, 0x1b, b'7']);
+    assert!(received_within_300ms(&rx).is_empty());
+    assert!(!session.input_route.prefix_pending, "the prefix is spent");
+}
+
+/// Without the prefix an Alt key still reaches the pane program.
+#[test]
+fn alt_key_without_prefix_still_forwards() {
+    let (rx, mut conn, mut session) = layout_chord_session("altfwd");
+    session.route_stdin_bytes(&mut conn, &[0x1b, b'1']);
+    let lines = received_within_300ms(&rx);
+    assert!(
+        lines.iter().any(|l| l.starts_with("send-keys")),
+        "Alt+1 forwards to the pane: {lines:?}"
+    );
+    assert!(!lines.iter().any(|l| l.starts_with("select-layout")));
+}
+
+/// M-5 on a zoomed window still sends the command; the daemon-side
+/// unzoom and the %layout-change reseed clear the cue.
+#[test]
+fn m5_on_zoomed_window_sends_select_layout_tiled() {
+    let (rx, mut conn, mut session) = layout_chord_session("m5zoom");
+    session.zoomed = true;
+    session.route_stdin_bytes(&mut conn, &[0x02, 0x1b, b'5']);
+    assert_eq!(
+        received_within_300ms(&rx),
+        vec!["select-layout tiled -t @0".to_string()]
+    );
+}
+
+#[test]
+fn select_layout_refusal_flashes() {
+    let script = FakeScript {
+        failing: ["select-layout tiled -t @0".to_string()].into(),
+        ..FakeScript::default()
+    };
+    let (rx, mut conn, mut session) = two_pane_session("layout-refused", script);
+    session.route_stdin_bytes(&mut conn, &[0x02, 0x1b, b'5']);
+    settle(&mut session, &mut conn);
+    assert_eq!(drained(&rx), vec!["select-layout tiled -t @0"]);
+    assert_eq!(session.chrome.flash_text(), Some("layout tiled: refused"));
+}
+
+#[test]
+fn plain_byte_lookup_does_not_resolve_an_alt_bound_layout_chord() {
+    let session = WindowSession::new(90, 26);
+    assert_eq!(
+        session.management_key(crate::mux::config::ChordKey::alt(b'1')),
+        Some(ManagementKey::LayoutEvenHorizontal)
+    );
+    assert_eq!(
+        session.management_key(crate::mux::config::ChordKey::plain(b'1')),
+        None
+    );
+    assert!(crate::mux::config::management_key("M-1", "popup[0].key").is_err());
+    assert_eq!(
+        crate::mux::config::management_key("1", "popup[0].key"),
+        Ok(b'1')
+    );
+}
+
+#[test]
+fn alt_non_ascii_chord_with_prefix_flashes_the_ascii_hint() {
+    let (rx, mut conn, mut session) = layout_chord_session("altnonascii");
+    for ch in ['中', ' '] {
+        session.route_plain(&[0x02], &mut conn);
+        session.route_key(
+            &mut conn,
+            &TermKeyEvent::char_(ch, par_term_emu_core::keyboard::modifiers::ALT),
+        );
+        assert_eq!(
+            session.chrome.flash_text(),
+            Some(non_ascii_chord_hint(ch).as_str())
+        );
+        assert!(!session.input_route.prefix_pending);
+    }
+    assert!(received_within_300ms(&rx).is_empty());
+}
+
+#[test]
+fn palette_layout_row_sends_select_layout() {
+    let (rx, mut conn, mut session) = two_pane_session("palette-layout", FakeScript::default());
+    chord(&mut session, &mut conn, b':');
+    drained(&rx);
+    session.route_plain(b"layout tiled", &mut conn);
+    session.route_plain(b"\r", &mut conn);
+    settle(&mut session, &mut conn);
+    assert_eq!(drained(&rx), vec!["select-layout tiled -t @0"]);
+}
+
+/// Pump step 9's wake, event-wise (card 01a19d78): the wait's stdin arm
+/// consumes a host click the moment it arrives instead of the wait
+/// blocking on the daemon channel alone until the 16 ms tick — input
+/// used to wait out the poll remainder. The tick enters as a channel the
+/// test fires itself, so the assertion is ordering (the chunk stashed by
+/// the stdin arm while the test's tick is still pending), not a
+/// wall-clock bound racing the gate's own load — the fixed bound flaked
+/// at load 9-100 (card 01a1d8e1). Unix-only: a real pipe carries the
+/// click through the production reader thread.
+#[test]
+#[cfg(unix)]
+fn pump_wait_wakes_on_stdin_off_the_poll_tick() {
+    let (_replies, mut conn) = recording_conn("pump-wait-stdin");
+    let mut session = WindowSession::new(80, 25);
+
+    // The host-tty shape: a real pipe whose read end the production
+    // reader thread drains into the wake channel.
+    let mut fds = [0 as libc::c_int; 2];
+    assert_eq!(unsafe { libc::pipe(fds.as_mut_ptr()) }, 0);
+    let (read_fd, write_fd) = (fds[0], fds[1]);
+    struct FdReader(libc::c_int);
+    impl std::io::Read for FdReader {
+        fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
+            loop {
+                let n = unsafe { libc::read(self.0, buf.as_mut_ptr().cast(), buf.len()) };
+                if n < 0 {
+                    let err = std::io::Error::last_os_error();
+                    if err.kind() == std::io::ErrorKind::Interrupted {
+                        continue;
+                    }
+                    return Err(err);
+                }
+                return Ok(n as usize);
+            }
+        }
+    }
+    impl Drop for FdReader {
+        fn drop(&mut self) {
+            unsafe { libc::close(self.0) };
+        }
+    }
+    let (tx, rx) = crossbeam_channel::bounded::<crate::mux::attach::StdinMsg>(64);
+    crate::mux::attach::Stdin::spawn_reader(FdReader(read_fd), tx);
+    let mut stdin = crate::mux::attach::Stdin { rx, front: None };
+
+    // The test's own tick: pending, undelivered. The thread behind it is
+    // only the fail-safe that bounds a regressed daemon-only wait (which
+    // would otherwise hang the suite) — a stdin wake never waits it out.
+    let (tick_tx, tick_rx) = crossbeam_channel::bounded::<std::time::Instant>(1);
+    std::thread::spawn(move || {
+        std::thread::sleep(std::time::Duration::from_secs(2));
+        let _ = tick_tx.send(std::time::Instant::now());
+    });
+
+    // The click lands ahead of the wait; the reader thread delivers it
+    // whenever scheduled, and the wait wakes on that delivery. There is
+    // no tick boundary left to race.
+    let bytes = b"\x1b[<0;10;5M";
+    assert_eq!(
+        unsafe { libc::write(write_fd, bytes.as_ptr().cast(), bytes.len()) },
+        bytes.len() as isize
+    );
+
+    let outcome = session.wait_next_push_with_tick(&mut conn, &mut stdin, tick_rx.clone());
+    assert!(
+        matches!(outcome, std::ops::ControlFlow::Continue(())),
+        "the stdin wake must not end the view"
+    );
+
+    // The stdin arm consumed the click into the stash while the test's
+    // tick is still pending — the wake off-tick, asserted event-wise.
+    let stashed = stdin
+        .front
+        .take()
+        .expect("the wait's stdin arm parked the click");
+    assert_eq!(stashed.expect("the chunk is Ok"), bytes.to_vec());
+    assert_eq!(
+        tick_rx.try_recv().unwrap_err(),
+        crossbeam_channel::TryRecvError::Empty,
+        "the test's tick must still be pending"
+    );
+    unsafe { libc::close(write_fd) };
 }

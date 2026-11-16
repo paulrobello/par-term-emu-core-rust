@@ -65,4 +65,5 @@ These directories hold point-in-time records. They are kept for history and are 
 - `opus/` - Enhancement implementation plans (`ENH-048` to `ENH-061`) from audit passes
 - `superpowers/plans/` - Feature implementation plans
 - `research/` - Protocol research notes (OSC 9;4 progress bar)
+- `archive/` - Superseded standalone documents kept for history (`MUX_FEATURE_MATRIX.md`, the par-mux 0.62.0 vs herdr feature comparison recorded 2026-10-19)
 - `images/` - Image assets used by the docs

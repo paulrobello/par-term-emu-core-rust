@@ -291,8 +291,8 @@ impl WindowSession {
                 return;
             }
         };
-        if matches!(self.modal, super::Modal::Scroll) {
-            self.leave_scroll_mode();
+        if matches!(self.modal, super::Modal::Copy(_)) {
+            self.leave_copy_mode();
         }
         self.renderer.set_popup(Some(PopupView {
             outer: geometry.outer,
@@ -451,7 +451,7 @@ impl WindowSession {
         }
         self.renderer.set_popup(None);
         self.arm_prefix(false);
-        self.status_dirty = true;
+        self.status_inflight.dirty = true;
         self.draw_tab_strip();
     }
 
@@ -486,7 +486,7 @@ impl WindowSession {
     pub(super) fn popup_route_plain(&mut self, conn: &mut AttachConn, bytes: &[u8]) -> bool {
         let mut to_send = Vec::with_capacity(bytes.len());
         for &byte in bytes {
-            if self.prefix_pending {
+            if self.input_route.prefix_pending {
                 self.arm_prefix(false);
                 let key = self.popup.as_ref().map(|o| o.popup.key);
                 if Some(byte) == key {
@@ -498,10 +498,10 @@ impl WindowSession {
                     self.close_popup(conn);
                     return true;
                 }
-                if byte == self.literal {
+                if byte == self.input_route.literal {
                     to_send.push(byte);
                 }
-            } else if byte == self.prefix {
+            } else if byte == self.input_route.prefix {
                 self.arm_prefix(true);
             } else {
                 to_send.push(byte);
@@ -519,7 +519,7 @@ impl WindowSession {
         conn: &mut AttachConn,
         ev: &par_term_emu_core::keyboard::TermKeyEvent,
     ) {
-        if self.prefix_pending {
+        if self.input_route.prefix_pending {
             self.arm_prefix(false);
             return;
         }

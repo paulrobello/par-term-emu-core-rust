@@ -360,6 +360,7 @@ All observer events are delivered as Python dicts with a `"type"` key identifyin
 | `file_transfer_failed` | `FileTransferFailed` | Screen |
 | `upload_requested` | `UploadRequested` | Screen |
 | `inline_image_dropped` | `InlineImageDropped` | Screen |
+| `output_budget_exceeded` | `OutputBudgetExceeded` | Screen |
 
 ### Event Fields
 

@@ -6,11 +6,56 @@ use super::{
     DividerHit, DragState, MenuTarget, Modal, PickerState, PromptTarget, Selection, TextDrag,
     WindowSession,
 };
-use crate::mux::attach::input::SgrMouse;
+use crate::mux::attach::input::{InputParser, SgrMouse};
 use crate::mux::attach::layout::PaneRect;
 use crate::mux::attach::text_input::{fold_fullwidth_ascii, Utf8Assembler, Utf8Step};
 use crate::mux::attach::ManagementKey;
+use crate::mux::config::ChordKey;
+use crate::mux::config::Chords;
 use par_term_emu_core::keyboard::TermKeyEvent;
+
+/// Input routing's live state: the prefix chord machinery, the
+/// typed-character assemblers, and the stdin tokenizer. Session-level
+/// (not per pump call) because a paste or escape sequence can span two
+/// stdin bursts, and the pump returns between them every frame tick.
+pub(super) struct InputRouteState {
+    /// The reload chord: the key byte matched after the prefix, and the
+    /// detach prefix itself — both live-rebindable by the reload.
+    pub(super) prefix: u8,
+    pub(super) reload_key: u8,
+    /// The prefix chord is armed — sent, awaiting its second key. The
+    /// status row shows the cue while it is up ([`WindowSession::arm_prefix`]
+    /// repaints on every flip).
+    pub(super) prefix_pending: bool,
+    /// A non-ASCII character is arriving as the prefix chord's key (IME
+    /// / CJK input): its remaining bytes are swallowed whole, never
+    /// forwarded as a torn UTF-8 tail.
+    pub(super) prefix_utf8: Option<Utf8Assembler>,
+    /// Reassembles multi-byte characters typed into the modal text
+    /// fields (prompt, picker/help filters, scroll search).
+    pub(super) text_utf8: Utf8Assembler,
+    /// The literal prefix byte to forward when the user types prefix
+    /// prefix (rebindable, so it is state, not the C_B constant).
+    pub(super) literal: u8,
+    /// The stdin tokenizer.
+    pub(super) parser: InputParser,
+}
+
+impl InputRouteState {
+    /// The chords start at the canonical defaults (ARC-131: one source,
+    /// `Chords::with_defaults`); the launch config overrides them.
+    pub(super) fn from_chords(chords: &Chords) -> Self {
+        Self {
+            prefix: chords.prefix,
+            reload_key: chords.reload,
+            prefix_pending: false,
+            prefix_utf8: None,
+            text_utf8: Utf8Assembler::default(),
+            literal: chords.prefix,
+            parser: InputParser::default(),
+        }
+    }
+}
 
 /// The status flash for a prefix chord typed as a non-ASCII character:
 /// chords are ASCII bytes, so an IME left in a non-Latin mode can only
@@ -87,6 +132,10 @@ pub(super) enum Hit {
     TabDrop(u16),
     /// A left press on the tab strip at this raw host column.
     TabPress(u16),
+    /// A left press on the session strip at this raw host column.
+    SessionPress(u16),
+    /// A wheel over an overflowing session strip: shift the visible run.
+    SessionWheel(isize),
     /// A wheel over a pane: scroll the client's scrollback, or forward
     /// when the pane owns the mouse.
     Wheel {
@@ -136,12 +185,15 @@ pub(super) enum PrefixChord {
     Resize,
     /// The bindings overlay.
     Help,
-    /// The session/window picker.
+    /// The window picker.
     Picker,
     /// `d`: detach.
     Detach,
-    /// `[`: the scroll viewport on the focused pane.
-    Scroll,
+    /// `[`: vi copy mode on the focused pane.
+    CopyMode,
+    /// `e`: the scrollback in $VISUAL/$EDITOR (copy mode's old `e`;
+    /// the vi table owns that letter now).
+    EditScrollback,
     /// `n`/`p`/`(`/`)`/`o`: the window, session, and pane switches.
     Switch,
     /// The literal prefix key: send it through.
@@ -159,14 +211,12 @@ impl WindowSession {
         bytes: &[u8],
         conn: &mut crate::mux::attach::conn::AttachConn,
     ) -> bool {
-        // The scroll-mode search line owns the bytes while it is up —
-        // before every other router (the viewport's pane must see
-        // nothing of the query).
-        if self.scroll_query.is_some() {
+        // The copy-mode search line owns the bytes while it is up —
+        // before every other router (the pane must see nothing of the
+        // query).
+        if self.copy_search_line_up() {
             for &byte in bytes {
-                if !self.search_typing_byte(byte) {
-                    break;
-                }
+                self.copy_search_byte(byte);
             }
             return false;
         }
@@ -180,10 +230,10 @@ impl WindowSession {
             // armed while the character's bytes arrive, then a fullwidth
             // form folds to its ASCII chord byte and anything else is
             // consumed with a hint. No byte of it reaches the pane.
-            if let Some(mut utf8) = self.prefix_utf8.take() {
+            if let Some(mut utf8) = self.input_route.prefix_utf8.take() {
                 match utf8.push(raw) {
                     Utf8Step::Pending => {
-                        self.prefix_utf8 = Some(utf8);
+                        self.input_route.prefix_utf8 = Some(utf8);
                         continue;
                     }
                     Utf8Step::Char(ch) => match fold_fullwidth_ascii(ch) {
@@ -202,16 +252,16 @@ impl WindowSession {
                         }
                     }
                 }
-            } else if self.prefix_pending && raw >= 0x80 {
+            } else if self.input_route.prefix_pending && raw >= 0x80 {
                 let mut utf8 = Utf8Assembler::default();
                 if utf8.push(raw) == Utf8Step::Pending {
-                    self.prefix_utf8 = Some(utf8);
+                    self.input_route.prefix_utf8 = Some(utf8);
                 } else {
                     self.arm_prefix(false);
                 }
                 continue;
             }
-            if self.prefix_pending {
+            if self.input_route.prefix_pending {
                 self.arm_prefix(false);
                 match self.prefix_chord(byte) {
                     PrefixChord::Reload => self.reload_config(conn),
@@ -220,15 +270,18 @@ impl WindowSession {
                     PrefixChord::Help => self.enter_help(),
                     PrefixChord::Picker => self.enter_picker(conn),
                     PrefixChord::Detach => return true,
-                    PrefixChord::Scroll => {
-                        // prefix [ — the scroll viewport on the focused
-                        // pane. No scrollback means nothing to scroll;
+                    PrefixChord::CopyMode => {
+                        // prefix [ — vi copy mode on the focused pane:
+                        // every pane enters (an empty-scrollback or
+                        // alt-screen pane roams its visible screen);
                         // the key is consumed either way.
-                        if let Some(id) = self.renderer.focused() {
-                            if self.renderer.enter_scroll_mode(id) {
-                                self.open_modal(Modal::Scroll);
-                            }
-                        }
+                        self.enter_copy_mode();
+                    }
+                    PrefixChord::EditScrollback => {
+                        // prefix e — the scrollback in $VISUAL/$EDITOR
+                        // (formerly copy mode's `e`; the motion table
+                        // owns that letter now).
+                        self.edit_scrollback(conn);
                     }
                     PrefixChord::Switch => self.prefix_switch(byte, conn),
                     PrefixChord::Literal => to_send.push(byte),
@@ -242,22 +295,13 @@ impl WindowSession {
                         }
                     }
                 }
-            } else if byte == self.prefix {
+            } else if byte == self.input_route.prefix {
                 self.arm_prefix(true);
-            } else if self.scroll_query.is_some() {
-                // A `/` earlier in this run opened the search line: the
-                // rest of the run is the query.
-                self.search_typing_byte(byte);
-            } else if matches!(self.modal, Modal::Scroll) {
-                // Scroll mode's plain keys: q and Enter exit, the
-                // copy-mode letters (v y / n N e) reach the key handler
-                // (the viewport is a modal view — keys do not leak into
-                // the pane).
-                if byte == b'q' || byte == b'\r' {
-                    self.leave_scroll_mode();
-                } else if byte.is_ascii_graphic() {
-                    self.scroll_mode_input(conn, &TermKeyEvent::char_(byte as char, 0));
-                }
+            } else if matches!(self.modal, Modal::Copy(_)) {
+                // Copy mode's plain keys: q exits, everything graphic
+                // reaches the vi table (the mode owns the keys — nothing
+                // leaks into the pane).
+                self.copy_mode_byte(byte);
             } else {
                 to_send.push(byte);
             }
@@ -282,12 +326,12 @@ impl WindowSession {
     /// up (tmux's status-line prefix indication).
     pub(super) fn arm_prefix(&mut self, on: bool) {
         if !on {
-            self.prefix_utf8 = None;
+            self.input_route.prefix_utf8 = None;
         }
-        if self.prefix_pending == on {
+        if self.input_route.prefix_pending == on {
             return;
         }
-        self.prefix_pending = on;
+        self.input_route.prefix_pending = on;
         self.draw_status_row();
     }
 
@@ -338,7 +382,7 @@ impl WindowSession {
         body: &[u8],
     ) {
         self.arm_prefix(false);
-        if self.feed_modal_run(body, conn) || matches!(self.modal, Modal::Scroll) {
+        if self.feed_modal_run(body, conn) || matches!(self.modal, Modal::Copy(_)) {
             return;
         }
         let Some(id) = self.renderer.focused() else {
@@ -376,7 +420,7 @@ impl WindowSession {
         // ends the run.
         let byte_handler: fn(&mut Self, &mut crate::mux::attach::conn::AttachConn, u8) -> bool =
             match &self.modal {
-                Modal::None | Modal::Scroll => return false,
+                Modal::None | Modal::Copy(_) => return false,
                 Modal::Resize => {
                     self.modal = Modal::None;
                     return true;
@@ -402,33 +446,34 @@ impl WindowSession {
     /// and picker, then the fixed `d`/`[`/switch arms, then the literal
     /// prefix; anything else is unbound and consumed.
     pub(super) fn prefix_chord(&self, byte: u8) -> PrefixChord {
-        if byte == self.reload_key && byte != b'd' {
+        if byte == self.input_route.reload_key && byte != b'd' {
             return PrefixChord::Reload;
         }
-        if let Some(key) = self.management_key(byte) {
+        if let Some(key) = self.management_key(ChordKey::plain(byte)) {
             return PrefixChord::Management(key);
         }
-        if byte == self.management.resize {
+        if ChordKey::plain(byte) == self.management.resize {
             return PrefixChord::Resize;
         }
-        if byte == self.management.help {
+        if ChordKey::plain(byte) == self.management.help {
             return PrefixChord::Help;
         }
-        if byte == self.management.picker {
+        if ChordKey::plain(byte) == self.management.picker {
             return PrefixChord::Picker;
         }
         match byte {
             b'd' => PrefixChord::Detach,
-            b'[' => PrefixChord::Scroll,
+            b'[' => PrefixChord::CopyMode,
+            b'e' => PrefixChord::EditScrollback,
             b'n' | b'p' | b'(' | b')' | b'o' => PrefixChord::Switch,
-            b if b == self.literal => PrefixChord::Literal,
+            b if b == self.input_route.literal => PrefixChord::Literal,
             _ => PrefixChord::Unbound,
         }
     }
 
     /// The configurable management chord bound to `byte`, if any (first
     /// match wins when two keys share a byte).
-    fn management_key(&self, byte: u8) -> Option<ManagementKey> {
+    pub(super) fn management_key(&self, chord: ChordKey) -> Option<ManagementKey> {
         let m = &self.management;
         let table = [
             (m.split_right, ManagementKey::SplitRight),
@@ -456,10 +501,21 @@ impl WindowSession {
             (m.status_bar, ManagementKey::StatusBar),
             (m.respawn, ManagementKey::Respawn),
             (m.notify_jump, ManagementKey::NotifyJump),
+            (
+                m.layout_even_horizontal,
+                ManagementKey::LayoutEvenHorizontal,
+            ),
+            (m.layout_even_vertical, ManagementKey::LayoutEvenVertical),
+            (
+                m.layout_main_horizontal,
+                ManagementKey::LayoutMainHorizontal,
+            ),
+            (m.layout_main_vertical, ManagementKey::LayoutMainVertical),
+            (m.layout_tiled, ManagementKey::LayoutTiled),
         ];
         table
             .into_iter()
-            .find(|(bound, _)| *bound == byte)
+            .find(|(bound, _)| *bound == chord)
             .map(|(_, key)| key)
     }
 
@@ -475,13 +531,33 @@ impl WindowSession {
         conn: &mut crate::mux::attach::conn::AttachConn,
         ev: &TermKeyEvent,
     ) {
-        if self.prefix_pending {
+        if self.input_route.prefix_pending {
             self.arm_prefix(false);
+            // An Alt+printable-ASCII key is an Alt chord: bound runs, unbound
+            // is consumed (tmux drops it too) rather than reaching the arrows.
+            if ev.modifiers & par_term_emu_core::keyboard::modifiers::ALT != 0
+                && ev.key() == par_term_emu_core::keyboard::TermKey::Char
+            {
+                if let Some(byte) = u8::try_from(ev.codepoint).ok().filter(u8::is_ascii_graphic) {
+                    if let Some(key) = self.management_key(ChordKey {
+                        key: byte,
+                        alt: true,
+                    }) {
+                        self.management_chord(key, conn);
+                    }
+                    return;
+                }
+                if let Some(ch) = char::from_u32(ev.codepoint) {
+                    self.chrome.flash(non_ascii_chord_hint(ch));
+                    self.draw_status_row();
+                }
+                return;
+            }
             self.prefix_pane_arrow(conn, ev);
             return;
         }
         match &self.modal {
-            Modal::Scroll => return self.scroll_mode_input(conn, ev),
+            Modal::Copy(_) => return self.copy_mode_input(conn, ev),
             Modal::Prompt(_) => return self.prompt_key(conn, ev),
             Modal::Menu(_) => return self.menu_key(conn, ev),
             Modal::Help(_) => return self.help_key(ev),
@@ -632,8 +708,53 @@ impl WindowSession {
                 self.menu_hover(x, y);
             }
         }
-        match self.mouse_hit(&mouse) {
-            Hit::Consumed => {}
+        let hit = self.mouse_hit(&mouse);
+        if hit != Hit::Consumed && self.apply_hit(conn, &mouse, hit) {
+            // A client-consumed wheel or press (the pane group) ends
+            // routing here: the pointer update would run against the
+            // state the handler already changed.
+            return;
+        }
+        // After the dispatch, not before: a release that ends a drag
+        // must already see `drag` cleared, or the pointer would keep
+        // the resize shape until an unrelated motion report arrives.
+        self.update_pointer(&mouse);
+    }
+
+    /// Apply one dispatched [`Hit`] along concern lines: the overlay
+    /// surfaces, the side panel, the tab/session strips, and the pane
+    /// content area. Returns true when the hit consumed the event
+    /// client-side and [`Self::route_mouse`] must stop — skipping its
+    /// pointer update — and false otherwise.
+    fn apply_hit(
+        &mut self,
+        conn: &mut crate::mux::attach::conn::AttachConn,
+        mouse: &SgrMouse,
+        hit: Hit,
+    ) -> bool {
+        if let Some(consumed) = self.apply_overlay_hit(conn, mouse, hit.clone()) {
+            return consumed;
+        }
+        if let Some(consumed) = self.apply_sidebar_hit(conn, mouse, hit.clone()) {
+            return consumed;
+        }
+        if let Some(consumed) = self.apply_strip_hit(conn, mouse, hit.clone()) {
+            return consumed;
+        }
+        self.apply_pane_hit(conn, mouse, hit).unwrap_or(false)
+    }
+
+    /// The overlay surfaces: the context menus, the settings and
+    /// layouts dialogs, the picker, the help panel, the toast, and the
+    /// tab context menu. None of these consume the event client-side;
+    /// routing continues to the pointer update.
+    fn apply_overlay_hit(
+        &mut self,
+        conn: &mut crate::mux::attach::conn::AttachConn,
+        _mouse: &SgrMouse,
+        hit: Hit,
+    ) -> Option<bool> {
+        match hit {
             Hit::MenuRow(row) => self.menu_click(conn, row),
             Hit::SettingsAt { row, col } => self.settings_click(conn, row, col),
             Hit::SettingsClose => self.leave_settings(),
@@ -643,6 +764,26 @@ impl WindowSession {
             Hit::LayoutsClose => self.leave_layouts(),
             Hit::MenuClose => self.leave_menu(),
             Hit::ToastPress { pane } => self.toast_press(conn, pane),
+            Hit::PickerMove(delta) => self.picker_move(delta),
+            Hit::PickerFilter => self.picker_open_filter(),
+            Hit::PickerRow(content) => self.picker_click_row(conn, content),
+            Hit::HelpScroll(delta) => self.help_scroll_by(delta),
+            Hit::TabMenu { id, anchor } => self.open_tab_menu(id, anchor),
+            _ => return None,
+        }
+        Some(false)
+    }
+
+    /// The side panel: workspace and agent rows, the chips, and the
+    /// panel's width/split drags. None of these consume the event
+    /// client-side; routing continues to the pointer update.
+    fn apply_sidebar_hit(
+        &mut self,
+        conn: &mut crate::mux::attach::conn::AttachConn,
+        mouse: &SgrMouse,
+        hit: Hit,
+    ) -> Option<bool> {
+        match hit {
             Hit::SidebarNewWorkspace => self.enter_prompt(PromptTarget::NewWorkspace),
             Hit::SidebarMenu => self.open_sidebar_menu(),
             Hit::SidebarCollapse => self.toggle_sidebar_collapse(conn),
@@ -655,38 +796,68 @@ impl WindowSession {
             Hit::SidebarResize => self.start_sidebar_width_drag(mouse.col - 1),
             Hit::SidebarSplitDrag => self.start_sidebar_split_drag(mouse.row - 1),
             Hit::SidebarDrag { x, y, release } => self.sidebar_drag_event(x, y, release),
-            Hit::Drag { x, y, release } => self.drag_event(conn, x, y, release),
-            Hit::PickerMove(delta) => self.picker_move(delta),
-            Hit::PickerFilter => self.picker_open_filter(),
-            Hit::PickerRow(content) => self.picker_click_row(conn, content),
-            Hit::HelpScroll(delta) => self.help_scroll_by(delta),
-            Hit::TabMenu { id, anchor } => self.open_tab_menu(id, anchor),
+            _ => return None,
+        }
+        Some(false)
+    }
+
+    /// The tab and session strips: presses switch or focus, wheels
+    /// shift an overflowing strip. None of these consume the event
+    /// client-side; routing continues to the pointer update.
+    fn apply_strip_hit(
+        &mut self,
+        conn: &mut crate::mux::attach::conn::AttachConn,
+        _mouse: &SgrMouse,
+        hit: Hit,
+    ) -> Option<bool> {
+        match hit {
             Hit::TabPress(rx) => self.tab_click(conn, rx),
+            Hit::SessionPress(rx) => self.session_click(conn, rx),
+            Hit::SessionWheel(delta) => {
+                self.chrome.session_strip.wheel(delta);
+                self.draw_session_strip_only();
+            }
             Hit::TabWheel(delta) => {
                 self.chrome.tab_strip.wheel(delta);
                 self.draw_tab_strip();
             }
             Hit::TabDrop(rx) => self.tab_drop(conn, rx),
+            _ => return None,
+        }
+        Some(false)
+    }
+
+    /// The pane content area: divider/text drags, the wheel (scrollback
+    /// scroll or forward), forwarding for mouse-owning panes, presses,
+    /// and drag arming. The wheel and the press can consume the event
+    /// client-side, which stops route_mouse before its pointer update.
+    fn apply_pane_hit(
+        &mut self,
+        conn: &mut crate::mux::attach::conn::AttachConn,
+        mouse: &SgrMouse,
+        hit: Hit,
+    ) -> Option<bool> {
+        let mut consumed = false;
+        match hit {
+            Hit::Drag { x, y, release } => self.drag_event(conn, x, y, release),
             Hit::Wheel { rect, x, cy, delta } => {
-                if self.pane_wheel(conn, &mouse, &rect, x, cy, delta) {
-                    return; // consumed client-side
+                if self.pane_wheel(conn, mouse, &rect, x, cy, delta) {
+                    consumed = true;
                 }
             }
-            Hit::PaneForward(rect) => self.forward_mouse(conn, &rect, &mouse),
+            Hit::PaneForward(rect) => self.forward_mouse(conn, &rect, mouse),
             Hit::DragStart { divider, x, y } => {
                 self.drag = Some(DragState::Pending { divider, x, y });
             }
             Hit::TextDrag { x, y, release } => self.text_drag_event(x, y, release),
             Hit::PanePress(rect) => {
-                if self.pane_press(conn, &mouse, &rect) {
-                    return;
+                if self.pane_press(conn, mouse, &rect) {
+                    consumed = true;
                 }
             }
+            _ => return None,
         }
-        // After the dispatch, not before: a release that ends a drag
-        // must already see `drag` cleared, or the pointer would keep
-        // the resize shape until an unrelated motion report arrives.
-        self.update_pointer(&mouse);
+        Some(consumed)
     }
 
     /// A press on the in-app toast: dismiss it and focus its agent's pane.
@@ -913,7 +1084,7 @@ impl WindowSession {
         // armed drag.
         if self.text_drag.is_some()
             && (mouse.release
-                || (mouse.is_motion() && matches!(self.modal, Modal::None | Modal::Scroll)))
+                || (mouse.is_motion() && matches!(self.modal, Modal::None | Modal::Copy(_))))
         {
             let (x, content_y) = self.geometry.host_to_content_clamped(x, y);
             return Hit::TextDrag {
@@ -983,11 +1154,14 @@ impl WindowSession {
             Modal::Picker(picker) => return self.picker_hit(picker, mouse, x, y),
             Modal::Help(_) => return help_hit(mouse),
             Modal::None
-            | Modal::Scroll
+            | Modal::Copy(_)
             | Modal::Menu(_)
             | Modal::Settings(_)
             | Modal::Layouts(_)
             | Modal::Resize => {}
+        }
+        if y < self.geometry.session_strip_rows {
+            return self.session_strip_hit(mouse, rx);
         }
         if y < self.geometry.strip_rows {
             return self.tab_strip_hit(mouse, rx);
@@ -1034,7 +1208,7 @@ impl WindowSession {
     /// agent's pane and dismisses the card. `None` when the report is not
     /// a press on the toast (or a modal other than scroll is up).
     fn toast_hit(&self, mouse: &SgrMouse, x: u16, y: u16) -> Option<Hit> {
-        if !matches!(self.modal, Modal::None | Modal::Scroll) || !mouse.is_press() {
+        if !matches!(self.modal, Modal::None | Modal::Copy(_)) || !mouse.is_press() {
             return None;
         }
         self.geometry
@@ -1146,6 +1320,28 @@ impl WindowSession {
         }
     }
 
+    /// The session strip owns host row 0 while it shows: a left press
+    /// hit-tests the entries and switches sessions (the handler resolves
+    /// the entry); a wheel shifts an overflowing run. A RIGHT press hits
+    /// nothing — the tabs' context menu has no session counterpart. `rx`
+    /// is the RAW host column, the layout's own space.
+    fn session_strip_hit(&self, mouse: &SgrMouse, rx: u16) -> Hit {
+        if mouse.is_wheel_up() || mouse.is_wheel_down() {
+            let delta = if mouse.is_wheel_up() { 3 } else { -3 };
+            if self.chrome.session_strip.overflowing() {
+                return Hit::SessionWheel(delta);
+            }
+            return Hit::Consumed;
+        }
+        let is_press =
+            !mouse.release && !mouse.is_motion() && !mouse.is_wheel_up() && !mouse.is_wheel_down();
+        if is_press {
+            Hit::SessionPress(rx)
+        } else {
+            Hit::Consumed
+        }
+    }
+
     /// The tab strip owns the top row: a left press hit-tests the tabs
     /// and switches windows through the select+resync contract; a RIGHT
     /// press on a tab opens that window's context menu; no pane focus, no
@@ -1224,7 +1420,7 @@ impl WindowSession {
                     release: mouse.release,
                 };
             }
-            if self.text_drag.is_some() && matches!(self.modal, Modal::None | Modal::Scroll) {
+            if self.text_drag.is_some() && matches!(self.modal, Modal::None | Modal::Copy(_)) {
                 return Hit::TextDrag {
                     x,
                     y: cy,
@@ -1350,7 +1546,7 @@ impl WindowSession {
             |s, _c, reply| {
                 if reply.ok {
                     s.chrome.tab_strip.reset_scroll();
-                    s.status_dirty = true;
+                    s.status_inflight.dirty = true;
                     s.draw_tab_strip();
                 }
             },

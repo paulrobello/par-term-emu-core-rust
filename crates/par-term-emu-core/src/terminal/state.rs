@@ -18,6 +18,7 @@ use super::{
 use crate::cell::CellFlags;
 use crate::color::{Color, NamedColor};
 use crate::cursor::Cursor;
+use crate::graphics::budget::{BudgetStore, OutputMemoryBudget, DEFAULT_OUTPUT_MEMORY_BUDGET};
 use crate::graphics::GraphicsStore;
 use crate::mouse::{MouseEncoding, MouseEventRecord, MouseMode, MousePosition};
 use crate::shell_integration::ShellIntegration;
@@ -25,6 +26,7 @@ use crate::sixel;
 use crate::terminal::sequences::dcs::DcsKind;
 use std::collections::HashMap;
 use std::num::NonZeroU32;
+use std::sync::Arc;
 
 /// Character set designation for G0/G1 charset slots.
 ///
@@ -366,6 +368,10 @@ pub(crate) struct CharsetState {
     pub(crate) g1_charset: Charset,
     /// Active charset slot: 0 = G0, 1 = G1 (toggled by SO/SI)
     pub(crate) active_g: u8,
+    /// The graphic character printed last, which REP (`CSI Ps b`) repeats.
+    /// Every other parser callback clears it, as in xterm.js, so REP only
+    /// repeats a character it directly follows.
+    pub(crate) rep_char: Option<char>,
 }
 
 impl Default for CharsetState {
@@ -374,6 +380,7 @@ impl Default for CharsetState {
             g0_charset: Charset::Ascii,
             g1_charset: Charset::Ascii,
             active_g: 0,
+            rep_char: None,
         }
     }
 }
@@ -771,6 +778,12 @@ pub(crate) struct HostConfig {
     pub(crate) configured_warning_bell_volume: u8,
     /// Margin bell volume RIS restores; DECSMBV changes only the live value.
     pub(crate) configured_margin_bell_volume: u8,
+    /// Store scrollback lines without their trailing default cells
+    /// ([`Terminal::set_compact_scrollback`]).
+    pub(crate) compact_scrollback: bool,
+    /// Resize the screens the way xterm.js resizes its buffers
+    /// ([`Terminal::set_xterm_resize`]).
+    pub(crate) xterm_resize: bool,
 }
 
 impl Default for HostConfig {
@@ -788,6 +801,8 @@ impl Default for HostConfig {
             configured_conformance_level: crate::conformance_level::ConformanceLevel::default(),
             configured_warning_bell_volume: 4,
             configured_margin_bell_volume: 4,
+            compact_scrollback: false,
+            xterm_resize: false,
         }
     }
 }
@@ -869,6 +884,21 @@ impl Default for BellVolumeState {
     }
 }
 
+/// Byte buffers a parse pass reuses (ARC-001 sub-struct): their capacity is
+/// kept between passes instead of being reallocated.
+#[derive(Default)]
+pub(crate) struct ParseBuffers {
+    /// SEC-003: scratch buffer reused by the incremental OSC guard in
+    /// `Terminal::advance_parser` so guarded chunks (those containing ESC or
+    /// mid-OSC state) do not allocate per call.
+    pub(crate) osc_scratch: Vec<u8>,
+    /// Printable ASCII the parser handed to `print` and that is not on the
+    /// grid yet. It is written as one run (see `Terminal::flush_print_run`)
+    /// before any other parser callback and before a parse pass returns, so
+    /// no code ever observes it pending.
+    pub(crate) print_run: Vec<u8>,
+}
+
 /// Kitty TGP APC pre-filter state (ARC-001 sub-struct). vte 0.15 does not
 /// expose APC payloads to `Perform`, so `Terminal::process` strips them out
 /// before the bytes reach the parser.
@@ -890,6 +920,9 @@ pub(crate) struct UnicodeConfigState {
     pub(crate) width_config: crate::unicode_width_config::WidthConfig,
     /// Unicode normalization form for text stored in cells
     pub(crate) normalization_form: crate::unicode_normalization_config::NormalizationForm,
+    /// Count widths per code point, as `wcwidth` does, instead of per
+    /// grapheme cluster ([`crate::terminal::Terminal::set_codepoint_widths`]).
+    pub(crate) codepoint_widths: bool,
 }
 
 /// Security flags: OSC 7 acceptance + insecure-sequence disable (ARC-001 sub-struct)
@@ -1004,5 +1037,35 @@ impl Default for GraphicsState {
             iterm_multipart_buffer: None,
             file_transfer_manager: FileTransferManager::default(),
         }
+    }
+}
+
+/// Unified aggregate budget for everything untrusted PTY output can retain
+/// (ENH-062): the graphics store, the iTerm2 multipart buffer, and the
+/// file-transfer manager all reserve against this one total. The `Arc` is
+/// shared into both stores by [`Terminal::wire_output_budget`]; RIS carries
+/// the sub-struct across so the configured total survives resets (ARC-100).
+pub(crate) struct OutputBudgetState {
+    pub(crate) budget: Arc<OutputMemoryBudget>,
+}
+
+impl Default for OutputBudgetState {
+    fn default() -> Self {
+        Self {
+            budget: Arc::new(OutputMemoryBudget::new(DEFAULT_OUTPUT_MEMORY_BUDGET)),
+        }
+    }
+}
+
+impl OutputBudgetState {
+    /// Publish the unified `OutputBudgetExceeded` event for a store whose
+    /// admission, growth, or eviction decision was refused by the budget.
+    pub(crate) fn report_exceeded(
+        &self,
+        events: &mut EventBroker,
+        store: BudgetStore,
+        bytes: usize,
+    ) {
+        events.push(TerminalEvent::OutputBudgetExceeded { store, bytes });
     }
 }

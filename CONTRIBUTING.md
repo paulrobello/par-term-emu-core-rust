@@ -32,6 +32,10 @@ make dev          # Build the library (release mode via maturin)
 
 The only time you invoke `cargo` directly is for Rust tests, which require the `--no-default-features --features pyo3/auto-initialize` workaround so the test harness can bootstrap a Python interpreter. See `docs/BUILDING.md` for the full rationale.
 
+### MSRV policy
+
+The `rust-version` in every manifest (`1.99` today) is **not a support floor** — it is a stamp of the newest stable toolchain exercised at the most recent release cut. Policy: MSRV tracks the latest stable Rust at each release cut; a release may raise it in lockstep with the maintainer's toolchain, and no effort is made to keep older toolchains compiling (the edition stays 2021 for embedding compatibility, not as a compatibility promise). Between releases, develop against the current stable; `rustup update` before reporting build failures.
+
 ## Verification
 
 Run the full quality gate before every commit.
@@ -50,7 +54,7 @@ make lint         # Rust clippy + fmt (auto-fix)
 make lint-python  # Python ruff format + check + pyright
 ```
 
-- `make mux-docs-check` fails until a new mux command, notification or notification type is listed in MUX.md and API_REFERENCE, and when MUX.md, a par-mux `[Unreleased]` CHANGELOG bullet, or `config.rs` rustdoc names a `--flag` that `par-mux`'s clap surface does not define (another program's flag goes in `FOREIGN_FLAGS` with a reason).
+- `make mux-docs-check` fails until a new mux command, notification or notification type is listed in MUX.md and API_REFERENCE, and when MUX.md, a par-mux `[Unreleased]` CHANGELOG bullet, or the `crates/par-mux/src/mux/config/` module's rustdoc names a `--flag` that `par-mux`'s clap surface does not define (another program's flag goes in `FOREIGN_FLAGS` with a reason).
 - Cite regression tests as "pinned by `<test_fn>`". `pinned-tests-check` fails when the named test no longer exists, so a rename must update its citation in the same change.
 - `make audit-deps` runs the dependency audits (cargo deny, `bun audit`, `pip-audit`) across the Rust graph, the web frontend and the Python environment. It needs network, is not part of `checkall`, and runs weekly in CI (`.github/workflows/deps-audit.yml`); accepted advisories and their reasons live in `deny.toml`.
 

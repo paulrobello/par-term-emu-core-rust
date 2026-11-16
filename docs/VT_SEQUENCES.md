@@ -47,7 +47,7 @@ VT100 cursor movement sequences.
 - `ESC 7` - Save cursor (DECSC)
 - `ESC 8` - Restore cursor (DECRC)
 
-> **Note:** `CSI s` and `CSI u` have dual purposes depending on context. `CSI s` with parameters and DECLRMM mode enabled sets left/right margins (DECSLRM). `CSI u` with a parameter sets margin bell volume (DECSMBV).
+> **Note:** `CSI s` and `CSI u` have dual purposes depending on context. `CSI s` with parameters and DECLRMM mode enabled sets left/right margins (DECSLRM). `CSI Ps SP u` — with a space intermediate byte, distinct from bare `CSI u` — sets margin bell volume (DECSMBV); see the VT520 features list below.
 
 ## Display Control
 
@@ -70,6 +70,10 @@ VT100 screen clearing and erasing sequences.
 - `n=1` - Clear from beginning of line to cursor
 - `n=2` - Clear entire line
 
+### Screen Alignment Pattern (DECALN)
+
+`ESC # 8` - Fill the screen with `E`, reset the margins and home the cursor
+
 ## Line/Character Editing
 
 VT220 insert/delete operations.
@@ -79,6 +83,7 @@ VT220 insert/delete operations.
 - `CSI <n> @` - Insert n blank characters (ICH)
 - `CSI <n> P` - Delete n characters (DCH)
 - `CSI <n> X` - Erase n characters (ECH)
+- `CSI <n> b` - Repeat the preceding graphic character n times (REP)
 
 ## Rectangle Operations
 
@@ -130,6 +135,7 @@ VT100/ECMA-48 text styling sequences.
 - `CSI 7 m` - Reverse
 - `CSI 8 m` - Hidden
 - `CSI 9 m` - Strikethrough
+- `CSI 21 m` - Double underline
 - `CSI 53 m` - Overline
 - `CSI 55 m` - Not overlined
 
@@ -247,7 +253,7 @@ DEC Private Mode sequences.
 - `?47` - Use alternate screen (no clear, no cursor save)
 - `?1047` - Use alternate screen, cleared on entry and exit
 - `?1048` - Save/restore cursor (like DECSC/DECRC)
-- `?1049` - Save cursor and use alternate screen
+- `?1049` - Save cursor as in DECSC and use alternate screen; DECRST restores as in DECRC (cursor and SGR pen, shared slot with ESC 7/ESC 8)
 
 ### Standard Modes
 

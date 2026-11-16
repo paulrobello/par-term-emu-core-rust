@@ -57,13 +57,61 @@ impl StreamingServer {
         SessionClientGuard,
         bool,
     )> {
-        let read_only = params.readonly || self.config.default_read_only;
-        let session = self.resolve_session_off_runtime(params).await?;
+        let read_only = params.readonly || params.metadata || self.config.default_read_only;
+        let session = if params.metadata {
+            self.metadata_session_off_runtime().await?
+        } else {
+            self.resolve_session_off_runtime(params).await?
+        };
         let session_guard = SessionClientGuard {
             session: Arc::clone(&session),
             server: Arc::clone(self),
         };
         Ok((session, global_guard, session_guard, read_only))
+    }
+
+    /// The `?metadata=1` connection state: a factory-free session under
+    /// the reserved registry id `metadata` — no pane mirror is created
+    /// (and none of the daemon's sizing involves this connection). It
+    /// exists only to route the metadata broadcasts (`mux_tree_snapshot`,
+    /// the roster) to the client and to give the shared dispatch loop a
+    /// write-refusing target; the write paths are refused by the forced
+    /// read-only flag, and the tree reply reads the watcher cache
+    /// directly. The state disappears with its last client
+    /// (`close_on_last_disconnect`), so `/sessions` lists it only while a
+    /// metadata listener is actually connected.
+    async fn metadata_session_off_runtime(self: &Arc<Self>) -> Result<Arc<StreamSessionState>> {
+        let this = Arc::clone(self);
+        tokio::task::spawn_blocking(move || {
+            let _lifecycle = this.session_lifecycle.lock();
+            let session = match this.sessions.get("metadata") {
+                Some(session) => session,
+                None => {
+                    // A fresh in-memory terminal: nothing mirrors a pane,
+                    // no PTY writer exists, and the idle/dead reapers
+                    // treat the state like any other client-less session.
+                    let terminal = Arc::new(RwLock::new(Terminal::new(80, 24)));
+                    let session = Arc::new(StreamSessionState::new(
+                        "metadata".to_string(),
+                        terminal,
+                        None,
+                        false,
+                    ));
+                    let _ = this
+                        .sessions
+                        .insert("metadata".to_string(), Arc::clone(&session));
+                    session
+                }
+            };
+            // Same admission accounting the factory path does: the
+            // SessionClientGuard's drop pairs with it.
+            if !session.try_add_client(this.config.max_clients_per_session) {
+                return Err(StreamingError::MaxClientsReached);
+            }
+            Ok(session)
+        })
+        .await
+        .map_err(|e| StreamingError::ServerError(format!("metadata session failed: {e}")))?
     }
 
     /// The one session loop for every WebSocket transport (tungstenite
@@ -109,8 +157,14 @@ impl StreamingServer {
             reconnect,
         );
 
-        // Send initial connection message
-        let connect_msg = session.build_connect_message(&client_id.to_string(), read_only);
+        // Send initial connection message. The pane-create signal mirrors
+        // the `handle_pane_create` refusal ladder's first two rungs: the
+        // allow flag AND the writable requirement (read-only forces false).
+        let connect_msg = session.build_connect_message(
+            &client_id.to_string(),
+            read_only,
+            self.config.allow_pane_create,
+        );
         client.send(connect_msg).await?;
 
         // Sync terminal mode state for existing sessions
@@ -132,6 +186,13 @@ impl StreamingServer {
         if let Some(status) = session.pane_size_status() {
             client.send(status).await?;
         }
+        // The mirrored pane's process lifecycle, same stored-snapshot
+        // ordering argument as the size status: the mirror updates its
+        // state before it broadcasts a transition, so a transition this
+        // send races is queued on the subscription above and corrects it.
+        if let Some(process) = session.pane_process_status() {
+            client.send(process).await?;
+        }
         client.send(session.viewer_presence()).await?;
 
         // Roster snapshot. Ordering: the subscription above precedes the
@@ -142,6 +203,14 @@ impl StreamingServer {
         // converges on the same state.
         if let Some(roster) = self.roster_snapshot() {
             client.send(roster).await?;
+        }
+
+        // Tree snapshot, same ordering argument as the roster: the
+        // subscription precedes the read, the watcher updates its cache
+        // before it broadcasts, and every push is a whole replacement —
+        // so a missed or replayed push converges on the same state.
+        if let Some(tree) = self.tree_snapshot() {
+            client.send(tree).await?;
         }
 
         // Setup keepalive timer
@@ -172,17 +241,19 @@ impl StreamingServer {
                         }
                         Ok(msg_opt) => match msg_opt {
                         Some(client_msg) => {
-                            let replies = self.handle_client_message(
-                                &session,
-                                ConnCtx {
-                                    transport_label,
-                                    client_id,
-                                    read_only,
-                                },
-                                &mut subscriptions,
-                                &mut rate_limiter,
-                                client_msg,
-                            );
+                            let replies = self
+                                .handle_client_message(
+                                    &session,
+                                    ConnCtx {
+                                        transport_label,
+                                        client_id,
+                                        read_only,
+                                    },
+                                    &mut subscriptions,
+                                    &mut rate_limiter,
+                                    client_msg,
+                                )
+                                .await;
                             for reply in replies {
                                 if let Err(e) = client.send(reply).await {
                                     crate::debug_error!(
@@ -207,13 +278,42 @@ impl StreamingServer {
                     let msg = match output_msg {
                         Ok(msg) => msg,
                         Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => {
-                            if let Some(status) = session.pane_size_status() {
-                                client.send(status).await?;
+                            // Dropped frames may include pane output, and a
+                            // lost output frame is the bare-ESC corruption:
+                            // an escape byte riding the dropped chunk never
+                            // reaches the client's parser, so the sequence
+                            // tail paints as literal text. Push the current
+                            // screen as an in-band resync (the same
+                            // screen-restore vehicle a workspace retarget
+                            // uses); frames still queued behind the lag
+                            // replay over it, which is the convergence shape
+                            // the roster/tree resync below already relies on.
+                            // The lag resync (card 01a1ce56): screen, mux
+                            // pane-size status, the pane's process
+                            // lifecycle, viewer presence. Every frame is a
+                            // whole replacement or a stored snapshot, so
+                            // send-then-overwrite converges; dropped
+                            // roster/tree deltas resync separately below.
+                            // Previously the process snapshot was missed —
+                            // a viewer that lagged across an exit
+                            // transition showed `running` until the NEXT
+                            // transition.
+                            for frame in session.lag_resync_frames() {
+                                if client.send(frame).await.is_err() {
+                                    break;
+                                }
                             }
-                            client.send(session.viewer_presence()).await?;
-                            // Dropped messages may include roster deltas: resync.
-                            match self.roster_snapshot() {
-                                Some(roster) => roster,
+                            // Dropped messages may include roster deltas or
+                            // tree pushes: resync both. Every snapshot is a
+                            // whole replacement, so send-then-overwrite
+                            // converges on the current state.
+                            if let Some(roster) = self.roster_snapshot() {
+                                if client.send(roster).await.is_err() {
+                                    break;
+                                }
+                            }
+                            match self.tree_snapshot() {
+                                Some(tree) => tree,
                                 None => continue,
                             }
                         }

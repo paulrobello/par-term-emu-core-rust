@@ -14,6 +14,7 @@ This document covers the **terminal core configuration** (Rust library internals
 - [Core Security Settings](#core-security-settings)
 - [Sixel Resource Limits](#sixel-resource-limits)
 - [Keyboard Protocol](#keyboard-protocol)
+- [Where par-mux Settings Live](#where-par-mux-settings-live)
 - [Color Configuration](#color-configuration)
 - [Screenshot Configuration](#screenshot-configuration)
 - [Terminal Notification Configuration](#terminal-notification-configuration)
@@ -32,6 +33,7 @@ The par-term-emu-core-rust library provides low-level terminal emulation with VT
 **Configuration layers:**
 - **Terminal Core** (this document): Low-level terminal emulator settings (dimensions, modes, protocols)
 - **TUI Layer**: Application-level settings for the TUI (see [par-term-emu-tui-rust](https://github.com/paulrobello/par-term-emu-tui-rust))
+- **par-mux daemon/attach**: the multiplexer's `config.toml` — all `[daemon]` and `[client]` keys — is documented in [MUX.md, Configuration file](MUX.md#configuration-file), not here; the handful of `[client]` keys that interact with terminal behavior are summarized under [Where par-mux Settings Live](#where-par-mux-settings-live)
 
 **Key Distinction**: Core settings control the *terminal emulation behavior* (VT modes, color parsing, escape sequences), while TUI settings control the *application experience* (selection, clipboard, themes).
 
@@ -365,7 +367,9 @@ only relax them in trusted environments where large images are expected.
 
 ---
 
-## Color Configuration
+## Where par-mux Settings Live
+
+par-mux's `config.toml` keys are not terminal-core settings and are documented in full in [MUX.md, Configuration file](MUX.md#configuration-file). The `[client]` keys below interact with terminal behavior, so they are summarized here with pointers to their MUX.md sections.
 
 The `par-mux attach` render client's chrome colors are not terminal settings: they come from the par-mux config file's `[client] theme`, `theme-dark`, and `theme-light` keys (herdr's presets, or `auto` to follow the host's light/dark appearance). See [MUX.md Themes](MUX.md#themes).
 
@@ -373,9 +377,13 @@ The same file's `[client] kitty-graphics` (default `true`) draws the kitty graph
 
 The same file's `[client] session-picker` (default `false`) turns a target-less `par-mux attach` against several sessions into an inline picker (arrow keys or `j`/`k`, Enter attaches, Esc/`q` cancels to the usual refusal) instead of the refusal; it never runs unless stdin and stdout are both terminals. See [MUX.md Attaching from a terminal](MUX.md#attaching-from-a-terminal).
 
+The same file's `[client] prefer-default-workspace` (default `false`; a settings-dialog row) resolves a target-less attach against several WORKSPACES to the one named `default` — else the first listed — and its first session, ahead of the picker and the target-less refusal. A single workspace keeps the target-less rule, and an explicit `-t` always wins. Read at launch: a reload changes the next attach.
+
 The same file's `[client] git-status` (default `true`) shows herdr's git badge under the displayed session's workspace row in the attach side panel — ` main ↑2`, the active pane's repo branch with its ahead/behind against the upstream (the daemon resolves it per `client-snapshot` request through a 3 s-cached `git status -sb` on the pane's live cwd, falling back to the workspace's launch folder; no repo, a detached HEAD, or `false` shows nothing). `false` is live on reload; the badge also has a settings-dialog row. See [MUX.md Workspace side panel](MUX.md#workspace-side-panel-s).
 
 The same file's `[[client.popup]]` tables (`key`, `command`, optional `width`/`height` as cells or `"N%"`, and `description`) bind popup command windows: prefix + the key runs the command in a floating box over the attach TUI. See [MUX.md Popups](MUX.md#popups).
+
+## Color Configuration
 
 ### Default Colors
 
@@ -840,6 +848,12 @@ term.process(b"\x1b[?1006h")  # SGR mouse encoding
 
 This is the one table of every environment variable the library, the `par-mux` binary, the `par-term-streamer` binary, and the shipped par-mux agent integrations read. Each area's guide keeps its own detail: [SECURITY.md](SECURITY.md#xtwinops-query-response-control) for `PAR_TERM_REPLY_XTWINOPS`, [MUX.md](MUX.md#agent-hook-reports) for the variables par-mux sets inside panes, and [STREAMING.md](STREAMING.md#command-line-options-and-environment-variables) for the streaming server options.
 
+One `[streaming]` setting deserves its own note beyond the table: **`allow-pane-create`** (streamer option `--allow-pane-create`, env `PAR_TERM_ALLOW_PANE_CREATE`, one of the `PAR_TERM_*` variables counted below). It lets writable clients create real panes on the backing mux daemon (`pane_create_request` runs `new-window -t <session>`, default shell only — no command passthrough, no split-window). Fail-closed: the default `false` refuses with error code `pane_create_disabled`; a read-only connection is refused `pane_create_read_only` regardless of the flag. Uncertain response: a drop between the daemon create and the reply leaves the pane existing, so a client that saw neither `pane_created` nor an error re-queries the mux tree snapshot instead of retrying blind — the request's `correlation_id` matches a late reply. Consumed by mux-xr (browser/Quest clients). Message detail: [STREAMING.md](STREAMING.md#command-line-options-and-environment-variables).
+
+The sibling **`csp-allow-blob-connect`** (streamer option `--csp-allow-blob-connect`, env `PAR_TERM_CSP_ALLOW_BLOB_CONNECT`, another `PAR_TERM_*` variable; Python `StreamingConfig(allow_blob_connect_src=…)`) adds `blob:` to the Content-Security-Policy's `connect-src` so a custom web root's own assets can `fetch()` blob URLs (GLTF embedded textures, Troika workers). Default `false` keeps the ENH-059 policy byte-identical on every response; `true` is an explicit opt-in for custom web roots serving owned blob assets — everything else in the policy, including `frame-ancestors 'none'`, is unchanged. Security review: Paul, 2026-11-01 (card 01a19895bd, requested by mux-xr).
+
+The sibling **`csp-connect-origins`** (streamer option `--csp-connect-origins`, env `PAR_TERM_CSP_CONNECT_ORIGINS`, another `PAR_TERM_*` variable; Python `StreamingConfig(csp_connect_origins=[…])`) appends HTTPS origins to the CSP's `connect-src` so a custom web root can `fetch()` public APIs directly (the requesting deployment uses weather endpoints that return permissive CORS headers). Comma-separated or repeat the flag; each value must be the strict `https://host[:port]` source-expression form — path, query, fragment, userinfo, non-HTTPS schemes, and malformed ports are rejected at startup naming the value (the same validator also guards the Python binding). Default unset keeps the ENH-059 policy byte-identical; set, `connect-src` gains exactly the supplied origins after the existing tokens and nothing else in the policy moves (including `frame-ancestors 'none'`). Requested by mux-xr (card 01a1d798).
+
 | Variable | Read by | Default | Purpose |
 |----------|---------|---------|---------|
 | `DEBUG_LEVEL` | Rust debug logger and the Python `debug` module | `0` (off) | Log verbosity `0`-`4` (off, error, info, debug, trace); logs go to the system temp directory |
@@ -850,8 +864,11 @@ This is the one table of every environment variable the library, the `par-mux` b
 | `PAR_MUX_SOCKET` | `par-mux` binary | unset | Socket path when neither `--socket` nor a name is given; set inside every mux pane |
 | `PAR_MUX_CONTROL_SOCKET` | `par-mux` client mode | unset | Full control socket; checked before `PAR_MUX_SOCKET`. Exported in panes only by a `--pane-endpoints --expose-control-socket` daemon, or under `--pane-endpoints` for a session whose env carries `PAR_MUX_CONTROL=1` |
 | `PAR_MUX_ENV` | par-mux nested-daemon guard | unset | Marks a process as running inside a mux pane; serve mode and auto-spawn refuse to start a nested daemon |
+| `PAR_MUX_NO_LAUNCHD` | `par-mux` daemon start (macOS) | unset | `1` opts a detached default-instance start out of the launchd job hand-off, so the daemon forks bare even when the `com.paulrobello.par-mux` job is loaded (skips the bundle's TCC-granted launchd ancestry); see [MUX.md](MUX.md) |
 | `PAR_MUX_NO_APP_WRAPPER` | `par-mux` daemon start (macOS) | unset | `1` opts a detached start out of the Par-mux.app wrapper hand-off, so the daemon forks from the invoking binary without the app bundle's TCC local-network grant; see [MUX.md](MUX.md) |
+| `PAR_MUX_MESH_BIN` | `par-mux agent-prompt --mesh` | unset | Overrides the par-mesh binary the daemon invokes for mesh delivery (default `~/.bun/bin/par-mesh`, then `PATH`); tests point it at a fake; see [MUX.md](MUX.md) |
 | `PAR_MUX_ALLOW_NESTED` | par-mux nested-daemon guard | unset | `1` allows a nested daemon despite `PAR_MUX_ENV` |
+| `PAR_MUX_DIE_WITH_PARENT` | `par-mux --foreground` serve (read once) | unset | Set by the test suite's spawn helper: a watchdog polls `getppid()` and requests the same clean shutdown as SIGTERM once the spawner dies, so an interrupted gate run cannot orphan a daemon holding its panes' PTYs; see [MUX.md](MUX.md) |
 | `PAR_MUX_CONTROL` | par-mux daemon, per session (`set-environment` / `new-session -e`) | unset | `1` in a session's env grants that session's panes `PAR_MUX_CONTROL_SOCKET` (the full control socket) under `--pane-endpoints` without `--expose-control-socket`; see [MUX.md](MUX.md#agent-hook-reports) |
 | `PAR_MUX_CURSOR_TRACE` | `par-mux attach` render mode (read once) | unset | Any value but empty or `0` logs every host cursor placement write and every reason the focused cursor is unplaceable to stderr; redirect it (`2>/tmp/cursor.log`) because stderr is usually the rendered tty |
 | `PAR_MUX_INPUT_TRACE` | `par-mux attach` render mode (read once) | unset | Any value but empty or `0` logs the render input/output timeline to stderr — every host mouse report with the routing decision and forwarded bytes, every `%output` chunk fed into a pane, every frame flush (cells + bytes), and `repaint_all` clears; redirect it (`2>/tmp/input.log`) because stderr is usually the rendered tty |
@@ -886,7 +903,7 @@ This is the one table of every environment variable the library, the `par-mux` b
 | `COMPUTERNAME` | par-mux (Windows) | — | Local hostname for deciding whether an OSC 7 directory report is from this machine |
 | `XPC_SERVICE_NAME` | streamer and par-mux self-update launchd detection | unset | Set (by launchd) for processes it manages; the updater compares it against the configured restart label to decide between `launchctl kickstart -k` and re-exec restart |
 | `LAUNCH_JOB_LABEL` | streamer and par-mux self-update launchd detection | unset | Same contract as `XPC_SERVICE_NAME`: launchd-injected job identity matched against the configured label |
-| `PAR_TERM_*` (50 variables) | `par-term-streamer` binary | per option | One variable per CLI option, such as `PAR_TERM_HOST`, `PAR_TERM_PORT`, `PAR_TERM_API_KEY`, `PAR_TERM_TLS_CERT`, `PAR_TERM_MUX_SOCKET`. A flag on the command line wins. Full list with the matching flag: [STREAMING.md](STREAMING.md#command-line-options-and-environment-variables) |
+| `PAR_TERM_*` (56 variables) | `par-term-streamer` binary | per option | One variable per CLI option, such as `PAR_TERM_HOST`, `PAR_TERM_PORT`, `PAR_TERM_API_KEY`, `PAR_TERM_TLS_CERT`, `PAR_TERM_MUX_SOCKET`. A flag on the command line wins. Full list with the matching flag: [STREAMING.md](STREAMING.md#command-line-options-and-environment-variables) |
 
 Spawned child processes receive `TERM=xterm-256color`, `COLORTERM=truecolor`, `TERM_PROGRAM=kitty`, `KITTY_WINDOW_ID=1` and `KITTY_PID=<pid>`. Override any of them with the `env` argument to `spawn()`/`spawn_shell()` (Python) or `PtySession::set_env()` (Rust). Inherited variables the library drops are listed in [SECURITY.md](SECURITY.md#inherited-environment).
 

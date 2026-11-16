@@ -1582,16 +1582,17 @@ fn agent_hooks_status_prints_one_line_per_agent_without_a_daemon() {
     assert_eq!(lines.len(), agents.len(), "stdout: {:?}", run.stdout);
     for (agent, line) in agents.iter().zip(&lines) {
         let rest = line.strip_prefix(agent).expect("agent name leads the line");
-        let Some(state) = rest.strip_prefix(" installed") else {
-            assert!(
-                rest == " absent",
-                "line {line:?} must read <agent> installed|absent [currency]"
-            );
-            continue;
+        let Some(state) = rest.strip_prefix(" installed").or_else(|| {
+            // `absent` carries a free-form reason too ("not installed") —
+            // the par-term Settings row consumes only the second token,
+            // so any suffix after either state is wire-conformant.
+            rest.strip_prefix(" absent").map(|_| "")
+        }) else {
+            panic!("line {line:?} must read <agent> installed|absent [suffix]");
         };
         assert!(
             state.is_empty() || state.starts_with(' '),
-            "line {line:?}: anything after `installed` is the currency suffix"
+            "line {line:?}: anything after the state is the currency/reason suffix"
         );
     }
 }

@@ -1024,3 +1024,304 @@ fn report_state_self_authority_is_not_scraped() {
     assert_eq!(f.metadata("agent_state").as_deref(), Some("working"));
     assert_eq!(f.metadata("agent_state_source").as_deref(), Some("self"));
 }
+
+/// Killing a hook-claimed pane broadcasts `%agent-released` — the reaper's
+/// own-death path answers with `%pane-exited`, but the explicit kill-pane
+/// had no notice at all, so roster consumers (the streamer's watcher)
+/// kept the row as a ghost in every later snapshot (the mux-xr kill-pane
+/// fault).
+#[test]
+fn kill_pane_of_a_claimed_pane_broadcasts_the_release() {
+    let f = Fixture::new();
+    // A broadcast sink so the test reads what a control client receives.
+    let (sink_tx, sink) = std::sync::mpsc::sync_channel(1024);
+    f.clients.lock().push((
+        u64::MAX,
+        sink_tx,
+        Arc::new(std::sync::atomic::AtomicUsize::new(0)),
+        Arc::new(AtomicBool::new(false)),
+        crate::mux::ipc::ConnectionAbort::none(),
+    ));
+    f.report("claude", "blocked", 1);
+    assert!(
+        f.run("list-agents").contains("%0 claude blocked hook"),
+        "the claim rides the roster before the kill"
+    );
+    let reply = f.run("kill-pane -t %0");
+    assert!(!reply.contains("%error"), "kill failed: {reply}");
+    let lines: Vec<String> = sink.try_iter().collect();
+    assert!(
+        lines
+            .iter()
+            .any(|l| l.contains("%agent-released %0 claude")),
+        "the release rides the broadcast: {lines:?}"
+    );
+    // The row is gone from the daemon roster, and the broadcast set has
+    // the release ahead of the removal geometry (window-close for the
+    // emptied window).
+    assert!(
+        !f.run("list-agents").contains("claude"),
+        "the row is gone: {}",
+        f.run("list-agents")
+    );
+    let release_index = lines
+        .iter()
+        .position(|l| l.contains("%agent-released"))
+        .expect("release present");
+    let window_close = lines
+        .iter()
+        .position(|l| l.contains("%window-close"))
+        .expect("window close present");
+    assert!(
+        release_index < window_close,
+        "the release precedes the removal geometry: {lines:?}"
+    );
+}
+
+/// Killing a WINDOW whose pane carries a claim broadcasts
+/// `%agent-released` ahead of the removal geometry — kill-pane's
+/// ghost-row rule generalized to the window cascade. Without it the
+/// killed window's claimed row ghosts in every later roster snapshot.
+#[test]
+fn kill_window_of_a_claimed_pane_broadcasts_the_release() {
+    let f = Fixture::new();
+    let (sink_tx, sink) = std::sync::mpsc::sync_channel(1024);
+    f.clients.lock().push((
+        u64::MAX,
+        sink_tx,
+        Arc::new(std::sync::atomic::AtomicUsize::new(0)),
+        Arc::new(AtomicBool::new(false)),
+        crate::mux::ipc::ConnectionAbort::none(),
+    ));
+    f.report("claude", "blocked", 1);
+    assert!(
+        f.run("list-agents").contains("%0 claude blocked hook"),
+        "the claim rides the roster before the kill"
+    );
+    let reply = f.run("kill-window -t @0");
+    assert!(!reply.contains("%error"), "kill failed: {reply}");
+    let lines: Vec<String> = sink.try_iter().collect();
+    let release_index = lines
+        .iter()
+        .position(|l| l.contains("%agent-released %0 claude"))
+        .expect("release present");
+    let window_close = lines
+        .iter()
+        .position(|l| l.contains("%window-close"))
+        .expect("window close present");
+    assert!(
+        release_index < window_close,
+        "the release precedes the removal geometry: {lines:?}"
+    );
+    assert!(
+        !f.run("list-agents").contains("claude"),
+        "the row is gone: {}",
+        f.run("list-agents")
+    );
+}
+
+/// Same contract for kill-session: every claimed pane the session
+/// cascade removes releases first, the `%window-close` lines follow.
+#[test]
+fn kill_session_of_a_claimed_pane_broadcasts_the_release() {
+    let f = Fixture::new();
+    let (sink_tx, sink) = std::sync::mpsc::sync_channel(1024);
+    f.clients.lock().push((
+        u64::MAX,
+        sink_tx,
+        Arc::new(std::sync::atomic::AtomicUsize::new(0)),
+        Arc::new(AtomicBool::new(false)),
+        crate::mux::ipc::ConnectionAbort::none(),
+    ));
+    f.report("claude", "blocked", 1);
+    assert!(
+        f.run("list-agents").contains("%0 claude blocked hook"),
+        "the claim rides the roster before the kill"
+    );
+    let reply = f.run("kill-session -t agents");
+    assert!(!reply.contains("%error"), "kill failed: {reply}");
+    let lines: Vec<String> = sink.try_iter().collect();
+    let release_index = lines
+        .iter()
+        .position(|l| l.contains("%agent-released %0 claude"))
+        .expect("release present");
+    let window_close = lines
+        .iter()
+        .position(|l| l.contains("%window-close"))
+        .expect("window close present");
+    let sessions_changed = lines
+        .iter()
+        .position(|l| l.contains("%sessions-changed"))
+        .expect("sessions changed present");
+    assert!(
+        release_index < window_close && release_index < sessions_changed,
+        "the release precedes the removal geometry: {lines:?}"
+    );
+    assert!(
+        !f.run("list-agents").contains("claude"),
+        "the row is gone: {}",
+        f.run("list-agents")
+    );
+}
+
+/// Same contract for kill-workspace (`kill-workspace` also rides the
+/// shared kill_target): the workspace cascade's claimed panes release
+/// before `%window-close` / `%sessions-changed` / `%workspaces-changed`.
+#[test]
+fn kill_workspace_of_a_claimed_pane_broadcasts_the_release() {
+    let f = Fixture::new();
+    let (sink_tx, sink) = std::sync::mpsc::sync_channel(1024);
+    f.clients.lock().push((
+        u64::MAX,
+        sink_tx,
+        Arc::new(std::sync::atomic::AtomicUsize::new(0)),
+        Arc::new(AtomicBool::new(false)),
+        crate::mux::ipc::ConnectionAbort::none(),
+    ));
+    f.report("claude", "blocked", 1);
+    assert!(
+        f.run("list-agents").contains("%0 claude blocked hook"),
+        "the claim rides the roster before the kill"
+    );
+    let reply = f.run("kill-workspace -t +0");
+    assert!(!reply.contains("%error"), "kill failed: {reply}");
+    let lines: Vec<String> = sink.try_iter().collect();
+    let release_index = lines
+        .iter()
+        .position(|l| l.contains("%agent-released %0 claude"))
+        .expect("release present");
+    let window_close = lines
+        .iter()
+        .position(|l| l.contains("%window-close"))
+        .expect("window close present");
+    assert!(
+        release_index < window_close,
+        "the release precedes the removal geometry: {lines:?}"
+    );
+    assert!(
+        !f.run("list-agents").contains("claude"),
+        "the row is gone: {}",
+        f.run("list-agents")
+    );
+}
+
+/// A registry line's `project=` field scopes the resolution; zero matches
+/// refuse naming the --to escape, several refuse listing the candidates.
+#[test]
+fn resolve_mesh_addr_scopes_by_project() {
+    let registry = "\
+claude-b177@macdaddy:proj harness=claude delivery=channel project=proj
+codex-e13f@macdaddy:other harness=codex delivery=poll project=other
+claude-5364@macdaddy:proj2 harness=claude delivery=channel project=proj2
+";
+    assert_eq!(
+        super::resolve_mesh_addr(registry, "proj").unwrap(),
+        "claude-b177@macdaddy:proj"
+    );
+    let err = super::resolve_mesh_addr(registry, "missing").unwrap_err();
+    assert!(err.contains("--to"), "{err}");
+}
+
+/// Two live agents in the pane's project refuse with the candidate list.
+#[test]
+fn resolve_mesh_addr_refuses_an_ambiguous_project() {
+    let registry = "\
+a-one@macdaddy:proj harness=claude project=proj
+a-two@macdaddy:proj harness=claude project=proj
+";
+    let err = super::resolve_mesh_addr(registry, "proj").unwrap_err();
+    assert!(err.contains("a-one@macdaddy:proj"), "{err}");
+    assert!(err.contains("a-two@macdaddy:proj"), "{err}");
+}
+
+/// The fake par-mesh the delivery tests run against: `send` appends its
+/// target and body to the log path baked into the script, and exits 1 for
+/// an address containing "fail" so the failure shape needs no second
+/// script.
+fn write_fake_mesh(dir: &std::path::Path, log: &std::path::Path) -> std::path::PathBuf {
+    let script = dir.join("fake-par-mesh.sh");
+    let log = log.to_string_lossy().replace('\\', "\\\\");
+    std::fs::write(
+        &script,
+        format!(
+            "#!/bin/bash\ncase \"$1\" in\n  send)\n    if [[ \"$2\" == *fail* ]]; then echo boom >&2; exit 1; fi\n    printf '%s|%s\\n' \"$2\" \"$3\" >> '{log}'\n    ;;\nesac\n"
+        ),
+    )
+    .unwrap();
+    use std::os::unix::fs::PermissionsExt;
+    std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o755)).unwrap();
+    script
+}
+
+/// `mesh_deliver` with an explicit address spawns `par-mesh send ADDR TEXT`
+/// and records it; a failing CLI surfaces its stderr.
+#[test]
+fn mesh_deliver_sends_the_text_to_the_named_address() {
+    let dir = tempfile::tempdir().unwrap();
+    let log = dir.path().join("sent.log");
+    let fake = write_fake_mesh(dir.path(), &log);
+    super::mesh_deliver(
+        fake.to_str().unwrap(),
+        "testagent",
+        &None,
+        Some("mesh-agent@localhost:proj"),
+        "hello",
+    )
+    .unwrap();
+    assert_eq!(
+        std::fs::read_to_string(&log).unwrap(),
+        "mesh-agent@localhost:proj|hello\n"
+    );
+    let err = super::mesh_deliver(
+        fake.to_str().unwrap(),
+        "testagent",
+        &None,
+        Some("fail@localhost:proj"),
+        "hello",
+    )
+    .unwrap_err();
+    assert!(err.contains("boom"), "{err}");
+}
+
+/// The dispatch end-to-end: `--mesh` without `--to` runs the full path —
+/// agent refusals, the pane's project scope, the par-mesh `list` through an
+/// injected fake — and the fake's registry names a different project, so
+/// the command refuses without sending or typing anything. Hermetic: no
+/// dependence on a real par-mesh install or this host's registry.
+#[test]
+fn agent_prompt_mesh_refuses_when_no_registry_entry_matches() {
+    let dir = tempfile::tempdir().unwrap();
+    let script = dir.path().join("fake-par-mesh-list.sh");
+    std::fs::write(
+        &script,
+        "#!/bin/bash\ncase \"$1\" in\n  list)\n    printf 'someone@localhost:other-project harness=claude project=other-project\\n' ;;\nesac\n",
+    )
+    .unwrap();
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o755)).unwrap();
+    }
+    *super::test_mesh_bin_state().lock() = Some(script.to_string_lossy().into_owned());
+    let f = Fixture::new();
+    f.wait_for_shell();
+    f.report("testagent", "idle", 1);
+    let (lines, ok) = body(&f.run("agent-prompt --mesh -t %0 hello from the mesh"));
+    assert!(!ok, "{lines:?}");
+    assert!(
+        lines
+            .iter()
+            .any(|l| l.contains("no par-mesh agent registered")),
+        "{lines:?}"
+    );
+    *super::test_mesh_bin_state().lock() = None;
+    std::thread::sleep(Duration::from_millis(400));
+    let pane_text = {
+        let guard = f.tree.lock();
+        let pane = guard.pane(PANE).expect("pane alive");
+        pane.terminal().read().content()
+    };
+    assert!(
+        !pane_text.contains("hello from the mesh"),
+        "prompt text must not reach the PTY: {pane_text:?}"
+    );
+}

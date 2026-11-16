@@ -198,11 +198,13 @@ Create a new terminal with specified dimensions.
 
 **Example:**
 ```python
-term.set_badge_format(r"\(username)@\(hostname)")
-term.set_badge_session_variable("username", "alice")
-term.set_badge_session_variable("hostname", "server1")
-badge = term.evaluate_badge()  # "alice@server1"
+term.set_badge_format(r"\(env)::\(branch)")
+term.set_badge_session_variable("env", "prod")
+term.set_badge_session_variable("branch", "main")
+badge = term.evaluate_badge()  # "prod::main"
 ```
+
+> **Note:** Built-in variable names are resolved from live terminal state and cannot be overridden via `set_badge_session_variable` — a custom variable stored under a built-in name is shadowed by the built-in. Use names outside the built-in list for custom values.
 
 #### User Variables (OSC 1337 SetUserVar)
 - `get_user_var(name: str) -> str | None`: Get a user variable set via OSC 1337 SetUserVar
@@ -281,7 +283,7 @@ term.encode_key(1, 2, ord("f"), left_option=0)  # b'f' (normal passthrough)
 - `clear_all_clipboard_history()`: Clear all clipboard history
 - `search_clipboard_history(query: str, slot: str | None = None) -> list[ClipboardEntry]`: Search clipboard history for entries containing `query` (case-sensitive substring match; searches all slots if `slot` is None)
 
-The same family is available as a feature-scoped facade, `TerminalClipboard(term)` (ARC-002), which delegates to the terminal it wraps: `add(slot, content, label=None)`, `history(slot)`, `latest(slot)`, `clear(slot=None)` (all slots when `slot` is None), `set(content, slot=None)`, `get(slot=None)`, `search(query, slot=None)`, and the `terminal` property. New code should prefer the facade; the flat methods stay for compatibility.
+The same family is available as a feature-scoped facade, [TerminalClipboard](#terminalclipboard) (ARC-002). New code should prefer the facade; the flat methods stay for compatibility.
 
 #### Scrollback Buffer
 - `scrollback() -> list[str]`: Get scrollback buffer as list of strings
@@ -434,8 +436,6 @@ Multi-protocol graphics support: Sixel (DCS), iTerm2 Inline Images (OSC 1337), a
 - `clear_graphics()`: Clear all graphics
 - `export_graphics_json() -> str`: Export all graphics metadata as JSON for session persistence (includes placements, scrollback, animations with base64-encoded pixel data)
 - `import_graphics_json(json: str) -> int`: Import graphics from JSON string (clears existing graphics first, returns count restored)
-- `graphics_store() -> GraphicsStore`: Get immutable access to graphics store (Rust API only)
-- `graphics_store_mut() -> GraphicsStore`: Get mutable access to graphics store (Rust API only)
 
 **Supported Protocols:**
 - **Sixel** (DCS): VT340 bitmap graphics via `DCS Pq ... ST`
@@ -468,7 +468,7 @@ Multi-protocol graphics support: Sixel (DCS), iTerm2 Inline Images (OSC 1337), a
 - `screenshot_config(config: ScreenshotConfig, scrollback_offset: int = 0) -> bytes`: Take a screenshot using a reusable `ScreenshotConfig` instead of repeating 16+ keyword args on every call (QA-005). Available on both `Terminal` and `PtyTerminal`.
 - `screenshot_to_file_config(path: str, config: ScreenshotConfig, scrollback_offset: int = 0)`: Take a screenshot to a file using a reusable `ScreenshotConfig`. Available on both `Terminal` and `PtyTerminal`.
 
-**Supported Formats:** PNG, JPEG, BMP, SVG (vector), HTML
+**Supported Formats:** PNG, JPEG, BMP, SVG (vector). HTML output is not a screenshot format — use `export_html()` for HTML export.
 
 **Example:**
 ```python
@@ -576,10 +576,8 @@ Extended shell integration features beyond basic OSC 133:
 - `clear_cwd_history()`: Clear CWD history
 - `set_max_cwd_history(max: int)`: Set CWD history limit
 - `record_cwd_change(new_cwd: str, hostname: str | None = None, username: str | None = None)`: Record working directory change (same method as documented under Shell Integration)
-- `poll_events()`: Now also returns `cwd_changed` events with `old_cwd`, `new_cwd`, `hostname`, `username`, `timestamp`
-- `poll_events()`: Now also returns `user_var_changed` events with `name`, `value`, `old_value` (optional) when OSC 1337 SetUserVar sequences are received
+- `poll_events() -> list[dict]`: Returns `cwd_changed` events (`old_cwd`, `new_cwd`, `hostname`, `username`, `timestamp`) and `user_var_changed` events (`name`, `value`, `old_value` (optional)) when OSC 1337 SetUserVar sequences are received. Shell integration events include the `cursor_line` field on both `poll_events()` and `poll_subscribed_events()`
 - `poll_shell_integration_events() -> list[dict]`: Drain only shell integration events (keeping other events queued). Returns dicts with `event_type`, `command`, `exit_code`, `timestamp`, `cursor_line`. The `cursor_line` is the absolute cursor line (`scrollback_len + cursor_row`) captured at the exact moment each OSC 133 marker was parsed
-- `poll_events()` and `poll_subscribed_events()`: Shell integration events now include `cursor_line` field
 
 ### Semantic Zones
 
@@ -625,7 +623,7 @@ zones = term.get_zones()
 # [
 #   {"zone_type": "prompt", "abs_row_start": 0, "abs_row_end": 0, ...},
 #   {"zone_type": "command", "abs_row_start": 0, "abs_row_end": 0, ...},
-#   {"zone_type": "output", "abs_row_start": 0, "abs_row_end": 1, ...},
+#   {"zone_type": "output", "abs_row_start": 0, "abs_row_end": 2, ...},
 # ]
 
 # Query a specific row
@@ -697,15 +695,30 @@ Advanced clipboard features beyond basic OSC 52:
 - `get_clipboard_sync_history(target: str) -> list[ClipboardHistoryEntry]`: Get clipboard sync history for a target (`"clipboard"`, `"primary"`, `"secondary"`, or `"cutbuffer0"`, case-insensitive)
 - `record_clipboard_sync(target: str, operation: str, content: str | None, is_remote: bool)`: Record a clipboard synchronization event (e.g. `record_clipboard_sync("clipboard", "set", "hello", False)`)
 
+### TerminalClipboard
+
+Feature-scoped facade over the clipboard family (ARC-002). `TerminalClipboard(term)` delegates every call to the terminal it wraps — `TerminalClipboard(term).history("clipboard")` is `term.get_clipboard_history("clipboard")`:
+
+- `add(slot: str, content: str, label: str | None = None)`: Add entry to the slot's clipboard history (raises `ValueError` for an unrecognized slot name)
+- `history(slot: str) -> list[ClipboardEntry]`: Get the slot's history, oldest-first
+- `latest(slot: str) -> ClipboardEntry | None`: Get the most recent entry for the slot
+- `clear(slot: str | None = None)`: Clear history for one slot, or all slots when `slot` is None
+- `set(content: str, slot: str | None = None)`: Set clipboard content, writing it to the slot's history
+- `get(slot: str | None = None) -> str | None`: Get the slot's current clipboard content
+- `search(query: str, slot: str | None = None) -> list[ClipboardEntry]`: Search history for entries containing `query` (case-sensitive substring; all slots when `slot` is None)
+- `terminal`: Property — the wrapped `Terminal` (the same object passed to the constructor)
+
 ### Graphics Extended
 
 Additional graphics management beyond basic display:
 
 - `add_inline_image(image: InlineImage)`: Add inline image (iTerm2 protocol)
-- `get_image_by_id(id: int) -> InlineImage | None`: Get image by ID
+- `get_image_by_id(id: str) -> InlineImage | None`: Get image by ID
 - `get_images_at(col: int, row: int) -> list[InlineImage]`: Get images at a position
 - `get_all_images() -> list[InlineImage]`: Get all images in terminal
-- `delete_image(id: int)`: Delete image by ID
+- `delete_image(id: str) -> bool`: Delete image by ID; returns `True` if an image with that ID was found and deleted
+
+Image IDs are strings. A programmatically added `InlineImage` keeps the `id` it was constructed with — one built with `id=None` cannot be addressed by `get_image_by_id`/`delete_image` (enumerate with `get_all_images()` instead); images received via OSC 1337 carry parser-assigned ids.
 - `clear_images()`: Clear all inline images
 - `set_max_inline_images(max: int)`: Set maximum inline image count
 - `set_allow_file_media(mode: str)`: Control whether Kitty graphics may load payloads from files (`t=f`/`t=t`): `"off"`, `"temp_only"` (default — only `*tty-graphics-protocol*` files inside an allowed temp root, deleted after decoding), or `"all"` (unrestricted `t=f` reads). Raises `ValueError` on any other name
@@ -761,6 +774,7 @@ File transfer events are delivered through the [Observer API](#observer-api). Su
 | `file_transfer_failed` | `id`, `reason` | Transfer failed (decode error, size exceeded, cancelled) |
 | `upload_requested` | `format` | Host requested a file upload (e.g., `"tgz"`) |
 | `inline_image_dropped` | `reason` | An OSC 1337 `File=`/`MultipartFile=`/`FilePart=` sequence was dropped (malformed input, limit rejection, or decode failure) — the visible diagnostic that distinguishes a dropped image from a sequence never sent |
+| `output_budget_exceeded` | `store`, `bytes` | The unified untrusted-output memory budget (ENH-062) refused, evicted, or would have been exceeded by an allocation: `store` is `"graphics"`, `"multipart"`, or `"file_transfer"`, `bytes` is the allocation involved. Per-store events keep firing alongside |
 
 #### Download Example
 
@@ -914,10 +928,11 @@ Controls how character widths are calculated, particularly for East Asian Ambigu
 - `set_width_config(config: WidthConfig)`: Set the full width configuration (Unicode version + ambiguous-width treatment)
 - `set_ambiguous_width(width: AmbiguousWidth)`: Convenience method to set just the ambiguous-width treatment without changing the Unicode version
 - `set_unicode_version(version: UnicodeVersion)`: Convenience method to set just the Unicode version without changing the ambiguous-width treatment
-- `char_width(c: str) -> int`: Get the display width of a single character (0, 1, or 2 cells)
+- `char_width(c: str) -> int`: Get the display width of a single character (0, 1, or 2 cells); the module-level `char_width` below adds a `WidthConfig` override
 
 **Module-level width functions** (call on the package, not a Terminal instance):
 
+- `char_width(c: str, config: WidthConfig | None = None) -> int`: Display width of a single character; pass a `WidthConfig` to override the default width rules
 - `char_width_cjk(c: str) -> int`: Display width of a single character using CJK rules (East Asian Ambiguous characters count as 2 cells)
 - `str_width(s: str, config: WidthConfig | None = None) -> int`: Display width of a string; pass a `WidthConfig` to override the default width rules
 - `str_width_cjk(s: str) -> int`: Display width of a string using CJK rules
@@ -949,7 +964,7 @@ Single active progress bar state, separate from the multiple concurrent [Named P
 - `poll_screen_cleared_events() -> list[bool]`: Drain pending `ScreenCleared` events. Each `bool` is `True` if the scrollback was also cleared (ED 3J), `False` for screen-only clears (ED 2J). Use this to invalidate scrollback zone/mark metadata on the frontend.
 
 **Event types returned by `poll_events()` / `poll_subscribed_events()`:**
-`bell`, `title_changed`, `size_changed`, `mode_changed`, `graphics_added`, `hyperlink_added`, `dirty_region`, `cwd_changed`, `trigger_matched`, `user_var_changed`, `progress_bar_changed`, `badge_changed`, `shell_integration`, `zone_opened`, `zone_closed`, `zone_scrolled_out`, `environment_changed`, `remote_host_transition`, `sub_shell_detected`, `file_transfer_started`, `file_transfer_progress`, `file_transfer_completed`, `file_transfer_failed`, `upload_requested`, `screen_cleared`, `inline_image_dropped`, `pointer_shape_changed`
+`bell`, `title_changed`, `size_changed`, `mode_changed`, `graphics_added`, `hyperlink_added`, `dirty_region`, `cwd_changed`, `trigger_matched`, `user_var_changed`, `progress_bar_changed`, `badge_changed`, `shell_integration`, `zone_opened`, `zone_closed`, `zone_scrolled_out`, `environment_changed`, `remote_host_transition`, `sub_shell_detected`, `file_transfer_started`, `file_transfer_progress`, `file_transfer_completed`, `file_transfer_failed`, `upload_requested`, `screen_cleared`, `inline_image_dropped`, `output_budget_exceeded`, `pointer_shape_changed`
 
 The `user_var_changed` event dict contains: `name`, `value`, and `old_value` (`None` when the variable is first set).
 - `update_animations()`: Update animation frames (for blinking cursor, text, etc.)
@@ -1051,7 +1066,7 @@ All observer events are delivered as Python dicts with a `"type"` key identifyin
 
 **Supported event types:**
 
-`bell`, `title_changed`, `size_changed`, `mode_changed`, `graphics_added`, `hyperlink_added`, `dirty_region`, `cwd_changed`, `trigger_matched`, `user_var_changed`, `progress_bar_changed`, `badge_changed`, `shell_integration`, `zone_opened`, `zone_closed`, `zone_scrolled_out`, `environment_changed`, `remote_host_transition`, `sub_shell_detected`, `file_transfer_started`, `file_transfer_progress`, `file_transfer_completed`, `file_transfer_failed`, `upload_requested`, `screen_cleared`, `inline_image_dropped`, `pointer_shape_changed`
+`bell`, `title_changed`, `size_changed`, `mode_changed`, `graphics_added`, `hyperlink_added`, `dirty_region`, `cwd_changed`, `trigger_matched`, `user_var_changed`, `progress_bar_changed`, `badge_changed`, `shell_integration`, `zone_opened`, `zone_closed`, `zone_scrolled_out`, `environment_changed`, `remote_host_transition`, `sub_shell_detected`, `file_transfer_started`, `file_transfer_progress`, `file_transfer_completed`, `file_transfer_failed`, `upload_requested`, `screen_cleared`, `inline_image_dropped`, `output_budget_exceeded`, `pointer_shape_changed`
 
 #### Examples
 
@@ -1869,7 +1884,7 @@ Difference between two screen snapshots. Obtain one from `diff_snapshots(old_sna
 Tmux control mode notification.
 
 **Properties:**
-- `notification_type: str`: Notification type — one of the exact runtime strings: `begin`, `end`, `error`, `output`, `pane-mode-changed`, `window-pane-changed`, `window-close`, `unlinked-window-close`, `window-add`, `unlinked-window-add`, `window-renamed`, `unlinked-window-renamed`, `session-changed`, `client-session-changed`, `session-renamed`, `sessions-changed`, `workspaces-changed`, `config-changed`, `session-window-changed`, `client-detached`, `client-attached`, `client-left`, `exit`, `pause`, `extended-output`, `continue`, `subscription-changed`, `layout-change`, `paste-buffer-changed`, `paste-buffer-deleted`, `agent-state-changed`, `agent-released`, `agent-telemetry-changed`, `pane-title-changed`, `pane-exited`, `pane-respawned`, `notification`, `unknown`, `terminal-output`. The agent, pane-title, pane-exited, pane-respawned, notification, config-changed, client-attached and client-left types are par-mux-fed; compare against the hyphenated string exactly.
+- `notification_type: str`: Notification type — one of the exact runtime strings: `begin`, `end`, `error`, `output`, `pane-damage`, `pane-mode-changed`, `window-pane-changed`, `window-close`, `unlinked-window-close`, `window-add`, `unlinked-window-add`, `window-renamed`, `unlinked-window-renamed`, `session-changed`, `client-session-changed`, `session-renamed`, `sessions-changed`, `workspaces-changed`, `config-changed`, `session-window-changed`, `client-detached`, `client-attached`, `client-left`, `exit`, `pause`, `extended-output`, `continue`, `subscription-changed`, `layout-change`, `paste-buffer-changed`, `paste-buffer-deleted`, `agent-state-changed`, `agent-released`, `agent-telemetry-changed`, `pane-title-changed`, `pane-exited`, `pane-respawned`, `notification`, `unknown`, `terminal-output`. The agent, pane-title, pane-exited, pane-respawned, notification, config-changed, client-attached and client-left types are par-mux-fed; compare against the hyphenated string exactly.
 - `source: str | None`: For `agent-state-changed`, who asserted the state: `"hook"` (the agent's own report) or `"scrape"` (a pattern matched pane content). `None` for every other notification type and for lines without a `source=` token
 - `workspace_id: str | None`: For `agent-state-changed`, the pane's owning workspace id (`+N`, the side panel's grouping key — the same value `list-agents`' `ws=` token reports). `None` when the daemon sent no `ws=` token
 - `pane_id: str | None`: Pane identifier (`%N`); set for every pane-scoped notification, including `pane-exited` (the held pane) and `pane-respawned` (the restarted pane)
@@ -1880,6 +1895,8 @@ Tmux control mode notification.
 - `exit_code: int | None`: For `pane-exited`, the held pane's exit code; `None` when it was unreadable (signal death, or reaped before the daemon read it) and for every other notification type
 - `client: str | None`: Client name; for the par-mux `client-attached` and `client-left` types, the daemon's decimal connection id (only clients that reported a size are announced; `client-left` also sets `session_id`/`window_id` to the view the client was displaying)
 - `data: bytes | None`: Raw notification data
+- `damage_generation: int | None`: For `pane-damage`, the pane terminal's damage generation after the adjacent `%output` applied; `None` for every other notification type
+- `damage_rows: list[tuple[int, int]] | None`: For `pane-damage`, the inclusive 0-based viewport row ranges (ascending, non-overlapping) the adjacent `%output` changed; `None` for every other notification type
 - `timestamp: int | None`: Notification timestamp
 - `command_number: int | None`: Command number
 - `flags: str | None`: Raw flags
@@ -2173,7 +2190,7 @@ Methods for sending events to all connected clients:
 - `send_pointer_shape_changed(shape: str | None = None)`: Send OSC 22 pointer shape change; `None` restores the client's own pointer
 - `send_action_notify(trigger_id: int, title: str, message: str)`: Send trigger notification action
 - `send_action_mark_line(trigger_id: int, row: int, label: str | None = None, color: tuple[int, int, int] | None = None)`: Send trigger mark line action
-- `send_cwd_changed(new_cwd: str, old_cwd: str | None = None, hostname: str | None = None, username: str | None = None, timestamp: int = 0)`: Send working directory change event
+- `send_cwd_changed(new_cwd: str, old_cwd: str | None = None, hostname: str | None = None, username: str | None = None, timestamp: int = 0)`: Send working directory change event. The server computes and stamps `is_local` on the wire message from the OSC 7 hostname (SEC-128 rule)
 - `send_trigger_matched(trigger_id: int, row: int, col: int, end_col: int, text: str, captures: list[str] = [], timestamp: int = 0)`: Send trigger match event
 - `send_progress_bar_changed(action: str, id: str, state: ProgressState | None = None, percent: int | None = None, label: str | None = None)`: Send progress bar state change. `action` must be `"set"`, `"remove"`, or `"remove_all"`.
 
@@ -2224,6 +2241,9 @@ StreamingConfig(
     allow_api_key_in_query: bool = False,
     allowed_origins: list[str] | None = None,
     kitty_file_media: str = "temp_only",
+    allow_pane_create: bool = False,
+    allow_blob_connect_src: bool = False,
+    csp_connect_origins: list[str] | None = None,
 )
 ```
 
@@ -2247,6 +2267,9 @@ StreamingConfig(
 - `enable_system_stats: bool` - Enable system resource statistics collection
 - `system_stats_interval_secs: int` - System stats collection interval in seconds
 - `kitty_file_media: str` - Kitty graphics file-media mode applied to every session terminal (SEC-101): `"temp_only"` (default) allows only a spec-named temp file, `"all"` also permits `t=f` reads of arbitrary paths, `"off"` refuses both. PTY output is untrusted
+- `allow_pane_create: bool` - Let writable clients create real panes on the backing mux daemon (`pane_create_request`, default False; fail-closed). A request may carry an optional `name` (≤ 64 bytes, no control characters; otherwise refused with `pane_create_failed`), which names the created window
+- `allow_blob_connect_src: bool` - Add `blob:` to the CSP's connect-src so a custom web root's own assets can fetch blob URLs (default False; the ENH-059 policy stays byte-identical)
+- `csp_connect_origins: list[str] | None` - Opt-in HTTPS origins appended to the CSP's connect-src so a custom web root can fetch public APIs directly; each value must be the strict `https://host[:port]` form, anything else raises ValueError naming the origin (default None; the ENH-059 policy stays byte-identical)
 - `tls_enabled: bool` - Check if TLS is configured (read-only)
 
 ### TLS Methods

@@ -324,6 +324,10 @@ pub fn event_fields(event: &TerminalEvent) -> Vec<(String, EventField)> {
         TerminalEvent::InlineImageDropped { reason } => {
             put!("reason", EventField::Str(reason.clone()));
         }
+        TerminalEvent::OutputBudgetExceeded { store, bytes } => {
+            put!("store", EventField::Str(store.as_str().to_string()));
+            put!("bytes", EventField::Int(*bytes as i64));
+        }
     }
     fields
 }

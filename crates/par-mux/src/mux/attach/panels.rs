@@ -1,17 +1,14 @@
 //! Overlay and sidebar composition shared by passthrough and render
 //! modes: key spelling, help rows and filtering, prompt panels, the
-//! session/window picker, and the workspace sidebar.
+//! window picker, and the workspace sidebar.
 
 use super::ManagementKey;
+use crate::mux::config::{spell_chord, ChordKey};
 
 /// The tmux spelling of a chord byte: `C-x` for control bytes (0 = the
 /// Space spelling), the literal character otherwise.
 pub(crate) fn spell_key(byte: u8) -> String {
-    match byte {
-        0 => "C-Space".to_string(),
-        b if (1..27).contains(&b) => format!("C-{}", (b - 1 + b'a') as char),
-        other => (other as char).to_string(),
-    }
+    spell_chord(&ChordKey::plain(byte))
 }
 
 /// One help panel row: the text and whether it renders as an accent row
@@ -84,21 +81,24 @@ pub(crate) fn help_rows(
         vec![
             (format!("{p} {p}"), "type a literal prefix".to_string()),
             (format!("{p} d"), "detach".to_string()),
-            (format!("{p} {}", spell_key(m.help)), "keybinds".to_string()),
+            (
+                format!("{p} {}", spell_chord(&m.help)),
+                "keybinds".to_string(),
+            ),
             (
                 format!("{p} {}", spell_key(reload)),
                 "reload the config".to_string(),
             ),
             (
-                format!("{p} {}", spell_key(m.palette)),
+                format!("{p} {}", spell_chord(&m.palette)),
                 "command palette".to_string(),
             ),
             (
-                format!("{p} {}", spell_key(m.respawn)),
+                format!("{p} {}", spell_chord(&m.respawn)),
                 "respawn the held-dead pane".to_string(),
             ),
             (
-                format!("{p} {}", spell_key(m.notify_jump)),
+                format!("{p} {}", spell_chord(&m.notify_jump)),
                 "jump to the last notification's pane".to_string(),
             ),
         ],
@@ -108,23 +108,23 @@ pub(crate) fn help_rows(
         "workspaces",
         vec![
             (
-                format!("{p} {}", spell_key(m.workspace_next)),
+                format!("{p} {}", spell_chord(&m.workspace_next)),
                 "next workspace".to_string(),
             ),
             (
-                format!("{p} {}", spell_key(m.workspace_prev)),
+                format!("{p} {}", spell_chord(&m.workspace_prev)),
                 "previous workspace".to_string(),
             ),
             (
-                format!("{p} {}", spell_key(m.workspace_picker)),
+                format!("{p} {}", spell_chord(&m.workspace_picker)),
                 "workspace picker".to_string(),
             ),
             (
-                format!("{p} {}", spell_key(m.sidebar)),
+                format!("{p} {}", spell_chord(&m.sidebar)),
                 "toggle the workspace side panel".to_string(),
             ),
             (
-                format!("{p} {}", spell_key(m.status_bar)),
+                format!("{p} {}", spell_chord(&m.status_bar)),
                 "toggle the status bar".to_string(),
             ),
         ],
@@ -134,7 +134,7 @@ pub(crate) fn help_rows(
         "tabs / windows / sessions",
         vec![
             (
-                format!("{p} {}", spell_key(m.new_window)),
+                format!("{p} {}", spell_chord(&m.new_window)),
                 "new tab (window)".to_string(),
             ),
             (
@@ -143,11 +143,11 @@ pub(crate) fn help_rows(
             ),
             (format!("{p} ( / )"), "previous / next session".to_string()),
             (
-                format!("{p} {}", spell_key(m.picker)),
-                "session/window picker".to_string(),
+                format!("{p} {}", spell_chord(&m.picker)),
+                "window picker".to_string(),
             ),
             (
-                format!("{p} {}", spell_key(m.rename_window)),
+                format!("{p} {}", spell_chord(&m.rename_window)),
                 "rename the tab (window)".to_string(),
             ),
         ],
@@ -157,47 +157,47 @@ pub(crate) fn help_rows(
         "panes",
         vec![
             (
-                format!("{p} {}", spell_key(m.split_right)),
+                format!("{p} {}", spell_chord(&m.split_right)),
                 "split right".to_string(),
             ),
             (
-                format!("{p} {}", spell_key(m.split_down)),
+                format!("{p} {}", spell_chord(&m.split_down)),
                 "split down".to_string(),
             ),
             (
-                format!("{p} {}", spell_key(m.kill_pane)),
+                format!("{p} {}", spell_chord(&m.kill_pane)),
                 "kill the focused pane".to_string(),
             ),
             (
-                format!("{p} {}", spell_key(m.break_pane)),
+                format!("{p} {}", spell_chord(&m.break_pane)),
                 "break the pane out to a new tab".to_string(),
             ),
             (
-                format!("{p} {}", spell_key(m.join_pane)),
+                format!("{p} {}", spell_chord(&m.join_pane)),
                 "join the pane into a picked tab".to_string(),
             ),
             (format!("{p} o"), "cycle panes".to_string()),
             (
                 format!(
                     "{p} {} / {}",
-                    spell_key(m.swap_prev),
-                    spell_key(m.swap_next)
+                    spell_chord(&m.swap_prev),
+                    spell_chord(&m.swap_next)
                 ),
                 "swap pane prev/next".to_string(),
             ),
             (
                 format!(
                     "{p} {} / {}",
-                    spell_key(m.move_window_left),
-                    spell_key(m.move_window_right)
+                    spell_chord(&m.move_window_left),
+                    spell_chord(&m.move_window_right)
                 ),
                 "move tab left/right".to_string(),
             ),
             (
                 format!(
                     "{p} {} / {}",
-                    spell_key(m.tab_strip_left),
-                    spell_key(m.tab_strip_right)
+                    spell_chord(&m.tab_strip_left),
+                    spell_chord(&m.tab_strip_right)
                 ),
                 "scroll tab strip left/right".to_string(),
             ),
@@ -206,24 +206,35 @@ pub(crate) fn help_rows(
                 "swap with the pane in that direction".to_string(),
             ),
             (
-                format!("{p} {} arrows", spell_key(m.resize)),
+                format!("{p} {} arrows", spell_chord(&m.resize)),
                 format!("resize mode, edge moves by {resize_step}"),
             ),
             (
-                format!("{p} {}", spell_key(m.zoom)),
+                format!("{p} {}", spell_chord(&m.zoom)),
                 "zoom the focused pane (toggle)".to_string(),
             ),
             (
-                format!("{p} {}", spell_key(m.border_cycle)),
+                format!("{p} {}", spell_chord(&m.border_cycle)),
                 "cycle the border style (herdr = per-pane boxes)".to_string(),
             ),
             (
-                format!("{p} {}", spell_key(m.label_toggle)),
+                format!("{p} {}", spell_chord(&m.label_toggle)),
                 "toggle pane labels".to_string(),
             ),
             (
-                format!("{p} {}", spell_key(m.rename_pane)),
+                format!("{p} {}", spell_chord(&m.rename_pane)),
                 "rename the focused pane".to_string(),
+            ),
+            (
+                format!(
+                    "{p} {} / {} / {} / {} / {}",
+                    spell_chord(&m.layout_even_horizontal),
+                    spell_chord(&m.layout_even_vertical),
+                    spell_chord(&m.layout_main_horizontal),
+                    spell_chord(&m.layout_main_vertical),
+                    spell_chord(&m.layout_tiled)
+                ),
+                "layout: even-h / even-v / main-h / main-v / tiled".to_string(),
             ),
         ],
     );
@@ -239,15 +250,58 @@ pub(crate) fn help_rows(
                 format!("{p} arrows"),
                 "select the pane in that direction".to_string(),
             ),
-            (format!("{p} ["), "scroll the pane's history".to_string()),
             (
-                format!("{p} [ then e"),
+                format!("{p} ["),
+                "vi copy mode: roam, select, yank".to_string(),
+            ),
+            (
+                format!("{p} e"),
                 "open the scrollback in $VISUAL/$EDITOR".to_string(),
             ),
             (
                 "wheel".to_string(),
                 "scrollback; forwarded when the pane owns mouse".to_string(),
             ),
+        ],
+    );
+    push_cat(
+        &mut rows,
+        "copy mode",
+        vec![
+            (
+                "h j k l / arrows".to_string(),
+                "move the copy cursor".to_string(),
+            ),
+            (
+                "w b e / W B E".to_string(),
+                "word forward / back / end".to_string(),
+            ),
+            (
+                "0 / $ / ^".to_string(),
+                "line start / end / first non-blank".to_string(),
+            ),
+            (
+                "gg / G".to_string(),
+                "top / bottom of the buffer".to_string(),
+            ),
+            ("C-u / C-d".to_string(), "half page up / down".to_string()),
+            ("C-b / C-f".to_string(), "full page up / down".to_string()),
+            (
+                "v / V / C-v".to_string(),
+                "start character / line / block selection".to_string(),
+            ),
+            ("y".to_string(), "yank (copy) the selection".to_string()),
+            ("/ / ?".to_string(), "search forward / backward".to_string()),
+            ("n / N".to_string(), "next / previous match".to_string()),
+            (
+                "m key / ' key".to_string(),
+                "set / jump to a mark".to_string(),
+            ),
+            (
+                "H / M / L".to_string(),
+                "viewport top / middle / bottom".to_string(),
+            ),
+            ("q / Esc".to_string(), "leave copy mode".to_string()),
         ],
     );
     push_cat(
@@ -285,7 +339,7 @@ pub(crate) fn help_rows(
     // spellings beside their entries above).
     for row in &mut rows {
         let key = row.text.trim();
-        if key == format!("{p} [") || key == format!("{p} [ then e") {
+        if key == format!("{p} [") || key == format!("{p} e") {
             row.render_only = true;
         }
     }
@@ -300,7 +354,7 @@ pub(crate) const HELP_FOOTER: &str = " search / · scroll j/k/arrows/pgup/pgdn �
 /// chrome embeds it in the top border, left-aligned).
 pub(crate) const HELP_OVERLAY_TITLE: &str = " keybinds ";
 
-/// The modal overlay's title for the session/window picker.
+/// The modal overlay's title for the window picker.
 pub(crate) const PICKER_OVERLAY_TITLE: &str = " picker ";
 
 /// The workspace picker modal's title.
@@ -470,9 +524,10 @@ pub(crate) fn compose_help_panel(
     panel
 }
 
-/// The session/window picker's footer/controls line (render mode).
+/// The session/workspace picker's footer/controls line (render mode):
+/// the filter is live from the open, like the palette's.
 pub(crate) const PICKER_FOOTER: &str =
-    " navigate arrows/j/k · select enter/click · filter / · close esc/q ";
+    " type to filter · arrows/j/k navigate · enter select · click select · esc close ";
 
 /// The command palette's footer/controls line (render mode): the filter
 /// is live from the open, so the footer never advertises `filter /`.
@@ -491,12 +546,13 @@ pub(crate) struct PickerEntry {
     pub current: bool,
 }
 
-/// Where one picker display row came from: a session (its header row) or
-/// one of its windows. The compose returns these parallel to the
-/// filtered rows so a selection or a click maps back to a target.
+/// Where one picker display row came from: one session's window. The
+/// compose returns these parallel to the filtered rows so a selection
+/// or a click maps back to a target.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum PickerRef {
-    Session(usize),
+    /// A window row: the entry's index into the picker's queried
+    /// sessions and the window's index into that entry's windows.
     Window(usize, usize),
     /// One workspace row (the workspace picker): the workspace's index
     /// into the picker's queried workspace list.
@@ -538,6 +594,23 @@ pub(crate) const PALETTE_ACTIONS: &[(Option<ManagementKey>, &str)] = &[
     (Some(ManagementKey::MoveWindowRight), "move tab right"),
     (None, "move tab to start"),
     (None, "move tab to end"),
+    (
+        Some(ManagementKey::LayoutEvenHorizontal),
+        "layout even horizontal",
+    ),
+    (
+        Some(ManagementKey::LayoutEvenVertical),
+        "layout even vertical",
+    ),
+    (
+        Some(ManagementKey::LayoutMainHorizontal),
+        "layout main horizontal",
+    ),
+    (
+        Some(ManagementKey::LayoutMainVertical),
+        "layout main vertical",
+    ),
+    (Some(ManagementKey::LayoutTiled), "layout tiled"),
 ];
 
 /// A palette action's chord at its EFFECTIVE binding, the help panel's
@@ -555,8 +628,8 @@ pub(crate) fn palette_action_chord(
         // keybinds opens at the help chord, reload at the reload chord,
         // detach at its fixed prefix chord.
         1 => m.help,
-        2 => reload,
-        3 => b'd',
+        2 => ChordKey::plain(reload),
+        3 => ChordKey::plain(b'd'),
         _ => match PALETTE_ACTIONS.get(action)?.0? {
             ManagementKey::SplitRight => m.split_right,
             ManagementKey::SplitDown => m.split_down,
@@ -575,37 +648,45 @@ pub(crate) fn palette_action_chord(
             ManagementKey::NotifyJump => m.notify_jump,
             ManagementKey::MoveWindowLeft => m.move_window_left,
             ManagementKey::MoveWindowRight => m.move_window_right,
+            ManagementKey::LayoutEvenHorizontal => m.layout_even_horizontal,
+            ManagementKey::LayoutEvenVertical => m.layout_even_vertical,
+            ManagementKey::LayoutMainHorizontal => m.layout_main_horizontal,
+            ManagementKey::LayoutMainVertical => m.layout_main_vertical,
+            ManagementKey::LayoutTiled => m.layout_tiled,
             _ => return None,
         },
     };
-    Some(format!("{} {}", spell_key(prefix), spell_key(key)))
+    Some(format!("{} {}", spell_key(prefix), spell_chord(&key)))
 }
 
-/// The picker's display rows from the queried entries: one accent
-/// header per session (` $N: name`, `>`-marked when the session is the
-/// one the view shows), its windows nested beneath it as `   @N: name`
-/// rows (`>`-marked for the shown window, `*` suffixed for the
-/// session's active window). The parallel refs list maps each row to
-/// its selection target.
+/// The picker's display rows from the queried entries: every session's
+/// windows as one flat, selectable row list (` @N: name`, `>`-marked
+/// for the shown window, `*` suffixed for its session's active
+/// window). A session is deliberately NOT a row — selecting one landed
+/// on its active (default) window — so a window NAME two sessions
+/// share is disambiguated by prefixing its session's name
+/// (`session/name`); a name one session owns stays bare. The parallel
+/// refs list maps each row to its selection target.
 pub(crate) fn picker_rows(
     entries: &[PickerEntry],
     current_window: Option<&str>,
 ) -> (Vec<HelpRow>, Vec<PickerRef>) {
+    // How many sessions each window name appears in: a name two
+    // sessions share needs its session spelled on the row.
+    let mut owners: std::collections::HashMap<&str, usize> = std::collections::HashMap::new();
+    for entry in entries {
+        let mut names: std::collections::HashSet<&str> = entry
+            .windows
+            .iter()
+            .map(|(_, name)| name.as_str())
+            .collect();
+        for name in names.drain() {
+            *owners.entry(name).or_default() += 1;
+        }
+    }
     let mut rows: Vec<HelpRow> = Vec::new();
     let mut refs: Vec<PickerRef> = Vec::new();
     for (i, entry) in entries.iter().enumerate() {
-        let marker = if entry.current { ">" } else { " " };
-        rows.push(HelpRow {
-            text: format!(
-                " {marker}{0}: {1}",
-                entry.session_id,
-                super::chrome_safe(&entry.session_name)
-            ),
-            accent: true,
-            footer: false,
-            render_only: false,
-        });
-        refs.push(PickerRef::Session(i));
         for (w, (window_id, name)) in entry.windows.iter().enumerate() {
             let marker = if current_window == Some(window_id.as_str()) {
                 ">"
@@ -614,8 +695,17 @@ pub(crate) fn picker_rows(
             };
             let active = entry.active_window.as_deref() == Some(window_id.as_str());
             let star = if active { " *" } else { "" };
+            let name = if owners.get(name.as_str()).is_some_and(|n| *n > 1) {
+                format!(
+                    "{}/{}",
+                    super::chrome_safe(&entry.session_name),
+                    super::chrome_safe(name)
+                )
+            } else {
+                super::chrome_safe(name).into_owned()
+            };
             rows.push(HelpRow {
-                text: format!(" {marker}  {window_id}: {}{star}", super::chrome_safe(name)),
+                text: format!(" {marker}  {window_id}: {name}{star}"),
                 accent: false,
                 footer: false,
                 render_only: false,
@@ -650,17 +740,16 @@ pub(crate) fn listbox_scroll(start: usize, selected: usize, visible: usize) -> u
 
 /// Compose the picker panel's CONTENT rows: the always-visible filter
 /// line (the same shape [`compose_help_panel`] draws — placeholder when
-/// inactive, ` /query▌` while typing), the filter's matching rows with
-/// headers hiding when nothing beneath them matches, the selection
-/// cursor `▸` prefixed to the selected row (clamped into range), the
-/// content windowed to `visible` rows at the panned `start`, and the
-/// footer controls line. Returns the panel rows, the FILTERED refs (the
-/// selection/click target for each content row, in content order), and
-/// the window's content start index, so a click at composed row `i`
-/// maps to content row `start + i - 1`. `footer` is the modal's
-/// controls line (the session/workspace pickers and the palette spell
-/// different ones). Pure over its inputs — the unit-test surface for
-/// the picker.
+/// inactive, ` /query▌` while typing), the filter's matching rows, the
+/// selection cursor `▸` prefixed to the selected row (clamped into
+/// range), the content windowed to `visible` rows at the panned
+/// `start`, and the footer controls line. Returns the panel rows, the
+/// FILTERED refs (the selection/click target for each content row, in
+/// content order), and the window's content start index, so a click at
+/// composed row `i` maps to content row `start + i - 1`. `footer` is
+/// the modal's controls line (the window/workspace pickers and the
+/// palette spell different ones). Pure over its inputs — the
+/// unit-test surface for the picker.
 #[allow(clippy::too_many_arguments)] // the pure compose's positional test surface
 pub(crate) fn compose_picker_panel(
     rows: &[HelpRow],
@@ -675,15 +764,8 @@ pub(crate) fn compose_picker_panel(
     let lower = filter.to_lowercase();
     let mut content: Vec<HelpRow> = Vec::new();
     let mut content_refs: Vec<PickerRef> = Vec::new();
-    let mut pending: Option<(HelpRow, PickerRef)> = None;
     for (row, r#ref) in rows.iter().zip(refs.iter()) {
-        if row.accent {
-            pending = Some((row.clone(), *r#ref));
-        } else if picker_row_matches(row, &lower) {
-            if let Some((header, header_ref)) = pending.take() {
-                content.push(header);
-                content_refs.push(header_ref);
-            }
+        if picker_row_matches(row, &lower) {
             content.push(row.clone());
             content_refs.push(*r#ref);
         }

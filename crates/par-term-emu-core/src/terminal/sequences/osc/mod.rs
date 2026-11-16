@@ -122,7 +122,10 @@ pub(crate) fn handle_osc_hyperlink(
     params: &[&[u8]],
 ) {
     if params.len() >= 3 {
-        if let Ok(url) = std::str::from_utf8(params[2]) {
+        // The URI is everything after the second `;`. vte splits the OSC at
+        // every `;`, so a URI that contains one arrives in several pieces.
+        let url = params[2..].join(&b';');
+        if let Ok(url) = std::str::from_utf8(&url) {
             let url = url.trim();
 
             if url.is_empty() {

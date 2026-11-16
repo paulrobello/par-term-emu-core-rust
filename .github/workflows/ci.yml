@@ -1,15 +1,16 @@
 name: CI
 
 # ARC-004: pull requests run the cheap gates (version check, lint, FFI
-# drift) and single-OS Rust/Python test + mux legs. The full OS x Python
-# matrix, Windows mux, wheels, feature matrix, web_term/ drift, and the
-# xcframework stay manual (workflow_dispatch) for runner cost.
+# drift) and single-OS Rust/Python test + mux legs. The web_term/ drift gate
+# also runs on PRs (ARC-007). The full OS x Python matrix, Windows mux,
+# wheels, feature matrix, and the xcframework stay manual
+# (workflow_dispatch) for runner cost.
 on:
   pull_request:
   workflow_dispatch:
     inputs:
       os-scope:
-        description: "Runner scope for the test/mux matrices (verification runs); 'all' runs the full matrix. Wheels, features, xcframework, and web-term-drift run only on 'all'."
+        description: "Runner scope for the test/mux matrices (verification runs); 'all' runs the full matrix. Wheels, features, and xcframework run only on 'all' (web-term-drift runs on every PR and on ''/'all' dispatches)."
         type: choice
         default: all
         options: [all, ubuntu-latest, macos-latest, windows-latest]
@@ -232,11 +233,17 @@ jobs:
       # DIFFERENT load-sensitive PTY test to the 8-on-3-vCPU
       # oversubscription (runs 39700463900..39710987499), so CI caps at
       # the ubuntu/windows vCPU count.
-      run: cargo nextest run --profile ci --locked -p par-mux --features attach --test-threads 4
+      # --retries 1: mirrors the local gate's retry-once on this
+      # daemon-spawning leg (Makefile test-mux-ci retry_once, card
+      # 01a1d67a82807290bcb85e9ab6bf2f79) — a first run lost to host-load
+      # flake re-runs the failing test once before the leg goes red.
+      run: cargo nextest run --profile ci --locked -p par-mux --features attach --test-threads 4 --retries 1
 
     - name: Run root tests with the mux re-export on
       # mux_feature_isolation + the root lib compiled against par-mux.
-      run: cargo nextest run --profile ci --locked --no-default-features --features rust-only,mux-bin,serde,attach
+      # --retries 1: same daemon-spawn load-flake retry as the mux leg
+      # above and the local gate's retry_once wrapper.
+      run: cargo nextest run --profile ci --locked --no-default-features --features rust-only,mux-bin,serde,attach --retries 1
 
     - name: Run par-term-emu-core member tests with the mux feature set
       # ARC-007 O2: the core (incl. PtySession) unit tests moved to the
@@ -356,7 +363,11 @@ jobs:
   # default build IDs made rebuilds of identical source differ).
   web-term-drift:
     name: web_term/ drift gate
-    if: github.event_name == 'workflow_dispatch' && (inputs.os-scope == '' || inputs.os-scope == 'all')
+    # ARC-007 (audit 2026-11-06): runs on every PR (like ffi-drift) so a
+    # frontend edit without `make web-build-static` fails review instead of
+    # shipping stale assets until the next manual dispatch; dispatch keeps
+    # the os-scope carve-outs (skipped for a single-OS verification run).
+    if: github.event_name == 'pull_request' || (github.event_name == 'workflow_dispatch' && (inputs.os-scope == '' || inputs.os-scope == 'all'))
     runs-on: ubuntu-latest
     timeout-minutes: 10
     needs: [version-check]
@@ -386,6 +397,30 @@ jobs:
           exit 1
         fi
         echo "web_term/ is in sync with the frontend sources."
+
+  # ENH-063's agent-state wire-test harness (crates/par-mux/integrations) is
+  # `make test-integrations` locally, part of checkall; CI runs the gate legs
+  # as jobs, so it needs its own. Mirrors web-term-drift's bun setup and runs
+  # on the same PR gate (CI has no all-green summary job to join).
+  integrations-test:
+    name: agent-state wire-test harness
+    if: github.event_name == 'pull_request' || (github.event_name == 'workflow_dispatch' && (inputs.os-scope == '' || inputs.os-scope == 'all'))
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    needs: [version-check]
+    steps:
+    - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+    - name: Set up bun
+      uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
+
+    - name: Install dependencies
+      working-directory: crates/par-mux/integrations
+      run: bun install --frozen-lockfile
+
+    - name: Run the wire-test harness
+      working-directory: crates/par-mux/integrations
+      run: bun run test
 
   # ENH-019: every feature must build on its own, and heavy dependencies must
   # stay out of the slim profiles (rust-only/sim/mux/streaming). Catches the

@@ -39,6 +39,25 @@ pub fn emit(notification: &TmuxNotification) -> String {
         TmuxNotification::Output { pane_id, data } => {
             format!("%output {} {}\n", pane_id, escape_output(data))
         }
+        TmuxNotification::OutputDamage {
+            pane_id,
+            generation,
+            ranges,
+        } => {
+            // Rendered as one line, never adjacent lines: the daemon's pane
+            // output sink writes `%output` + `%pane-damage` together as ONE
+            // fan-out string, which is what makes the pair atomic on every
+            // client queue and socket (the adjacency contract, docs/MUX.md).
+            let mut line = format!("%pane-damage {pane_id} {generation}");
+            {
+                use std::fmt::Write as _;
+                for (start, end) in ranges {
+                    let _ = write!(line, " {start}-{end}");
+                }
+            }
+            line.push('\n');
+            line
+        }
         TmuxNotification::WindowAdd {
             window_id,
             window_layout,
@@ -311,6 +330,44 @@ mod tests {
             }
             other => panic!("expected Output, got {other:?}"),
         }
+    }
+
+    /// Card 01a19ca4: the damage line renders `%pane-damage %N <generation>
+    /// <start>-<end>…`, newline-terminated, and decodes back to the same
+    /// generation and ascending ranges.
+    #[test]
+    fn output_damage_round_trips() {
+        let original = TmuxNotification::OutputDamage {
+            pane_id: "%7".to_string(),
+            generation: 42,
+            ranges: vec![(0, 5), (9, 9), (20, 23)],
+        };
+        let line = emit(&original);
+        assert!(
+            line.starts_with("%pane-damage %7 42 0-5 9-9 20-23\n"),
+            "exact grammar: {line:?}"
+        );
+        let parsed = round_trip(&original);
+        assert_eq!(parsed.len(), 1);
+        assert_eq!(parsed[0], original);
+    }
+
+    /// The empty-range form (generation only) round-trips too — a chunk
+    /// that advanced the generation but changed no viewport row.
+    #[test]
+    fn output_damage_empty_ranges_round_trips() {
+        let original = TmuxNotification::OutputDamage {
+            pane_id: "%1".to_string(),
+            generation: 8,
+            ranges: Vec::new(),
+        };
+        let line = emit(&original);
+        assert_eq!(
+            line, "%pane-damage %1 8\n",
+            "generation only, no range tokens"
+        );
+        let parsed = round_trip(&original);
+        assert_eq!(parsed, vec![original]);
     }
 
     #[test]

@@ -1180,7 +1180,11 @@ fn a_restart_reruns_a_flagged_panes_start_command_with_the_resume_session_id() {
         let mut writer = stream.try_clone().expect("clone");
         let mut reader = BufReader::new(stream);
         let start_command = format!(
-            "printf 'wrapper resume=%s\\n' \"${{PAR_MUX_RESUME_SESSION_ID:-unset}}\" >> {}; exec sleep 300",
+            // `exec -a claude`: the save-side resurrect gate persists the
+            // hook claim only when the process table finds the claimed
+            // agent in the pane's tree, and the restart below asserts the
+            // identity reaches the wrapper.
+            "printf 'wrapper resume=%s\\n' \"${{PAR_MUX_RESUME_SESSION_ID:-unset}}\" >> {}; exec -a claude sleep 300",
             marker.display()
         );
         command(

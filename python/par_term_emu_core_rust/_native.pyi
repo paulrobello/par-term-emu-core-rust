@@ -921,18 +921,48 @@ class Macro:
     @events.setter
     def events(self, value: Any) -> None: ...
     @staticmethod
-    def from_yaml(yaml: Any) -> Any:
-        """Parse from YAML string"""
+    def from_yaml(yaml: Any) -> Macro:
+        """Parse a macro from a YAML string
+
+        Args:
+            yaml: YAML document produced by `to_yaml`
+
+        Returns:
+            Macro: The parsed macro
+
+        Raises:
+            ValueError: If the YAML cannot be parsed as a macro
+        """
     @staticmethod
-    def load_yaml(path: Any) -> Any:
-        """Load from YAML file"""
+    def load_yaml(path: Any) -> Macro:
+        """Load a macro from a YAML file
+
+        Args:
+            path: Path to a YAML file written by `save_yaml`
+
+        Returns:
+            Macro: The loaded macro
+
+        Raises:
+            OSError: If the file cannot be read or parsed
+        """
     @property
     def name(self) -> Any:
         """Get macro name"""
     @name.setter
     def name(self, value: Any) -> None: ...
     def save_yaml(self, path: Any) -> Any:
-        """Save to YAML file"""
+        """Save the macro to a YAML file
+
+        Args:
+            path: Destination file path
+
+        Returns:
+            None on success
+
+        Raises:
+            OSError: If the file cannot be written or the macro cannot be serialized
+        """
     def set_description(self, description: Any) -> Any:
         """Set description"""
     @property
@@ -940,8 +970,15 @@ class Macro:
         """Get terminal size (cols, rows)"""
     @terminal_size.setter
     def terminal_size(self, value: Any) -> None: ...
-    def to_yaml(self) -> Any:
-        """Convert to YAML string"""
+    def to_yaml(self) -> str:
+        """Serialize the macro to a YAML string
+
+        Returns:
+            str: The macro as a YAML document
+
+        Raises:
+            ValueError: If serialization fails
+        """
 
 class MacroEvent:
     """Macro event"""
@@ -1805,10 +1842,12 @@ class PtyTerminal:
             True
         """
     def get_dropped_sixel_graphics(self) -> Any:
-        """Get count of Sixel graphics dropped due to limits
+        """Get count of graphics dropped due to limits
 
         Returns:
-            Number of Sixel graphics that have been dropped because of size or count limits
+            Number of graphics that have been dropped because of size or count
+            limits. Sixel and Kitty graphics share one store and this counter,
+            so it includes Kitty graphics evicted by the memory budget.
         """
     def get_fg_color(self, col: Any, row: Any) -> Any:
         """Get a cell's foreground color at the specified position
@@ -3885,6 +3924,9 @@ class StreamingConfig:
         allow_api_key_in_query: Any = False,
         allowed_origins: Any = None,
         kitty_file_media: Any = "temp_only",
+        allow_pane_create: Any = False,
+        allow_blob_connect_src: Any = False,
+        csp_connect_origins: Any = None,
     ) -> None: ...
     @property
     def allow_api_key_in_query(self) -> Any:
@@ -3903,6 +3945,64 @@ class StreamingConfig:
         """
     @allow_api_key_in_query.setter
     def allow_api_key_in_query(self, value: Any) -> None: ...
+    @property
+    def allow_blob_connect_src(self) -> Any:
+        """Get whether the CSP's connect-src permits blob URLs
+
+        Intended for custom web roots serving owned blob assets (GLTF
+        embedded textures, Troika workers). Default False keeps the
+        ENH-059 policy byte-identical.
+
+        Returns:
+            bool: True if connect-src permits blob URLs (default False)
+
+        Example:
+            >>> config = StreamingConfig()
+            >>> config.allow_blob_connect_src
+            False
+            >>> config.allow_blob_connect_src = True
+            >>> config.allow_blob_connect_src
+            True
+        """
+    @allow_blob_connect_src.setter
+    def allow_blob_connect_src(self, value: Any) -> None: ...
+    @property
+    def csp_connect_origins(self) -> Any:
+        """Get the opt-in HTTPS origins appended to the CSP's connect-src
+
+        For custom web roots that fetch public APIs directly. Values use the
+        strict https://host[:port] form and are validated at config time.
+
+        Returns:
+            list[str] | None: Origins appended to connect-src (default None)
+
+        Example:
+            >>> config = StreamingConfig()
+            >>> config.csp_connect_origins is None
+            True
+            >>> config.csp_connect_origins = ["https://api.zippopotam.us", "https://api.weather.gov"]
+            >>> config.csp_connect_origins
+            ['https://api.zippopotam.us', 'https://api.weather.gov']
+        """
+    @csp_connect_origins.setter
+    def csp_connect_origins(self, value: Any) -> None: ...
+    @property
+    def allow_pane_create(self) -> Any:
+        """Get whether clients may create panes on the backing mux daemon
+
+        Returns:
+            bool: True if writable clients may create panes (default False)
+
+        Example:
+            >>> config = StreamingConfig()
+            >>> config.allow_pane_create
+            False
+            >>> config.allow_pane_create = True
+            >>> config.allow_pane_create
+            True
+        """
+    @allow_pane_create.setter
+    def allow_pane_create(self, value: Any) -> None: ...
     @property
     def allowed_origins(self) -> Any:
         """Get the allowed browser origins allowlist (None = local/non-browser only).
@@ -4355,6 +4455,12 @@ class StreamingServer:
             label: Optional label for the mark
             color: Optional RGB color tuple (r, g, b)
 
+
+        Returns:
+            None on success
+
+        Raises:
+            RuntimeError: If the server has been stopped
         Example:
             ```python
             server = StreamingServer(PtyTerminal(80, 24), "127.0.0.1:0")
@@ -4369,6 +4475,12 @@ class StreamingServer:
             title: Notification title
             message: Notification message
 
+
+        Returns:
+            None on success
+
+        Raises:
+            RuntimeError: If the server has been stopped
         Example:
             ```python
             server = StreamingServer(PtyTerminal(80, 24), "127.0.0.1:0")
@@ -4381,6 +4493,12 @@ class StreamingServer:
         Args:
             badge: New badge text, or None to clear the badge
 
+
+        Returns:
+            None on success
+
+        Raises:
+            RuntimeError: If the server has been stopped
         Example:
             ```python
             server = StreamingServer(PtyTerminal(80, 24), "127.0.0.1:0")
@@ -4391,6 +4509,12 @@ class StreamingServer:
     def send_bell(self) -> Any:
         """Send a bell event to all clients
 
+
+        Returns:
+            None on success
+
+        Raises:
+            RuntimeError: If the server has been stopped
         Example:
             ```python
             server = StreamingServer(PtyTerminal(80, 24), "127.0.0.1:0")
@@ -4405,6 +4529,12 @@ class StreamingServer:
             row: Cursor row (0-indexed)
             visible: Whether the cursor is visible
 
+
+        Returns:
+            None on success
+
+        Raises:
+            RuntimeError: If the server has been stopped
         Example:
             ```python
             server = StreamingServer(PtyTerminal(80, 24), "127.0.0.1:0")
@@ -4428,6 +4558,12 @@ class StreamingServer:
             username: Username associated with the CWD (optional)
             timestamp: Unix timestamp of the change
 
+
+        Returns:
+            None on success
+
+        Raises:
+            RuntimeError: If the server has been stopped
         Example:
             ```python
             server = StreamingServer(PtyTerminal(80, 24), "127.0.0.1:0")
@@ -4440,6 +4576,12 @@ class StreamingServer:
         Args:
             row: Grid row the new graphic was placed on
 
+
+        Returns:
+            None on success
+
+        Raises:
+            RuntimeError: If the server has been stopped
         Example:
             ```python
             server = StreamingServer(PtyTerminal(80, 24), "127.0.0.1:0")
@@ -4455,6 +4597,12 @@ class StreamingServer:
             col: Grid column the link starts at (0-indexed)
             id: Optional link id for grouping multi-cell links
 
+
+        Returns:
+            None on success
+
+        Raises:
+            RuntimeError: If the server has been stopped
         Example:
             ```python
             server = StreamingServer(PtyTerminal(80, 24), "127.0.0.1:0")
@@ -4473,6 +4621,9 @@ class StreamingServer:
         Args:
             data: Raw bytes to send to the PTY
 
+        Returns:
+            None on success
+
         Raises:
             RuntimeError: If the server has been stopped
 
@@ -4489,6 +4640,12 @@ class StreamingServer:
             mode: Mode name (e.g. "alt_screen", "cursor_visible")
             enabled: Whether the mode is now enabled
 
+
+        Returns:
+            None on success
+
+        Raises:
+            RuntimeError: If the server has been stopped
         Example:
             ```python
             server = StreamingServer(PtyTerminal(80, 24), "127.0.0.1:0")
@@ -4501,6 +4658,12 @@ class StreamingServer:
         Args:
             data: The output data to send (ANSI escape sequences)
 
+
+        Returns:
+            None on success
+
+        Raises:
+            RuntimeError: If the server has been stopped or the send fails
         Example:
             ```python
             server = StreamingServer(PtyTerminal(80, 24), "127.0.0.1:0")
@@ -4514,6 +4677,12 @@ class StreamingServer:
             shape: OSC 22 shape name (``ew-resize``, ``text``, ...), or None to
                 restore the client's own pointer
 
+
+        Returns:
+            None on success
+
+        Raises:
+            RuntimeError: If the server has been stopped
         Example:
             ```python
             server = StreamingServer(PtyTerminal(80, 24), "127.0.0.1:0")
@@ -4538,6 +4707,12 @@ class StreamingServer:
             percent: Optional progress percentage (0-100)
             label: Optional label text
 
+
+        Returns:
+            None on success
+
+        Raises:
+            RuntimeError: If the server has been stopped
         Example:
             ```python
             server = StreamingServer(PtyTerminal(80, 24), "127.0.0.1:0")
@@ -4554,6 +4729,12 @@ class StreamingServer:
             cols: Number of columns
             rows: Number of rows
 
+
+        Returns:
+            None on success
+
+        Raises:
+            RuntimeError: If the server has been stopped
         Example:
             ```python
             server = StreamingServer(PtyTerminal(80, 24), "127.0.0.1:0")
@@ -4566,6 +4747,12 @@ class StreamingServer:
         Args:
             title: The new terminal title
 
+
+        Returns:
+            None on success
+
+        Raises:
+            RuntimeError: If the server has been stopped
         Example:
             ```python
             server = StreamingServer(PtyTerminal(80, 24), "127.0.0.1:0")
@@ -4593,6 +4780,12 @@ class StreamingServer:
             captures: List of capture group strings
             timestamp: Unix timestamp of the match
 
+        Returns:
+            None on success
+
+        Raises:
+            RuntimeError: If the server has been stopped
+
         Example:
             ```python
             server = StreamingServer(PtyTerminal(80, 24), "127.0.0.1:0")
@@ -4609,6 +4802,12 @@ class StreamingServer:
             value: New variable value
             old_value: Previous value, if known
 
+
+        Returns:
+            None on success
+
+        Raises:
+            RuntimeError: If the server has been stopped
         Example:
             ```python
             server = StreamingServer(PtyTerminal(80, 24), "127.0.0.1:0")
@@ -4632,6 +4831,11 @@ class StreamingServer:
         """Start the streaming server (non-blocking)
 
         This spawns the server in a background thread
+
+        Returns:
+            None on success
+        Raises:
+            RuntimeError: If the server has been stopped
         """
 
 class Terminal:
@@ -6182,10 +6386,12 @@ class Terminal:
             list[int]: Sorted 0-indexed dirty row numbers
         """
     def get_dropped_sixel_graphics(self) -> Any:
-        """Get count of Sixel graphics dropped due to limits
+        """Get count of graphics dropped due to limits
 
         Returns:
-            Number of Sixel graphics that have been dropped because of size or count limits
+            Number of graphics that have been dropped because of size or count
+            limits. Sixel and Kitty graphics share one store and this counter,
+            so it includes Kitty graphics evicted by the memory budget.
         """
     def get_fg_color(self, col: Any, row: Any) -> Any:
         """Get a cell's foreground color at the specified position
@@ -7798,7 +8004,11 @@ class Terminal:
             ```
         """
     def remove_all_named_progress_bars(self) -> Any:
-        """Remove all named progress bars"""
+        """Remove all named progress bars
+
+        Returns:
+            None
+        """
     def remove_bookmark(self, id: Any) -> Any:
         """Remove a bookmark by ID
 
@@ -8528,7 +8738,7 @@ class Terminal:
                    sub_shell_detected, file_transfer_started,
                    file_transfer_progress, file_transfer_completed,
                    file_transfer_failed, upload_requested, screen_cleared,
-                   inline_image_dropped.
+                   inline_image_dropped, output_budget_exceeded.
         """
     def set_faint_text_alpha(self, alpha: Any) -> Any:
         """Set faint/dim text alpha multiplier
@@ -9447,6 +9657,20 @@ class TmuxNotification:
         """Command number (for begin/end/error notifications)"""
     @command_number.setter
     def command_number(self, value: Any) -> None: ...
+    @property
+    def damage_generation(self) -> Any:
+        """Damage generation (for `pane-damage`): the pane terminal's damage
+        generation after the adjacent `%output` applied
+        """
+    @damage_generation.setter
+    def damage_generation(self, value: Any) -> None: ...
+    @property
+    def damage_rows(self) -> Any:
+        """Inclusive viewport row ranges (for `pane-damage`), 0-based and
+        ascending, that the adjacent `%output` changed
+        """
+    @damage_rows.setter
+    def damage_rows(self, value: Any) -> None: ...
     @property
     def data(self) -> Any:
         """Output data (for output notifications, as bytes)"""

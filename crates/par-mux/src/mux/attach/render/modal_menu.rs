@@ -451,7 +451,7 @@ impl WindowSession {
             return;
         }
         let _ = conn.send_forget(&format!("move-window -s {window} -t {slot}"));
-        self.status_dirty = true;
+        self.status_inflight.dirty = true;
     }
     /// The workspace menu's `respawn on exit`: flip the workspace's
     /// keep-one-tab respawn option (`set-workspace-respawn -t {id}
@@ -528,11 +528,11 @@ impl WindowSession {
             return;
         }
         if !shown {
-            self.status_dirty = true;
+            self.status_inflight.dirty = true;
             return;
         }
         let Some(session) = self.status.session_id.clone() else {
-            self.status_dirty = true;
+            self.status_inflight.dirty = true;
             return;
         };
         self.send_then(
@@ -545,7 +545,7 @@ impl WindowSession {
                 let Some(survivor) = active_window_row(&reply.body) else {
                     // The session died with the window: the next status
                     // refresh reports SessionGone and lands up the tree.
-                    s.status_dirty = true;
+                    s.status_inflight.dirty = true;
                     return;
                 };
                 s.land_window(c, &survivor);
@@ -619,7 +619,7 @@ impl WindowSession {
                 return;
             }
             if !shown {
-                s.status_dirty = true;
+                s.status_inflight.dirty = true;
                 return;
             }
             s.send_then(c, "list-workspaces", |s, c, reply| {
@@ -635,7 +635,7 @@ impl WindowSession {
                 let Some(survivor) = survivor else {
                     // No workspace remains: the view ends cleanly through
                     // the next status refresh.
-                    s.status_dirty = true;
+                    s.status_inflight.dirty = true;
                     return;
                 };
                 if c.send_forget(&format!("select-workspace -t {survivor}"))

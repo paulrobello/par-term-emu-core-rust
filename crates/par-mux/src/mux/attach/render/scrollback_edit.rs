@@ -146,7 +146,7 @@ impl WindowSession {
                 return;
             }
         };
-        self.leave_scroll_mode();
+        self.leave_copy_mode();
         // The script runs under /bin/sh whatever the pane shell is (fish
         // would reject a POSIX script). Since the parser's start-command
         // cut stops split-window's flags at the `--`, the script rides
@@ -173,7 +173,7 @@ impl WindowSession {
                     .and_then(|id| id.trim().strip_prefix('%'))
                     .and_then(|n| n.parse::<u32>().ok());
                 let window = s.window.clone();
-                s.reseed_window(c, &window);
+                s.reseed_window(c, &window, false);
                 let Some(new_pane) = new_pane else {
                     return;
                 };

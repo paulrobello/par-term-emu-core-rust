@@ -9,12 +9,180 @@
 //! - Character attributes and hyperlinks
 //! - Grapheme clusters (variation selectors, ZWJ, skin tone modifiers, regional indicators)
 
-use crate::cell::{Cell, PackedColor, PackedOptionColor};
+use crate::cell::{Cell, CellFlags, PackedColor, PackedOptionColor};
 use crate::debug;
 use crate::grapheme;
 use crate::terminal::{Charset, Terminal};
 
+#[cfg(test)]
+thread_local! {
+    /// Tests compare the run writer against the per-character path.
+    pub(crate) static PER_CHAR_PRINT: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+
+/// Whether a test asked this thread to write printable ASCII one
+/// character at a time (always `false` outside tests).
+fn per_char_print_for_tests() -> bool {
+    #[cfg(test)]
+    {
+        PER_CHAR_PRINT.with(std::cell::Cell::get)
+    }
+    #[cfg(not(test))]
+    {
+        false
+    }
+}
+
 impl Terminal {
+    /// DECALN (`ESC # 8`): fill the screen with default-attribute `E`s,
+    /// reset the margins, clear origin mode and home the cursor, as xterm
+    /// does (its DECALN clears ORIGIN and calls resetRendition, so the E
+    /// cells and the ongoing pen carry default attributes, not the active
+    /// pen). Used to check a screen's alignment, and by vttest.
+    pub(crate) fn screen_alignment_pattern(&mut self) {
+        let (cols, rows) = self.size();
+        self.modes.origin_mode = false;
+        self.attrs.flags = CellFlags::default();
+        self.attrs.fg = self.theme.default_fg;
+        self.attrs.bg = self.theme.default_bg;
+        self.attrs.underline_color = None;
+        let cell = Cell {
+            c: 'E',
+            combining: None,
+            fg: PackedColor::pack(self.theme.default_fg),
+            bg: PackedColor::pack(self.theme.default_bg),
+            underline_color: PackedOptionColor::pack(None),
+            flags: Default::default(),
+            width: 1,
+        };
+        self.active_grid_mut().fill_screen(&cell);
+        self.margins.scroll_region_top = 0;
+        self.margins.scroll_region_bottom = rows.saturating_sub(1);
+        self.margins.left_margin = 0;
+        self.margins.right_margin = cols.saturating_sub(1);
+        self.cursor.goto(0, 0);
+        self.pending_wrap = false;
+        for row in 0..rows {
+            self.triggers.mark_written(row);
+        }
+    }
+
+    /// Write the printable ASCII collected by `print` (see
+    /// `ParseBuffers::print_run`). Called before every other parser callback
+    /// and at the end of every parse pass.
+    pub(crate) fn flush_print_run(&mut self) {
+        if self.parse_buffers.print_run.is_empty() {
+            return;
+        }
+        let run = std::mem::take(&mut self.parse_buffers.print_run);
+        self.write_ascii_run(&run);
+        self.parse_buffers.print_run = run;
+        self.parse_buffers.print_run.clear();
+    }
+
+    /// Write a run of printable ASCII (`' '..='~'`) exactly as one
+    /// `write_char` per byte would, but a screen row at a time: the pen is
+    /// packed once, and each row segment is marked damaged once and written
+    /// straight into the row. Anything that changes how a single character
+    /// lands (a translating charset, insert mode, left/right margins,
+    /// autowrap off, trace logging) takes the per-character path.
+    fn write_ascii_run(&mut self, run: &[u8]) {
+        if self.active_charset() != Charset::Ascii
+            || self.modes.insert_mode
+            || self.margins.use_lr_margins
+            || !self.modes.auto_wrap
+            || debug::is_enabled(debug::DebugLevel::Trace)
+            || per_char_print_for_tests()
+        {
+            for &b in run {
+                debug::log_print(b as char, self.cursor.col, self.cursor.row);
+                self.write_char(b as char);
+            }
+            return;
+        }
+
+        let (cols, _rows) = self.size();
+        let mut flags = self.attrs.flags;
+        flags.hyperlink_id = self.hyperlink_state.current_hyperlink_id;
+        flags.set_guarded(self.modes.char_protected);
+        let pen = Cell {
+            c: ' ',
+            combining: None,
+            fg: PackedColor::pack(self.attrs.fg),
+            bg: PackedColor::pack(self.attrs.bg),
+            underline_color: PackedOptionColor::pack(self.attrs.underline_color),
+            flags,
+            width: 1,
+        };
+
+        let mut rest = run;
+        while !rest.is_empty() {
+            if self.pending_wrap {
+                self.resolve_pending_wrap();
+            }
+            let (col, row) = (self.cursor.col, self.cursor.row);
+            if col >= cols {
+                // Not a state the cursor is kept in; let the general path
+                // decide what it means.
+                for &b in rest {
+                    self.write_char(b as char);
+                }
+                return;
+            }
+            let n = rest.len().min(cols - col);
+            // Same invariant as the per-character path: halves of wide pairs
+            // orphaned at the segment edges are blanked before the overwrite.
+            let bg = pen.bg;
+            self.active_grid_mut()
+                .split_wide_chars_at(row, col, col + n, bg);
+            self.active_grid_mut()
+                .write_ascii(col, row, &rest[..n], &pen);
+            self.triggers.mark_written(row);
+            self.cursor.col = col + n;
+            if self.cursor.col >= cols {
+                // Delayed autowrap: stay in the last column, wrap on the
+                // next character.
+                self.cursor.col = cols - 1;
+                self.pending_wrap = true;
+            }
+            rest = &rest[n..];
+        }
+    }
+
+    /// Perform the wrap a character written in the last column left
+    /// pending (DECAWM): mark the row wrapped and move to the start of the
+    /// next row, scrolling the region when the cursor is at its bottom.
+    fn resolve_pending_wrap(&mut self) {
+        let (cols, rows) = self.size();
+        let was_outside_lr = self.margins.use_lr_margins
+            && (self.cursor.col < self.margins.left_margin
+                || self.cursor.col > self.margins.right_margin);
+
+        // Mark the current row as wrapped (line continues to next row)
+        let current_row = self.cursor.row;
+        self.active_grid_mut().set_line_wrapped(current_row, true);
+
+        // Move to left margin or column 0
+        self.cursor.col = if self.margins.use_lr_margins {
+            self.margins.left_margin.min(cols.saturating_sub(1))
+        } else {
+            0
+        };
+        if self.cursor.row == self.margins.scroll_region_bottom && !was_outside_lr {
+            let scroll_top = self.margins.scroll_region_top;
+            let scroll_bottom = self.margins.scroll_region_bottom;
+            debug::log_scroll("wrap-pending-advance", scroll_top, scroll_bottom, 1);
+            self.scroll_region_up_tracked(1, scroll_top, scroll_bottom);
+            // Cursor remains at bottom of region
+        } else {
+            self.cursor.row += 1;
+            if self.cursor.row >= rows {
+                self.cursor.row = rows - 1;
+            }
+        }
+        self.pending_wrap = false;
+    }
+
     /// Write a character to the terminal at the current cursor position
     pub(super) fn write_char(&mut self, c: char) {
         // Apply ACS (Alternate Character Set) translation when the active charset
@@ -36,6 +204,12 @@ impl Terminal {
             self.write_normal_cell_known_width(c, 1, cols);
             return;
         }
+        // C0 controls are never regional indicators or combining marks
+        // either, so they go straight to their handling below.
+        if c.is_ascii_control() {
+            self.write_control(c, cols);
+            return;
+        }
 
         // Handle regional indicator pairs (flag emoji like 🇺🇸)
         // When the second regional indicator arrives, combine it with the first
@@ -51,6 +225,12 @@ impl Terminal {
             return;
         }
 
+        self.write_control(c, cols);
+    }
+
+    /// Handle CR, LF, TAB and BS; ignore other control characters; write
+    /// anything else as a normal cell.
+    fn write_control(&mut self, c: char, cols: usize) {
         // Handle special characters
         match c {
             '\r' => {
@@ -158,34 +338,7 @@ impl Terminal {
     fn write_normal_cell_known_width(&mut self, c: char, char_width: usize, cols: usize) {
         // If a wrap is pending from a prior write at the right margin, perform the wrap now
         if self.pending_wrap {
-            let (cols, rows) = self.size();
-            let was_outside_lr = self.margins.use_lr_margins
-                && (self.cursor.col < self.margins.left_margin
-                    || self.cursor.col > self.margins.right_margin);
-
-            // Mark the current row as wrapped (line continues to next row)
-            let current_row = self.cursor.row;
-            self.active_grid_mut().set_line_wrapped(current_row, true);
-
-            // Move to left margin or column 0
-            self.cursor.col = if self.margins.use_lr_margins {
-                self.margins.left_margin.min(cols.saturating_sub(1))
-            } else {
-                0
-            };
-            if self.cursor.row == self.margins.scroll_region_bottom && !was_outside_lr {
-                let scroll_top = self.margins.scroll_region_top;
-                let scroll_bottom = self.margins.scroll_region_bottom;
-                debug::log_scroll("wrap-pending-advance", scroll_top, scroll_bottom, 1);
-                self.scroll_region_up_tracked(1, scroll_top, scroll_bottom);
-                // Cursor remains at bottom of region
-            } else {
-                self.cursor.row += 1;
-                if self.cursor.row >= rows {
-                    self.cursor.row = rows - 1;
-                }
-            }
-            self.pending_wrap = false;
+            self.resolve_pending_wrap();
         }
 
         // If wide character won't fit on current line, wrap first
@@ -247,6 +400,14 @@ impl Terminal {
                 .insert_chars(cursor_col, cursor_row, char_width);
         }
 
+        // A wide character this one half overwrites is blanked.
+        let bg = cell.bg;
+        self.active_grid_mut().split_wide_chars_at(
+            cursor_row,
+            cursor_col,
+            cursor_col + char_width.max(1),
+            bg,
+        );
         self.active_grid_mut().set(cursor_col, cursor_row, cell);
         // New text landed: render damage plus trigger scan
         self.triggers.mark_written(cursor_row);
@@ -276,14 +437,49 @@ impl Terminal {
             // Spacer is on same row, already marked dirty above
         }
 
-        // Handle delayed autowrap for width-1 characters
-        if self.modes.auto_wrap && char_width == 1 && self.cursor.col >= cols {
-            // Stay at last column and set wrap-pending; do not move yet
+        // Delayed autowrap: a character (narrow or wide) that ends in the
+        // last column leaves the cursor there with the wrap pending, so the
+        // next character starts the next row instead of overwriting it (a
+        // wide character's spacer included).
+        if self.cursor.col >= cols {
             self.cursor.col = cols - 1;
-            self.pending_wrap = true;
-        } else if self.cursor.col >= cols {
-            // Fallback: if auto-wrap is disabled or some edge case, clamp to last column
-            self.cursor.col = cols - 1;
+            if self.modes.auto_wrap {
+                self.pending_wrap = true;
+            }
+        }
+    }
+
+    /// The cell holding the character written last, where a combining
+    /// mark attaches: the cell before the cursor, or the cursor's own cell
+    /// while a wrap is pending (the cursor stays on the character it wrote
+    /// in the last column). A wide character's spacer resolves to the wide
+    /// character. `None` when there is no cell before the cursor.
+    fn last_written_cell(&self, cols: usize) -> Option<(usize, usize)> {
+        let (col, row) = (self.cursor.col, self.cursor.row);
+        let (prev_col, prev_row) = if self.pending_wrap {
+            (col.min(cols - 1), row)
+        } else if col > 0 {
+            (col - 1, row)
+        } else if row > 0 {
+            (cols - 1, row - 1)
+        } else {
+            return None;
+        };
+        if !self
+            .active_grid()
+            .get(prev_col, prev_row)?
+            .flags
+            .wide_char_spacer()
+        {
+            return Some((prev_col, prev_row));
+        }
+        // A spacer: the wide character is one cell further left.
+        if prev_col > 0 {
+            Some((prev_col - 1, prev_row))
+        } else if prev_row > 0 {
+            Some((cols - 1, prev_row - 1))
+        } else {
+            None
         }
     }
 
@@ -293,41 +489,24 @@ impl Terminal {
     ///
     /// Returns `true` when the character was consumed here.
     fn try_apply_combining_mark(&mut self, c: char, cols: usize) -> bool {
+        // With per-code-point widths (`Terminal::set_codepoint_widths`) a
+        // skin tone modifier is a character of its own, and nothing that
+        // attaches to a cell changes its width.
+        let codepoint_widths = self.unicode_state.codepoint_widths;
+        if codepoint_widths && grapheme::is_skin_tone_modifier(c) {
+            return false;
+        }
+
         if grapheme::is_variation_selector(c)
             || grapheme::is_zwj(c)
             || grapheme::is_skin_tone_modifier(c)
             || grapheme::is_combining_mark(c)
         {
-            // Find the previous actual character cell (skip over wide char spacers)
-            let (prev_col, prev_row) = if self.cursor.col > 0 {
-                (self.cursor.col - 1, self.cursor.row)
-            } else if self.cursor.row > 0 {
-                (cols - 1, self.cursor.row - 1)
-            } else {
-                // At position (0, 0), nowhere to add combining char
+            // The cell of the character written last; at (0, 0) there is
+            // nothing to attach to.
+            let Some((target_col, target_row)) = self.last_written_cell(cols) else {
                 return true;
             };
-
-            // Check if the previous cell is a wide char spacer
-            // If so, the actual wide char is one more cell to the left
-            let (target_col, target_row) =
-                if let Some(cell) = self.active_grid().get(prev_col, prev_row) {
-                    if cell.flags.wide_char_spacer() {
-                        // Previous cell is a spacer, go back one more cell for the wide char
-                        if prev_col > 0 {
-                            (prev_col - 1, prev_row)
-                        } else if prev_row > 0 {
-                            (cols - 1, prev_row - 1)
-                        } else {
-                            // Spacer at start of grid, nowhere to go
-                            return true;
-                        }
-                    } else {
-                        (prev_col, prev_row)
-                    }
-                } else {
-                    return true;
-                };
 
             // Copy normalization form before mutable borrow
             let norm_form = self.unicode_state.normalization_form;
@@ -362,35 +541,45 @@ impl Terminal {
                     }
                 }
 
-                // Recalculate width if needed (e.g., emoji with variation selector)
+                // Recalculate width if needed (e.g., emoji with variation
+                // selector). The cell only widens when there is room for the
+                // spacer after it: a wide pair must never end the row
+                // half-written, so at the last column the mark still attaches
+                // but the cell keeps width 1.
                 let grapheme = target_cell.get_grapheme();
-                let new_width = grapheme::is_wide_grapheme(&grapheme);
-                if new_width && target_cell.width() == 1 {
+                if !codepoint_widths
+                    && target_col + 1 < cols
+                    && grapheme::is_wide_grapheme(&grapheme)
+                    && target_cell.width() == 1
+                {
                     target_cell.width = 2;
                     target_cell.flags.set_wide_char(true);
 
-                    if target_col + 1 < cols {
-                        let mut spacer_flags = target_cell.flags;
-                        spacer_flags.set_wide_char(false);
-                        spacer_flags.set_wide_char_spacer(true);
+                    let mut spacer_flags = target_cell.flags;
+                    spacer_flags.set_wide_char(false);
+                    spacer_flags.set_wide_char_spacer(true);
 
-                        let spacer = Cell {
-                            c: ' ',
-                            combining: None,
-                            fg: target_cell.fg,
-                            bg: target_cell.bg,
-                            underline_color: target_cell.underline_color,
-                            flags: spacer_flags,
-                            width: 1,
-                        };
-                        self.active_grid_mut()
-                            .set(target_col + 1, target_row, spacer);
-                    }
+                    let spacer = Cell {
+                        c: ' ',
+                        combining: None,
+                        fg: target_cell.fg,
+                        bg: target_cell.bg,
+                        underline_color: target_cell.underline_color,
+                        flags: spacer_flags,
+                        width: 1,
+                    };
+                    self.active_grid_mut()
+                        .set(target_col + 1, target_row, spacer);
                 }
 
                 self.triggers.mark_written(target_row);
             }
             return true;
+        }
+
+        // With per-code-point widths an emoji after a ZWJ takes its own cells.
+        if codepoint_widths {
+            return false;
         }
 
         // Check if previous cell has ZWJ - if so, this char is part of ZWJ sequence
@@ -402,31 +591,12 @@ impl Terminal {
             | 0x1F000..=0x1FFFF // Emoji blocks
         );
 
-        if is_potential_emoji && (self.cursor.col > 0 || self.cursor.row > 0) {
-            let (prev_col, prev_row) = if self.cursor.col > 0 {
-                (self.cursor.col - 1, self.cursor.row)
-            } else {
-                (cols - 1, self.cursor.row - 1)
-            };
-
-            // Skip spacers to find actual wide char
-            let (target_col, target_row) =
-                if let Some(cell) = self.active_grid().get(prev_col, prev_row) {
-                    if cell.flags.wide_char_spacer() {
-                        if prev_col > 0 {
-                            (prev_col - 1, prev_row)
-                        } else if prev_row > 0 {
-                            (cols - 1, prev_row - 1)
-                        } else {
-                            (prev_col, prev_row) // Fallback
-                        }
-                    } else {
-                        (prev_col, prev_row)
-                    }
-                } else {
-                    (prev_col, prev_row)
-                };
-
+        let last_written = if is_potential_emoji {
+            self.last_written_cell(cols)
+        } else {
+            None
+        };
+        if let Some((target_col, target_row)) = last_written {
             // Check if target cell has ZWJ in combining chars
             if let Some(target_cell) = self.active_grid().get(target_col, target_row) {
                 if target_cell.combining_has('\u{200D}') {
@@ -436,30 +606,32 @@ impl Terminal {
                     {
                         target_cell_mut.combining_push(c);
 
-                        // Recalculate width if needed
+                        // Recalculate width if needed. As in the combining
+                        // path above, the cell only widens when the spacer
+                        // still fits on the row.
                         let grapheme = target_cell_mut.get_grapheme();
-                        let new_width = grapheme::is_wide_grapheme(&grapheme);
-                        if new_width && target_cell_mut.width() == 1 {
+                        if target_col + 1 < cols
+                            && grapheme::is_wide_grapheme(&grapheme)
+                            && target_cell_mut.width() == 1
+                        {
                             target_cell_mut.width = 2;
                             target_cell_mut.flags.set_wide_char(true);
 
-                            if target_col + 1 < cols {
-                                let mut spacer_flags = target_cell_mut.flags;
-                                spacer_flags.set_wide_char(false);
-                                spacer_flags.set_wide_char_spacer(true);
+                            let mut spacer_flags = target_cell_mut.flags;
+                            spacer_flags.set_wide_char(false);
+                            spacer_flags.set_wide_char_spacer(true);
 
-                                let spacer = Cell {
-                                    c: ' ',
-                                    combining: None,
-                                    fg: target_cell_mut.fg,
-                                    bg: target_cell_mut.bg,
-                                    underline_color: target_cell_mut.underline_color,
-                                    flags: spacer_flags,
-                                    width: 1,
-                                };
-                                self.active_grid_mut()
-                                    .set(target_col + 1, target_row, spacer);
-                            }
+                            let spacer = Cell {
+                                c: ' ',
+                                combining: None,
+                                fg: target_cell_mut.fg,
+                                bg: target_cell_mut.bg,
+                                underline_color: target_cell_mut.underline_color,
+                                flags: spacer_flags,
+                                width: 1,
+                            };
+                            self.active_grid_mut()
+                                .set(target_col + 1, target_row, spacer);
                         }
 
                         self.triggers.mark_written(target_row);
@@ -480,6 +652,12 @@ impl Terminal {
     /// starts a new potential pair via [`Self::write_regional_indicator_first`].
     /// Always consumes the character.
     fn try_combine_regional_indicator(&mut self, c: char, cols: usize) {
+        // While a wrap is pending the previous indicator sits in the last
+        // column with no room for the pair's second cell: start a new pair
+        // on the next row.
+        if self.pending_wrap {
+            return self.write_regional_indicator_first(c, cols);
+        }
         // Check if previous cell is also a regional indicator (first half of a flag)
         let (prev_col, prev_row) = if self.cursor.col > 0 {
             (self.cursor.col - 1, self.cursor.row)
@@ -523,6 +701,18 @@ impl Terminal {
             } else {
                 None
             };
+
+            // The spacer overwrites the cursor's cell: blank a wide
+            // character it half overwrites (before the indicator widens).
+            if let Some(spacer) = &spacer {
+                let bg = spacer.bg;
+                self.active_grid_mut().split_wide_chars_at(
+                    cursor_row,
+                    cursor_col,
+                    cursor_col + 1,
+                    bg,
+                );
+            }
 
             // Previous cell is a lone regional indicator - combine them
             if let Some(target_cell) = self.active_grid_mut().get_mut(prev_col, prev_row) {
@@ -619,6 +809,9 @@ impl Terminal {
                 .insert_chars(cursor_col, cursor_row, 1);
         }
 
+        let bg = cell.bg;
+        self.active_grid_mut()
+            .split_wide_chars_at(cursor_row, cursor_col, cursor_col + 1, bg);
         self.active_grid_mut().set(cursor_col, cursor_row, cell);
         self.triggers.mark_written(cursor_row);
 
@@ -645,6 +838,29 @@ mod tests {
     }
 
     #[test]
+    fn test_vs16_in_last_column_defers_widening() {
+        let mut term = Terminal::new(4, 3);
+        // x lands in the last column with wrap pending; VS16 must attach but
+        // not widen, or the row ends in a spacerless width-2 cell.
+        term.process("abcx\u{FE0F}".as_bytes());
+        let cell = term.active_grid().get(3, 0).unwrap();
+        assert_eq!(cell.width(), 1, "no room for the spacer: keep width 1");
+        assert!(!cell.flags.wide_char());
+        assert!(cell.combining_has('\u{FE0F}'));
+    }
+
+    #[test]
+    fn test_vs16_expands_when_the_spacer_fits() {
+        let mut term = Terminal::new(4, 3);
+        term.process("a\u{FE0F}".as_bytes());
+        let cell = term.active_grid().get(0, 0).unwrap();
+        assert_eq!(cell.width(), 2);
+        assert!(cell.flags.wide_char());
+        let spacer = term.active_grid().get(1, 0).unwrap();
+        assert!(spacer.flags.wide_char_spacer());
+    }
+
+    #[test]
     fn test_write_char_basic() {
         let mut term = create_test_terminal();
         term.write_char('A');
@@ -653,6 +869,80 @@ mod tests {
         assert_eq!(cell.c, 'A');
         assert_eq!(term.cursor.col, 1);
         assert_eq!(term.cursor.row, 0);
+    }
+
+    #[test]
+    fn emoji_sequences_keep_their_own_widths_with_codepoint_widths() {
+        fn terminal() -> Terminal {
+            let mut term = Terminal::new(10, 3);
+            term.set_codepoint_widths(true);
+            term
+        }
+
+        // VS16 does not widen the heart: one column, as wcwidth counts it,
+        // and the next character lands right after it.
+        let mut term = terminal();
+        term.process("\u{2764}\u{FE0F}xyz".as_bytes());
+        let grid = term.active_grid();
+        assert_eq!(grid.get(0, 0).unwrap().get_grapheme(), "\u{2764}\u{FE0F}");
+        assert_eq!(grid.get(0, 0).unwrap().width(), 1);
+        assert_eq!(grid.row_text(0).trim_end(), "\u{2764}\u{FE0F}xyz");
+        assert_eq!(term.cursor.col, 4);
+
+        // After a ZWJ the next emoji takes its own cells: 2 + 0 + 2 columns.
+        let mut term = terminal();
+        term.process("\u{1F468}\u{200D}\u{1F4BB}x".as_bytes());
+        let grid = term.active_grid();
+        assert_eq!(grid.get(0, 0).unwrap().get_grapheme(), "\u{1F468}\u{200D}");
+        assert_eq!(grid.get(2, 0).unwrap().c, '\u{1F4BB}');
+        assert_eq!(grid.get(4, 0).unwrap().c, 'x');
+        assert_eq!(term.cursor.col, 5);
+
+        // A narrow base joined by ZWJ does not widen either.
+        let mut term = terminal();
+        term.process("\u{2764}\u{FE0F}\u{200D}\u{1F525}x".as_bytes());
+        let grid = term.active_grid();
+        assert_eq!(grid.get(0, 0).unwrap().width(), 1);
+        assert_eq!(grid.get(1, 0).unwrap().c, '\u{1F525}');
+        assert_eq!(grid.get(3, 0).unwrap().c, 'x');
+
+        // A skin tone modifier is a wide character of its own.
+        let mut term = terminal();
+        term.process("\u{1F44D}\u{1F3FD}x".as_bytes());
+        let grid = term.active_grid();
+        assert_eq!(grid.get(2, 0).unwrap().c, '\u{1F3FD}');
+        assert_eq!(grid.get(4, 0).unwrap().c, 'x');
+        assert_eq!(term.cursor.col, 5);
+
+        // A combining mark still attaches, and a flag is still one
+        // two-column cell.
+        let mut term = terminal();
+        term.process("e\u{301}\u{1F1FA}\u{1F1F8}x".as_bytes());
+        let grid = term.active_grid();
+        assert_eq!(grid.get(0, 0).unwrap().get_grapheme(), "\u{e9}");
+        assert_eq!(grid.get(1, 0).unwrap().get_grapheme(), "\u{1F1FA}\u{1F1F8}");
+        assert_eq!(grid.get(3, 0).unwrap().c, 'x');
+    }
+
+    #[test]
+    fn codepoint_widths_are_off_by_default_and_survive_ris() {
+        // The default counts grapheme clusters: VS16 widens the heart and a
+        // skin tone modifier joins the cell before it.
+        let mut term = Terminal::new(10, 3);
+        assert!(!term.codepoint_widths());
+        term.process("\u{2764}\u{FE0F}".as_bytes());
+        assert_eq!(term.active_grid().get(0, 0).unwrap().width(), 2);
+        term.process("\r\n\u{1F44D}\u{1F3FD}".as_bytes());
+        assert_eq!(
+            term.active_grid().get(0, 1).unwrap().get_grapheme(),
+            "\u{1F44D}\u{1F3FD}"
+        );
+
+        term.set_codepoint_widths(true);
+        term.process(b"\x1bc");
+        assert!(term.codepoint_widths());
+        term.process("\u{2764}\u{FE0F}".as_bytes());
+        assert_eq!(term.active_grid().get(0, 0).unwrap().width(), 1);
     }
 
     #[test]
@@ -866,6 +1156,66 @@ mod tests {
 
         // First row should be marked as wrapped
         assert!(term.active_grid().is_line_wrapped(0));
+    }
+
+    #[test]
+    fn a_wide_character_ending_in_the_last_column_leaves_the_wrap_pending() {
+        let mut term = Terminal::new(6, 3);
+        term.process("abcd中".as_bytes());
+        assert_eq!(term.cursor.col, 5);
+        assert!(term.pending_wrap);
+
+        // The next character starts the next row; the spacer stays.
+        term.process(b"x");
+        let grid = term.active_grid();
+        assert_eq!(grid.get(4, 0).unwrap().c, '中');
+        assert!(grid.get(5, 0).unwrap().flags.wide_char_spacer());
+        assert_eq!(grid.get(0, 1).unwrap().c, 'x');
+        assert!(grid.is_line_wrapped(0));
+        assert_eq!((term.cursor.col, term.cursor.row), (1, 1));
+
+        // Without autowrap the cursor stays in the last column.
+        let mut term = Terminal::new(6, 3);
+        term.process("\x1b[?7labcd中".as_bytes());
+        assert_eq!(term.cursor.col, 5);
+        assert!(!term.pending_wrap);
+    }
+
+    #[test]
+    fn a_combining_mark_during_the_pending_wrap_joins_the_last_column() {
+        let mut term = Terminal::new(3, 3);
+        term.process("abc\u{301}".as_bytes());
+        let grid = term.active_grid();
+        assert_eq!(grid.get(1, 0).unwrap().get_grapheme(), "b");
+        assert_eq!(grid.get(2, 0).unwrap().get_grapheme(), "\u{107}"); // c + acute, composed
+        assert!(term.pending_wrap);
+
+        // A wide character in the last column takes the mark, not its spacer.
+        let mut term = Terminal::new(6, 3);
+        term.process("abcd中\u{301}".as_bytes());
+        let grid = term.active_grid();
+        assert_eq!(grid.get(4, 0).unwrap().get_grapheme(), "中\u{301}");
+        assert!(grid.get(5, 0).unwrap().combining_is_empty());
+
+        // A ZWJ continuation looks at the same cell.
+        let mut term = Terminal::new(3, 3);
+        term.process("ab\u{1F468}\u{200D}".as_bytes()); // the man wraps to row 1
+        assert_eq!(
+            term.active_grid().get(0, 1).unwrap().get_grapheme(),
+            "\u{1F468}\u{200D}"
+        );
+    }
+
+    #[test]
+    fn a_regional_indicator_during_the_pending_wrap_starts_a_new_pair() {
+        let mut term = Terminal::new(4, 3);
+        term.process("aa\u{1F1FA}x\u{1F1F8}".as_bytes());
+        let grid = term.active_grid();
+        // The x in the last column stays; the second indicator wraps.
+        assert_eq!(grid.get(2, 0).unwrap().get_grapheme(), "\u{1F1FA}");
+        assert_eq!(grid.get(3, 0).unwrap().c, 'x');
+        assert_eq!(grid.get(0, 1).unwrap().c, '\u{1F1F8}');
+        assert_eq!((term.cursor.col, term.cursor.row), (1, 1));
     }
 
     #[test]
@@ -1131,5 +1481,80 @@ mod tests {
         // Should wrap to left margin
         assert_eq!(term.cursor.col, 11);
         assert_eq!(term.cursor.row, 1);
+    }
+
+    /// Row `row`'s text, after checking that every wide character there
+    /// has its spacer and every spacer its wide character.
+    fn row_with_whole_wide_chars(term: &Terminal, row: usize) -> String {
+        let grid = term.active_grid();
+        let cells = grid.row(row).unwrap();
+        for (col, cell) in cells.iter().enumerate() {
+            if cell.flags.wide_char() && col + 1 < cells.len() {
+                assert!(
+                    cells[col + 1].flags.wide_char_spacer(),
+                    "the wide character in column {col} lost its spacer"
+                );
+            }
+            if cell.flags.wide_char_spacer() {
+                assert!(
+                    col > 0 && cells[col - 1].flags.wide_char(),
+                    "the spacer in column {col} lost its wide character"
+                );
+            }
+        }
+        grid.row_text(row).trim_end().to_string()
+    }
+
+    #[test]
+    fn overwriting_half_a_wide_character_blanks_the_other_half() {
+        // The right half: X shows instead of hiding under the 中.
+        let mut term = Terminal::new(6, 3);
+        term.process("中\x1b[1;2HX".as_bytes());
+        assert_eq!(row_with_whole_wide_chars(&term, 0), " X");
+        // The left half, through the per-character path too.
+        for text in ["中\x1b[1;1HX", "中\x1b[1;1H\u{e9}"] {
+            let mut term = Terminal::new(6, 3);
+            term.process(text.as_bytes());
+            let first = text.chars().last().unwrap();
+            assert_eq!(row_with_whole_wide_chars(&term, 0), first.to_string());
+        }
+        // A wide character over the right half of another.
+        let mut term = Terminal::new(6, 3);
+        term.process("中中\x1b[1;2H日".as_bytes());
+        assert_eq!(row_with_whole_wide_chars(&term, 0), " 日");
+        // Insert mode splits the wide character it is typed into.
+        let mut term = Terminal::new(6, 3);
+        term.process("a中b\x1b[1;3H\x1b[4hX".as_bytes());
+        assert_eq!(row_with_whole_wide_chars(&term, 0), "a X b");
+    }
+
+    #[test]
+    fn editing_half_a_wide_character_blanks_the_other_half() {
+        // Columns: a 中 (spacer) b c, the cursor on the spacer or the 中.
+        let cases = [
+            ("\x1b[1;3H\x1b[P", "a bc"),   // DCH on the spacer
+            ("\x1b[1;2H\x1b[P", "a bc"),   // DCH on the wide character
+            ("\x1b[1;3H\x1b[@", "a   bc"), // ICH on the spacer
+            ("\x1b[1;3H\x1b[X", "a  bc"),  // ECH on the spacer
+            ("\x1b[1;2H\x1b[X", "a  bc"),  // ECH on the wide character
+            ("\x1b[1;3H\x1b[K", "a"),      // EL 0 from the spacer
+            ("\x1b[1;2H\x1b[1K", "   bc"), // EL 1 to the wide character
+        ];
+        for (edit, expected) in cases {
+            let mut term = Terminal::new(8, 3);
+            term.process(format!("a中bc{edit}").as_bytes());
+            assert_eq!(row_with_whole_wide_chars(&term, 0), expected, "{edit:?}");
+        }
+        // ICH pushing a wide character half off the row blanks it.
+        let mut term = Terminal::new(6, 3);
+        term.process("abcd中\x1b[1;1H\x1b[@".as_bytes());
+        assert_eq!(row_with_whole_wide_chars(&term, 0), " abcd");
+        // A colored erase blanks the other half in its color.
+        let mut term = Terminal::new(8, 3);
+        term.process("a中bc\x1b[44m\x1b[1;3H\x1b[X".as_bytes());
+        assert_eq!(
+            term.active_grid().get(1, 0).unwrap().bg(),
+            crate::color::Color::Named(crate::color::NamedColor::Blue)
+        );
     }
 }

@@ -9,7 +9,7 @@
 use crate::mouse::{MouseEncoding, MouseMode};
 use crate::streaming::error::{Result, StreamingError};
 use crate::streaming::inline_image_frame_struct;
-use crate::streaming::protocol::{InlineImageFrame, ServerMessage, ThemeInfo};
+use crate::streaming::protocol::{DamageRange, InlineImageFrame, ServerMessage, ThemeInfo};
 use crate::terminal::Terminal;
 use parking_lot::{Mutex, RwLock};
 use std::collections::HashMap;
@@ -107,6 +107,99 @@ impl SessionMetrics {
 // Session State
 // =============================================================================
 
+/// One chunk of pane output queued into a session's output broadcaster
+/// (card 01a19ca4): the decoded text plus, when the producer had it, the
+/// chunk's damage. A producer without damage information sends
+/// [`OutputChunk::plain`]; its chunks carry no damage fields on the wire
+/// and a client full-scans — the conservative default.
+#[derive(Debug, Clone, Default)]
+pub struct OutputChunk {
+    /// Decoded text of the output chunk (lossy UTF-8 of the raw bytes).
+    pub data: String,
+    /// Inclusive viewport row ranges the chunk changed, ascending.
+    pub damage: Vec<DamageRange>,
+    /// The pane's damage generation after this chunk applied. `Some` marks
+    /// the damage authoritative (empty `damage` = no viewport row
+    /// changed); `None` = no damage information.
+    pub damage_generation: Option<u64>,
+}
+
+impl OutputChunk {
+    /// A chunk without damage information.
+    pub fn plain(data: String) -> Self {
+        Self {
+            data,
+            damage: Vec::new(),
+            damage_generation: None,
+        }
+    }
+
+    /// A chunk with authoritative damage: generation present even when
+    /// `ranges` is empty (which then means "no viewport row changed").
+    pub fn with_damage(data: String, generation: u64, ranges: Vec<(u32, u32)>) -> Self {
+        Self {
+            data,
+            damage: ranges
+                .into_iter()
+                .map(|(start_row, end_row)| DamageRange { start_row, end_row })
+                .collect(),
+            damage_generation: Some(generation),
+        }
+    }
+
+    /// Coalesce `ranges` into the accumulator, keeping it sorted and
+    /// non-overlapping. Adjacent-or-overlapping runs merge; a gap stays a
+    /// gap (a gap between ranges is information: rows the client need not
+    /// redraw).
+    fn accumulate(ranges: &mut Vec<(u32, u32)>, incoming: &[(u32, u32)]) {
+        ranges.extend_from_slice(incoming);
+        ranges.sort_unstable();
+        let mut write = 0;
+        for read in 1..ranges.len() {
+            // Merge when the next range touches or overlaps the current
+            // run (`read.start <= write.end + 1`).
+            if ranges[read].0 <= ranges[write].1.saturating_add(1) {
+                ranges[write].1 = ranges[write].1.max(ranges[read].1);
+            } else {
+                write += 1;
+                ranges[write] = ranges[read];
+            }
+        }
+        ranges.truncate(write + 1);
+    }
+
+    /// Merge this chunk's damage into `batch` (see
+    /// [`StreamSessionState::output_broadcaster_loop`]): a chunk without
+    /// damage information poisons the batch (absent fields on the wire —
+    /// the client full-scans), while damaged chunks union their ranges
+    /// under the maximum generation.
+    fn merge_into(&self, batch: &mut DamageBatch) {
+        match (&mut *batch, self.damage_generation) {
+            (Some(Some((gen, ranges))), Some(chunk_gen)) => {
+                *gen = (*gen).max(chunk_gen);
+                Self::accumulate(ranges, &self.damage_pairs());
+            }
+            (None, Some(chunk_gen)) => {
+                *batch = Some(Some((chunk_gen, self.damage_pairs().into_iter().collect())))
+            }
+            _ => *batch = Some(None),
+        }
+    }
+
+    fn damage_pairs(&self) -> Vec<(u32, u32)> {
+        self.damage
+            .iter()
+            .map(|r| (r.start_row, r.end_row))
+            .collect()
+    }
+}
+
+/// One batch's damage accumulator in [`StreamSessionState::output_broadcaster_loop`]:
+/// `None` = nothing accumulated yet; `Some(None)` = poisoned by a chunk
+/// without damage information; `Some(Some((generation, ranges)))` = every
+/// chunk carried damage.
+type DamageBatch = Option<Option<(u64, Vec<(u32, u32)>)>>;
+
 /// Per-session state extracted from StreamingServer for multi-session support
 pub struct StreamSessionState {
     /// Unique session identifier
@@ -116,9 +209,9 @@ pub struct StreamSessionState {
     /// Broadcast channel for sending output to all clients in this session
     pub(crate) broadcast_tx: broadcast::Sender<ServerMessage>,
     /// Channel for sending output data into the broadcaster loop (bounded for backpressure)
-    pub(crate) output_tx: mpsc::Sender<String>,
+    pub(crate) output_tx: mpsc::Sender<OutputChunk>,
     /// Receiver end of the output channel (consumed by broadcaster loop)
-    pub(crate) output_rx: Arc<tokio::sync::Mutex<mpsc::Receiver<String>>>,
+    pub(crate) output_rx: Arc<tokio::sync::Mutex<mpsc::Receiver<OutputChunk>>>,
     /// PTY writer for sending client input (optional, only set if PTY is available)
     pub(crate) pty_writer: RwLock<Option<PtyWriterHandle>>,
     /// Serialized PTY input path (QA-110): every input-bearing client
@@ -149,6 +242,11 @@ pub struct StreamSessionState {
     viewers: parking_lot::Mutex<std::collections::BTreeMap<uuid::Uuid, String>>,
     mux_viewers: parking_lot::Mutex<Vec<String>>,
     pane_size_status: parking_lot::RwLock<Option<ServerMessage>>,
+    /// The mirrored pane's process lifecycle (`pane_process_state`), kept
+    /// current by the mux mirror so a connecting viewer reads the state
+    /// without waiting for the next transition. `None` for direct-PTY
+    /// sessions and pre-transition mirrors.
+    pane_process_status: parking_lot::RwLock<Option<ServerMessage>>,
     /// When the last client disconnected (for idle timeout)
     pub(crate) last_client_disconnect: parking_lot::RwLock<Option<tokio::time::Instant>>,
     /// When this session was created (Unix epoch seconds)
@@ -171,6 +269,13 @@ pub struct StreamSessionState {
     /// later handshake names the pane being mirrored right now. `None` for
     /// every other session: the requested id echoes verbatim.
     pub(crate) connected_pane: RwLock<Option<Arc<Mutex<u32>>>>,
+    /// The pane's cwd and OSC 7 hostname as a mux mirror factory pushed
+    /// them (attach pane-info row, kept current by the drain loop — card
+    /// 01a1ce6a). `Connected.cwd` falls back to it when the session's
+    /// terminal has no OSC 7 cwd of its own. `None` for direct-PTY
+    /// sessions and mux sessions whose daemon predates the pane-info cwd
+    /// tokens.
+    pub(crate) mux_cwd: Mutex<Option<(String, Option<String>)>>,
     /// Per-session metrics
     pub metrics: SessionMetrics,
 }
@@ -208,6 +313,7 @@ impl StreamSessionState {
             viewers: parking_lot::Mutex::new(std::collections::BTreeMap::new()),
             mux_viewers: parking_lot::Mutex::new(Vec::new()),
             pane_size_status: parking_lot::RwLock::new(None),
+            pane_process_status: parking_lot::RwLock::new(None),
             last_client_disconnect: parking_lot::RwLock::new(None),
             created_at,
             shutdown: Arc::new(tokio::sync::Notify::new()),
@@ -215,20 +321,29 @@ impl StreamSessionState {
             send_initial_screen,
             graphics_panes: RwLock::new(None),
             connected_pane: RwLock::new(None),
+            mux_cwd: Mutex::new(None),
             metrics: SessionMetrics::new(),
         }
     }
 
+    /// Register a connected client in the viewer set and broadcast the new
+    /// presence to the session. Called from the WS handshake on connect.
     pub(crate) fn viewer_join(&self, id: uuid::Uuid, kind: &str) {
         self.viewers.lock().insert(id, kind.to_string());
         let _ = self.broadcast_tx.send(self.viewer_presence());
     }
 
+    /// Drop a disconnected client from the viewer set and broadcast the new
+    /// presence. Called by `ViewerGuard` on session teardown.
     pub(crate) fn viewer_leave(&self, id: uuid::Uuid) {
         self.viewers.lock().remove(&id);
         let _ = self.broadcast_tx.send(self.viewer_presence());
     }
 
+    /// Re-identify an already-present viewer as `kind`. Only `web` and
+    /// `mobile` are accepted — an absent id or an `attach` kind is ignored,
+    /// since attach identity is authoritative from the mux mirror, not
+    /// from client self-reporting.
     pub(crate) fn viewer_identity(&self, id: uuid::Uuid, kind: &str) {
         let present = self.viewers.lock().contains_key(&id);
         if matches!(kind, "web" | "mobile") && present {
@@ -236,6 +351,8 @@ impl StreamSessionState {
         }
     }
 
+    /// Build the `ViewerPresence` message: this session's own viewers merged
+    /// with the mirror's viewer list, sorted, formatted `kind:id`.
     pub(crate) fn viewer_presence(&self) -> ServerMessage {
         let mut viewers = self.mux_viewers.lock().clone();
         viewers.extend(
@@ -251,6 +368,8 @@ impl StreamSessionState {
         }
     }
 
+    /// Fold the mirror's reconciled pane size and viewer list into the
+    /// session, broadcasting each only when it changed.
     // Only the mux-gated mirror reconciler calls this; the streaming-only
     // build otherwise lints the method as dead (same shape as parse_titles_output).
     #[cfg_attr(not(feature = "mux"), allow(dead_code))]
@@ -273,8 +392,56 @@ impl StreamSessionState {
         }
     }
 
+    /// The last pane-size status folded in by `update_mux_status`, if any;
+    /// `None` until the mirror reports one.
     pub(crate) fn pane_size_status(&self) -> Option<ServerMessage> {
         self.pane_size_status.read().clone()
+    }
+
+    /// Record the pane's cwd and its OSC 7 hostname (card 01a1ce6a).
+    /// `Connected.cwd` falls back to this when the session's terminal has
+    /// no OSC 7 cwd of its own; a later `record_cwd` keeps it current so
+    /// even the first client connecting after a `cd` sees the pane's new
+    /// directory in the handshake.
+    #[cfg_attr(not(feature = "mux"), allow(dead_code))]
+    pub(crate) fn update_mux_cwd(&self, cwd: String, host: Option<String>) {
+        *self.mux_cwd.lock() = Some((cwd, host));
+    }
+
+    /// Record the pane's process lifecycle and broadcast it to the
+    /// session's viewers when it changed. A `pane_id` change alone (a
+    /// workspace-active retarget landing on a same-state pane) counts as
+    /// a change, so a retargeted viewer's stored state names the pane
+    /// being mirrored now.
+    #[cfg_attr(not(feature = "mux"), allow(dead_code))]
+    pub(crate) fn update_pane_process(&self, msg: ServerMessage) {
+        let mut status = self.pane_process_status.write();
+        let unchanged = matches!(
+            (status.as_ref(), &msg),
+            (
+                Some(ServerMessage::PaneProcessState {
+                    pane_id: a,
+                    state: b,
+                    exit_code: c,
+                }),
+                ServerMessage::PaneProcessState {
+                    pane_id,
+                    state,
+                    exit_code,
+                }
+            ) if a == pane_id && b == state && c == exit_code
+        );
+        if !unchanged {
+            *status = Some(msg.clone());
+            let _ = self.broadcast_tx.send(msg);
+        }
+    }
+
+    /// The current pane process lifecycle for the connect handshake's
+    /// initial burst.
+    #[cfg_attr(not(feature = "mux"), allow(dead_code))]
+    pub(crate) fn pane_process_status(&self) -> Option<ServerMessage> {
+        self.pane_process_status.read().clone()
     }
 
     /// Try to add a client to this session. Returns true if successful.
@@ -331,7 +498,20 @@ impl StreamSessionState {
     /// the ones likeliest still on screen — and the walk stops at the
     /// first frame that would bust the frame count or the aggregate byte
     /// budget; the skipped tail is logged, never truncated.
-    pub fn build_connect_message(&self, client_id: &str, readonly: bool) -> ServerMessage {
+    ///
+    /// `allow_pane_create` is the server's `allow_pane_create` config flag
+    /// (streamer CLI `--allow-pane-create`). `Connected.pane_create_allowed`
+    /// is set to `Some(allow_pane_create && !readonly)` — mirroring the
+    /// `handle_pane_create` refusal ladder — so a client knows before its
+    /// first request whether `PaneCreateRequest` can succeed. A plain
+    /// builder-built `Connected` leaves the field `None` (absent on the
+    /// wire): how old servers degrade.
+    pub fn build_connect_message(
+        &self,
+        client_id: &str,
+        readonly: bool,
+        allow_pane_create: bool,
+    ) -> ServerMessage {
         let terminal = self.terminal.write();
         let (cols, rows) = terminal.size();
 
@@ -343,7 +523,28 @@ impl StreamSessionState {
 
         let badge = terminal.evaluate_badge();
         let faint_alpha = Some(terminal.faint_text_alpha());
-        let cwd = terminal.current_directory().map(|s| s.to_string());
+        // The cwd in the handshake: the session terminal's own OSC 7 state
+        // first, else the mux factory's daemon-known pane path (card
+        // 01a1ce6a criterion 1 — a mirror's screen replay rarely carries an
+        // OSC 7, so the fallback is the usual mux answer). Locality rides
+        // the OSC 7 hostname under the SEC-128 rule; a cwd with no host is
+        // local by construction.
+        let (cwd, cwd_hostname, cwd_is_local) = match terminal.current_directory() {
+            Some(cwd) => {
+                let host = terminal.shell_integration().hostname().map(str::to_string);
+                let local =
+                    par_term_emu_core::shell_integration::osc7_host_is_local(host.as_deref());
+                (Some(cwd.to_string()), host, Some(local))
+            }
+            None => match &*self.mux_cwd.lock() {
+                Some((cwd, host)) => {
+                    let local =
+                        par_term_emu_core::shell_integration::osc7_host_is_local(host.as_deref());
+                    (Some(cwd.clone()), host.clone(), Some(local))
+                }
+                None => (None, None, None),
+            },
+        };
         let mok_mode = Some(terminal.modify_other_keys_mode() as u32);
 
         let store = terminal.all_graphics();
@@ -386,12 +587,54 @@ impl StreamSessionState {
             .badge(badge)
             .faint_text_alpha(faint_alpha)
             .cwd(cwd)
+            .cwd_hostname(cwd_hostname)
+            .cwd_is_local(cwd_is_local)
             .modify_other_keys(mok_mode)
             .client_id(Some(client_id.to_string()))
             .readonly(Some(readonly))
             .pointer_shape(terminal.pointer_shape().map(str::to_string))
             .graphics(graphics)
+            .pane_create_allowed(Some(allow_pane_create && !readonly))
             .build()
+    }
+
+    /// The full-screen resync frame a client that lost broadcast frames
+    /// (`RecvError::Lagged`) applies to converge with the terminal again.
+    ///
+    /// The dropped frames may include pane output, and a lost frame is the
+    /// bare-ESC corruption: an escape byte that arrived inside the dropped
+    /// chunk never reaches the client's parser, and the next sequence's
+    /// tail (`22Gth`) paints as literal text. The screen-restore sequence
+    /// is the same in-band resync vehicle a workspace retarget pushes
+    /// (mux_factory mirror.rs); carried as an `Output` frame with no
+    /// damage generation, so the client full-scans instead of trusting a
+    /// stale row map.
+    pub fn screen_resync_frame(&self) -> ServerMessage {
+        ServerMessage::output_with_damage(
+            self.terminal.read().export_screen_restore_sequence(),
+            None,
+            Vec::new(),
+        )
+    }
+
+    /// The whole-replacement frames a client that lagged the broadcast
+    /// receives before the queued replay resumes (card 01a1ce56): the
+    /// screen, the mux pane-size status, the pane's process lifecycle, and
+    /// viewer presence. Every frame is a whole replacement or a stored
+    /// snapshot, so send-then-overwrite converges — dropped roster/tree
+    /// deltas are resynced separately by the ws loop's server snapshots.
+    #[cfg_attr(not(feature = "mux"), allow(dead_code))]
+    pub fn lag_resync_frames(&self) -> Vec<ServerMessage> {
+        let mut frames = Vec::with_capacity(4);
+        frames.push(self.screen_resync_frame());
+        if let Some(status) = self.pane_size_status() {
+            frames.push(status);
+        }
+        if let Some(process) = self.pane_process_status() {
+            frames.push(process);
+        }
+        frames.push(self.viewer_presence());
+        frames
     }
 
     /// Build ModeChanged messages for all active (non-default) terminal modes.
@@ -704,8 +947,10 @@ impl StreamSessionState {
         }
     }
 
-    /// Get a clone of the output sender channel
-    pub fn get_output_sender(&self) -> mpsc::Sender<String> {
+    /// Get a clone of the output sender channel. Chunks may carry damage
+    /// ([`OutputChunk::with_damage`]); damage-less chunks are the
+    /// conservative default (no damage fields on the wire).
+    pub fn get_output_sender(&self) -> mpsc::Sender<OutputChunk> {
         self.output_tx.clone()
     }
 
@@ -732,9 +977,26 @@ impl StreamSessionState {
     }
 
     /// Run the output broadcaster loop for this session
+    ///
+    /// Batches queued [`OutputChunk`]s on the 16 ms window (and the 8 KiB
+    /// size cap), merging their damage as it goes (card 01a19ca4): chunks
+    /// without damage information poison the batch (the flush emits no
+    /// damage fields and a client full-scans); chunks that all carry
+    /// damage flush with the maximum generation and the coalesced union
+    /// of their ranges — every row any chunk changed is redrawn, and no
+    /// row that stayed clean is claimed.
+    ///
+    /// A batch never mixes kinds: a plain chunk arriving into a batch that
+    /// already holds damage-bearing chunks — or a damage-bearing chunk
+    /// arriving into a plain-poisoned batch — flushes first. Under load the
+    /// daemon's mark chunks (OSC 7/133 fragments that change no rows, so the
+    /// mux gate sends no damage line) arrive as plain chunks between
+    /// damage-bearing ones; letting them merge would erase the pending
+    /// frames' damage and force a client full-scan.
     pub async fn output_broadcaster_loop(&self) {
         let mut rx = self.output_rx.lock().await;
         let mut buffer = String::new();
+        let mut batch: DamageBatch = None;
         let mut last_flush = tokio::time::Instant::now();
 
         const BATCH_WINDOW: Duration = Duration::from_millis(16);
@@ -745,23 +1007,36 @@ impl StreamSessionState {
                 _ = self.shutdown.notified() => {
                     crate::debug_info!("STREAMING", "Session {} broadcaster received shutdown signal", self.id);
                     if !buffer.is_empty() {
-                        let data_len = buffer.len();
-                        let msg = ServerMessage::output(buffer);
-                        self.broadcast(msg);
-                        self.metrics.bytes_sent.fetch_add(data_len, Ordering::Relaxed);
+                        self.flush_output_batch(&mut buffer, &mut batch);
                     }
                     break;
                 }
                 msg = rx.recv() => {
                     match msg {
-                        Some(data) => {
-                            if !data.is_empty() {
-                                buffer.push_str(&data);
+                        Some(chunk) => {
+                            if !chunk.data.is_empty() {
+                                // A batch never mixes kinds (see the method
+                                // doc): the batch's kind follows its damage
+                                // state — `Some(Some(_))` holds only
+                                // damage-bearing chunks, `Some(None)` was
+                                // poisoned by a plain chunk. On a mismatch
+                                // with data pending, flush first so the
+                                // pending frames keep their damage; the
+                                // incoming chunk then starts a fresh
+                                // same-kind batch.
+                                let chunk_damaged = chunk.damage_generation.is_some();
+                                let batch_damaged = matches!(batch, Some(Some(_)));
+                                if batch.is_some() && chunk_damaged != batch_damaged {
+                                    self.flush_output_batch(&mut buffer, &mut batch);
+                                    self.metrics
+                                        .last_broadcast_time
+                                        .store(now_millis(), Ordering::Relaxed);
+                                    last_flush = tokio::time::Instant::now();
+                                }
+                                chunk.merge_into(&mut batch);
+                                buffer.push_str(&chunk.data);
                                 if buffer.len() > MAX_BATCH_SIZE {
-                                    let data_len = buffer.len();
-                                    let msg = ServerMessage::output(std::mem::take(&mut buffer));
-                                    self.broadcast(msg);
-                                    self.metrics.bytes_sent.fetch_add(data_len, Ordering::Relaxed);
+                                    self.flush_output_batch(&mut buffer, &mut batch);
                                     self.metrics.last_broadcast_time.store(now_millis(), Ordering::Relaxed);
                                     last_flush = tokio::time::Instant::now();
                                 }
@@ -769,25 +1044,43 @@ impl StreamSessionState {
                         }
                         None => {
                             if !buffer.is_empty() {
-                                let data_len = buffer.len();
-                                let msg = ServerMessage::output(buffer);
-                                self.broadcast(msg);
-                                self.metrics.bytes_sent.fetch_add(data_len, Ordering::Relaxed);
+                                self.flush_output_batch(&mut buffer, &mut batch);
                             }
                             break;
                         }
                     }
                 }
                 _ = tokio::time::sleep_until(last_flush + BATCH_WINDOW), if !buffer.is_empty() => {
-                    let data_len = buffer.len();
-                    let msg = ServerMessage::output(std::mem::take(&mut buffer));
-                    self.broadcast(msg);
-                    self.metrics.bytes_sent.fetch_add(data_len, Ordering::Relaxed);
+                    self.flush_output_batch(&mut buffer, &mut batch);
                     self.metrics.last_broadcast_time.store(now_millis(), Ordering::Relaxed);
                     last_flush = tokio::time::Instant::now();
                 }
             }
         }
+    }
+
+    /// Emit `buffer` as one `output` frame with the batch's merged damage,
+    /// then clear both accumulators. Metrics match the pre-damage loop:
+    /// `bytes_sent` counts the text length only.
+    fn flush_output_batch(&self, buffer: &mut String, batch: &mut DamageBatch) {
+        let data_len = buffer.len();
+        let (generation, ranges) = match batch.take() {
+            // Already sorted and coalesced: `merge_into` accumulates on
+            // every damaged chunk.
+            Some(Some((gen, ranges))) => (
+                Some(gen),
+                ranges
+                    .into_iter()
+                    .map(|(start_row, end_row)| DamageRange { start_row, end_row })
+                    .collect::<Vec<DamageRange>>(),
+            ),
+            _ => (None, Vec::new()),
+        };
+        let msg = ServerMessage::output_with_damage(std::mem::take(buffer), generation, ranges);
+        self.broadcast(msg);
+        self.metrics
+            .bytes_sent
+            .fetch_add(data_len, Ordering::Relaxed);
     }
 
     /// Signal this session to shut down
@@ -964,6 +1257,45 @@ impl SessionRegistry {
 mod tests {
     use super::*;
 
+    /// Card 01a1ce56 criterion 2: the lag-resync recovery frames carry the
+    /// pane's CURRENT process lifecycle, so a viewer that lagged across an
+    /// exit transition converges on `exited` — this is the exact frame set
+    /// the ws loop sends after a broadcast `Lagged`.
+    #[test]
+    fn lag_resync_frames_carry_the_current_process_state() {
+        let session = StreamSessionState::new(
+            "lag-resync".into(),
+            Arc::new(RwLock::new(Terminal::new(80, 24))),
+            None,
+            true,
+        );
+        // No mux state yet: screen + presence only.
+        assert_eq!(session.lag_resync_frames().len(), 2);
+
+        // The exit transition the viewer lagged across.
+        session.update_pane_process(ServerMessage::PaneProcessState {
+            pane_id: "%3".into(),
+            state: "exited".into(),
+            exit_code: Some(5),
+        });
+        assert!(session.lag_resync_frames().iter().any(|f| matches!(
+            f,
+            ServerMessage::PaneProcessState { state, exit_code: Some(5), .. }
+                if state == "exited"
+        )));
+
+        // A respawn transition replaces the stored state.
+        session.update_pane_process(ServerMessage::PaneProcessState {
+            pane_id: "%3".into(),
+            state: "running".into(),
+            exit_code: None,
+        });
+        assert!(session.lag_resync_frames().iter().any(|f| matches!(
+            f,
+            ServerMessage::PaneProcessState { state, .. } if state == "running"
+        )));
+    }
+
     #[test]
     fn viewer_presence_composes_attach_web_mobile_and_pushes_leave() {
         let session = StreamSessionState::new(
@@ -1040,8 +1372,12 @@ mod tests {
         let broadcaster =
             tokio::spawn(async move { broadcaster_session.output_broadcaster_loop().await });
 
-        tx.send("hello ".to_string()).await.expect("queued");
-        tx.send("world".to_string()).await.expect("queued");
+        tx.send(OutputChunk::plain("hello ".to_string()))
+            .await
+            .expect("queued");
+        tx.send(OutputChunk::plain("world".to_string()))
+            .await
+            .expect("queued");
         // The 16 ms batch window flushes both chunks as one frame.
         tokio::time::sleep(Duration::from_millis(80)).await;
 
@@ -1050,6 +1386,7 @@ mod tests {
             if let ServerMessage::Output {
                 ref data,
                 timestamp,
+                ..
             } = msg
             {
                 saw_output = true;
@@ -1075,6 +1412,171 @@ mod tests {
         broadcaster.await.expect("broadcaster task");
     }
 
+    /// One drained broadcaster `Output` frame as a test tuple: (data,
+    /// damage generation, (start_row, end_row) ranges).
+    type Frame = (String, Option<u64>, Vec<(u32, u32)>);
+
+    /// A batch never mixes kinds: a plain chunk queued between two
+    /// damage-bearing chunks must not erase their damage. The three chunks
+    /// below land inside one 16 ms window, so the pre-boundary code merged
+    /// them into one frame and flushed it damageless — under load the
+    /// daemon's mark chunks (OSC 7/133, no rows changed, no damage line
+    /// from the mux gate) arrive exactly like this and every frame a client
+    /// drained carried `damage_generation: None`. The damage-bearing chunks
+    /// must flush with their own generation and ranges; the plain chunk
+    /// flushes as its own damageless frame.
+    #[tokio::test]
+    async fn output_broadcaster_plain_chunk_does_not_poison_pending_damage() {
+        let terminal = Arc::new(RwLock::new(Terminal::new(80, 24)));
+        let session = Arc::new(StreamSessionState::new(
+            "poison".to_string(),
+            terminal,
+            None,
+            true,
+        ));
+        let mut rx = session.broadcast_tx.subscribe();
+        let tx = session.get_output_sender();
+        let broadcaster_session = Arc::clone(&session);
+        let broadcaster =
+            tokio::spawn(async move { broadcaster_session.output_broadcaster_loop().await });
+
+        tx.send(OutputChunk::with_damage("A".into(), 5, vec![(0, 2)]))
+            .await
+            .expect("queued");
+        tx.send(OutputChunk::plain("\x1b]7;file:///tmp cwd\x07".into()))
+            .await
+            .expect("queued");
+        tx.send(OutputChunk::with_damage("B".into(), 6, vec![(4, 6)]))
+            .await
+            .expect("queued");
+        // The batch window flushes the final segment; the boundary flushes
+        // happen as each kind change arrives.
+        tokio::time::sleep(Duration::from_millis(80)).await;
+
+        let mut frames: Vec<Frame> = Vec::new();
+        while let Ok(msg) = rx.try_recv() {
+            if let ServerMessage::Output {
+                data,
+                damage,
+                damage_generation,
+                ..
+            } = msg
+            {
+                frames.push((
+                    data,
+                    damage_generation,
+                    damage
+                        .iter()
+                        .map(|r| (r.start_row, r.end_row))
+                        .collect::<Vec<_>>(),
+                ));
+            }
+        }
+        assert_eq!(
+            frames,
+            vec![
+                ("A".to_string(), Some(5), vec![(0, 2)]),
+                ("\x1b]7;file:///tmp cwd\x07".to_string(), None, Vec::new()),
+                ("B".to_string(), Some(6), vec![(4, 6)]),
+            ],
+            "a plain chunk splits the batch instead of erasing the pending damage"
+        );
+
+        session.shutdown("done".to_string());
+        broadcaster.await.expect("broadcaster task");
+    }
+
+    /// The boundary also protects the reverse order: damage arriving into a
+    /// plain-poisoned batch flushes the plain frame first instead of staying
+    /// poisoned, so the damage chunk keeps its generation and ranges. A
+    /// plain-only stream still coalesces into one damageless frame (the
+    /// conservative default is unchanged).
+    #[tokio::test]
+    async fn output_broadcaster_damage_chunk_flushes_pending_plain_batch() {
+        let terminal = Arc::new(RwLock::new(Terminal::new(80, 24)));
+        let session = Arc::new(StreamSessionState::new(
+            "split-plain".to_string(),
+            terminal,
+            None,
+            true,
+        ));
+        let mut rx = session.broadcast_tx.subscribe();
+        let tx = session.get_output_sender();
+        let broadcaster_session = Arc::clone(&session);
+        let broadcaster =
+            tokio::spawn(async move { broadcaster_session.output_broadcaster_loop().await });
+
+        tx.send(OutputChunk::plain("\x1b]133;D\x07".into()))
+            .await
+            .expect("queued");
+        tx.send(OutputChunk::with_damage("C".into(), 7, vec![(1, 3)]))
+            .await
+            .expect("queued");
+        tokio::time::sleep(Duration::from_millis(80)).await;
+
+        let mut frames: Vec<Frame> = Vec::new();
+        while let Ok(msg) = rx.try_recv() {
+            if let ServerMessage::Output {
+                data,
+                damage,
+                damage_generation,
+                ..
+            } = msg
+            {
+                frames.push((
+                    data,
+                    damage_generation,
+                    damage
+                        .iter()
+                        .map(|r| (r.start_row, r.end_row))
+                        .collect::<Vec<_>>(),
+                ));
+            }
+        }
+        assert_eq!(
+            frames,
+            vec![
+                ("\x1b]133;D\x07".to_string(), None, Vec::new()),
+                ("C".to_string(), Some(7), vec![(1, 3)]),
+            ],
+            "damage after a plain chunk flushes the plain frame instead of inheriting its poison"
+        );
+
+        session.shutdown("done".to_string());
+        broadcaster.await.expect("broadcaster task");
+    }
+
+    /// The Lagged recovery a ws client gets after losing broadcast frames:
+    /// an `Output` frame carrying the current screen-restore sequence, with
+    /// no damage generation so the client full-scans. A lost output frame
+    /// is the bare-ESC corruption, so the resync must carry the full
+    /// screen, not a delta.
+    #[test]
+    fn screen_resync_frame_carries_the_current_screen_without_damage() {
+        let mut terminal = Terminal::new(80, 24);
+        terminal.process(b"before resync\r\nresync marker");
+        let terminal = Arc::new(RwLock::new(terminal));
+        let session = StreamSessionState::new("resync".to_string(), terminal, None, true);
+
+        match session.screen_resync_frame() {
+            ServerMessage::Output {
+                data,
+                damage_generation,
+                ..
+            } => {
+                assert!(
+                    data.contains("resync marker"),
+                    "the resync replays the current screen, got {data:?}"
+                );
+                assert!(
+                    damage_generation.is_none(),
+                    "no damage generation: the client must full-scan"
+                );
+            }
+            other => panic!("expected an Output frame, got {other:?}"),
+        }
+    }
+
     /// Card 01a0efb2: `initial_screen` carries the terminal's scrollback,
     /// not just the live screen, so a late joiner sees history. The payload
     /// must replay into a fresh same-size terminal with the history in its
@@ -1089,7 +1591,7 @@ mod tests {
         let terminal = Arc::new(RwLock::new(terminal));
         let session = StreamSessionState::new("hist".to_string(), terminal, None, true);
 
-        let screen = match session.build_connect_message("client-1", false) {
+        let screen = match session.build_connect_message("client-1", false, false) {
             ServerMessage::Connected { initial_screen, .. } => {
                 initial_screen.expect("send_initial_screen=true produces a payload")
             }
@@ -1147,6 +1649,69 @@ mod tests {
 
         // Should be idle with zero timeout
         assert!(session.is_idle(Duration::from_secs(0)));
+    }
+
+    /// Kanban 01a1c25c: the pane-create capability rides `Connected`.
+    /// Three wire shapes: (a) a builder-built `Connected` without the
+    /// capability leaves the field `None` — absent on the wire, the same
+    /// degradation a pre-feature server produces; (b) allow + writable
+    /// stamps `Some(true)` and survives the pb round trip as present-true;
+    /// (c) a read-only connection forces `Some(false)` even when the
+    /// config flag is on.
+    #[test]
+    fn connect_message_pane_create_allowed_wire_shapes() {
+        use crate::streaming::proto::pb;
+        use prost::Message as _;
+
+        // (a) unset: absent on the wire
+        let unset = ServerMessage::connected_builder(80, 24, "s".to_string()).build();
+        let ServerMessage::Connected {
+            pane_create_allowed,
+            ..
+        } = &unset
+        else {
+            panic!("expected Connected");
+        };
+        assert_eq!(pane_create_allowed, &None, "unset stays absent");
+        let wire: pb::ServerMessage = (&unset).into();
+        let bytes = wire.encode_to_vec();
+        let back = ServerMessage::try_from(pb::ServerMessage::decode(&*bytes).unwrap()).unwrap();
+        let ServerMessage::Connected {
+            pane_create_allowed,
+            ..
+        } = back
+        else {
+            panic!("expected Connected");
+        };
+        assert_eq!(pane_create_allowed, None);
+
+        // (b) allow + writable: present and true
+        let session = StreamSessionState::new(
+            "pca".to_string(),
+            Arc::new(RwLock::new(Terminal::new(80, 24))),
+            None,
+            true,
+        );
+        let allowed = session.build_connect_message("client-1", false, true);
+        let ServerMessage::Connected {
+            pane_create_allowed,
+            ..
+        } = allowed
+        else {
+            panic!("expected Connected");
+        };
+        assert_eq!(pane_create_allowed, Some(true));
+
+        // (c) read-only forces false even with the allow flag on
+        let readonly = session.build_connect_message("client-1", true, true);
+        let ServerMessage::Connected {
+            pane_create_allowed,
+            ..
+        } = readonly
+        else {
+            panic!("expected Connected");
+        };
+        assert_eq!(pane_create_allowed, Some(false));
     }
 
     #[tokio::test]
@@ -1530,4 +2095,24 @@ mod tests {
         // bytes for a process that is gone.
         assert!(session.pty_writer.read().is_none());
     }
+}
+
+#[test]
+fn output_batch_damage_merges_union_max_generation_and_a_plain_chunk_poisons() {
+    // Two damaged chunks: the union coalesces (touching ranges merge),
+    // the generation takes the max.
+    let mut batch: DamageBatch = None;
+    OutputChunk::with_damage("a".into(), 5, vec![(0, 2)]).merge_into(&mut batch);
+    OutputChunk::with_damage("b".into(), 9, vec![(10, 11), (2, 5)]).merge_into(&mut batch);
+    assert_eq!(batch, Some(Some((9, vec![(0, 5), (10, 11)]))));
+
+    // One chunk without damage information poisons the batch: absent
+    // fields on the flush, the conservative direction.
+    OutputChunk::plain("c".into()).merge_into(&mut batch);
+    assert_eq!(batch, Some(None));
+
+    // A fresh batch poisoned from the first chunk stays poisoned.
+    let mut fresh: DamageBatch = None;
+    OutputChunk::plain("x".into()).merge_into(&mut fresh);
+    assert_eq!(fresh, Some(None));
 }

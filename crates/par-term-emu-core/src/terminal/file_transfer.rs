@@ -9,7 +9,9 @@
 
 use std::collections::hash_map::Entry;
 use std::collections::HashMap;
+use std::sync::Arc;
 
+use crate::graphics::budget::{BudgetStore, OutputMemoryBudget};
 use crate::text_utils::unix_millis;
 
 /// Unique file transfer identifier
@@ -82,6 +84,13 @@ pub struct FileTransferManager {
     next_id: TransferId,
     /// Maximum allowed transfer size in bytes (default 50 MB)
     max_transfer_size: usize,
+    /// Maximum number of simultaneously active transfers
+    max_active: usize,
+    /// Shared aggregate untrusted-output budget (ENH-062). `None` keeps the
+    /// per-manager caps as the only gates; when set, `append_data` also
+    /// refuses growth that would exceed the aggregate total, and the
+    /// manager reconciles its slice of the budget after mutations.
+    shared_budget: Option<Arc<OutputMemoryBudget>>,
 }
 
 /// Default maximum transfer size: 50 MB
@@ -92,6 +101,10 @@ pub(crate) const DEFAULT_MAX_TRANSFER_SIZE: usize = 50 * 1024 * 1024;
 /// cap: Completed transfers retained from client file-transfer requests.
 const DEFAULT_MAX_COMPLETED: usize = 32;
 
+/// Default maximum number of concurrently active transfers
+/// cap: Concurrent in-progress downloads from client file-transfer requests.
+pub(crate) const DEFAULT_MAX_ACTIVE_TRANSFERS: usize = 8;
+
 impl Default for FileTransferManager {
     fn default() -> Self {
         Self {
@@ -100,6 +113,8 @@ impl Default for FileTransferManager {
             max_completed: DEFAULT_MAX_COMPLETED,
             next_id: 1,
             max_transfer_size: DEFAULT_MAX_TRANSFER_SIZE,
+            max_active: DEFAULT_MAX_ACTIVE_TRANSFERS,
+            shared_budget: None,
         }
     }
 }
@@ -108,6 +123,44 @@ impl FileTransferManager {
     /// Create a new `FileTransferManager` with default settings
     pub fn new() -> Self {
         Self::default()
+    }
+
+    /// Attach the shared aggregate untrusted-output budget (ENH-062).
+    ///
+    /// When set, `append_data` refuses growth that would exceed the
+    /// aggregate total, and the manager reconciles its slice of the budget
+    /// to [`retained_bytes`](Self::retained_bytes) after mutations.
+    pub fn set_shared_budget(&mut self, budget: Arc<OutputMemoryBudget>) {
+        self.shared_budget = Some(budget);
+    }
+
+    /// Total payload bytes retained: every active transfer's accumulated
+    /// `data` plus the completed ring's retained results. This is the
+    /// manager's slice of the shared aggregate budget.
+    pub fn retained_bytes(&self) -> usize {
+        self.active_transfers
+            .values()
+            .map(|t| t.data.len())
+            .sum::<usize>()
+            .saturating_add(
+                self.completed_transfers
+                    .iter()
+                    .map(|t| t.data.len())
+                    .sum::<usize>(),
+            )
+    }
+
+    /// Reconcile the shared budget's transfer slice after a mutation.
+    fn sync_budget(&self) {
+        if let Some(budget) = &self.shared_budget {
+            let after = self.retained_bytes();
+            let current = budget.transfer_bytes();
+            if after > current {
+                budget.try_reserve(BudgetStore::FileTransfer, after - current);
+            } else if after < current {
+                budget.release(BudgetStore::FileTransfer, current - after);
+            }
+        }
     }
 
     /// Start a new download transfer
@@ -119,6 +172,25 @@ impl FileTransferManager {
         total_bytes: Option<usize>,
         params: HashMap<String, String>,
     ) -> TransferId {
+        // Admission cap: a transfer orphaned by a client restart (buffer
+        // replaced without completion) is unreachable from any later append,
+        // so the active set must stay bounded at entry.
+        if self.active_transfers.len() >= self.max_active {
+            let oldest = self
+                .active_transfers
+                .iter()
+                .min_by_key(|(&id, t)| (t.started_at, id))
+                .map(|(&id, _)| id);
+            if let Some(oldest_id) = oldest {
+                if let Some(mut transfer) = self.active_transfers.remove(&oldest_id) {
+                    transfer.status =
+                        TransferStatus::Failed("superseded by new transfer (active cap)".into());
+                    transfer.completed_at = Some(unix_millis());
+                    self.push_completed(transfer);
+                }
+            }
+        }
+
         let id = self.next_id;
         self.next_id += 1;
 
@@ -143,6 +215,7 @@ impl FileTransferManager {
         };
 
         self.active_transfers.insert(id, transfer);
+        self.sync_budget();
         id
     }
 
@@ -171,6 +244,22 @@ impl FileTransferManager {
             ));
         }
 
+        // Aggregate gate (ENH-062): refuse growth that would push the
+        // shared untrusted-output budget over its total.
+        if let Some(budget) = self.shared_budget.clone() {
+            if !budget.admits(data.len()) {
+                let total = budget.total();
+                let mut transfer = entry.remove();
+                transfer.status =
+                    TransferStatus::Failed("aggregate output memory budget exceeded".to_string());
+                transfer.completed_at = Some(unix_millis());
+                self.push_completed(transfer);
+                return Err(format!(
+                    "transfer {id} exceeds the aggregate output memory budget of {total} bytes",
+                ));
+            }
+        }
+
         let transfer = entry.into_mut();
         transfer.data.extend_from_slice(data);
 
@@ -191,6 +280,7 @@ impl FileTransferManager {
             total_bytes,
         };
 
+        self.sync_budget();
         Ok(())
     }
 
@@ -261,11 +351,15 @@ impl FileTransferManager {
     ///
     /// Returns `None` if no completed transfer with the given ID exists.
     pub fn take_completed_transfer(&mut self, id: TransferId) -> Option<FileTransfer> {
-        if let Some(pos) = self.completed_transfers.iter().position(|t| t.id == id) {
+        let taken = if let Some(pos) = self.completed_transfers.iter().position(|t| t.id == id) {
             Some(self.completed_transfers.remove(pos))
         } else {
             None
+        };
+        if taken.is_some() {
+            self.sync_budget();
         }
+        taken
     }
 
     /// Get the current maximum transfer size in bytes
@@ -284,6 +378,7 @@ impl FileTransferManager {
             self.completed_transfers.remove(0);
         }
         self.completed_transfers.push(transfer);
+        self.sync_budget();
     }
 }
 
@@ -372,6 +467,32 @@ impl Terminal {
     /// Get the maximum allowed transfer size in bytes
     pub fn get_max_transfer_size(&self) -> usize {
         self.graphics.file_transfer_manager.max_transfer_size()
+    }
+
+    /// Fuzzing-only oracle accessor (ENH-064): the live SEC-001 caps —
+    /// per-transfer size, active count, completed ring length — plus the
+    /// retained bytes of the inline multipart buffer (params + accumulated
+    /// base64 chunks), which lives outside `FileTransferManager` in the same
+    /// state machine. The `iterm_transfer` cargo-fuzz target pins its
+    /// invariant assertions to these values instead of hard-coded caps.
+    /// Hidden from docs; exists only under `--cfg fuzzing` (cargo-fuzz builds).
+    #[cfg(fuzzing)]
+    #[doc(hidden)]
+    pub fn fuzz_file_transfer_caps(&self) -> (usize, usize, usize, usize) {
+        let buffer_bytes = match &self.graphics.iterm_multipart_buffer {
+            Some(state) => {
+                let params_bytes: usize = state.params.iter().map(|(k, v)| k.len() + v.len()).sum();
+                let chunks_bytes: usize = state.chunks.iter().map(|c| c.len()).sum();
+                params_bytes + chunks_bytes
+            }
+            None => 0,
+        };
+        (
+            self.graphics.file_transfer_manager.max_transfer_size,
+            self.graphics.file_transfer_manager.max_active,
+            self.graphics.file_transfer_manager.max_completed,
+            buffer_bytes,
+        )
     }
 }
 
@@ -528,6 +649,38 @@ mod tests {
         // First two should be evicted
         assert!(mgr.take_completed_transfer(ids[0]).is_none());
         assert!(mgr.take_completed_transfer(ids[1]).is_none());
+    }
+
+    #[test]
+    fn test_active_transfer_cap_fails_oldest() {
+        let mut mgr = FileTransferManager::new();
+
+        let mut ids = Vec::new();
+        for i in 0..DEFAULT_MAX_ACTIVE_TRANSFERS {
+            ids.push(mgr.start_download(format!("file_{i}.txt"), None, HashMap::new()));
+        }
+        assert_eq!(mgr.active_transfers().len(), DEFAULT_MAX_ACTIVE_TRANSFERS);
+
+        // The start past the cap must fail the oldest entry instead of
+        // growing the active set.
+        let overflow_id = mgr.start_download("overflow.txt".into(), None, HashMap::new());
+        assert_eq!(
+            mgr.active_transfers().len(),
+            DEFAULT_MAX_ACTIVE_TRANSFERS,
+            "active count must never exceed the cap"
+        );
+        assert!(mgr.get_transfer(ids[0]).is_none());
+        assert!(mgr.get_transfer(overflow_id).is_some());
+
+        let evicted = mgr
+            .completed_transfers()
+            .iter()
+            .find(|t| t.id == ids[0])
+            .expect("the failed-oldest transfer must land in the completed ring");
+        assert!(matches!(
+            &evicted.status,
+            TransferStatus::Failed(msg) if msg == "superseded by new transfer (active cap)"
+        ));
     }
 
     #[test]

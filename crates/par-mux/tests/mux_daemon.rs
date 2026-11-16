@@ -2458,6 +2458,87 @@ fn pane_exited_replay_with_no_held_panes_is_empty() {
     }
 }
 
+/// Card 01a1981a: the loss window-add-replay exists to close. A created
+/// session's `%window-add` is recorded in the ring, but 1024 recorded
+/// events later the ring has evicted it — `events --since 0` can no
+/// longer hand it to a first-attaching client, which is the permanent
+/// loss par-term's adoption starves on. `window-add-replay -t` rebuilds
+/// the same line from the live tree instead, so adoption is deterministic
+/// under eviction.
+#[test]
+fn window_add_replay_recovers_a_session_lost_to_ring_eviction() {
+    use par_term_emu_core::tmux_control::TmuxNotification;
+
+    let fixture = MuxFixture::new("winreplay");
+    let path = fixture.socket();
+    let server = MuxServer::bind(path).expect("bind");
+    let _handle = std::thread::spawn(move || server.run());
+
+    let mut client = par_mux::mux::MuxClient::connect(path).expect("connect");
+    client
+        .send("new-session -s winreplay")
+        .expect("new-session");
+
+    // The created window's id, and the recorded `%window-add` in the ring.
+    let reply = client
+        .send_checked("list-windows -t winreplay")
+        .expect("list-windows");
+    let win = reply.body[0]
+        .split_whitespace()
+        .next()
+        .expect("window id")
+        .to_string();
+    let events = client.send_checked("events --since 0").expect("events");
+    let recorded = events
+        .body
+        .iter()
+        .find(|line| line.contains("%window-add") && line.contains(&win))
+        .expect("the %window-add was recorded with its layout triple")
+        .clone();
+
+    // Churn past the ring capacity: every rename records an event, so
+    // the `%window-add` falls out the back of the 1024-entry ring.
+    for i in 0..1100 {
+        client
+            .send_checked(&format!("rename-window -t {win} w{i}"))
+            .expect("rename");
+    }
+    let events = client.send_checked("events --since 0").expect("events");
+    assert!(
+        !events
+            .body
+            .iter()
+            .any(|line| line.contains("%window-add") && line.contains(&win)),
+        "the %window-add is evicted from the ring — the loss the card demonstrates"
+    );
+
+    // The recovery: the replay rebuilds the same wire line from the tree.
+    let reply = client
+        .send_checked("window-add-replay -t winreplay")
+        .expect("replay");
+    assert!(reply.ok, "window-add-replay succeeds: {:?}", reply.body);
+    let note = next_notification(
+        &mut client,
+        |n| matches!(n, TmuxNotification::WindowAdd { window_id, .. } if window_id == &win),
+    );
+    let TmuxNotification::WindowAdd {
+        window_layout,
+        window_visible_layout,
+        window_raw_flags,
+        ..
+    } = note
+    else {
+        unreachable!("matched");
+    };
+    // The replayed form matches the recorded form's payload (the seq and
+    // timestamp prefix aside) and carries the layout triple like a live
+    // broadcast would.
+    assert!(recorded.contains(&format!("%window-add {win}")));
+    assert!(!window_layout.is_empty(), "layout triple present");
+    assert!(window_visible_layout == window_layout);
+    assert!(window_raw_flags.is_empty());
+}
+
 /// The unique-names rule over a live socket: a second `new-session` with
 /// a taken name is answered `duplicate session: <name>`, renaming onto a
 /// taken name refuses while keeping a session's own name succeeds, and
@@ -3077,7 +3158,9 @@ fn a_following_client_reconstructs_the_switched_window_screen() {
 /// state file refuses instead of racing the first's saves. The lock fires
 /// before bind, so even a load-stalled first daemon — whose socket looks
 /// dead to a prober — cannot gain a twin writer; the refusal names the
-/// holder's pid and the first daemon keeps serving.
+/// holder's pid and the first daemon keeps serving. The explicit `start`
+/// shape is what stays loud: the bare autostart/app-launch shape exits 0
+/// quietly (see `bare_headless_start_when_a_daemon_serves_exits_zero`).
 #[ignore = "load-sensitive: PTY/timing suite; run via make test-rust-sensitive or checkall-ci"]
 #[test]
 #[cfg(unix)]
@@ -3090,6 +3173,88 @@ fn second_daemon_refuses_an_occupied_state_file() {
     let state_dir = dir.path().join("state");
     let bin = env!("CARGO_BIN_EXE_par-mux");
     let stderr_path = dir.path().join("refusal.stderr");
+
+    let serve = |args: &[&str], stderr_to: &std::path::Path| {
+        let mut cmd = std::process::Command::new(bin);
+        cmd.args(args)
+            .env_remove("PAR_MUX_ENV")
+            .stderr(std::fs::File::create(stderr_to).expect("stderr file"))
+            .stdout(std::process::Stdio::null());
+        cmd.spawn().expect("the daemon spawns")
+    };
+
+    // The first daemon claims the state and serves.
+    let mut first = serve(
+        &[
+            "--foreground",
+            "--socket",
+            socket.to_str().expect("utf8 socket"),
+            "--state-dir",
+            state_dir.to_str().expect("utf8 state"),
+        ],
+        &dir.path().join("first.stderr"),
+    );
+    wait_listening(&socket);
+    let stream = connect_local_stream(&socket).expect("the first daemon serves");
+    let mut writer = stream.try_clone().expect("clone");
+    let mut reader = BufReader::new(stream);
+    let reply = command(&mut writer, &mut reader, "new-session -s keepalive").join("");
+    assert!(!reply.contains("%error"), "keepalive session: {reply}");
+
+    // The second explicit start on the same state refuses before binding
+    // anything: an operator asking for a daemon by name gets the refusal.
+    let mut second = serve(
+        &[
+            "start",
+            "locked",
+            "--foreground",
+            "--socket",
+            socket.to_str().expect("utf8 socket"),
+            "--state-dir",
+            state_dir.to_str().expect("utf8 state"),
+        ],
+        &stderr_path,
+    );
+    let refusal = second.wait().expect("the refused start exits").code();
+    assert_eq!(refusal, Some(1), "the refusal exits non-zero: {refusal:?}");
+    let refused = std::fs::read_to_string(&stderr_path).expect("refusal stderr");
+    assert!(
+        refused.contains("already served by another daemon"),
+        "the refusal names the situation: {refused}"
+    );
+
+    // The first daemon never noticed: it still serves, and its state file
+    // has had exactly one writer throughout.
+    let reply = command(&mut writer, &mut reader, "list-sessions").join("");
+    assert!(
+        !reply.contains("%error") && reply.contains("keepalive"),
+        "the first daemon keeps serving through the refusal: {reply}"
+    );
+
+    // Teardown: stop the first daemon through its control socket.
+    let reply = command(&mut writer, &mut reader, "kill-server").join("");
+    assert!(!reply.contains("%error"), "kill-server: {reply}");
+    let _ = first.wait();
+}
+
+/// Card 01a1939a: the launchd autostart agent relaunches the bundle bare
+/// (`--foreground`, no tty, KeepAlive only on nonzero exit). When a daemon
+/// already serves, that start must exit 0 — a refusal relaunches the agent
+/// and every cycle repeats the launcher's TCC probe (the 2026-10-31 prompt
+/// storm). The quiet path proves the socket serves and leaves the first
+/// daemon as the only writer.
+#[ignore = "load-sensitive: PTY/timing suite; run via make test-rust-sensitive or checkall-ci"]
+#[test]
+#[cfg(unix)]
+fn bare_headless_start_when_a_daemon_serves_exits_zero() {
+    let dir = tempfile::Builder::new()
+        .prefix("par-mux-autostart-")
+        .tempdir()
+        .expect("tempdir");
+    let socket = dir.path().join("autostart.sock");
+    let state_dir = dir.path().join("state");
+    let bin = env!("CARGO_BIN_EXE_par-mux");
+    let stderr_path = dir.path().join("noop.stderr");
 
     let serve = |stderr_to: &std::path::Path| {
         std::process::Command::new(bin)
@@ -3107,7 +3272,7 @@ fn second_daemon_refuses_an_occupied_state_file() {
             .expect("the daemon spawns")
     };
 
-    // The first daemon claims the state and serves.
+    // The first daemon claims the state and serves a session.
     let mut first = serve(&dir.path().join("first.stderr"));
     wait_listening(&socket);
     let stream = connect_local_stream(&socket).expect("the first daemon serves");
@@ -3116,22 +3281,21 @@ fn second_daemon_refuses_an_occupied_state_file() {
     let reply = command(&mut writer, &mut reader, "new-session -s keepalive").join("");
     assert!(!reply.contains("%error"), "keepalive session: {reply}");
 
-    // The second start on the same state refuses before binding anything.
-    let mut second = serve(&stderr_path);
-    let refusal = second.wait().expect("the refused start exits").code();
-    assert_eq!(refusal, Some(1), "the refusal exits non-zero: {refusal:?}");
-    let refused = std::fs::read_to_string(&stderr_path).expect("refusal stderr");
+    // The bare autostart shape on the same state exits 0 quietly.
+    let mut noop = serve(&stderr_path);
+    let code = noop.wait().expect("the noop start exits").code();
+    assert_eq!(code, Some(0), "the autostart noop exits zero: {code:?}");
+    let noop_stderr = std::fs::read_to_string(&stderr_path).expect("noop stderr");
     assert!(
-        refused.contains("already served by another daemon"),
-        "the refusal names the situation: {refused}"
+        noop_stderr.contains("already serving"),
+        "the noop start says why it exited: {noop_stderr}"
     );
 
-    // The first daemon never noticed: it still serves, and its state file
-    // has had exactly one writer throughout.
+    // The first daemon never noticed: it still serves, one writer throughout.
     let reply = command(&mut writer, &mut reader, "list-sessions").join("");
     assert!(
         !reply.contains("%error") && reply.contains("keepalive"),
-        "the first daemon keeps serving through the refusal: {reply}"
+        "the first daemon keeps serving through the noop: {reply}"
     );
 
     // Teardown: stop the first daemon through its control socket.
@@ -3375,4 +3539,297 @@ fn save_layout_lands_beside_the_state_file() {
     );
     let listed = client.send("list-layouts").expect("list").join("\n");
     assert_eq!(listed, "d1");
+}
+
+/// `select-layout tiled` over the control socket: the leaf order survives
+/// and the broadcast layout is the tiled shape, a vertical stack whose
+/// first row holds two panes side by side and whose second row holds one.
+#[ignore = "load-sensitive: PTY/timing suite; run via make test-rust-sensitive or checkall-ci"]
+#[test]
+fn select_layout_e2e_tiled_via_control_socket() {
+    let fixture = MuxFixture::new("tiledwire");
+    let path = fixture.socket();
+    let server = MuxServer::bind(path).expect("bind");
+    let _handle = std::thread::spawn(move || server.run());
+
+    let mut client = par_mux::mux::MuxClient::connect(path).expect("connect");
+    client
+        .send("new-session -s tiledwire")
+        .expect("new-session");
+    client.send("split-window -h -t %0").expect("split");
+    client.send("split-window -h -t %1").expect("split");
+    let before = client.send("list-panes -t @0").expect("list").join("\n");
+    assert_eq!(before.lines().count(), 3, "three panes: {before}");
+
+    let reply = client
+        .send("select-layout tiled -t @0")
+        .expect("select-layout")
+        .join("\n");
+    assert!(!reply.contains("error"), "select-layout failed: {reply}");
+
+    let after = client.send("list-panes -t @0").expect("list").join("\n");
+    assert_eq!(after, before, "tiling never reorders the leaves");
+
+    // Tiled for three panes is a top-level stack `[row{p,p},p]`, while the
+    // earlier split frames are top-level `{...}`.
+    let deadline = Instant::now() + Duration::from_secs(15);
+    let mut tiled = None;
+    while Instant::now() < deadline && tiled.is_none() {
+        if let Ok(par_term_emu_core::tmux_control::TmuxNotification::LayoutChange {
+            window_layout,
+            ..
+        }) = client
+            .notifications()
+            .recv_timeout(Duration::from_millis(250))
+        {
+            let body = window_layout.split_once(',').map_or("", |(_, rest)| rest);
+            if body
+                .find(['[', '{'])
+                .is_some_and(|i| body.as_bytes()[i] == b'[')
+            {
+                tiled = Some(window_layout);
+            }
+        }
+    }
+    let layout = tiled.expect("a tiled %layout-change arrived within 15s");
+    // Tiled at three panes: two share the top row (y=0, half width each)
+    // and one sits below. main-horizontal at three panes keeps ONE pane
+    // at y=0 (the full-width main pane above the pair), so the pane count
+    // at y=0 discriminates. Pane entries in the layout string are spelled
+    // `WxH,X,Y[,id]`.
+    let bytes = layout.as_bytes();
+    let mut panes: Vec<(u32, u32, u32)> = Vec::new();
+    let mut i = 0;
+    while i < bytes.len() {
+        // Token boundary: never start inside a number or right after the
+        // WxH separator.
+        let token_start = i == 0 || !(bytes[i - 1].is_ascii_digit() || bytes[i - 1] == b'x');
+        let mut at = i;
+        let mut fields: [Option<u32>; 4] = [None; 4];
+        let mut ok = token_start;
+        // `WxH,X,Y`: three separators, four numbers. Window and group
+        // extents spell the same `WxH,X,Y` but close with '[' or '{';
+        // a real pane is followed by ',', '}', ']', or its id.
+        for (idx, sep) in b"x,,".iter().enumerate() {
+            let start = at;
+            while at < bytes.len() && bytes[at].is_ascii_digit() {
+                at += 1;
+            }
+            if at == start || at >= bytes.len() || bytes[at] != *sep {
+                ok = false;
+                break;
+            }
+            fields[idx] = std::str::from_utf8(&bytes[start..at])
+                .ok()
+                .and_then(|s| s.parse().ok());
+            at += 1;
+        }
+        if ok {
+            // The third leg consumed the comma after X, so the digits
+            // here are Y; any further `,id` tail stays unread.
+            let start = at;
+            while at < bytes.len() && bytes[at].is_ascii_digit() {
+                at += 1;
+            }
+            if at > start {
+                fields[3] = std::str::from_utf8(&bytes[start..at])
+                    .ok()
+                    .and_then(|s| s.parse().ok());
+            }
+            if matches!(bytes.get(at), Some(b'[' | b'{')) {
+                ok = false;
+            }
+        }
+        if ok {
+            if let [Some(w), Some(_h), Some(x), Some(y)] = fields {
+                panes.push((x, y, w));
+            }
+        }
+        i += 1;
+    }
+    assert_eq!(
+        panes.len(),
+        3,
+        "every pane appears as WxH,X,Y in the layout: {layout}"
+    );
+    assert_eq!(
+        panes.iter().filter(|&&(_, y, _)| y == 0).count(),
+        2,
+        "two panes share the top row: {layout}"
+    );
+    assert_eq!(
+        panes.iter().filter(|&&(_, y, _)| y > 0).count(),
+        1,
+        "the third pane sits below: {layout}"
+    );
+    client.send("kill-server").expect("kill-server");
+}
+
+/// The headless-fleet-bootstrap shape (the detached-start card): `par-mux
+/// start` DETACHED, over what plays the invoking ssh session, with
+/// --keep-alive. The `sh -c exec` spawner becomes the par-mux parent,
+/// which forks the detached daemon and exits after its "daemon running"
+/// report — the spawner is gone exactly like a closed ssh session, and
+/// the fresh state dir holds no sessions, so no client holds the daemon
+/// either. Under --keep-alive (exit-when-empty off) the daemon must still
+/// answer past the 5 s exit-when-empty grace — the window a start without
+/// the flag self-exits inside.
+#[cfg(unix)]
+#[ignore = "load-sensitive: PTY/timing suite; run via make test-rust-sensitive or checkall-ci"]
+#[test]
+fn a_detached_keep_alive_start_survives_its_spawner_and_the_empty_grace() {
+    use std::process::{Command, Stdio};
+
+    let fixture = MuxFixture::new("keep-alive");
+    let sock = fixture.socket().to_path_buf();
+    let bin = env!("CARGO_BIN_EXE_par-mux");
+    // A crashed earlier run of this test must not hold the state lock
+    // under this socket: a best-effort stop clears the path first.
+    let _ = Command::new(bin)
+        .arg("--stop")
+        .arg("--socket")
+        .arg(&sock)
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .output();
+    let script = format!(
+        "exec '{bin}' start --socket '{sock}' --state-dir '{state}' --no-attach --keep-alive",
+        sock = sock.display(),
+        bin = bin,
+        state = fixture.state_dir().display(),
+    );
+    let status = Command::new("/bin/sh")
+        .arg("-c")
+        .arg(&script)
+        .env("PAR_MUX_CONFIG", fixture.config_path())
+        .env("PAR_MUX_NO_APP_WRAPPER", "1")
+        .env_remove("PAR_MUX_ENV")
+        .env_remove("PAR_MUX_DIE_WITH_PARENT")
+        .env_remove("PAR_MUX_SOCKET")
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .status()
+        .expect("spawn the detached start");
+    assert!(status.success(), "the detached start exits 0: {status}");
+    wait_listening(&sock);
+
+    // An exit-when-empty daemon self-exits ~5 s after going empty; the
+    // keep-alive daemon must still accept across that whole window.
+    let deadline = Instant::now() + Duration::from_secs(6);
+    while Instant::now() < deadline {
+        assert!(
+            connect_local_stream(&sock).is_ok(),
+            "the keep-alive daemon died inside the exit-when-empty grace window"
+        );
+        std::thread::sleep(Duration::from_millis(100));
+    }
+    let out = Command::new(bin)
+        .arg("--socket")
+        .arg(&sock)
+        .arg("--cmd")
+        .arg("version")
+        .stdin(Stdio::null())
+        .output()
+        .expect("run the version probe");
+    assert!(out.status.success(), "--cmd version must exit 0: {out:?}");
+    assert!(
+        !out.stdout.is_empty(),
+        "the empty keep-alive daemon answered version: {:?}",
+        String::from_utf8_lossy(&out.stdout)
+    );
+
+    // Cleanup, the same shape as the recipe's later-session stop.
+    let stopped = Command::new(bin)
+        .arg("--stop")
+        .arg("--socket")
+        .arg(&sock)
+        .stdin(Stdio::null())
+        .output()
+        .expect("run the stop");
+    assert!(stopped.status.success(), "--stop must exit 0: {stopped:?}");
+    let deadline = Instant::now() + Duration::from_secs(10);
+    while connect_local_stream(&sock).is_ok() {
+        assert!(
+            Instant::now() < deadline,
+            "the daemon kept accepting after --stop"
+        );
+        std::thread::sleep(Duration::from_millis(50));
+    }
+}
+
+/// The default pinned: the SAME detached start without --keep-alive
+/// self-exits inside the exit-when-empty grace (a fresh state dir has no
+/// sessions and no client), and the daemon log records why. Default
+/// behavior must not change — this is the observed headless-start death,
+/// reproduced and asserted.
+#[cfg(unix)]
+#[ignore = "load-sensitive: PTY/timing suite; run via make test-rust-sensitive or checkall-ci"]
+#[test]
+fn a_detached_start_without_keep_alive_exits_on_the_empty_grace() {
+    use std::process::{Command, Stdio};
+
+    let fixture = MuxFixture::new("exit-empty");
+    let sock = fixture.socket().to_path_buf();
+    let bin = env!("CARGO_BIN_EXE_par-mux");
+    let _ = Command::new(bin)
+        .arg("--stop")
+        .arg("--socket")
+        .arg(&sock)
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .output();
+    let script = format!(
+        "exec '{bin}' start --socket '{sock}' --state-dir '{state}' --no-attach",
+        sock = sock.display(),
+        bin = bin,
+        state = fixture.state_dir().display(),
+    );
+    let status = Command::new("/bin/sh")
+        .arg("-c")
+        .arg(&script)
+        .env("PAR_MUX_CONFIG", fixture.config_path())
+        .env("PAR_MUX_NO_APP_WRAPPER", "1")
+        .env_remove("PAR_MUX_ENV")
+        .env_remove("PAR_MUX_DIE_WITH_PARENT")
+        .env_remove("PAR_MUX_SOCKET")
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .status()
+        .expect("spawn the detached start");
+    assert!(status.success(), "the detached start exits 0: {status}");
+    wait_listening(&sock);
+
+    // The grace is 5 s from the cadence's first empty observation; a
+    // generous bound keeps a loaded host honest without weakening the
+    // assertion: the daemon DOES go away on its own.
+    let deadline = Instant::now() + Duration::from_secs(15);
+    while connect_local_stream(&sock).is_ok() {
+        assert!(
+            Instant::now() < deadline,
+            "the unpinned daemon never exited; exit-when-empty must stay on by default"
+        );
+        std::thread::sleep(Duration::from_millis(100));
+    }
+    // The log beside the state file carries the verdict line.
+    let mut log = par_mux::mux::persist::state_file_in(&fixture.state_dir(), fixture.socket());
+    log.as_mut_os_string().push(".log");
+    let verdict_deadline = Instant::now() + Duration::from_secs(5);
+    let contents = loop {
+        match std::fs::read_to_string(&log) {
+            Ok(text) if text.contains("exit-when-empty") => break text,
+            _ if Instant::now() < verdict_deadline => {
+                std::thread::sleep(Duration::from_millis(100));
+            }
+            Ok(text) => panic!("the daemon log never recorded the exit: {text}"),
+            Err(err) => panic!("the daemon log {} is missing: {err}", log.display()),
+        }
+    };
+    assert!(
+        contents.contains("tree empty; daemon exiting (exit-when-empty)"),
+        "the log must name the exit-when-empty verdict: {contents}"
+    );
 }

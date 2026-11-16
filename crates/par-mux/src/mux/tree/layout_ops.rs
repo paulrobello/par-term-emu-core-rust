@@ -4,7 +4,7 @@
 
 use super::{kill_detached, ClientView, FocusSource, MuxTree, MuxWindow, SeenFocus, SplitSpawn};
 use crate::mux::ids::{PaneId, SessionId, WindowId, WorkspaceId};
-use crate::mux::layout::{LayoutTree, PaneChrome, ResizeDirection, SplitDirection};
+use crate::mux::layout::{LayoutPreset, LayoutTree, PaneChrome, ResizeDirection, SplitDirection};
 use crate::mux::pane::{MuxError, MuxPane};
 use par_term_emu_core::color::Color;
 use std::path::Path;
@@ -195,6 +195,22 @@ impl MuxTree {
                 .map_err(|_| MuxError::PanesInDifferentWindows(target, source))?;
             Ok(window_id)
         })
+    }
+
+    /// Rebuild `window`'s layout as `preset` over its panes in their
+    /// current order, returning the window — the dispatcher's
+    /// `%layout-change` target.
+    pub fn apply_layout_preset(
+        &mut self,
+        window: WindowId,
+        preset: LayoutPreset,
+    ) -> Result<WindowId, MuxError> {
+        self.mutate_layout(window, |w| {
+            let panes = w.layout.pane_ids();
+            w.layout = LayoutTree::for_preset(&panes, preset);
+            Ok(())
+        })?;
+        Ok(window)
     }
 
     /// Toggle `pane`'s zoom (`resize-pane -Z`): zooming resizes its
@@ -655,9 +671,9 @@ impl MuxTree {
     /// `refresh-client -p WxH`'s landing point: the cell size is the one
     /// renderer metric every pane shares (grid extents differ per pane, the
     /// font does not), so it is held daemon-wide and every pane's terminal,
-    /// PTY `TIOCGWINSZ`, and image cell-span math re-derive from it — see
-    /// [`MuxPane::resize_with_cell_pixels`]. Latest report wins, matching
-    /// the `-C` grid-size policy.
+    /// PTY `TIOCGWINSZ`, and image cell-span math re-derive from it (the
+    /// cell-pixel resize `sync_pane_sizes` drives per pane). Latest report
+    /// wins, matching the `-C` grid-size policy.
     pub fn set_client_cell_pixels(&mut self, cell_w: u16, cell_h: u16) {
         self.client_cell_pixels = Some((cell_w, cell_h));
         let window_ids: Vec<WindowId> = self.windows.keys().copied().collect();

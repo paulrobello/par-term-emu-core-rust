@@ -20,7 +20,9 @@ fn should_send_passes_roster_messages_through_any_filter() {
         assert!(should_send(&roster_msg(), subs));
         assert!(should_send(&delta_msg(), subs));
     }
-    // Control: a filtered event type is still dropped.
+    // Control: a filtered event type is still dropped, and delivered when
+    // the client subscribes to Bell.
+    assert!(should_send(&ServerMessage::Bell, &only_bell));
     assert!(!should_send(&ServerMessage::Bell, &empty));
 }
 
@@ -59,6 +61,7 @@ async fn broadcast_all_reaches_every_session() {
 }
 
 use super::*;
+use crate::streaming::session::OutputChunk;
 use crate::terminal::Terminal;
 
 #[tokio::test]
@@ -67,7 +70,7 @@ async fn test_output_sender() {
     let server = StreamingServer::new(terminal, "127.0.0.1:0".to_string());
 
     let tx = server.get_output_sender();
-    assert!(tx.try_send("test".to_string()).is_ok());
+    assert!(tx.try_send(OutputChunk::plain("test".to_string())).is_ok());
 }
 
 #[tokio::test]
@@ -201,6 +204,7 @@ async fn max_clients_reached_rejects_before_session_spawn() {
         session_id: "fresh-session".to_string(),
         readonly: false,
         preset: None,
+        metadata: false,
     };
     let (_session, _g, _s, _ro) = server
         .prepare_ws_session(&params, GlobalClientGuard { server: &server })
@@ -234,6 +238,37 @@ async fn test_resolve_nonexistent_session_no_factory() {
     ));
 }
 
+/// ARC-002: the registry is the default session's only owner. Closing it
+/// in single-session mode must leave no stale second handle: a later
+/// resolve is a clean `SessionNotFound` instead of a dead-session
+/// handout, and server broadcasts stop at the registry miss.
+#[tokio::test]
+async fn close_default_session_leaves_no_stale_owner() {
+    let terminal = Arc::new(RwLock::new(Terminal::new(80, 24)));
+    let server = Arc::new(StreamingServer::new(terminal, "127.0.0.1:0".to_string()));
+
+    let old = server
+        .get_session("default")
+        .expect("default session exists");
+    let mut rx = old.broadcast_tx.subscribe();
+
+    assert!(server.close_session("default", "test close".to_string()));
+    assert!(server.get_session("default").is_none());
+
+    // Drain the shutdown notice the close itself broadcast, then prove a
+    // server-level broadcast no longer reaches the dead session.
+    while rx.try_recv().is_ok() {}
+    server.broadcast(ServerMessage::output("after close".to_string()));
+    assert!(rx.try_recv().is_err());
+
+    // Reconnect path: a clean miss, never the dead session.
+    let params = ConnectionParams::from_uri_query(None);
+    assert!(matches!(
+        server.resolve_session(&params),
+        Err(StreamingError::SessionNotFound(_))
+    ));
+}
+
 /// Input against a session whose PTY writer is detached (never
 /// attached, or detached by [`StreamSessionState::shutdown`]) is dropped
 /// and counted in `dropped_messages`, and the connection stays open: a
@@ -251,17 +286,23 @@ async fn input_without_pty_writer_is_counted_and_dropped() {
     assert!(!StreamingServer::session_has_writer(&session));
 
     let dispatch = |read_only: bool, msg: ClientMessage| {
-        server.handle_client_message(
-            &session,
-            super::ConnCtx {
-                transport_label: "ws-test",
-                client_id: uuid::Uuid::new_v4(),
-                read_only,
-            },
-            &mut None,
-            &mut None,
-            msg,
-        )
+        let server = Arc::clone(&server);
+        let session = Arc::clone(&session);
+        async move {
+            server
+                .handle_client_message(
+                    &session,
+                    super::ConnCtx {
+                        transport_label: "ws-test",
+                        client_id: uuid::Uuid::new_v4(),
+                        read_only,
+                    },
+                    &mut None,
+                    &mut None,
+                    msg,
+                )
+                .await
+        }
     };
 
     let inputs = [
@@ -283,7 +324,10 @@ async fn input_without_pty_writer_is_counted_and_dropped() {
         ClientMessage::FocusChange { focused: true },
     ];
     for (i, msg) in inputs.into_iter().enumerate() {
-        assert!(dispatch(false, msg).is_empty(), "input produces no reply");
+        assert!(
+            dispatch(false, msg).await.is_empty(),
+            "input produces no reply"
+        );
         assert_eq!(
             session.metrics.dropped_messages.load(Ordering::Relaxed),
             i + 1
@@ -291,7 +335,7 @@ async fn input_without_pty_writer_is_counted_and_dropped() {
     }
 
     // Non-input messages on the same writer-less session still reply.
-    let replies = dispatch(false, ClientMessage::Ping);
+    let replies = dispatch(false, ClientMessage::Ping).await;
     assert!(matches!(replies.as_slice(), [ServerMessage::Pong]));
     assert_eq!(
         session.metrics.dropped_messages.load(Ordering::Relaxed),
@@ -306,7 +350,8 @@ async fn input_without_pty_writer_is_counted_and_dropped() {
         ClientMessage::Input {
             data: "q".to_string(),
         },
-    );
+    )
+    .await;
     assert!(replies.is_empty());
     assert_eq!(
         session.metrics.dropped_messages.load(Ordering::Relaxed),
@@ -327,26 +372,34 @@ async fn upload_messages_without_a_mux_pipe_are_refused_inline() {
     let session = server.get_session("default").expect("default session");
 
     let dispatch = |read_only: bool, msg: ClientMessage| {
-        server.handle_client_message(
-            &session,
-            super::ConnCtx {
-                transport_label: "ws-test",
-                client_id: uuid::Uuid::new_v4(),
-                read_only,
-            },
-            &mut None,
-            &mut None,
-            msg,
-        )
+        let server = Arc::clone(&server);
+        let session = Arc::clone(&session);
+        async move {
+            server
+                .handle_client_message(
+                    &session,
+                    super::ConnCtx {
+                        transport_label: "ws-test",
+                        client_id: uuid::Uuid::new_v4(),
+                        read_only,
+                    },
+                    &mut None,
+                    &mut None,
+                    msg,
+                )
+                .await
+        }
     };
 
-    let refused = |msg: ClientMessage| match dispatch(false, msg).as_slice() {
-        [ServerMessage::UploadFinished {
-            upload_id: 0,
-            path: None,
-            error: Some(reason),
-        }] => reason.clone(),
-        other => panic!("expected one upload_finished refusal, got {other:?}"),
+    let refused = |msg: ClientMessage| async {
+        match dispatch(false, msg).await.as_slice() {
+            [ServerMessage::UploadFinished {
+                upload_id: 0,
+                path: None,
+                error: Some(reason),
+            }] => reason.clone(),
+            other => panic!("expected one upload_finished refusal, got {other:?}"),
+        }
     };
 
     assert!(
@@ -354,6 +407,7 @@ async fn upload_messages_without_a_mux_pipe_are_refused_inline() {
             filename: "x.png".into(),
             total_bytes: 5,
         })
+        .await
         .contains("mux-backed"),
         "no-pipe begin must refuse with the mux reason"
     );
@@ -361,15 +415,20 @@ async fn upload_messages_without_a_mux_pipe_are_refused_inline() {
         refused(ClientMessage::UploadChunk {
             data: b"xy".to_vec()
         })
+        .await
         .contains("mux-backed"),
         "no-pipe chunk must refuse with the mux reason"
     );
     assert!(
-        refused(ClientMessage::UploadCommit).contains("mux-backed"),
+        refused(ClientMessage::UploadCommit)
+            .await
+            .contains("mux-backed"),
         "no-pipe commit must refuse with the mux reason"
     );
     assert!(
-        refused(ClientMessage::UploadAbort).contains("mux-backed"),
+        refused(ClientMessage::UploadAbort)
+            .await
+            .contains("mux-backed"),
         "no-pipe abort must refuse with the mux reason"
     );
 
@@ -381,6 +440,7 @@ async fn upload_messages_without_a_mux_pipe_are_refused_inline() {
             total_bytes: 5,
         },
     )
+    .await
     .as_slice()
     {
         [ServerMessage::UploadFinished {
@@ -503,9 +563,12 @@ async fn test_validate_terminal_size_max_u16() {
 // =========================================================================
 
 /// Send one credential-less GET through `api_auth_middleware` (wired the
-/// same way `build_http_app` wires it) and return the response.
-async fn unauthenticated_response(
+/// same way `build_http_app` wires it) against the given target URI and
+/// return the response.
+async fn auth_middleware_response(
     auth_config: ApiAuthConfig,
+    auth_throttle: Arc<Mutex<AuthFailureThrottle>>,
+    target_uri: &str,
 ) -> axum::http::Response<axum::body::Body> {
     use axum::{routing::get, Router};
     use tower::ServiceExt;
@@ -514,13 +577,26 @@ async fn unauthenticated_response(
         .route("/ok", get(|| async { "ok" }))
         .layer(axum::middleware::from_fn(move |req, next| {
             let auth_config = auth_config.clone();
-            api_auth_middleware(req, next, auth_config)
+            let auth_throttle = auth_throttle.clone();
+            api_auth_middleware(req, next, auth_config, auth_throttle)
         }));
     let req = axum::http::Request::builder()
-        .uri("/ok")
+        .uri(target_uri)
         .body(axum::body::Body::empty())
         .expect("static request parts are valid");
     app.oneshot(req).await.expect("router is infallible")
+}
+
+/// Send one credential-less GET to `/ok` through `api_auth_middleware`.
+async fn unauthenticated_response(
+    auth_config: ApiAuthConfig,
+) -> axum::http::Response<axum::body::Body> {
+    auth_middleware_response(
+        auth_config,
+        Arc::new(Mutex::new(AuthFailureThrottle::default())),
+        "/ok",
+    )
+    .await
 }
 
 #[tokio::test]
@@ -555,6 +631,210 @@ async fn test_auth_middleware_api_key_only_401_has_no_challenge() {
     assert!(!res
         .headers()
         .contains_key(axum::http::header::WWW_AUTHENTICATE));
+}
+
+// ─── Query API-key percent-decoding (SEC-002) ─────────────────────────────
+
+#[test]
+fn test_percent_decode_query_component() {
+    assert_eq!(
+        percent_decode_query_component("plain-key_42"),
+        "plain-key_42"
+    );
+    assert_eq!(percent_decode_query_component("a%26b%3Dc%25d"), "a&b=c%d");
+    // Encoded plus decodes; a raw plus passes through unchanged.
+    assert_eq!(percent_decode_query_component("%2B"), "+");
+    assert_eq!(percent_decode_query_component("a+b"), "a+b");
+    // Malformed escapes are left as-is (the comparison then fails safely).
+    assert_eq!(percent_decode_query_component("100%"), "100%");
+    assert_eq!(percent_decode_query_component("%zz"), "%zz");
+    assert_eq!(percent_decode_query_component("%2"), "%2");
+}
+
+#[tokio::test]
+async fn test_auth_middleware_query_api_key_percent_decoded() {
+    // A key containing characters a raw query cannot carry must match via
+    // the query channel once URL-encoded (SEC-002).
+    let res = auth_middleware_response(
+        ApiAuthConfig {
+            api_key: Some("s3cr&t=k%y+".to_string()),
+            http_basic_auth: None,
+            allow_api_key_in_query: true,
+        },
+        Arc::new(Mutex::new(AuthFailureThrottle::default())),
+        "/ok?api_key=s3cr%26t%3Dk%25y%2B",
+    )
+    .await;
+    assert_eq!(res.status(), axum::http::StatusCode::OK);
+
+    // The same key sent raw cannot match: the `&` splits the query.
+    let res = auth_middleware_response(
+        ApiAuthConfig {
+            api_key: Some("s3cr&t=k%y+".to_string()),
+            http_basic_auth: None,
+            allow_api_key_in_query: true,
+        },
+        Arc::new(Mutex::new(AuthFailureThrottle::default())),
+        "/ok?api_key=s3cr&t=k%y+",
+    )
+    .await;
+    assert_eq!(res.status(), axum::http::StatusCode::UNAUTHORIZED);
+}
+
+#[test]
+fn test_validate_ws_handshake_auth_query_api_key_percent_decoded() {
+    let req = tokio_tungstenite::tungstenite::http::Request::builder()
+        .uri("ws://127.0.0.1:8099/ws?api_key=a%26b%3Dc")
+        .body(())
+        .expect("static request parts are valid");
+    assert!(validate_ws_handshake_auth(&req, Some("a&b=c"), None, true));
+}
+
+// ─── Static-route Host allowlist (2026-11-06 audit SEC-003) ────────────────
+
+#[test]
+fn test_static_host_guard_bind_classification() {
+    for loopback in [
+        "127.0.0.1:8099",
+        "localhost:8099",
+        "[::1]:8099",
+        "127.0.0.5:9000",
+    ] {
+        assert!(
+            StaticHostGuard::from_bind_addr(loopback).is_enabled(),
+            "{loopback} is a loopback bind and must enable the guard"
+        );
+    }
+    for remote in [
+        "0.0.0.0:8099",
+        "192.168.1.5:8099",
+        "[::]:8099",
+        "example.com:8099",
+    ] {
+        assert!(
+            !StaticHostGuard::from_bind_addr(remote).is_enabled(),
+            "{remote} is not a loopback bind; the guard must stay inactive"
+        );
+    }
+}
+
+#[tokio::test]
+async fn test_static_host_guard_rejects_non_loopback_host_on_loopback_bind() {
+    use axum::{routing::get, Router};
+    use tower::ServiceExt;
+
+    // Same shape as build_http_app: the guard layers the static fallback
+    // only; the API routes keep their own checks.
+    let api_routes = Router::new().route("/ws", get(|| async { "ws" }));
+    let static_routes =
+        Router::new()
+            .fallback(|| async { "static" })
+            .layer(axum::middleware::from_fn_with_state(
+                StaticHostGuard::from_bind_addr("127.0.0.1:8099"),
+                static_host_guard_middleware,
+            ));
+    let app = api_routes.merge(static_routes);
+
+    // A rebinding attack sends its own Host: refused on the static route.
+    let req = axum::http::Request::builder()
+        .uri("/index.html")
+        .header("host", "attacker.example")
+        .body(axum::body::Body::empty())
+        .expect("static request parts are valid");
+    let res = app
+        .clone()
+        .oneshot(req)
+        .await
+        .expect("router is infallible");
+    assert_eq!(res.status(), axum::http::StatusCode::FORBIDDEN);
+
+    // Loopback Hosts (with or without port, IPv6 brackets) pass.
+    for host in ["localhost:8099", "127.0.0.1", "[::1]:8099"] {
+        let req = axum::http::Request::builder()
+            .uri("/index.html")
+            .header("host", host)
+            .body(axum::body::Body::empty())
+            .expect("static request parts are valid");
+        let res = app
+            .clone()
+            .oneshot(req)
+            .await
+            .expect("router is infallible");
+        assert_eq!(res.status(), axum::http::StatusCode::OK, "Host {host}");
+    }
+
+    // A missing Host header is a non-browser client and passes, mirroring
+    // check_ws_origin's absent-Origin rule (a rebinding page always names
+    // its own host).
+    let req = axum::http::Request::builder()
+        .uri("/index.html")
+        .body(axum::body::Body::empty())
+        .expect("static request parts are valid");
+    let res = app
+        .clone()
+        .oneshot(req)
+        .await
+        .expect("router is infallible");
+    assert_eq!(res.status(), axum::http::StatusCode::OK);
+
+    // The API routes are outside the guard: a non-loopback Host still
+    // reaches them (their own auth/origin checks apply).
+    let req = axum::http::Request::builder()
+        .uri("/ws")
+        .header("host", "attacker.example")
+        .body(axum::body::Body::empty())
+        .expect("static request parts are valid");
+    let res = app.oneshot(req).await.expect("router is infallible");
+    assert_eq!(res.status(), axum::http::StatusCode::OK);
+}
+
+// ─── Failed-auth throttling (2026-11-06 audit SEC-004) ─────────────────────
+
+#[test]
+fn test_auth_failure_throttle_escalates_and_caps() {
+    let mut throttle = AuthFailureThrottle::default();
+    let expected_ms = [50u64, 100, 200, 400, 800, 1600, 3200, 5000, 5000];
+    for (failures, ms) in expected_ms.iter().enumerate() {
+        assert_eq!(
+            throttle.record_failure(),
+            Duration::from_millis(*ms),
+            "delay after {failures} prior failures"
+        );
+        assert_eq!(throttle.consecutive_failures(), failures as u32 + 1);
+    }
+}
+
+#[test]
+fn test_auth_failure_throttle_decays_after_quiet_window() {
+    let mut throttle = AuthFailureThrottle::default();
+    let t0 = std::time::Instant::now();
+    assert_eq!(throttle.record_failure_at(t0), Duration::from_millis(50));
+    assert_eq!(
+        throttle.record_failure_at(t0 + Duration::from_secs(5)),
+        Duration::from_millis(100)
+    );
+    assert_eq!(throttle.consecutive_failures(), 2);
+    // A quiet window past DECAY restarts the escalation from the base.
+    let t2 = t0 + Duration::from_secs(5) + AuthFailureThrottle::DECAY + Duration::from_secs(1);
+    assert_eq!(throttle.record_failure_at(t2), Duration::from_millis(50));
+    assert_eq!(throttle.consecutive_failures(), 1);
+}
+
+#[tokio::test]
+async fn test_auth_middleware_failures_escalate_throttle_counter() {
+    // Assert the counter state, not wall-clock (the three sleeps total
+    // 350 ms of real time in this test).
+    let throttle = Arc::new(Mutex::new(AuthFailureThrottle::default()));
+    let auth_config = ApiAuthConfig {
+        api_key: Some("key".to_string()),
+        http_basic_auth: None,
+        allow_api_key_in_query: false,
+    };
+    for _ in 0..3 {
+        let res = auth_middleware_response(auth_config.clone(), Arc::clone(&throttle), "/ok").await;
+        assert_eq!(res.status(), axum::http::StatusCode::UNAUTHORIZED);
+    }
+    assert_eq!(throttle.lock().consecutive_failures(), 3);
 }
 
 // ─── ClipboardRequest set gating (SEC-003 follow-up) ──────────────────────
@@ -630,25 +910,28 @@ async fn snapshot_request_replies_with_semantic_snapshot() {
     let server = Arc::new(StreamingServer::new(terminal, "127.0.0.1:0".to_string()));
     let session = server.get_session("default").expect("default session");
 
-    let dispatch = |msg: ClientMessage| {
-        server.handle_client_message(
-            &session,
-            super::ConnCtx {
-                transport_label: "ws-test",
-                client_id: uuid::Uuid::new_v4(),
-                read_only: false,
-            },
-            &mut None,
-            &mut None,
-            msg,
-        )
+    let dispatch = |msg: ClientMessage| async {
+        server
+            .handle_client_message(
+                &session,
+                super::ConnCtx {
+                    transport_label: "ws-test",
+                    client_id: uuid::Uuid::new_v4(),
+                    read_only: false,
+                },
+                &mut None,
+                &mut None,
+                msg,
+            )
+            .await
     };
 
     for scope in ["visible", "recent", "full"] {
         let replies = dispatch(ClientMessage::SnapshotRequest {
             scope: scope.to_string(),
             max_commands: if scope == "recent" { Some(3) } else { None },
-        });
+        })
+        .await;
         let snapshot_json = match replies.as_slice() {
             [ServerMessage::SemanticSnapshot { snapshot_json }] => snapshot_json.clone(),
             other => panic!("scope {scope}: expected one SemanticSnapshot reply, got {other:?}"),
@@ -664,7 +947,8 @@ async fn snapshot_request_replies_with_semantic_snapshot() {
     let replies = dispatch(ClientMessage::SnapshotRequest {
         scope: "bogus".to_string(),
         max_commands: None,
-    });
+    })
+    .await;
     let message = match replies.as_slice() {
         [ServerMessage::Error { message, .. }] => message.clone(),
         other => panic!("invalid scope: expected one Error reply, got {other:?}"),
@@ -672,4 +956,515 @@ async fn snapshot_request_replies_with_semantic_snapshot() {
     assert!(message.contains("visible"));
 }
 
+/// `PaneCreateRequest` against a default-configured server is refused
+/// identically whether the connection is writable or read-only: the
+/// feature is off (`allow_pane_create` defaults to false), and the
+/// disabled gate is the least-revealing answer, so it fires before
+/// anything else is probed.
+#[tokio::test]
+async fn pane_create_is_refused_when_the_flag_is_off() {
+    use crate::streaming::protocol::ClientMessage;
+
+    let terminal = Arc::new(RwLock::new(Terminal::new(80, 24)));
+    let server = Arc::new(StreamingServer::new(terminal, "127.0.0.1:0".to_string()));
+    let session = server.get_session("default").expect("default session");
+
+    let dispatch = |read_only: bool, msg: ClientMessage| {
+        let server = Arc::clone(&server);
+        let session = Arc::clone(&session);
+        async move {
+            server
+                .handle_client_message(
+                    &session,
+                    super::ConnCtx {
+                        transport_label: "ws-test",
+                        client_id: uuid::Uuid::new_v4(),
+                        read_only,
+                    },
+                    &mut None,
+                    &mut None,
+                    msg,
+                )
+                .await
+        }
+    };
+    let request = || ClientMessage::PaneCreateRequest {
+        correlation_id: "corr-1".to_string(),
+        session_id: "$0".to_string(),
+        name: None,
+    };
+
+    for read_only in [false, true] {
+        match dispatch(read_only, request()).await.as_slice() {
+            [ServerMessage::Error { message, code }] => {
+                assert_eq!(
+                    message, "pane creation is disabled on this server",
+                    "default-off refusal message must be exact (read_only={read_only})"
+                );
+                assert_eq!(
+                    code.as_deref(),
+                    Some("pane_create_disabled"),
+                    "default-off refusal code must be exact (read_only={read_only})"
+                );
+            }
+            other => panic!("expected one pane_create_disabled refusal, got {other:?}"),
+        }
+    }
+}
+
+/// With `allow_pane_create` on, the gate still holds where creation must
+/// not happen: a read-only connection is refused `pane_create_read_only`
+/// regardless of the flag, and a writable connection with no mux-backed
+/// factory is refused `pane_create_no_daemon`.
+#[tokio::test]
+async fn pane_create_is_refused_read_only_and_without_a_daemon_when_enabled() {
+    use crate::streaming::protocol::ClientMessage;
+
+    let terminal = Arc::new(RwLock::new(Terminal::new(80, 24)));
+    let server = Arc::new(StreamingServer::with_config(
+        terminal,
+        "127.0.0.1:0".to_string(),
+        crate::streaming::StreamingConfig {
+            allow_pane_create: true,
+            ..Default::default()
+        },
+    ));
+    let session = server.get_session("default").expect("default session");
+
+    let dispatch = |read_only: bool, msg: ClientMessage| {
+        let server = Arc::clone(&server);
+        let session = Arc::clone(&session);
+        async move {
+            server
+                .handle_client_message(
+                    &session,
+                    super::ConnCtx {
+                        transport_label: "ws-test",
+                        client_id: uuid::Uuid::new_v4(),
+                        read_only,
+                    },
+                    &mut None,
+                    &mut None,
+                    msg,
+                )
+                .await
+        }
+    };
+    let request = || ClientMessage::PaneCreateRequest {
+        correlation_id: "corr-2".to_string(),
+        session_id: "$0".to_string(),
+        name: None,
+    };
+
+    match dispatch(true, request()).await.as_slice() {
+        [ServerMessage::Error { code, .. }] => {
+            assert_eq!(
+                code.as_deref(),
+                Some("pane_create_read_only"),
+                "read-only refusal regardless of the flag"
+            );
+        }
+        other => panic!("expected the pane_create_read_only refusal, got {other:?}"),
+    }
+
+    match dispatch(false, request()).await.as_slice() {
+        [ServerMessage::Error { code, .. }] => {
+            assert_eq!(
+                code.as_deref(),
+                Some("pane_create_no_daemon"),
+                "no mux factory behind the session"
+            );
+        }
+        other => panic!("expected the pane_create_no_daemon refusal, got {other:?}"),
+    }
+}
+
+/// Card 01a1d0d5 criterion 1: an optional name rides the request, but the
+/// streamer rejects one over the byte bound or carrying control characters
+/// with `pane_create_failed` BEFORE any daemon path is probed (the
+/// validation sits between the read-only rung and the no-daemon rung).
+#[tokio::test]
+async fn pane_create_rejects_names_over_the_bound_or_with_control_characters() {
+    use crate::streaming::protocol::ClientMessage;
+
+    let terminal = Arc::new(RwLock::new(Terminal::new(80, 24)));
+    let server = Arc::new(StreamingServer::with_config(
+        terminal,
+        "127.0.0.1:0".to_string(),
+        crate::streaming::StreamingConfig {
+            allow_pane_create: true,
+            ..Default::default()
+        },
+    ));
+    let session = server.get_session("default").expect("default session");
+
+    let dispatch = |name: Option<String>| {
+        let server = Arc::clone(&server);
+        let session = Arc::clone(&session);
+        async move {
+            server
+                .handle_client_message(
+                    &session,
+                    super::ConnCtx {
+                        transport_label: "ws-test",
+                        client_id: uuid::Uuid::new_v4(),
+                        read_only: false,
+                    },
+                    &mut None,
+                    &mut None,
+                    ClientMessage::PaneCreateRequest {
+                        correlation_id: "corr-3".to_string(),
+                        session_id: "$0".to_string(),
+                        name,
+                    },
+                )
+                .await
+        }
+    };
+
+    for (label, name) in [
+        ("over-bound", Some("x".repeat(65))),
+        ("control char", Some("bad\nname".to_string())),
+    ] {
+        match dispatch(name).await.as_slice() {
+            [ServerMessage::Error { message, code }] => {
+                assert_eq!(code.as_deref(), Some("pane_create_failed"), "{label}");
+                assert!(
+                    message.starts_with("invalid pane name"),
+                    "{label}: {message}"
+                );
+            }
+            other => panic!("{label}: expected pane_create_failed, got {other:?}"),
+        }
+    }
+
+    // A name at exactly the bound is accepted past validation (reaches the
+    // no-daemon rung on this factory-less server).
+    match dispatch(Some("x".repeat(64))).await.as_slice() {
+        [ServerMessage::Error { code, .. }] => {
+            assert_eq!(code.as_deref(), Some("pane_create_no_daemon"));
+        }
+        other => panic!("expected pane_create_no_daemon at the bound, got {other:?}"),
+    }
+}
+
+// ─── Mouse move normalization (raw SGR button bits) ─────────────────────
+
+/// The (PTY writer, capture buffer) pair [`capture_writer`] hands back.
+type CapturedWriter = (
+    std::sync::Arc<parking_lot::Mutex<Box<dyn std::io::Write + Send>>>,
+    std::sync::Arc<parking_lot::Mutex<Vec<u8>>>,
+);
+
+/// A PTY writer backed by a shared buffer so a test can assert the exact
+/// bytes the serialized input path delivered, in order.
+fn capture_writer() -> CapturedWriter {
+    let captured = std::sync::Arc::new(parking_lot::Mutex::new(Vec::<u8>::new()));
+    let writer = std::sync::Arc::new(parking_lot::Mutex::new(Box::new(CaptureWriter {
+        buf: std::sync::Arc::clone(&captured),
+    })
+        as Box<dyn std::io::Write + Send>));
+    (writer, captured)
+}
+
+/// The `Box<dyn Write + Send>` payload behind [`capture_writer`]: appends
+/// every write into the shared buffer.
+struct CaptureWriter {
+    buf: std::sync::Arc<parking_lot::Mutex<Vec<u8>>>,
+}
+
+impl std::io::Write for CaptureWriter {
+    fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
+        self.buf.lock().extend_from_slice(bytes);
+        Ok(bytes.len())
+    }
+    fn flush(&mut self) -> std::io::Result<()> {
+        Ok(())
+    }
+}
+
+/// Poll until the captured PTY bytes end with `needle`; returns the buffer.
+fn wait_for_writer_bytes(
+    captured: &std::sync::Arc<parking_lot::Mutex<Vec<u8>>>,
+    needle: &[u8],
+) -> Vec<u8> {
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+    loop {
+        let buf = captured.lock().clone();
+        if buf.ends_with(needle) {
+            return buf;
+        }
+        assert!(
+            std::time::Instant::now() < deadline,
+            "PTY writer never received {needle:?}; have {:?}",
+            captured.lock(),
+        );
+        std::thread::sleep(std::time::Duration::from_millis(5));
+    }
+}
+
+async fn dispatch_mouse(
+    server: &std::sync::Arc<StreamingServer>,
+    session: &std::sync::Arc<StreamSessionState>,
+    read_only: bool,
+    button: u8,
+    event_type: crate::streaming::protocol::MouseEventType,
+) {
+    let mut subscriptions = None;
+    let mut rate_limiter = None;
+    server
+        .handle_client_message(
+            session,
+            super::ConnCtx {
+                transport_label: "ws-test",
+                client_id: uuid::Uuid::new_v4(),
+                read_only,
+            },
+            &mut subscriptions,
+            &mut rate_limiter,
+            crate::streaming::protocol::ClientMessage::Mouse {
+                col: 1,
+                row: 1,
+                button,
+                shift: false,
+                ctrl: false,
+                alt: false,
+                event_type,
+            },
+        )
+        .await;
+}
+
+/// A server session with SGR any-event tracking armed and a capturing PTY
+/// writer attached, ready to receive mouse input.
+fn mouse_session() -> (
+    std::sync::Arc<StreamingServer>,
+    std::sync::Arc<StreamSessionState>,
+    std::sync::Arc<parking_lot::Mutex<Vec<u8>>>,
+) {
+    let server = Arc::new(StreamingServer::new(
+        Arc::new(RwLock::new(Terminal::new(80, 24))),
+        "127.0.0.1:0".to_string(),
+    ));
+    let session = server.get_session("default").expect("default session");
+    {
+        let mut terminal = session.terminal.write();
+        terminal.set_mouse_mode(crate::mouse::MouseMode::AnyEvent);
+        terminal.set_mouse_encoding(crate::mouse::MouseEncoding::Sgr);
+    }
+    let (writer, captured) = capture_writer();
+    session.set_pty_writer(writer);
+    (server, session, captured)
+}
+
+/// A logical `move` (button 0 left-held, 3 buttonless) and an already-raw
+/// one (32/35) all encode as SGR motion reports `<32` / `<35`; modifiers
+/// keep ORing their bits (shift adds 4) on top of the motion bit.
+#[tokio::test]
+async fn mouse_move_normalizes_logical_button_to_raw_sgr_bits() {
+    use crate::streaming::protocol::MouseEventType;
+
+    let (server, session, captured) = mouse_session();
+
+    for (button, expected) in [
+        (0u8, &b"\x1b[<32;2;2M"[..]),
+        (3, &b"\x1b[<35;2;2M"[..]),
+        (32, &b"\x1b[<32;2;2M"[..]),
+        (35, &b"\x1b[<35;2;2M"[..]),
+    ] {
+        dispatch_mouse(&server, &session, false, button, MouseEventType::Move).await;
+        wait_for_writer_bytes(&captured, expected);
+    }
+}
+
+/// `press`/`release` pass the button through verbatim in both spellings —
+/// the logical 0-press / 3-release pair and raw values — and a raw press
+/// code (the motion bit set) is not rewritten.
+#[tokio::test]
+async fn mouse_press_and_release_buttons_stay_verbatim() {
+    use crate::streaming::protocol::MouseEventType;
+
+    let (server, session, captured) = mouse_session();
+
+    for (button, event_type, expected) in [
+        (0u8, MouseEventType::Press, &b"\x1b[<0;2;2M"[..]),
+        (3, MouseEventType::Release, &b"\x1b[<3;2;2m"[..]),
+        (1, MouseEventType::Press, &b"\x1b[<1;2;2M"[..]),
+        (2, MouseEventType::Press, &b"\x1b[<2;2;2M"[..]),
+        (32, MouseEventType::Press, &b"\x1b[<32;2;2M"[..]),
+    ] {
+        dispatch_mouse(&server, &session, false, button, event_type).await;
+        wait_for_writer_bytes(&captured, expected);
+    }
+}
+
+/// A read-only viewer's `move` never reaches the serialized input path:
+/// nothing is enqueued, and the silence is not counted as a drop.
+#[tokio::test]
+async fn read_only_mouse_move_sends_nothing() {
+    use crate::streaming::protocol::MouseEventType;
+
+    let (server, session, captured) = mouse_session();
+
+    dispatch_mouse(&server, &session, true, 0, MouseEventType::Move).await;
+    std::thread::sleep(std::time::Duration::from_millis(100));
+    assert!(
+        captured.lock().is_empty(),
+        "read-only move must not enqueue PTY bytes"
+    );
+    assert_eq!(
+        session.metrics.dropped_messages.load(Ordering::Relaxed),
+        0,
+        "read-only silence is not a drop"
+    );
+}
+
+/// The normalized `move` rides the same serialized input path as
+/// keystrokes (QA-110): one blocking drain task writes queue order, so a
+/// move flanked by keystrokes cannot overtake or trail them.
+#[tokio::test]
+async fn mouse_move_rides_the_serialized_input_path_with_keystrokes() {
+    use crate::streaming::protocol::{ClientMessage, MouseEventType};
+
+    let (server, session, captured) = mouse_session();
+    let dispatch = |msg: ClientMessage| {
+        let server = Arc::clone(&server);
+        let session = Arc::clone(&session);
+        async move {
+            server
+                .handle_client_message(
+                    &session,
+                    super::ConnCtx {
+                        transport_label: "ws-test",
+                        client_id: uuid::Uuid::new_v4(),
+                        read_only: false,
+                    },
+                    &mut None,
+                    &mut None,
+                    msg,
+                )
+                .await
+        }
+    };
+
+    dispatch(ClientMessage::Input {
+        data: "q".to_string(),
+    })
+    .await;
+    dispatch_mouse(&server, &session, false, 0, MouseEventType::Move).await;
+    dispatch(ClientMessage::Input {
+        data: "x".to_string(),
+    })
+    .await;
+
+    wait_for_writer_bytes(&captured, b"q\x1b[<32;2;2Mx");
+}
+
 // ─── InputRateLimiter tests ─────────────────────────────────────────────
+
+// ─── handle_paste bracketed-paste breakout hardening ────────────────────
+
+/// A server session with bracketed paste enabled on its terminal and a
+/// capturing PTY writer attached, ready to receive Paste messages.
+fn paste_session() -> (
+    std::sync::Arc<StreamingServer>,
+    std::sync::Arc<StreamSessionState>,
+    std::sync::Arc<parking_lot::Mutex<Vec<u8>>>,
+) {
+    let server = Arc::new(StreamingServer::new(
+        Arc::new(RwLock::new(Terminal::new(80, 24))),
+        "127.0.0.1:0".to_string(),
+    ));
+    let session = server.get_session("default").expect("default session");
+    {
+        let mut terminal = session.terminal.write();
+        terminal.set_bracketed_paste(true);
+    }
+    let (writer, captured) = capture_writer();
+    session.set_pty_writer(writer);
+    (server, session, captured)
+}
+
+/// Dispatch one Paste through the full handler path and wait for the PTY
+/// input drain to deliver the frame to the capture writer; returns the
+/// exact bytes the PTY would receive.
+async fn dispatch_paste(
+    server: &std::sync::Arc<StreamingServer>,
+    session: &std::sync::Arc<StreamSessionState>,
+    captured: &std::sync::Arc<parking_lot::Mutex<Vec<u8>>>,
+    content: &str,
+) -> Vec<u8> {
+    use crate::streaming::protocol::ClientMessage;
+    server
+        .handle_client_message(
+            session,
+            super::ConnCtx {
+                transport_label: "ws-test",
+                client_id: uuid::Uuid::new_v4(),
+                read_only: false,
+            },
+            &mut None,
+            &mut None,
+            ClientMessage::Paste {
+                content: content.to_string(),
+            },
+        )
+        .await;
+    // The frame is one enqueue ending with the app's end marker.
+    wait_for_writer_bytes(captured, b"\x1b[201~")
+}
+
+/// One end marker in the whole frame, at the end.
+fn assert_single_end_marker(frame: &[u8]) {
+    assert!(
+        frame.ends_with(b"\x1b[201~"),
+        "frame must close with the end marker: {frame:?}"
+    );
+    assert_eq!(
+        frame
+            .windows(b"\x1b[201~".len())
+            .filter(|w| *w == b"\x1b[201~")
+            .count(),
+        1,
+        "exactly one end marker, at the end: {frame:?}"
+    );
+}
+
+/// Criterion 1: a payload carrying the end marker (a web page can plant
+/// ESC[201~ in the clipboard through a copy handler) cannot break out —
+/// the frame carries exactly one end marker, ours, at the end, and the
+/// payload survives as literal text minus its ESC byte.
+#[tokio::test]
+async fn paste_containing_the_end_marker_reaches_the_pty_with_one_end_marker() {
+    let (server, session, captured) = paste_session();
+    let frame = dispatch_paste(&server, &session, &captured, "hello \u{1b}[201~rm -rf /\n").await;
+    assert!(
+        frame.starts_with(b"\x1b[200~"),
+        "frame opens with the start marker: {frame:?}"
+    );
+    let payload = &frame[b"\x1b[200~".len()..frame.len() - b"\x1b[201~".len()];
+    assert_eq!(
+        payload, b"hello [201~rm -rf /\n",
+        "the ESC byte is stripped, the rest is text"
+    );
+    assert_single_end_marker(&frame);
+}
+
+/// Criterion 2: the splice-nesting payload (ESC[20 ESC[201~ 1~) that
+/// defeats one-pass marker removal yields exactly one end marker too —
+/// character stripping makes the marker unspellable, so no removal pass
+/// can be defeated by how the fragments land.
+#[tokio::test]
+async fn nested_marker_payload_also_yields_one_end_marker() {
+    let (server, session, captured) = paste_session();
+    let frame = dispatch_paste(
+        &server,
+        &session,
+        &captured,
+        "abc \u{1b}[20\u{1b}[201~1~ tail",
+    )
+    .await;
+    let payload = &frame[b"\x1b[200~".len()..frame.len() - b"\x1b[201~".len()];
+    assert_eq!(payload, b"abc [20[201~1~ tail");
+    assert_single_end_marker(&frame);
+}

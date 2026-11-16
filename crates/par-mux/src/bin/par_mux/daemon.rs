@@ -6,6 +6,7 @@
 //! ([`Serving::serve`], which also tears the registry entry down).
 
 use par_mux::mux::config::{self, EffectiveConfig};
+use std::io::IsTerminal;
 
 use super::{effective, update_cli, Cli};
 
@@ -176,7 +177,29 @@ pub(super) fn run_daemon(
     // and a flock lives as long as any fd to that description does), and
     // releases on exit, so the --stop/--restart handoff re-acquires
     // inside the retry window.
-    let _state_lock = par_mux::mux::persist::acquire_state_lock(&launch.state_path)?;
+    let _state_lock = match par_mux::mux::persist::acquire_state_lock(&launch.state_path) {
+        Ok(lock) => lock,
+        Err(err) => {
+            // The autostart agent launches the bundle bare (`--foreground`,
+            // no NAME, no tty; launchd KeepAlive only on nonzero exit):
+            // when a daemon already serves the socket, the refusal must
+            // exit 0 or every relaunch repeats the launcher's TCC probe —
+            // the 2026-10-31 prompt storm. A named start (verb or NAME
+            // form; merge_verb folds both into cli.name) keeps the loud
+            // refusal.
+            let autostart_noop = launch.cli.name.is_none()
+                && launch.cli.foreground
+                && !std::io::stdin().is_terminal();
+            if autostart_noop && par_mux::mux::connect_local_stream(&launch.path).is_ok() {
+                eprintln!(
+                    "par-mux: a daemon is already serving on {}; nothing to start",
+                    launch.path.display()
+                );
+                return Ok(std::process::ExitCode::SUCCESS);
+            }
+            return Err(err);
+        }
+    };
 
     // Nested-daemon guard, on the path that actually serves: a daemon
     // started from inside a pane (PAR_MUX_ENV=1) would shadow the outer
@@ -249,13 +272,22 @@ impl DaemonLaunch {
             par_mux::mux::persist::StatePeek::Populated => {}
             par_mux::mux::persist::StatePeek::Empty => eprintln!(
                 "par-mux: previous daemon saved an empty tree at {} — the fresh daemon will \
-                 restore nothing and exit (exit-when-empty)",
-                self.state_path.display()
+                 restore nothing{}",
+                self.state_path.display(),
+                if self.eff.exit_empty {
+                    " and exit (exit-when-empty)"
+                } else {
+                    " and wait (--keep-alive)"
+                }
             ),
             par_mux::mux::persist::StatePeek::Missing => eprintln!(
-                "par-mux: no saved state at {} — the fresh daemon will start empty and exit \
-                 (exit-when-empty)",
-                self.state_path.display()
+                "par-mux: no saved state at {} — the fresh daemon will start empty{}",
+                self.state_path.display(),
+                if self.eff.exit_empty {
+                    " and exit (exit-when-empty)"
+                } else {
+                    " and wait (--keep-alive)"
+                }
             ),
             par_mux::mux::persist::StatePeek::Unreadable => eprintln!(
                 "par-mux: saved state {} is unreadable — the fresh daemon will quarantine it \
@@ -294,6 +326,42 @@ impl DaemonLaunch {
             && nested.is_none()
             && par_mux::mux::connect_local_stream(&self.path).is_err()
         {
+            // The launchd hand-off (card 01a1b21b) comes first: when the
+            // installed Par-mux.app job supervises this default instance,
+            // a fresh start must land under launchd — the launcher serves
+            // in-process there, so the job's PID is the daemon and panes
+            // inherit the bundle's TCC grants from the launchd-rooted
+            // ancestry. The caller becomes the fork parent's
+            // wait-and-attach without a fork. A failure degrades to the
+            // app hand-off below, never blocking the start.
+            if let Some(job) = launchd_handoff_job(
+                &self.path,
+                self.state_dir_pinned,
+                self.cli.par_mux_in_app_wrapper,
+                std::env::var_os("PAR_MUX_NO_LAUNCHD").is_some_and(|v| v == "1"),
+            ) {
+                if launchd_job_loaded(&job) {
+                    log::info!("par-mux: handing the fresh daemon to launchd job {job}");
+                    match std::process::Command::new("launchctl")
+                        .args(["kickstart", "-k", job.as_str()])
+                        .status()
+                    {
+                        Ok(status) if status.success() => {
+                            return run_detached_parent(
+                                &self.cli,
+                                &self.path,
+                                &self.state_path,
+                                self.state_dir_pinned,
+                            )
+                            .map(Some);
+                        }
+                        other => log::warn!(
+                            "par-mux: launchd kickstart for {job} failed ({other:?}); \
+                             starting the bare daemon"
+                        ),
+                    }
+                }
+            }
             if let Ok(exe) = std::env::current_exe() {
                 let no_wrapper =
                     std::env::var_os("PAR_MUX_NO_APP_WRAPPER").is_some_and(|v| v == "1");
@@ -424,7 +492,7 @@ impl DaemonLaunch {
         // reported the save side on the terminal; this records the restore
         // side — including a populated save that failed to rebuild — in the
         // daemon log the fork points stderr at.
-        if cli.restart && tree.sessions().is_empty() {
+        if cli.restart && eff.exit_empty && tree.sessions().is_empty() {
             log::warn!("par-mux: restored tree is empty; daemon exiting (exit-when-empty)");
         }
         // Committed upload files persist for pane apps by design, so spool
@@ -500,6 +568,28 @@ impl Serving {
         {
             SHUTDOWN_HANDLE.set(server.shutdown_handle()).ok();
             install_signal_handlers()?;
+        }
+
+        // Die-with-parent for programmatic spawners that ask for it (the
+        // test harness sets PAR_MUX_DIE_WITH_PARENT at its single spawn
+        // site): an interrupted gate run kills the test process but not
+        // this foreground child, and an orphaned daemon holds its panes'
+        // PTYs — measured 2026-11-01, 55 orphans exhausted the host's
+        // pty supply. Poll getppid(): a reparent to 1 means the spawner
+        // died; request the same clean shutdown the SIGTERM path uses
+        // (final save, registry out). Panes die via PTY-master close, so
+        // exiting frees their ttys without a per-pane sweep.
+        #[cfg(unix)]
+        if std::env::var_os("PAR_MUX_DIE_WITH_PARENT").is_some() {
+            let shutdown = server.shutdown_handle();
+            std::thread::spawn(move || loop {
+                std::thread::sleep(std::time::Duration::from_millis(500));
+                // SAFETY: getppid is a trivially safe syscall wrapper.
+                if unsafe { libc::getppid() } == 1 {
+                    shutdown.store(true, std::sync::atomic::Ordering::Release);
+                    return;
+                }
+            });
         }
 
         update_cli::start_auto_update(&path);
@@ -652,6 +742,58 @@ pub(super) fn app_handoff_launcher(
     Some(launcher)
 }
 
+/// The launchd job (label `com.paulrobello.par-mux`, installed with the
+/// Par-mux.app deploy) supervises the default daemon in-process through
+/// the bundle launcher (`par-mux --foreground --no-attach`), so the job's
+/// PID is the serving daemon and panes inherit the bundle's TCC grants
+/// from the launchd-rooted ancestry. A daemon forked from a
+/// terminal-rooted chain cannot hold those grants — pane LAN access dies
+/// and macOS re-prompts (card 01a1b21b).
+#[cfg(target_os = "macos")]
+const LAUNCHD_JOB_LABEL: &str = "com.paulrobello.par-mux";
+
+/// Decide whether a fresh non-foreground daemon start may hand off to the
+/// installed Par-mux.app launchd job (card 01a1b21b) instead of forking a
+/// detached orphan: only the default instance (default socket, unpinned
+/// state dir) is the job's supervised target; the wrapper marker, a pinned
+/// state dir, or the PAR_MUX_NO_LAUNCHD=1 opt-out keeps the bare fork.
+/// Returns the kickstart job spec (`gui/<uid>/<label>`).
+#[cfg(target_os = "macos")]
+pub(super) fn launchd_handoff_job(
+    target_socket: &std::path::Path,
+    state_dir_pinned: bool,
+    in_app_wrapper: bool,
+    opt_out: bool,
+) -> Option<String> {
+    if opt_out || in_app_wrapper || state_dir_pinned {
+        return None;
+    }
+    if target_socket != par_mux::mux::ipc::default_socket_path("default") {
+        return None;
+    }
+    // SAFETY: getuid takes no arguments and cannot fail.
+    Some(format!("gui/{}/{LAUNCHD_JOB_LABEL}", unsafe {
+        libc::getuid()
+    }))
+}
+
+/// Whether `job` is currently loaded in the caller's gui domain
+/// (`launchctl print` exits 0). Best-effort: a missing launchctl or a
+/// probe failure reads as unloaded, and the start degrades to the app
+/// hand-off / bare fork below.
+#[cfg(target_os = "macos")]
+fn launchd_job_loaded(job: &str) -> bool {
+    matches!(
+        std::process::Command::new("launchctl")
+            .arg("print")
+            .arg(job)
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .status(),
+        Ok(status) if status.success()
+    )
+}
+
 #[cfg(unix)]
 fn run_detached_parent(
     cli: &Cli,
@@ -799,4 +941,41 @@ fn install_signal_handlers() -> std::io::Result<()> {
         unsafe { signal::sigaction(terminal_signal, &ignore) }.map_err(std::io::Error::other)?;
     }
     Ok(())
+}
+
+#[cfg(all(test, unix))]
+mod signal_tests {
+    use super::install_signal_handlers;
+
+    /// The detached daemon must survive the invoking terminal hanging up:
+    /// after [`install_signal_handlers`] every terminal-generated signal
+    /// is discarded (SIG_IGN) — execution simply continues past the
+    /// raise — while SIGTERM reaches the clean-shutdown handler (which,
+    /// with the shutdown handle unset in tests, stores nothing and
+    /// returns). This is the SIGHUP half of the detached-start contract:
+    /// closing the ssh session that started the daemon must not kill it.
+    #[test]
+    fn terminal_generated_signals_are_ignored_and_sigterm_shuts_down() {
+        use nix::sys::signal;
+        install_signal_handlers().expect("install the daemon dispositions");
+        for signum in [
+            signal::SIGHUP,
+            signal::SIGINT,
+            signal::SIGQUIT,
+            signal::SIGPIPE,
+            signal::SIGTSTP,
+        ] {
+            // SAFETY: raise takes only the signal number and cannot fail
+            // for a delivered, ignored signal.
+            let raised = unsafe { libc::raise(signum as i32) };
+            assert_eq!(
+                raised, 0,
+                "signal {signum} must be ignored after install (raise returned {raised})"
+            );
+        }
+        // SAFETY: raise takes only the signal number; the handler is the
+        // async-signal-safe store-or-return of on_sigterm.
+        let term = unsafe { libc::raise(signal::SIGTERM as i32) };
+        assert_eq!(term, 0, "SIGTERM must reach its handler and return");
+    }
 }

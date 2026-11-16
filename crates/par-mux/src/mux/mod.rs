@@ -62,6 +62,10 @@ mod dispatch;
 
 pub use client::{MuxClient, Reply};
 pub use command::{parse_command, MuxCommand};
+/// Re-exported because [`MuxClient::notifications`] hands embedders a
+/// `&crossbeam_channel::Receiver` (card 01a19d78): draining it must not
+/// require declaring crossbeam-channel in the embedder's own manifest.
+pub use crossbeam_channel;
 pub use emit::{emit, emit_block, escape_output};
 pub use ids::{
     AnyTarget, IdAllocator, PaneId, ParseIdError, SessionId, Target, WindowId, WorkspaceId,

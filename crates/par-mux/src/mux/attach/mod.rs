@@ -72,6 +72,8 @@ pub(crate) mod text_input;
 use panels::*;
 use targets::*;
 
+use crate::mux::config::ChordKey;
+use crate::mux::layout::LayoutPreset;
 use crate::mux::resolve_socket_path;
 use par_term_emu_core::tmux_control::TmuxNotification;
 use std::io::Write as _;
@@ -278,12 +280,16 @@ fn run_inner(
     let path = options.socket_path();
     // The session picker runs before the attach connection and the
     // terminal guard exist.
-    let target =
-        picker::picked_target_on_host(&path, options.target.as_deref(), chords.session_picker)
-            .map_err(|err| match err {
-                Some(err) => AttachError::Handshake(std::io::Error::other(err)),
-                None => AttachError::NoDaemon(path.clone()),
-            })?;
+    let target = picker::picked_target_on_host(
+        &path,
+        options.target.as_deref(),
+        chords.session_picker,
+        chords.prefer_default_workspace,
+    )
+    .map_err(|err| match err {
+        Some(err) => AttachError::Handshake(std::io::Error::other(err)),
+        None => AttachError::NoDaemon(path.clone()),
+    })?;
     let conn = conn::AttachConn::connect(&path).map_err(|_| AttachError::NoDaemon(path.clone()))?;
 
     // Client-contract warnings: stamp mismatch (warn-only). Written BEFORE
@@ -452,6 +458,37 @@ impl PasteTracker {
     }
 }
 
+/// The passthrough pump's status-row freshness flag, typed (QA-003
+/// remainder): set means the row's facts — pane title, exit state,
+/// geometry, roster names — may be stale, so the next pass must redraw
+/// the reserved bottom row before it is trusted again. Cleared only
+/// immediately after that draw; the bare `&mut bool` this replaces let a
+/// stray write happen without the redraw that justifies it.
+struct StatusDirty(bool);
+
+impl StatusDirty {
+    /// The loop opens flagged: pass one paints the row once.
+    fn dirty() -> Self {
+        Self(true)
+    }
+
+    /// The status facts may have changed: a push that moves the title,
+    /// exit state, geometry, or roster names, or the prefix cue flipping.
+    fn mark(&mut self) {
+        self.0 = true;
+    }
+
+    /// Whether this pass owes the row a redraw.
+    fn needs_redraw(&self) -> bool {
+        self.0
+    }
+
+    /// Clear right after the draw that refreshed the row's facts.
+    fn clear(&mut self) {
+        self.0 = false;
+    }
+}
+
 impl Session {
     /// Resolve the target, resync its screen to stdout, and seed the
     /// status state.
@@ -505,7 +542,7 @@ impl Session {
     }
 
     /// One daemon push. Returns false only on `%exit`.
-    fn handle_event(&mut self, event: &TmuxNotification, status_dirty: &mut bool) -> bool {
+    fn handle_event(&mut self, event: &TmuxNotification, status_dirty: &mut StatusDirty) -> bool {
         match event {
             TmuxNotification::Output { pane_id, data } if *pane_id == self.pane => {
                 self.emulator.feed(data);
@@ -519,21 +556,21 @@ impl Session {
                 // has passed — mark the settle redraw.
                 if self.settling {
                     self.settling = false;
-                    *status_dirty = true;
+                    status_dirty.mark();
                 }
             }
             TmuxNotification::Exit => return false,
             TmuxNotification::PaneExited { pane_id, exit_code } if *pane_id == self.pane => {
                 self.exited = Some(*exit_code);
-                *status_dirty = true;
+                status_dirty.mark();
             }
             TmuxNotification::PaneRespawned { pane_id } if *pane_id == self.pane => {
                 self.exited = None;
-                *status_dirty = true;
+                status_dirty.mark();
             }
             TmuxNotification::PaneTitleChanged { pane_id, title } if *pane_id == self.pane => {
                 self.pane_title = title.clone();
-                *status_dirty = true;
+                status_dirty.mark();
             }
             TmuxNotification::LayoutChange { .. }
             | TmuxNotification::WindowAdd { .. }
@@ -550,7 +587,7 @@ impl Session {
             | TmuxNotification::ClientLeft { .. } => {
                 // Geometry/roster/name changes can move the status facts;
                 // re-query before the next redraw.
-                *status_dirty = true;
+                status_dirty.mark();
             }
             // Everything else (output for other panes, lifecycle elsewhere)
             // is not this single-pane view's concern in Phase A.
@@ -672,6 +709,20 @@ impl Session {
             return false;
         }
         if byte == 0x1b {
+            // ESC + a printable that is not a CSI/SS3 opener (or `<`) is an
+            // Alt chord: bound runs, unbound is consumed.
+            if let Some(&alt) = rest.get(*index) {
+                if alt.is_ascii_graphic() && !matches!(alt, b'[' | b'O' | b'<') {
+                    *index += 1;
+                    if let Some(key) = self.management_command(ChordKey {
+                        key: alt,
+                        alt: true,
+                    }) {
+                        self.passthrough_management(key);
+                    }
+                    return false;
+                }
+            }
             // An arrow chord: collect the rest of the CSI sequence.
             let taken = rest[*index..].iter().take(2).copied().collect::<Vec<u8>>();
             *index += taken.len();
@@ -690,20 +741,20 @@ impl Session {
         // command table: they are configurable, so they cannot be
         // static arms, and the defaults (`%`, `"`, `x`, `c`) are
         // consumed unbound by the table today.
-        if let Some(key) = self.management_command(byte) {
+        if let Some(key) = self.management_command(ChordKey::plain(byte)) {
             self.passthrough_management(key);
             return false;
         }
         // The resize chord: a sticky mode — arrows adjust
         // the focused pane's edges until Enter/Escape/q.
-        if byte == self.management.resize {
+        if ChordKey::plain(byte) == self.management.resize {
             self.enter_resize_mode();
             return false;
         }
         // The help chord: the bindings panel, printed as
         // plain text (passthrough has no overlay surface;
         // the pane's next output redraws over it).
-        if byte == self.management.help {
+        if ChordKey::plain(byte) == self.management.help {
             self.show_help();
             return false;
         }
@@ -761,6 +812,13 @@ impl Session {
             | ManagementKey::Sidebar
             | ManagementKey::StatusBar
             | ManagementKey::NotifyJump => {}
+            key @ (ManagementKey::LayoutEvenHorizontal
+            | ManagementKey::LayoutEvenVertical
+            | ManagementKey::LayoutMainHorizontal
+            | ManagementKey::LayoutMainVertical
+            | ManagementKey::LayoutTiled) => {
+                self.select_layout(key.layout_preset().expect("layout key"))
+            }
         }
     }
 
@@ -910,7 +968,7 @@ pub(crate) enum ManagementKey {
     BorderCycle,
     /// Toggle pane titles embedded in the pane borders (render mode).
     Labels,
-    /// Open the workspace picker modal (the session/window picker's
+    /// Open the workspace picker modal (the window picker's
     /// workspace sibling).
     WorkspacePicker,
     /// Toggle the workspace side panel (render mode).
@@ -922,6 +980,54 @@ pub(crate) enum ManagementKey {
     /// Focus the pane behind the most recent agent notification this
     /// client delivered (render mode).
     NotifyJump,
+    /// Apply the even-horizontal layout preset to the window.
+    LayoutEvenHorizontal,
+    /// Apply the even-vertical layout preset to the window.
+    LayoutEvenVertical,
+    /// Apply the main-horizontal layout preset to the window.
+    LayoutMainHorizontal,
+    /// Apply the main-vertical layout preset to the window.
+    LayoutMainVertical,
+    /// Apply the tiled layout preset to the window.
+    LayoutTiled,
+}
+
+impl ManagementKey {
+    /// The window preset selected by a layout action.
+    pub(crate) fn layout_preset(self) -> Option<LayoutPreset> {
+        match self {
+            Self::LayoutEvenHorizontal => Some(LayoutPreset::EvenHorizontal),
+            Self::LayoutEvenVertical => Some(LayoutPreset::EvenVertical),
+            Self::LayoutMainHorizontal => Some(LayoutPreset::MainHorizontal),
+            Self::LayoutMainVertical => Some(LayoutPreset::MainVertical),
+            Self::LayoutTiled => Some(LayoutPreset::Tiled),
+            Self::SplitRight
+            | Self::SplitDown
+            | Self::KillPane
+            | Self::BreakPane
+            | Self::JoinPane
+            | Self::Palette
+            | Self::NewWindow
+            | Self::SwapPrev
+            | Self::SwapNext
+            | Self::MoveWindowLeft
+            | Self::MoveWindowRight
+            | Self::TabStripLeft
+            | Self::TabStripRight
+            | Self::WorkspaceNext
+            | Self::WorkspacePrev
+            | Self::Zoom
+            | Self::RenameWindow
+            | Self::RenamePane
+            | Self::BorderCycle
+            | Self::Labels
+            | Self::WorkspacePicker
+            | Self::Sidebar
+            | Self::StatusBar
+            | Self::Respawn
+            | Self::NotifyJump => None,
+        }
+    }
 }
 
 /// The prefix command table: d detach; o / arrows cycle panes; n/p
@@ -958,8 +1064,16 @@ type StdinMsg = std::io::Result<Vec<u8>>;
 /// non-blocking drain and its bounded notification wait are what observe
 /// the disconnect. Byte order is preserved (one reader, FIFO channel);
 /// Unix behavior is unchanged beyond who performs the same read.
+///
+/// The channel is crossbeam (card 01a19d78) so the render pump's wait can
+/// select over it and the daemon-push channel together: a host click
+/// wakes the tick immediately instead of riding out the poll remainder.
 pub(crate) struct Stdin {
-    rx: std::sync::mpsc::Receiver<StdinMsg>,
+    rx: crossbeam_channel::Receiver<StdinMsg>,
+    /// The chunk the wait's select consumed on the stdin arm, parked so
+    /// the next tick's `read_available` returns it first — the select
+    /// cannot peek, and re-queueing behind unread chunks would reorder.
+    front: Option<StdinMsg>,
 }
 
 impl Stdin {
@@ -973,12 +1087,28 @@ impl Stdin {
     /// between the query and the deadline); this is how they get back
     /// into the stream instead of being eaten.
     fn new_with_primer(primer: Vec<u8>) -> Self {
-        let (tx, rx) = std::sync::mpsc::sync_channel::<std::io::Result<Vec<u8>>>(64);
+        let (tx, rx) = crossbeam_channel::bounded::<std::io::Result<Vec<u8>>>(64);
         if !primer.is_empty() {
             let _ = tx.send(Ok(primer));
         }
         Self::spawn_reader(std::io::stdin(), tx);
-        Self { rx }
+        Self { rx, front: None }
+    }
+
+    /// The receiver the render pump's wait selects over. Returning the
+    /// live receiver (not a clone) keeps the EOF/disconnect semantics:
+    /// the channel closes when the reader thread ends.
+    fn wake_rx(&self) -> &crossbeam_channel::Receiver<StdinMsg> {
+        &self.rx
+    }
+
+    /// Park a chunk the wait's stdin arm consumed, so the next tick's
+    /// step 3 (`pump_stdin` → `read_available`) sees it before anything
+    /// still queued in the channel.
+    fn stash_wake(&mut self, msg: Result<StdinMsg, crossbeam_channel::RecvError>) {
+        if let Ok(chunk) = msg {
+            self.front = Some(chunk);
+        }
     }
 
     /// The stdin reader thread's body: feed every read result into `tx`.
@@ -986,7 +1116,7 @@ impl Stdin {
     /// same classification.
     fn spawn_reader<R: std::io::Read + Send + 'static>(
         mut handle: R,
-        tx: std::sync::mpsc::SyncSender<StdinMsg>,
+        tx: crossbeam_channel::Sender<StdinMsg>,
     ) {
         std::thread::spawn(move || {
             let mut buf = [0u8; 4096];
@@ -1024,12 +1154,17 @@ impl Stdin {
     }
 
     /// Read whatever is available, or `Some(Ok(vec![]))` on EOF. `None`
-    /// when nothing is pending (would block).
+    /// when nothing is pending (would block). The wait's stash comes
+    /// first so a select-consumed chunk keeps its place at the head of
+    /// the stream.
     fn read_available(&mut self) -> Option<std::io::Result<Vec<u8>>> {
+        if let Some(chunk) = self.front.take() {
+            return Some(chunk);
+        }
         match self.rx.try_recv() {
             Ok(read) => Some(read),
-            Err(std::sync::mpsc::TryRecvError::Empty) => None,
-            Err(std::sync::mpsc::TryRecvError::Disconnected) => {
+            Err(crossbeam_channel::TryRecvError::Empty) => None,
+            Err(crossbeam_channel::TryRecvError::Disconnected) => {
                 // The reader thread ended (EOF or error already
                 // delivered). Report idle; the pump treats a delivered
                 // empty read as EOF and detaches.

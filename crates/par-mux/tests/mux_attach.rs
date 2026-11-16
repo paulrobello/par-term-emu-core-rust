@@ -24,6 +24,9 @@ mod common;
 mod render_agents;
 #[path = "mux_attach/render_input.rs"]
 mod render_input;
+#[cfg(unix)]
+#[path = "mux_attach/render_latency.rs"]
+mod render_latency;
 #[path = "mux_attach/render_layout.rs"]
 mod render_layout;
 // Every test in this suite is unix-only.
@@ -55,7 +58,9 @@ struct AttachHost {
 
 /// Spawn `par-mux attach --socket <path> [-t target]` under a fresh PTY and
 /// hand back the master side: a writer (the client's stdin) and a reader
-/// channel (the client's stdout). stderr goes to a buffer for diagnostics.
+/// channel (the client's stdout). The second tuple slot is an unwired
+/// diagnostics buffer (the child's stderr is inherited, or goes to a file
+/// when the caller passes `stderr_file` through [`spawn_attach_host`]).
 ///
 /// The reader thread doubles as the stand-in host terminal: modern Windows
 /// ConPTY sends `CSI 6n` (cursor position report) during its init handshake
@@ -119,7 +124,7 @@ fn spawn_attach_with_env(
     client_config: &str,
     env: &[(&str, &str)],
 ) -> (AttachHost, std::sync::Arc<std::sync::Mutex<String>>) {
-    spawn_attach_host(fixture, extra, mode, client_config, env, false)
+    spawn_attach_host(fixture, extra, mode, client_config, env, false, None)
 }
 
 /// The kitty graphics support query the render client's launch probe
@@ -138,6 +143,7 @@ fn spawn_attach_host(
     client_config: &str,
     env: &[(&str, &str)],
     kitty_host: bool,
+    stderr_file: Option<&std::path::Path>,
 ) -> (AttachHost, std::sync::Arc<std::sync::Mutex<String>>) {
     std::fs::write(fixture.client_config_path(), client_config).expect("write client config");
     let pty_system = native_pty_system();
@@ -149,15 +155,39 @@ fn spawn_attach_host(
             pixel_height: 0,
         })
         .expect("openpty");
-    let mut cmd = CommandBuilder::new(env!("CARGO_BIN_EXE_par-mux"));
-    cmd.arg("attach");
-    cmd.arg("--socket");
-    cmd.arg(fixture.socket());
     // The suite's byte-shape assertions are passthrough's contract; the
     // product default is render, so both modes pin explicitly.
-    cmd.arg("--mode");
-    cmd.arg(mode);
-    cmd.args(extra);
+    let mut argv: Vec<String> = vec![
+        env!("CARGO_BIN_EXE_par-mux").to_string(),
+        "attach".to_string(),
+        "--socket".to_string(),
+        fixture.socket().display().to_string(),
+        "--mode".to_string(),
+        mode.to_string(),
+    ];
+    argv.extend(extra.iter().map(|s| s.to_string()));
+    let mut cmd = match stderr_file {
+        // CommandBuilder has no stdio redirect, so a client whose stderr the
+        // test parses (PAR_MUX_INPUT_TRACE diagnostics) rides a /bin/sh -c
+        // wrap that sends stderr to a file; the env additions below still
+        // reach the exec'd client through the shell.
+        Some(file) => {
+            let quote = |s: &str| format!("'{}'", s.replace('\'', "'\\''"));
+            let cmdline = argv.iter().map(|a| quote(a)).collect::<Vec<_>>().join(" ");
+            let path = quote(file.to_str().expect("stderr path is utf-8"));
+            let mut cmd = CommandBuilder::new("/bin/sh");
+            cmd.arg("-c");
+            cmd.arg(format!("exec {cmdline} 2>{path}"));
+            cmd
+        }
+        None => {
+            let mut cmd = CommandBuilder::new(&argv[0]);
+            for arg in &argv[1..] {
+                cmd.arg(arg);
+            }
+            cmd
+        }
+    };
     cmd.env("PAR_MUX_CONFIG", fixture.client_config_path());
     for (key, value) in env {
         cmd.env(key, value);
@@ -1324,8 +1354,8 @@ fn saw_pane_exited(client: &par_mux::mux::MuxClient, deadline: Duration) -> bool
             Ok(par_term_emu_core::tmux_control::TmuxNotification::PaneExited { .. }) => {
                 return true
             }
-            Ok(_) | Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {}
-            Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => return false,
+            Ok(_) | Err(crossbeam_channel::RecvTimeoutError::Timeout) => {}
+            Err(crossbeam_channel::RecvTimeoutError::Disconnected) => return false,
         }
     }
     false
@@ -1578,6 +1608,156 @@ fn passthrough_flood_round_trip(shape: HostShape) {
         );
     }
     host.killer.kill().ok();
+}
+
+/// Byte-budgeted eviction (broadcast backpressure under flood): a flood
+/// arriving as MANY SHORT `%output` lines — the PTY read fragmentation a
+/// loaded host produces, ~30-40 B per read — must not evict a modestly
+/// lagging observer: the flood's total bytes stay far under the per-client
+/// 8 MiB budget. Under the old 4096-line cap the same flood crossed the
+/// cap mid-flood and evicted the observer, its payload tail never arriving
+/// ("the daemon side must carry the whole payload").
+///
+/// The observer is made to lag by registering and then NOT reading its
+/// socket while the flood runs, so the burst accumulates in the daemon-side
+/// queue instead of only in the kernel socket buffers; the flood writes are
+/// paced (a sleep per fragment) so each lands as its own PTY read — its own
+/// `%output` line — instead of coalescing into 16 KiB reads, and the
+/// payload rides behind the fragments as the flood's tail, the bytes the
+/// old eviction dropped.
+#[cfg(unix)]
+#[test]
+fn flood_short_lines_do_not_evict_a_lagging_observer() {
+    use std::io::BufRead;
+    use std::os::unix::net::UnixStream;
+
+    let (fixture, _daemon, mut client) = fixture_with_session("ptlag");
+    let pane = session_first_pane(&mut client, "$0");
+
+    const START: &[u8] = b"<<PT-PAYLOAD-START>>";
+    const END: &[u8] = b"<<PT-PAYLOAD-END>>";
+    let mut payload = START.to_vec();
+    payload.extend_from_slice(&rich_like_payload(3000));
+    payload.extend_from_slice(END);
+    let payload_path = fixture.state_dir().with_file_name("payload-lag.bin");
+    std::fs::write(&payload_path, &payload).expect("write payload");
+
+    // The lagging observer: a raw control connection that registers
+    // (list-panes), consumes its reply block, then goes SILENT while the
+    // flood runs.
+    let observer = UnixStream::connect(fixture.socket()).expect("observer connects");
+    observer
+        // 5 s, not a tight bound: this covers the registration reply AND the
+        // post-flood drain reads; both are content-asserted, and a 200 ms
+        // here died on WouldBlock during the registration reply at host
+        // load 60+ (2026-11-13 synthetic-load evidence run).
+        .set_read_timeout(Some(Duration::from_millis(5000)))
+        .expect("read timeout installs");
+    let mut observer_writer = observer.try_clone().expect("clone for write");
+    std::io::Write::write_all(&mut observer_writer, b"list-panes\n").expect("register");
+    let mut observer_reader = std::io::BufReader::new(observer.try_clone().expect("clone"));
+    loop {
+        let mut line = String::new();
+        observer_reader.read_line(&mut line).expect("reply block");
+        if line.is_empty() {
+            panic!("server closed before the registration reply");
+        }
+        if line.starts_with("%end ") || line.starts_with("%error") {
+            break;
+        }
+    }
+
+    // The flood: 5000 paced short writes (~11 B payload per fragment —
+    // the WIRE lines with %output framing and the octal-escaped newline
+    // land near ~26 B each, ~130 KB total) so the %output line count
+    // crosses the old 4096-line cap while the byte total stays under the
+    // 8 MiB budget; the marked payload rides behind them as the tail the
+    // old eviction dropped. Budgets are load-scaled (flood 150 s, above
+    // the 90 s CEILING; harness override 30s x 12 in .config/nextest.toml)
+    // because the sleep pacing stretches under host load — measured
+    // gate-run failure at the 90 s ceiling, 2026-11-13.
+    let flood_cmd = format!(
+        "i=0; while [ $i -lt 5000 ]; do printf frag-%05d\\n $i; sleep 0.001; i=$((i+1)); \
+         done; cat {}",
+        payload_path.display()
+    );
+    client
+        .send(&format!("send-keys -t {pane} -l '{flood_cmd}'"))
+        .expect("send-keys flood");
+    client
+        .send(&format!("send-keys -t {pane} Enter"))
+        .expect("Enter");
+
+    // The flood is done when the payload's END marker reaches the healthy
+    // (draining) fixture client.
+    let flood_done = Instant::now() + Duration::from_secs(150);
+    loop {
+        match client
+            .notifications()
+            .recv_timeout(Duration::from_millis(100))
+        {
+            Ok(par_term_emu_core::tmux_control::TmuxNotification::Output {
+                pane_id: seen,
+                ref data,
+            }) if seen == pane && data.windows(END.len()).any(|w| w == END) => break,
+            Ok(_) | Err(crossbeam_channel::RecvTimeoutError::Timeout) => {}
+            Err(crossbeam_channel::RecvTimeoutError::Disconnected) => {
+                panic!("the fixture client's reader thread died")
+            }
+        }
+        assert!(
+            Instant::now() < flood_done,
+            "the flood never finished (no payload END on the draining client)"
+        );
+    }
+    // Let the tail settle into the observer's daemon-side queue.
+    std::thread::sleep(Duration::from_millis(500));
+
+    // Resume the observer: everything the flood produced must arrive,
+    // in order, through the END marker — the connection stayed registered.
+    let mut daemon_bytes = Vec::new();
+    let deadline = Instant::now() + Duration::from_secs(60);
+    let mut parser = par_term_emu_core::tmux_control::TmuxControlParser::new(true);
+    let mut chunk = [0u8; 16384];
+    loop {
+        if let Some(region) = marked_region(&daemon_bytes, START, END) {
+            assert_eq!(
+                region,
+                &payload[..],
+                "the lagging observer must carry the whole payload byte-exact \
+                 (byte-budgeted queue survives the short-line flood)"
+            );
+            break;
+        }
+        match observer_reader.read(&mut chunk) {
+            Ok(0) => panic!(
+                "server closed during the flood drain ({} bytes so far) — the observer \
+                 was evicted mid-flood",
+                daemon_bytes.len()
+            ),
+            Ok(n) => {
+                for notification in parser.parse(&chunk[..n]) {
+                    if let par_term_emu_core::tmux_control::TmuxNotification::Output {
+                        pane_id: seen,
+                        data,
+                    } = notification
+                    {
+                        if seen == pane {
+                            daemon_bytes.extend_from_slice(&data);
+                        }
+                    }
+                }
+            }
+            Err(err) if err.kind() == std::io::ErrorKind::WouldBlock => {}
+            Err(err) => panic!("read flood output: {err}"),
+        }
+        assert!(
+            Instant::now() < deadline,
+            "the payload tail never arrived on the resumed observer \
+             ({} bytes so far, no END marker)",
+            daemon_bytes.len()
+        );
+    }
 }
 
 /// Strip SGR (CSI …m) runs from a `capture-pane -e` row.

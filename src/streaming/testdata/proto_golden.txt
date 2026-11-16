@@ -1,5 +1,9 @@
 S 0a0e0a0a6f75741b5b316d707574100b
-  = Ok(Output { data: "out\u{1b}[1mput", timestamp: Some(11) })
+  = Ok(Output { data: "out\u{1b}[1mput", timestamp: Some(11), damage: [], damage_generation: None })
+S 0a110a03646d671a0210051a0408091009202a
+  = Ok(Output { data: "dmg", timestamp: None, damage: [DamageRange { start_row: 0, end_row: 5 }, DamageRange { start_row: 9, end_row: 9 }], damage_generation: Some(42) })
+S 0a02202b
+  = Ok(Output { data: "", timestamp: None, damage: [], damage_generation: Some(43) })
 S e202020807
   = Ok(UploadStarted { upload_id: 7 })
 S ea02300807122c2f746d702f7061722d6d75782d75706c6f6164732f75706c6f61642d3030303030372d70686f746f2e706e67
@@ -7,23 +11,23 @@ S ea02300807122c2f746d702f7061722d6d75782d75706c6f6164732f75706c6f61642d30303030
 S ea020b08071a0761626f72746564
   = Ok(UploadFinished { upload_id: 7, path: None, error: Some("aborted") })
 S 0a00
-  = Ok(Output { data: "", timestamp: None })
+  = Ok(Output { data: "", timestamp: None, damage: [], damage_generation: None })
 S 1205088401102b
   = Ok(Resize { cols: 132, rows: 43 })
 S 1a0b0a097469746c6520e29c93
   = Ok(Title { title: "title ✓" })
-S 22f7010864101e1a0673637265656e2204736573732a9f010a0c676f6c64656e2d7468656d6512060801100218031a0908fa0110fb0118fc012204100a181422060801100b181522060802100c181622060803100d181722060804100e181822060805100f1819220608061010181a220608071011181b2a060864106e18782a060865106f18792a0608661070187a2a0608671071187b2a0608681072187c2a0608691073187d2a06086a1074187e2a06086b1075187f320562616467653d0000803e42042f746d704802520363696458016204746578746a20080710031a047267626120042802320401020304380c40224a0670616e652d33
-  = Ok(Connected { cols: 100, rows: 30, initial_screen: Some("screen"), session_id: "sess", theme: Some(ThemeInfo { name: "golden-theme", background: (1, 2, 3), foreground: (250, 251, 252), normal: [(0, 10, 20), (1, 11, 21), (2, 12, 22), (3, 13, 23), (4, 14, 24), (5, 15, 25), (6, 16, 26), (7, 17, 27)], bright: [(100, 110, 120), (101, 111, 121), (102, 112, 122), (103, 113, 123), (104, 114, 124), (105, 115, 125), (106, 116, 126), (107, 117, 127)] }), badge: Some("badge"), faint_text_alpha: Some(0.25), cwd: Some("/tmp"), modify_other_keys: Some(2), client_id: Some("cid"), readonly: Some(true), pointer_shape: Some("text"), graphics: [InlineImageFrame { image_id: 7, pane_id: Some(3), format: "rgba", width: 4, height: 2, data: [1, 2, 3, 4], col: 12, row: 34, pane: Some("pane-3") }] })
+S 2289020864101e1a0673637265656e2204736573732a9f010a0c676f6c64656e2d7468656d6512060801100218031a0908fa0110fb0118fc012204100a181422060801100b181522060802100c181622060803100d181722060804100e181822060805100f1819220608061010181a220608071011181b2a060864106e18782a060865106f18792a0608661070187a2a0608671071187b2a0608681072187c2a0608691073187d2a06086a1074187e2a06086b1075187f320562616467653d0000803e42042f746d704802520363696458016204746578746a20080710031a047267626120042802320401020304380c40224a0670616e652d3370017a0b6d6972726f722d686f7374800100
+  = Ok(Connected { cols: 100, rows: 30, initial_screen: Some("screen"), session_id: "sess", theme: Some(ThemeInfo { name: "golden-theme", background: (1, 2, 3), foreground: (250, 251, 252), normal: [(0, 10, 20), (1, 11, 21), (2, 12, 22), (3, 13, 23), (4, 14, 24), (5, 15, 25), (6, 16, 26), (7, 17, 27)], bright: [(100, 110, 120), (101, 111, 121), (102, 112, 122), (103, 113, 123), (104, 114, 124), (105, 115, 125), (106, 116, 126), (107, 117, 127)] }), badge: Some("badge"), faint_text_alpha: Some(0.25), cwd: Some("/tmp"), modify_other_keys: Some(2), client_id: Some("cid"), readonly: Some(true), pointer_shape: Some("text"), graphics: [InlineImageFrame { image_id: 7, pane_id: Some(3), format: "rgba", width: 4, height: 2, data: [1, 2, 3, 4], col: 12, row: 34, pane: Some("pane-3") }], pane_create_allowed: Some(true), cwd_hostname: Some("mirror-host"), cwd_is_local: Some(false) })
 S 220408011002
-  = Ok(Connected { cols: 1, rows: 2, initial_screen: None, session_id: "", theme: None, badge: None, faint_text_alpha: None, cwd: None, modify_other_keys: None, client_id: None, readonly: None, pointer_shape: None, graphics: [] })
+  = Ok(Connected { cols: 1, rows: 2, initial_screen: None, session_id: "", theme: None, badge: None, faint_text_alpha: None, cwd: None, modify_other_keys: None, client_id: None, readonly: None, pointer_shape: None, graphics: [], pane_create_allowed: None, cwd_hostname: None, cwd_is_local: None })
 S 2a0d080710081a0772656672657368
   = Ok(Refresh { cols: 7, rows: 8, screen_content: "refresh" })
 S 3206080310041801
   = Ok(CursorPosition { col: 3, row: 4, visible: true })
 S 3a00
   = Ok(Bell)
-S 5a1a0a042f6f6c6412042f6e65771a04686f7374220475736572280c
-  = Ok(CwdChanged { old_cwd: Some("/old"), new_cwd: "/new", hostname: Some("host"), username: Some("user"), timestamp: Some(12) })
+S 5a1c0a042f6f6c6412042f6e65771a04686f7374220475736572280c3000
+  = Ok(CwdChanged { old_cwd: Some("/old"), new_cwd: "/new", hostname: Some("host"), username: Some("user"), timestamp: Some(12), is_local: Some(false) })
 S 6217080d1005180620092a056d61746368320161320162380e
   = Ok(TriggerMatched { trigger_id: 13, row: 5, col: 6, end_col: 9, text: "match", captures: ["a", "b"], timestamp: 14 })
 S 6a0a080f12026e741a026e6d
@@ -108,6 +112,20 @@ S da0219080710031a03706e6720800528e0033204010203ff380c4022
   = Ok(InlineImage { image_id: 7, pane_id: Some(3), format: "png", width: 640, height: 480, data: [1, 2, 3, 255], col: 12, row: 34, pane: None })
 S da0200
   = Ok(InlineImage { image_id: 0, pane_id: None, format: "", width: 0, height: 0, data: [], col: 0, row: 0, pane: None })
+S f2027f0a7d0a022b3112046d61696e1801226f0a0224301204776f726b180122610a0240301206656469746f7218012228303030302c38317832342c302c307b34307832342c302c302c302c34307832342c34312c302c317d2a1b0a02253012057368656c6c180120282818420665786974656448072a0a0a022531202828183029
+  = Ok(MuxTreeSnapshot { workspaces: [MuxTreeWorkspace { id: "+1", name: "main", active: true, sessions: [MuxTreeSession { id: "$0", name: "work", active: true, windows: [MuxTreeWindow { id: "@0", name: "editor", active: true, layout: "0000,81x24,0,0{40x24,0,0,0,40x24,41,0,1}", panes: [MuxTreePane { id: "%0", title: "shell", active: true, cols: 40, rows: 24, x: 0, y: 0, process_state: "exited", exit_code: Some(7) }, MuxTreePane { id: "%1", title: "", active: false, cols: 40, rows: 24, x: 41, y: 0, process_state: "", exit_code: None }] }] }] }] })
+S f20200
+  = Ok(MuxTreeSnapshot { workspaces: [] })
+S fa020e0a0225391206657869746564180d
+  = Ok(PaneProcessState { pane_id: "%9", state: "exited", exit_code: Some(13) })
+S fa020c0a0225391206657869746564
+  = Ok(PaneProcessState { pane_id: "%9", state: "exited", exit_code: None })
+S fa020d0a022532120772756e6e696e67
+  = Ok(PaneProcessState { pane_id: "%2", state: "running", exit_code: None })
+S 8203160a086372656174652d37120224301a02403322022536
+  = Ok(PaneCreated { correlation_id: "create-7", session_id: "$0", window_id: "@3", pane_id: "%6" })
+S 820300
+  = Ok(PaneCreated { correlation_id: "", session_id: "", window_id: "", pane_id: "" })
 C 0a050a03696e03
   = Ok(Input { data: "in\u{3}" })
 C 1204085a1021
@@ -140,14 +158,18 @@ C 52080a03676574120178
   = Ok(ClipboardRequest { operation: "get", content: Some("x"), target: None })
 C 5a080a0466756c6c1009
   = Ok(SnapshotRequest { scope: "full", max_commands: Some(9) })
+C 8a0100
+  = Ok(MuxTreeRequest)
+C 92011b0a086372656174652d37120224301a0b6167656e742d62656e6368
+  = Ok(PaneCreateRequest { correlation_id: "create-7", session_id: "$0", name: Some("agent-bench") })
 LS empty server oneof
   = Err(InvalidMessage("Empty server message"))
 LS output invalid utf8
-  = Ok(Output { data: "o�(", timestamp: None })
+  = Ok(Output { data: "o�(", timestamp: None, damage: [], damage_generation: None })
 LS resize truncates u16
   = Ok(Resize { cols: 1, rows: 4464 })
 LS connected wide theme truncates channels
-  = Ok(Connected { cols: 4464, rows: 0, initial_screen: Some("�a"), session_id: "s", theme: Some(ThemeInfo { name: "w", background: (0, 1, 255), foreground: (1, 2, 3), normal: [(44, 0, 0), (45, 0, 0), (46, 0, 0), (47, 0, 0), (48, 0, 0), (49, 0, 0), (50, 0, 0), (51, 0, 0)], bright: [(0, 0, 144), (0, 0, 145), (0, 0, 146), (0, 0, 147), (0, 0, 148), (0, 0, 149), (0, 0, 150), (0, 0, 151)] }), badge: None, faint_text_alpha: None, cwd: None, modify_other_keys: None, client_id: None, readonly: None, pointer_shape: None, graphics: [] })
+  = Ok(Connected { cols: 4464, rows: 0, initial_screen: Some("�a"), session_id: "s", theme: Some(ThemeInfo { name: "w", background: (0, 1, 255), foreground: (1, 2, 3), normal: [(44, 0, 0), (45, 0, 0), (46, 0, 0), (47, 0, 0), (48, 0, 0), (49, 0, 0), (50, 0, 0), (51, 0, 0)], bright: [(0, 0, 144), (0, 0, 145), (0, 0, 146), (0, 0, 147), (0, 0, 148), (0, 0, 149), (0, 0, 150), (0, 0, 151)] }), badge: None, faint_text_alpha: None, cwd: None, modify_other_keys: None, client_id: None, readonly: None, pointer_shape: None, graphics: [], pane_create_allowed: None, cwd_hostname: None, cwd_is_local: None })
 LS connected theme missing background
   = Err(InvalidMessage("Missing background color"))
 LS connected theme missing foreground

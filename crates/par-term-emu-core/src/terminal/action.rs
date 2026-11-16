@@ -195,6 +195,7 @@ impl Terminal {
             let responses_before = self.response_buffer.len();
             let mut parser = vte::Parser::new();
             parser.advance(self, &bytes);
+            self.flush_print_run();
             self.cap_parsed_responses(responses_before);
             self.finish_applied_actions();
         }
@@ -215,6 +216,7 @@ impl Terminal {
             let responses_before = self.response_buffer.len();
             let mut parser = vte::Parser::new();
             parser.advance(self, &bytes);
+            self.flush_print_run();
             self.cap_parsed_responses(responses_before);
             self.finish_applied_actions();
         }

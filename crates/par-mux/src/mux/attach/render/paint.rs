@@ -157,9 +157,18 @@ impl PaneRenderer {
                 }
                 cell.set_style(map_flags(core_cell.flags()));
                 // The selection reverses its cells — whole lines in
-                // scroll mode, the drag's span for a mouse selection.
+                // scroll mode, the drag's span for a mouse selection,
+                // the column slice for copy mode's block.
                 if let Some(selection) = self.selection {
                     if selection.covers(rect.pane, abs_line, usize::from(col)) {
+                        let style = cell.style().add_modifier(RtModifier::REVERSED);
+                        cell.set_style(style);
+                    }
+                }
+                // Copy mode's cursor cell paints reversed (the mode's
+                // own cursor; the host cursor is hidden while it is up).
+                if let Some((pane, line, cursor_col)) = self.copy_cursor {
+                    if pane == rect.pane && line == abs_line && cursor_col == usize::from(col) {
                         let style = cell.style().add_modifier(RtModifier::REVERSED);
                         cell.set_style(style);
                     }

@@ -50,6 +50,167 @@ mod streaming_tests {
         );
     }
 
+    /// The par-mux tree snapshot round-trips JSON and protobuf with the
+    /// whole hierarchy intact — ids, active markers, the layout string and
+    /// the pre-parsed pane rectangles; the empty snapshot and the
+    /// `mux_tree_request` do the same.
+    #[test]
+    fn mux_tree_round_trip_json_and_protobuf() {
+        use par_term_emu_core_rust::streaming::protocol::{
+            MuxTreePane, MuxTreeSession, MuxTreeWindow, MuxTreeWorkspace,
+        };
+        let message = ServerMessage::MuxTreeSnapshot {
+            workspaces: vec![MuxTreeWorkspace {
+                id: "+1".into(),
+                name: "main".into(),
+                active: true,
+                sessions: vec![MuxTreeSession {
+                    id: "$0".into(),
+                    name: "work".into(),
+                    active: true,
+                    windows: vec![MuxTreeWindow {
+                        id: "@0".into(),
+                        name: "editor".into(),
+                        active: true,
+                        layout: "0000,81x24,0,0{40x24,0,0,0,40x24,41,0,1}".into(),
+                        panes: vec![
+                            MuxTreePane {
+                                id: "%0".into(),
+                                title: "shell".into(),
+                                active: true,
+                                cols: 40,
+                                rows: 24,
+                                x: 0,
+                                y: 0,
+                                process_state: "exited".into(),
+                                exit_code: Some(7),
+                            },
+                            MuxTreePane {
+                                id: "%1".into(),
+                                title: String::new(),
+                                active: false,
+                                cols: 40,
+                                rows: 24,
+                                x: 41,
+                                y: 0,
+                                ..Default::default()
+                            },
+                        ],
+                    }],
+                }],
+            }],
+        };
+        let json = serde_json::to_value(&message).unwrap();
+        let from_json: ServerMessage = serde_json::from_value(json.clone()).unwrap();
+        let wire = encode_server_message(&from_json).unwrap();
+        let decoded = decode_server_message(&wire).unwrap();
+        assert_eq!(serde_json::to_value(decoded).unwrap(), json);
+
+        let empty = ServerMessage::MuxTreeSnapshot { workspaces: vec![] };
+        let wire = encode_server_message(&empty).unwrap();
+        assert!(
+            matches!(decode_server_message(&wire).unwrap(), ServerMessage::MuxTreeSnapshot { workspaces } if workspaces.is_empty())
+        );
+
+        let wire = encode_client_message(&ClientMessage::MuxTreeRequest).unwrap();
+        assert!(matches!(
+            decode_client_message(&wire).unwrap(),
+            ClientMessage::MuxTreeRequest
+        ));
+    }
+
+    /// The held-pane process lifecycle event round-trips JSON and
+    /// protobuf equivalently, with backward-compatible decoding: the exit
+    /// code is optional in both encodings, so a producer that omits it
+    /// (running state, or a daemon that had no status to read) decodes to
+    /// `None`, and a JSON/protobuf pane row without the lifecycle fields
+    /// decodes as running.
+    #[test]
+    fn pane_process_state_round_trip_and_backward_compatible_decode() {
+        let exited = ServerMessage::PaneProcessState {
+            pane_id: "%5".into(),
+            state: "exited".into(),
+            exit_code: Some(9),
+        };
+        let running = ServerMessage::PaneProcessState {
+            pane_id: "%5".into(),
+            state: "running".into(),
+            exit_code: None,
+        };
+        for message in [exited, running] {
+            let json = serde_json::to_value(&message).unwrap();
+            let from_json: ServerMessage = serde_json::from_value(json.clone()).unwrap();
+            let wire = encode_server_message(&from_json).unwrap();
+            let decoded = decode_server_message(&wire).unwrap();
+            assert_eq!(serde_json::to_value(decoded).unwrap(), json);
+        }
+
+        // Backward-compatible decoding: a JSON object without the
+        // optional exit code (and a tree pane without either lifecycle
+        // field) decodes cleanly — an older producer's payload is valid
+        // input for the new reader.
+        let legacy_json = serde_json::json!({
+            "type": "pane_process_state",
+            "pane_id": "%5",
+            "state": "exited"
+        });
+        let legacy: ServerMessage = serde_json::from_value(legacy_json).unwrap();
+        assert!(matches!(
+            legacy,
+            ServerMessage::PaneProcessState { state, exit_code: None, .. } if state == "exited"
+        ));
+
+        // Protobuf: the exit-code field is absent (not zero) in the
+        // running encoding — the wire bytes carry no field 3, and a
+        // decode of such bytes reads `None`, not `Some(0)`.
+        let wire = encode_server_message(&ServerMessage::PaneProcessState {
+            pane_id: "%5".into(),
+            state: "running".into(),
+            exit_code: None,
+        })
+        .unwrap();
+        assert!(matches!(
+            decode_server_message(&wire).unwrap(),
+            ServerMessage::PaneProcessState {
+                exit_code: None,
+                ..
+            }
+        ));
+        assert!(
+            !wire.contains(&0x18),
+            "no field-3 (exit_code) tag byte rides the running encoding: {wire:?}"
+        );
+    }
+
+    /// The pane-create request and its reply round-trip JSON and protobuf
+    /// equivalently, with the correlation id carried field-for-field (the
+    /// client-chosen echo a late reply is matched by).
+    #[test]
+    fn pane_create_round_trip() {
+        let request = ClientMessage::PaneCreateRequest {
+            correlation_id: "create-7".into(),
+            session_id: "$0".into(),
+            name: Some("agent-bench".into()),
+        };
+        let json = serde_json::to_value(&request).unwrap();
+        let from_json: ClientMessage = serde_json::from_value(json.clone()).unwrap();
+        let wire = encode_client_message(&from_json).unwrap();
+        let decoded = decode_client_message(&wire).unwrap();
+        assert_eq!(serde_json::to_value(decoded).unwrap(), json);
+
+        let reply = ServerMessage::PaneCreated {
+            correlation_id: "create-7".into(),
+            session_id: "$0".into(),
+            window_id: "@3".into(),
+            pane_id: "%6".into(),
+        };
+        let json = serde_json::to_value(&reply).unwrap();
+        let from_json: ServerMessage = serde_json::from_value(json.clone()).unwrap();
+        let wire = encode_server_message(&from_json).unwrap();
+        let decoded = decode_server_message(&wire).unwrap();
+        assert_eq!(serde_json::to_value(decoded).unwrap(), json);
+    }
+
     /// Inline-image frames round-trip JSON and protobuf with bytes intact;
     /// the 8 MiB payload cap is enforced on the encode boundary.
     #[test]
@@ -106,12 +267,83 @@ mod streaming_tests {
 
     mod protocol_constructors {
         use super::*;
+        use par_term_emu_core_rust::streaming::protocol::DamageRange;
+
+        /// Card 01a19ca4 acceptance 1: an `output` frame without damage
+        /// decodes to the pre-damage shape — the fields are ABSENT, not
+        /// empty, on the wire, and both the protobuf and the JSON carry no
+        /// damage keys an old client could trip on.
+        #[test]
+        fn output_without_damage_decodes_to_the_old_shape() {
+            let msg = ServerMessage::output("legacy".to_string());
+            let decoded = decode_server_message(&encode_server_message(&msg).unwrap()).unwrap();
+            match decoded {
+                ServerMessage::Output {
+                    data,
+                    timestamp,
+                    damage,
+                    damage_generation,
+                } => {
+                    assert_eq!(data, "legacy");
+                    assert_eq!(timestamp, None);
+                    assert!(damage.is_empty(), "absent, not empty");
+                    assert_eq!(damage_generation, None);
+                }
+                _ => panic!("Expected Output variant"),
+            }
+            let json = serde_json::to_value(&msg).unwrap();
+            assert!(json.get("damage").is_none(), "JSON omits the empty list");
+            assert!(
+                json.get("damage_generation").is_none(),
+                "JSON omits the absent generation"
+            );
+        }
+
+        /// The damage shape round-trips both wire encodings: ranges keep
+        /// their bounds and the generation its presence.
+        #[test]
+        fn output_with_damage_round_trips() {
+            let msg = ServerMessage::output_with_damage(
+                "dmg".to_string(),
+                Some(7),
+                vec![
+                    DamageRange {
+                        start_row: 0,
+                        end_row: 5,
+                    },
+                    DamageRange {
+                        start_row: 9,
+                        end_row: 9,
+                    },
+                ],
+            );
+            let decoded = decode_server_message(&encode_server_message(&msg).unwrap()).unwrap();
+            match decoded {
+                ServerMessage::Output {
+                    damage,
+                    damage_generation,
+                    ..
+                } => {
+                    assert_eq!(damage_generation, Some(7));
+                    assert_eq!(damage.len(), 2);
+                    assert_eq!((damage[0].start_row, damage[0].end_row), (0, 5));
+                    assert_eq!((damage[1].start_row, damage[1].end_row), (9, 9));
+                }
+                _ => panic!("Expected Output variant"),
+            }
+            let json = serde_json::to_value(&msg).unwrap();
+            assert_eq!(json["damage"][0]["start_row"], 0);
+            assert_eq!(json["damage"][1]["end_row"], 9);
+            assert_eq!(json["damage_generation"], 7);
+        }
 
         #[test]
         fn test_server_message_output() {
             let msg = ServerMessage::output("test output".to_string());
             match msg {
-                ServerMessage::Output { data, timestamp } => {
+                ServerMessage::Output {
+                    data, timestamp, ..
+                } => {
                     assert_eq!(data, "test output");
                     assert_eq!(timestamp, None);
                 }
@@ -123,7 +355,9 @@ mod streaming_tests {
         fn test_server_message_output_with_timestamp() {
             let msg = ServerMessage::output_with_timestamp("test".to_string(), 1234567890);
             match msg {
-                ServerMessage::Output { data, timestamp } => {
+                ServerMessage::Output {
+                    data, timestamp, ..
+                } => {
                     assert_eq!(data, "test");
                     assert_eq!(timestamp, Some(1234567890));
                 }
@@ -578,6 +812,9 @@ mod streaming_tests {
                 allow_api_key_in_query: false,
                 allowed_origins: None,
                 kitty_file_media: par_term_emu_core_rust::graphics::kitty::FileMediaMode::default(),
+                allow_pane_create: false,
+                allow_blob_connect_src: false,
+                csp_connect_origins: None,
             };
 
             assert_eq!(config.max_clients, 50);
@@ -1610,7 +1847,7 @@ mod streaming_tests {
             let mut term = Terminal::new(80, 24);
             term.process(b"\x1b]22;ns-resize\x07");
             let session = create_session_with_terminal(term);
-            match session.build_connect_message("client-1", false) {
+            match session.build_connect_message("client-1", false, false) {
                 ServerMessage::Connected { pointer_shape, .. } => {
                     assert_eq!(pointer_shape.as_deref(), Some("ns-resize"));
                 }
@@ -1622,7 +1859,7 @@ mod streaming_tests {
         #[test]
         fn test_connect_message_default_terminal_has_no_pointer_shape() {
             let session = create_session_with_terminal(Terminal::new(80, 24));
-            match session.build_connect_message("client-1", false) {
+            match session.build_connect_message("client-1", false, false) {
                 ServerMessage::Connected { pointer_shape, .. } => {
                     assert!(pointer_shape.is_none());
                 }
@@ -1640,7 +1877,7 @@ mod streaming_tests {
             term.process(b"\x1b[4;6H\x1b_Ga=T,f=24,s=2,v=2;AAAAAAAAAAAAAAAA\x1b\\");
             assert_eq!(term.all_graphics().len(), 1, "the image decoded");
             let session = create_session_with_terminal(term);
-            match session.build_connect_message("client-1", false) {
+            match session.build_connect_message("client-1", false, false) {
                 ServerMessage::Connected { graphics, .. } => {
                     assert_eq!(graphics.len(), 1, "the store's graphic replays");
                     let frame = &graphics[0];
@@ -1676,7 +1913,7 @@ mod streaming_tests {
             // the NEWEST 24 of them, newest first.
             let store_ids: Vec<u64> = term.all_graphics().iter().map(|g| g.id).collect();
             let session = create_session_with_terminal(term);
-            match session.build_connect_message("client-1", false) {
+            match session.build_connect_message("client-1", false, false) {
                 ServerMessage::Connected { graphics, .. } => {
                     assert_eq!(graphics.len(), 24, "the frame cap stops the replay");
                     let ids: Vec<u64> = graphics.iter().map(|f| f.image_id).collect();
@@ -1713,7 +1950,7 @@ mod streaming_tests {
             }
             assert_eq!(term.all_graphics().len(), 12);
             let session = create_session_with_terminal(term);
-            match session.build_connect_message("client-1", false) {
+            match session.build_connect_message("client-1", false, false) {
                 ServerMessage::Connected { graphics, .. } => {
                     assert_eq!(graphics.len(), 8, "the byte budget stops the replay");
                     assert_eq!(graphics[0].image_id, 12, "newest first");
@@ -1722,6 +1959,43 @@ mod streaming_tests {
                         total <= 8 * 1024 * 1024,
                         "the aggregate payload respects the budget: {total}"
                     );
+                }
+                other => panic!("expected Connected, got {other:?}"),
+            }
+        }
+
+        /// Kanban 01a1c25c: `Connected.pane_create_allowed` mirrors the
+        /// `handle_pane_create` refusal ladder — read-only forces false
+        /// even on an allow-enabled server; the field is `None` only for
+        /// hand-built defaults (the handshake always stamps it).
+        #[test]
+        fn test_connect_message_pane_create_read_only_forces_false() {
+            let session = create_session_with_terminal(Terminal::new(80, 24));
+            match session.build_connect_message("client-1", true, true) {
+                ServerMessage::Connected {
+                    pane_create_allowed,
+                    ..
+                } => {
+                    assert_eq!(
+                        pane_create_allowed,
+                        Some(false),
+                        "read-only connection must not advertise pane create"
+                    );
+                }
+                other => panic!("expected Connected, got {other:?}"),
+            }
+        }
+
+        /// An allow-enabled writable handshake stamps the field `Some(true)`.
+        #[test]
+        fn test_connect_message_pane_create_allowed_true_when_enabled_and_writable() {
+            let session = create_session_with_terminal(Terminal::new(80, 24));
+            match session.build_connect_message("client-1", false, true) {
+                ServerMessage::Connected {
+                    pane_create_allowed,
+                    ..
+                } => {
+                    assert_eq!(pane_create_allowed, Some(true));
                 }
                 other => panic!("expected Connected, got {other:?}"),
             }

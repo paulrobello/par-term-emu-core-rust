@@ -8,10 +8,10 @@
 
 use crate::mux::build_stamp;
 use crate::mux::client::{MuxClient, Reply};
+use crossbeam_channel::{Receiver, RecvTimeoutError, TryRecvError};
 use par_term_emu_core::tmux_control::TmuxNotification;
 use std::io;
 use std::path::Path;
-use std::sync::mpsc::{Receiver, RecvTimeoutError, TryRecvError};
 use std::time::Duration;
 
 /// How long a user-initiated render command waits before the view gives

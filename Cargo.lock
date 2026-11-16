@@ -820,6 +820,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "crossbeam-channel"
+version = "0.5.17"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "98b0cc327b5bc766e7fda9c9260cc0fa81b43a8e240440422dff70788e3f9ef1"
+dependencies = [
+ "crossbeam-utils",
+]
+
+[[package]]
 name = "crossbeam-deque"
 version = "0.8.8"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2285,7 +2294,6 @@ dependencies = [
  "js-sys",
  "pin-project-lite",
  "thiserror 2.0.21",
- "tracing",
 ]
 
 [[package]]
@@ -2402,11 +2410,12 @@ dependencies = [
 
 [[package]]
 name = "par-mux"
-version = "0.75.0"
+version = "0.82.0"
 dependencies = [
  "base64 0.22.1",
  "clap",
  "clap_complete",
+ "crossbeam-channel",
  "crossterm",
  "dirs",
  "image",
@@ -2416,7 +2425,6 @@ dependencies = [
  "log",
  "nix 0.31.3",
  "opentelemetry",
- "opentelemetry-otlp",
  "opentelemetry_sdk",
  "par-term-emu-core",
  "parking_lot 0.13.0",
@@ -2437,7 +2445,7 @@ dependencies = [
 
 [[package]]
 name = "par-term-emu-core"
-version = "0.75.0"
+version = "0.82.0"
 dependencies = [
  "base64 0.22.1",
  "bitflags 2.13.2",
@@ -2446,6 +2454,10 @@ dependencies = [
  "libc",
  "log",
  "lru",
+ "memchr",
+ "opentelemetry",
+ "opentelemetry-otlp",
+ "opentelemetry_sdk",
  "parking_lot 0.13.0",
  "percent-encoding",
  "portable-pty",
@@ -2470,7 +2482,7 @@ dependencies = [
 
 [[package]]
 name = "par-term-emu-core-rust"
-version = "0.75.0"
+version = "0.82.0"
 dependencies = [
  "anyhow",
  "axum",
@@ -2487,7 +2499,6 @@ dependencies = [
  "log",
  "md-5",
  "opentelemetry",
- "opentelemetry-otlp",
  "opentelemetry_sdk",
  "par-mux",
  "par-term-emu-core",

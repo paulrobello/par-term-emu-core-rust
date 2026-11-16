@@ -20,7 +20,7 @@
 # the claim's owner and so a state report re-establishes the resume
 # identity after any claim-losing event without waiting for a SessionStart.
 # PAR_MUX_INTEGRATION_ID=claude
-# PAR_MUX_INTEGRATION_VERSION=4
+# PAR_MUX_INTEGRATION_VERSION=5
 
 action="${1:-}"
 
@@ -58,13 +58,14 @@ def is_claude_command(command):
     return False
 
 
-def nested_claude():
-    # Two or more claude processes above this hook mean the claude this
-    # hook serves was spawned by another claude (its Bash tool), whose
-    # pane claim must not be touched. A top-level claude hook sees
-    # exactly one (its own parent). Best-effort: ps missing or unreadable
-    # reads as not nested — the hook keeps its primary function and the
-    # daemon identity guards re-check on their side.
+def ancestor_claude_pids():
+    # The claude pids above this hook, nearest first: one is the claude
+    # this hook serves, two or more mean it was spawned by another claude
+    # (its Bash tool) whose pane claim must not be touched. Best-effort:
+    # ps missing or unreadable reads as empty — the hook keeps its
+    # primary function and the daemon identity guards re-check on their
+    # side. (No apostrophes in these comments: the shell wrapper is
+    # single-quoted.)
     try:
         import subprocess
 
@@ -88,18 +89,20 @@ def nested_claude():
             parents[pid] = ppid
             command_of[pid] = parts[2] if len(parts) == 3 else ""
     except Exception:
-        return False
+        return []
+    pids = []
     pid = os.getpid()
-    seen = 0
     for _ in range(64):
         pid = parents.get(pid)
         if pid is None or pid <= 1:
             break
         if is_claude_command(command_of.get(pid, "")):
-            seen += 1
-            if seen >= 2:
-                return True
-    return False
+            pids.append(pid)
+    return pids
+
+
+def nested_claude():
+    return len(ancestor_claude_pids()) >= 2
 
 
 if nested_claude():
@@ -187,6 +190,16 @@ else:
         "agent_session_id": session_id,
         "session_resume_argv": ["claude", "--resume", session_id],
     }
+    # v5: the identity stamp is the NEAREST claude process above this
+    # hook (the one this session belongs to), found by the same ancestry
+    # walk as the nested guard — never the hook or its shell wrapper,
+    # which die with this report and would mark the claim dead at the
+    # next save. No claude ancestor found means an unrecognized
+    # ancestry: send no stamp and let the daemon fall back to label
+    # liveness.
+    ancestors = ancestor_claude_pids()
+    if ancestors:
+        params["agent_pid"] = ancestors[0]
     transcript = payload.get("transcript_path")
     if isinstance(transcript, str) and transcript:
         params["agent_session_path"] = transcript

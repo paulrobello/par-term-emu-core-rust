@@ -14,7 +14,7 @@ cargo-fuzz = true
 
 [dependencies]
 libfuzzer-sys = "0.4"
-parking_lot = "0.12.5"
+parking_lot = "0.13"
 
 [dependencies.par-term-emu-core-rust]
 path = ".."
@@ -87,6 +87,13 @@ bench = false
 [[bin]]
 name = "ipc_rows"
 path = "fuzz_targets/ipc_rows.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "iterm_transfer"
+path = "fuzz_targets/iterm_transfer.rs"
 test = false
 doc = false
 bench = false

@@ -1266,6 +1266,21 @@ fn test_kitty_keyboard_push_pop() {
     assert_eq!(term.keyboard_flags(), 1);
 }
 
+/// `CSI < u` without a count pops one entry: a program that pushes `CSI > 11 u`
+/// and pops with a bare `CSI < u` on exit must not leave its flags on.
+#[test]
+fn test_kitty_keyboard_pop_without_a_count_pops_one() {
+    let mut term = Terminal::new(80, 24);
+    term.process(b"\x1b[>11u");
+    assert_eq!(term.keyboard_flags(), 11);
+    term.process(b"\x1b[<u");
+    assert_eq!(term.keyboard_flags(), 0);
+
+    term.process(b"\x1b[>3u\x1b[>7u");
+    term.process(b"\x1b[<0u");
+    assert_eq!(term.keyboard_flags(), 3, "a count of 0 pops one as well");
+}
+
 #[test]
 fn test_kitty_keyboard_pop_multiple() {
     let mut term = Terminal::new(80, 24);

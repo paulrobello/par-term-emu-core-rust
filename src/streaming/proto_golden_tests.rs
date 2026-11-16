@@ -11,7 +11,10 @@
 
 use super::*;
 use crate::streaming::protocol::{
-    CpuStats, DiskStats, InlineImageFrame, LoadAverage, MemoryStats, NetworkInterfaceStats,
+    CpuStats, DiskStats, InlineImageFrame, LoadAverage, MemoryStats, MuxTreePane as AppMuxTreePane,
+    MuxTreeSession as AppMuxTreeSession, MuxTreeWindow as AppMuxTreeWindow,
+    MuxTreeWorkspace as AppMuxTreeWorkspace, NetworkInterfaceStats, CLIENT_MESSAGE_VARIANT_NAMES,
+    SERVER_MESSAGE_VARIANT_NAMES,
 };
 use std::fmt::Write as _;
 
@@ -48,6 +51,42 @@ fn agent(pane_id: u32) -> AppAgentEntry {
 
 /// A roster row carrying every v0.72 activity/presence stat, so the
 /// golden pins the wire encoding of the non-zero additive fields.
+/// A tree window with a two-pane split, so the golden pins the nested
+/// pane geometry encoding.
+fn tree_window() -> AppMuxTreeWindow {
+    AppMuxTreeWindow {
+        id: "@0".into(),
+        name: "editor".into(),
+        active: true,
+        layout: "0000,81x24,0,0{40x24,0,0,0,40x24,41,0,1}".into(),
+        panes: vec![
+            AppMuxTreePane {
+                id: "%0".into(),
+                title: "shell".into(),
+                active: true,
+                cols: 40,
+                rows: 24,
+                x: 0,
+                y: 0,
+                // The non-zero lifecycle fields, so the golden pins their
+                // wire encoding too.
+                process_state: "exited".into(),
+                exit_code: Some(7),
+            },
+            AppMuxTreePane {
+                id: "%1".into(),
+                title: String::new(),
+                active: false,
+                cols: 40,
+                rows: 24,
+                x: 41,
+                y: 0,
+                ..Default::default()
+            },
+        ],
+    }
+}
+
 fn agent_stats() -> AppAgentEntry {
     AppAgentEntry {
         last_activity_at: 1_700_000_000_000,
@@ -67,6 +106,33 @@ fn server_fixtures() -> Vec<AppServerMessage> {
         S::Output {
             data: "out\x1b[1mput".into(),
             timestamp: Some(11),
+            damage: Vec::new(),
+            damage_generation: None,
+        },
+        // Card 01a19ca4: the damage shape — both fields present — and the
+        // generation-only shape (advanced, zero changed rows). The two
+        // pre-damage fixtures above/below pin the absent-field shape an
+        // old client decodes unchanged.
+        S::Output {
+            data: "dmg".into(),
+            timestamp: None,
+            damage: vec![
+                super::super::protocol::DamageRange {
+                    start_row: 0,
+                    end_row: 5,
+                },
+                super::super::protocol::DamageRange {
+                    start_row: 9,
+                    end_row: 9,
+                },
+            ],
+            damage_generation: Some(42),
+        },
+        S::Output {
+            data: String::new(),
+            timestamp: None,
+            damage: Vec::new(),
+            damage_generation: Some(43),
         },
         S::UploadStarted { upload_id: 7 },
         S::UploadFinished {
@@ -82,6 +148,8 @@ fn server_fixtures() -> Vec<AppServerMessage> {
         S::Output {
             data: String::new(),
             timestamp: None,
+            damage: Vec::new(),
+            damage_generation: None,
         },
         S::Resize {
             cols: 132,
@@ -114,6 +182,9 @@ fn server_fixtures() -> Vec<AppServerMessage> {
                 row: 34,
                 pane: Some("pane-3".into()),
             }],
+            pane_create_allowed: Some(true),
+            cwd_hostname: Some("mirror-host".into()),
+            cwd_is_local: Some(false),
         },
         S::Connected {
             cols: 1,
@@ -129,6 +200,9 @@ fn server_fixtures() -> Vec<AppServerMessage> {
             client_id: None,
             readonly: None,
             pointer_shape: None,
+            pane_create_allowed: None,
+            cwd_hostname: None,
+            cwd_is_local: None,
         },
         S::Refresh {
             cols: 7,
@@ -147,6 +221,7 @@ fn server_fixtures() -> Vec<AppServerMessage> {
             hostname: Some("host".into()),
             username: Some("user".into()),
             timestamp: Some(12),
+            is_local: Some(false),
         },
         S::TriggerMatched {
             trigger_id: 13,
@@ -415,6 +490,53 @@ fn server_fixtures() -> Vec<AppServerMessage> {
             row: 0,
             pane: None,
         },
+        S::MuxTreeSnapshot {
+            workspaces: vec![AppMuxTreeWorkspace {
+                id: "+1".into(),
+                name: "main".into(),
+                active: true,
+                sessions: vec![AppMuxTreeSession {
+                    id: "$0".into(),
+                    name: "work".into(),
+                    active: true,
+                    windows: vec![tree_window()],
+                }],
+            }],
+        },
+        S::MuxTreeSnapshot { workspaces: vec![] },
+        // The held-pane lifecycle event: with a captured status, and
+        // running with the status absent (both spellings the drain loop
+        // and the seed paths emit).
+        S::PaneProcessState {
+            pane_id: "%9".into(),
+            state: "exited".into(),
+            exit_code: Some(13),
+        },
+        S::PaneProcessState {
+            pane_id: "%9".into(),
+            state: "exited".into(),
+            exit_code: None,
+        },
+        S::PaneProcessState {
+            pane_id: "%2".into(),
+            state: "running".into(),
+            exit_code: None,
+        },
+        // The pane-create reply: every field populated, and the echo of a
+        // request whose correlation id is the client-chosen "" (empty
+        // strings are present on the wire, not omitted).
+        S::PaneCreated {
+            correlation_id: "create-7".into(),
+            session_id: "$0".into(),
+            window_id: "@3".into(),
+            pane_id: "%6".into(),
+        },
+        S::PaneCreated {
+            correlation_id: String::new(),
+            session_id: String::new(),
+            window_id: String::new(),
+            pane_id: String::new(),
+        },
     ]
 }
 
@@ -471,6 +593,12 @@ fn client_fixtures() -> Vec<AppClientMessage> {
             scope: "full".into(),
             max_commands: Some(9),
         },
+        C::MuxTreeRequest,
+        C::PaneCreateRequest {
+            correlation_id: "create-7".into(),
+            session_id: "$0".into(),
+            name: Some("agent-bench".into()),
+        },
     ]
 }
 
@@ -504,6 +632,7 @@ fn lossy_server_inputs() -> Vec<(&'static str, pb::ServerMessage)> {
             wrap(M::Output(pb::Output {
                 data: vec![b'o', 0xc3, 0x28],
                 timestamp: None,
+                ..Default::default()
             })),
         ),
         (
@@ -641,6 +770,9 @@ fn lossy_server_inputs() -> Vec<(&'static str, pb::ServerMessage)> {
                 client_id: None,
                 readonly: None,
                 pointer_shape: None,
+                pane_create_allowed: Some(false),
+                cwd_hostname: None,
+                cwd_is_local: None,
                 graphics: vec![pb::InlineImage {
                     image_id: 1,
                     pane_id: None,
@@ -751,83 +883,42 @@ fn proto_golden_wire_conversions_are_unchanged() {
     );
 }
 
-/// Every variant appears in the fixtures: a new variant fails this match
-/// until a fixture (and a golden line) covers it.
+/// Every variant appears in the fixtures: the covered set (named per
+/// message via `variant_name`) must equal the enum's variant-name
+/// registry in protocol.rs EXACTLY - a fixture-less variant and a
+/// registry drift both fail here, naming the variant. The registry is
+/// compile-tied to the enum by `variant_name`'s no-wildcard match, so a
+/// new variant is a compile error there until named (QA-005).
 #[test]
 fn proto_golden_fixtures_cover_every_variant() {
-    use AppClientMessage as C;
-    use AppServerMessage as S;
-    let mut seen = std::collections::BTreeSet::new();
-    for msg in server_fixtures() {
-        seen.insert(match msg {
-            S::Output { .. } => "Output",
-            S::Resize { .. } => "Resize",
-            S::Title { .. } => "Title",
-            S::Connected { .. } => "Connected",
-            S::Refresh { .. } => "Refresh",
-            S::CursorPosition { .. } => "CursorPosition",
-            S::Bell => "Bell",
-            S::CwdChanged { .. } => "CwdChanged",
-            S::TriggerMatched { .. } => "TriggerMatched",
-            S::ActionNotify { .. } => "ActionNotify",
-            S::ActionMarkLine { .. } => "ActionMarkLine",
-            S::Error { .. } => "Error",
-            S::Shutdown { .. } => "Shutdown",
-            S::Pong => "Pong",
-            S::ModeChanged { .. } => "ModeChanged",
-            S::GraphicsAdded { .. } => "GraphicsAdded",
-            S::HyperlinkAdded { .. } => "HyperlinkAdded",
-            S::UserVarChanged { .. } => "UserVarChanged",
-            S::ProgressBarChanged { .. } => "ProgressBarChanged",
-            S::BadgeChanged { .. } => "BadgeChanged",
-            S::SelectionChanged { .. } => "SelectionChanged",
-            S::ClipboardSync { .. } => "ClipboardSync",
-            S::ShellIntegrationEvent { .. } => "ShellIntegrationEvent",
-            S::SystemStats { .. } => "SystemStats",
-            S::ZoneOpened { .. } => "ZoneOpened",
-            S::ZoneClosed { .. } => "ZoneClosed",
-            S::ZoneScrolledOut { .. } => "ZoneScrolledOut",
-            S::EnvironmentChanged { .. } => "EnvironmentChanged",
-            S::RemoteHostTransition { .. } => "RemoteHostTransition",
-            S::SubShellDetected { .. } => "SubShellDetected",
-            S::SemanticSnapshot { .. } => "SemanticSnapshot",
-            S::FileTransferStarted { .. } => "FileTransferStarted",
-            S::FileTransferProgress { .. } => "FileTransferProgress",
-            S::FileTransferCompleted { .. } => "FileTransferCompleted",
-            S::FileTransferFailed { .. } => "FileTransferFailed",
-            S::UploadRequested { .. } => "UploadRequested",
-            S::ScreenCleared { .. } => "ScreenCleared",
-            S::AgentRoster { .. } => "AgentRoster",
-            S::AgentStateChanged { .. } => "AgentStateChanged",
-            S::PointerShapeChanged { .. } => "PointerShapeChanged",
-            S::PaneSizeStatus { .. } => "PaneSizeStatus",
-            S::ViewerPresence { .. } => "ViewerPresence",
-            S::InlineImage { .. } => "InlineImage",
-            S::UploadStarted { .. } => "UploadStarted",
-            S::UploadFinished { .. } => "UploadFinished",
-        });
-    }
-    assert_eq!(seen.len(), 45, "server fixtures miss a variant");
-    let mut seen = std::collections::BTreeSet::new();
-    for msg in client_fixtures() {
-        seen.insert(match msg {
-            C::ViewerIdentity { .. } => "ViewerIdentity",
-            C::Input { .. } => "Input",
-            C::Resize { .. } => "Resize",
-            C::Ping => "Ping",
-            C::RequestRefresh => "RequestRefresh",
-            C::Subscribe { .. } => "Subscribe",
-            C::Mouse { .. } => "Mouse",
-            C::FocusChange { .. } => "FocusChange",
-            C::Paste { .. } => "Paste",
-            C::SelectionRequest { .. } => "SelectionRequest",
-            C::ClipboardRequest { .. } => "ClipboardRequest",
-            C::SnapshotRequest { .. } => "SnapshotRequest",
-            C::UploadBegin { .. } => "UploadBegin",
-            C::UploadChunk { .. } => "UploadChunk",
-            C::UploadCommit => "UploadCommit",
-            C::UploadAbort => "UploadAbort",
-        });
-    }
-    assert_eq!(seen.len(), 16, "client fixtures miss a variant");
+    use std::collections::BTreeSet;
+    let covered: BTreeSet<&'static str> = server_fixtures()
+        .iter()
+        .map(|msg| msg.variant_name())
+        .collect();
+    assert_eq!(
+        covered,
+        SERVER_MESSAGE_VARIANT_NAMES.iter().copied().collect(),
+        "server fixtures and the variant registry disagree"
+    );
+    assert_eq!(
+        SERVER_MESSAGE_VARIANT_NAMES.len(),
+        48,
+        "server variant registry count changed - keep registry, match and this count in one edit"
+    );
+
+    let covered: BTreeSet<&'static str> = client_fixtures()
+        .iter()
+        .map(|msg| msg.variant_name())
+        .collect();
+    assert_eq!(
+        covered,
+        CLIENT_MESSAGE_VARIANT_NAMES.iter().copied().collect(),
+        "client fixtures and the variant registry disagree"
+    );
+    assert_eq!(
+        CLIENT_MESSAGE_VARIANT_NAMES.len(),
+        18,
+        "client variant registry count changed - keep registry, match and this count in one edit"
+    );
 }

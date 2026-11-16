@@ -11,7 +11,7 @@
 //! caller flushes only those cells, and a whole output flood between two
 //! frames collapses into one diff.
 
-use crate::mux::attach::input::{InputParser, Token};
+use crate::mux::attach::input::Token;
 use crate::mux::attach::layout::PaneRect;
 use crate::mux::attach::status;
 use crate::mux::attach::targets::{cascade_landing, session_active_window};
@@ -26,9 +26,8 @@ use ratatui::buffer::{Buffer, Cell as RtCell};
 use ratatui::style::Color as RtColor;
 use std::collections::HashMap;
 use std::io::Write as _;
-use std::sync::mpsc::RecvTimeoutError;
-
 mod chrome;
+mod copy_mode;
 mod cursor;
 mod drag;
 mod geometry;
@@ -51,21 +50,30 @@ mod pointer;
 mod popup;
 mod renderer;
 mod scrollback_edit;
+mod selection;
 mod session;
 mod sidebar;
 mod sidebar_state;
 mod sink;
+mod status_inflight;
 mod status_patch;
 mod toast;
 
 use chrome::ChromeRows;
 use cursor::CursorState;
+use selection::{normalize_span, DragState, Selection, TextDrag};
 use sidebar_state::SidebarState;
+use status_inflight::{SnapshotFlight, StatusInflight};
 
 use renderer::{RenderOptions, StdoutSink};
 
 /// How long a status-row flash stays up.
 const FLASH_LIFETIME: std::time::Duration = std::time::Duration::from_secs(1);
+
+/// How long after a boot restore the "server was restarted" toast still
+/// counts as news: an attach landing within this window of the daemon's
+/// restart shows it once; a later re-attach does not.
+const RESTART_TOAST_WINDOW_SECS: u64 = 120;
 
 /// The glyph set dividers draw with.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -193,7 +201,7 @@ pub struct PaneEmulator {
     /// keystroke forwarded to the pane snaps it back to live.
     scroll: usize,
     /// Scroll hold: pane output does not snap the view back to live
-    /// while held (the prefix-[ keyboard viewport, or a wheel-scrolled
+    /// while held (the copy-mode viewport, or a wheel-scrolled
     /// view — the wheel arms the hold so a pane that keeps writing,
     /// like omp's streaming chat, cannot instantly swallow the scroll).
     /// The offset grows by the lines the pane pushes into scrollback so
@@ -265,8 +273,10 @@ impl PaneEmulator {
     /// the prefix-[ viewport or a wheel-scrolled view), the offset
     /// survives instead and tracks the lines the pane pushes into
     /// scrollback, so the view stays put relative to its CONTENT (tmux's
-    /// copy-mode behavior), clamped to the scrollback extent.
-    pub fn feed(&mut self, bytes: &[u8]) {
+    /// copy-mode behavior), clamped to the scrollback extent. Returns
+    /// the lines pushed into scrollback while held (0 otherwise) — the
+    /// copy-mode state's rebase delta.
+    pub fn feed(&mut self, bytes: &[u8]) -> usize {
         let sb_before = if self.hold_scroll {
             Some(self.term.active_grid().scrollback_len())
         } else {
@@ -278,13 +288,16 @@ impl PaneEmulator {
         // undrained queues would grow with the pane's output (SEC-207).
         let _ = self.term.drain_responses();
         let _ = self.term.drain_bell_events();
-        if self.hold_scroll {
+        let pushed = if self.hold_scroll {
             let max = self.term.active_grid().scrollback_len();
             let pushed = max.saturating_sub(sb_before.unwrap_or(max));
             self.scroll = (self.scroll + pushed).min(max);
+            pushed
         } else {
             self.scroll = 0;
-        }
+            0
+        };
+        pushed
     }
 
     /// Scroll this pane's client-side view by `delta` lines (positive =
@@ -345,6 +358,39 @@ pub(crate) type Overlay = (&'static str, Vec<HelpRow>, Option<OverlayScroll>);
 /// command menu beside its chip, opening upward); [`OverlayAnchor::Below`]
 /// puts its top ring on `y` (the tab menu under its tab, opening
 /// downward), pulled back up when the rows below cannot hold it.
+/// The session strip's visibility mode (config `session-strip`): `auto`
+/// shows the row while the workspace holds two or more sessions, `always`
+/// and `off` pin it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub(crate) enum SessionStripMode {
+    /// Visible while the current workspace lists two or more sessions.
+    #[default]
+    Auto,
+    Always,
+    Off,
+}
+
+impl SessionStripMode {
+    /// The config spelling for `word`; an unknown word keeps `auto`
+    /// (the resolve path warns about it).
+    pub(crate) fn from_config(word: &str) -> Self {
+        match word {
+            "always" => Self::Always,
+            "off" => Self::Off,
+            _ => Self::Auto,
+        }
+    }
+
+    /// The config word the settings dialog shows.
+    pub(crate) fn config_value(self) -> &'static str {
+        match self {
+            Self::Auto => "auto",
+            Self::Always => "always",
+            Self::Off => "off",
+        }
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum OverlayAnchor {
     Above(u16, u16),
@@ -390,10 +436,14 @@ pub struct PaneRenderer {
     /// The popup command window painted over the panes (above the
     /// side panel, under the toast and modal overlays).
     pub(super) popup: Option<popup::PopupView>,
-    /// The on-screen selection — scroll mode's whole lines or the mouse
-    /// drag's characters; see [`Selection`]. `None` when nothing is
-    /// selected.
+    /// The on-screen selection — scroll mode's whole lines, the mouse
+    /// drag's characters, or copy mode's block; see [`Selection`].
+    /// `None` when nothing is selected.
     pub(crate) selection: Option<Selection>,
+    /// Copy mode's cursor: the `(pane, absolute line, column)` whose
+    /// cell paints reversed (the mode's own cursor — the host cursor is
+    /// hidden while the mode is up). `None` outside copy mode.
+    copy_cursor: Option<(u32, usize, usize)>,
     /// Per-pane border boxes instead of shared dividers (config
     /// `pane-borders`); `show_label_in_border` embeds the pane's title in
     /// the top edge. Both default off.
@@ -567,6 +617,7 @@ fn render_session_inner(
         &path,
         options.target.as_deref(),
         client.chords.session_picker,
+        client.chords.prefer_default_workspace,
     )
     .map_err(|err| err.unwrap_or_else(no_daemon))?;
     let mut conn = crate::mux::attach::conn::AttachConn::connect(&path).map_err(|_| no_daemon())?;
@@ -754,102 +805,6 @@ pub(super) mod screen_guard_drops {
     }
 }
 
-/// A divider drag in flight. `Pending` is a press near a divider that has
-/// not moved yet — it must not focus or forward (a divider press is not a
-/// click-through); the first motion promotes it to `Active`, which
-/// accumulates the pointer's signed cell delta from the press point for
-/// the pump's frame-cadence application.
-enum DragState {
-    Pending {
-        divider: DividerHit,
-        x: u16,
-        y: u16,
-    },
-    Active {
-        divider: DividerHit,
-        x: u16,
-        y: u16,
-        applied: i32,
-        pending: i32,
-        /// When the last resize step was sent — the drag's send
-        /// throttle. Every step is a daemon layout change that repaints
-        /// the whole window, and pointer motion arrives far faster than
-        /// that should happen.
-        last_sent: Option<std::time::Instant>,
-    },
-}
-
-/// A text-selection drag in flight — the mouse's sweep over a pane that
-/// is not capturing the pointer. `Pending` is a press that has not moved
-/// yet (a plain click: it must neither highlight nor copy); the first
-/// motion promotes it to `Active` with the anchor the press stored, and
-/// release copies the swept text. The pane id and anchor live in the
-/// renderer's [`Selection::Chars`] once promoted.
-enum TextDrag {
-    Pending { pane: u32, anchor: (usize, usize) },
-    Active { pane: u32 },
-}
-
-/// What the client has selected on screen. Lines are the pane's ABSOLUTE
-/// line coordinate — scrollback lines first (oldest at 0), then the live
-/// grid's rows — the coordinate both painting and text extraction share.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum Selection {
-    /// Scroll mode's whole-line selection: absolute lines `a..=b`, set
-    /// by `v` and extended by the scrolling viewport.
-    Lines { pane: u32, a: usize, b: usize },
-    /// The mouse drag's character selection: anchor and head are
-    /// `(absolute line, column)`. Reading order between the two cells
-    /// defines the selection, whichever way the drag ran.
-    Chars {
-        pane: u32,
-        anchor: (usize, usize),
-        head: (usize, usize),
-    },
-}
-
-impl Selection {
-    /// Whether the selection covers cell `(line, col)` of `pane` — the
-    /// paint path's highlight test.
-    pub(crate) fn covers(&self, pane: u32, line: usize, col: usize) -> bool {
-        match *self {
-            Selection::Lines { pane: p, a, b } => p == pane && line >= a && line <= b,
-            Selection::Chars {
-                pane: p,
-                anchor,
-                head,
-            } => {
-                if p != pane {
-                    return false;
-                }
-                let ((first_line, first_col), (last_line, last_col)) = normalize_span(anchor, head);
-                if line < first_line || line > last_line {
-                    return false;
-                }
-                match (line == first_line, line == last_line) {
-                    (true, true) => col >= first_col && col <= last_col,
-                    (true, false) => col >= first_col,
-                    (false, true) => col <= last_col,
-                    // A middle line is covered whole.
-                    (false, false) => true,
-                }
-            }
-        }
-    }
-}
-
-/// The span's cells in reading order: the earlier cell first.
-pub(crate) fn normalize_span(
-    anchor: (usize, usize),
-    head: (usize, usize),
-) -> ((usize, usize), (usize, usize)) {
-    if (anchor.0, anchor.1) <= (head.0, head.1) {
-        (anchor, head)
-    } else {
-        (head, anchor)
-    }
-}
-
 /// One render-mode session's live state: the window being mirrored, its
 /// renderer, the status row, and any layout change waiting to be applied
 /// (applying one needs the connection for the re-seeding replays, so the
@@ -865,52 +820,19 @@ struct WindowSession {
     status: status::StatusState,
     /// The status row, tab strip, status-bar toggle and flash cue.
     chrome: ChromeRows,
-    /// Whether the status state is stale and needs a re-query before the
-    /// next paint (the throttled re-query on agent/sessions churn).
-    status_dirty: bool,
-    /// A `client-snapshot` refresh written and not yet applied or
-    /// abandoned, since the pump tick that wrote it (the async status
-    /// path, [`Self::refresh_status_async`]).
-    status_snapshot_inflight: Option<std::time::Instant>,
-    /// Whether the re-seed now issuing its snapshot is the gone-view
-    /// landing's ([`Self::land_gone_view`], both branches): its reply's
-    /// `SessionGone` walks the interactive ladder directly — the async
-    /// form of the sync path's `false` fall-through — instead of
-    /// re-landing from the same stale cache forever.
-    landing_reseed: bool,
-    /// Whether the snapshot now in flight is the seed's
-    /// ([`Self::seed_status_snapshot`]): pushes handled while it is owed
-    /// join `seed_raced_panes`.
-    seed_snapshot_inflight: bool,
-    /// Agent panes whose state pushes were handled while the seed's
-    /// snapshot was in flight. The sync path drained its pre-refresh
-    /// pushes and left them out of the baseline; the seed's continuation
-    /// must too, or the snapshot's entry suppresses an identical
-    /// rebroadcast on a record the push stream never made.
-    seed_raced_panes: Vec<u32>,
-    /// The nothing-left-to-show `End` raised by the snapshot reply's
-    /// continuation (the reply cannot end the view through a return
-    /// value any more); the pump's status step checks it.
-    status_end: bool,
+    /// The status/seed snapshot coordination: the one owed
+    /// `client-snapshot` and its issuer's role, the stale mark, the
+    /// seed's raced panes, and the pump-visible nothing-left-to-show
+    /// `End` — see [`StatusInflight`].
+    status_inflight: StatusInflight,
     /// The modal that owns the keyboard (and, for most, the pointer), if
     /// any: see [`Modal`]. One field, so two open modals are
     /// unrepresentable.
     modal: Modal,
-    /// The reload chord: the key byte matched after the prefix, and the
-    /// detach prefix itself — both live-rebindable by the reload.
-    prefix: u8,
-    reload_key: u8,
-    /// The prefix chord is armed — sent, awaiting its second key. The
-    /// status row shows the cue while it is up ([`Self::arm_prefix`]
-    /// repaints on every flip).
-    prefix_pending: bool,
-    /// A non-ASCII character is arriving as the prefix chord's key (IME
-    /// / CJK input): its remaining bytes are swallowed whole, never
-    /// forwarded as a torn UTF-8 tail.
-    prefix_utf8: Option<crate::mux::attach::text_input::Utf8Assembler>,
-    /// Reassembles multi-byte characters typed into the modal text
-    /// fields (prompt, picker/help filters, scroll search).
-    text_utf8: crate::mux::attach::text_input::Utf8Assembler,
+    /// Input routing's live state: the prefix chord machinery, the
+    /// typed-character assemblers, and the stdin tokenizer — see
+    /// [`input_route::InputRouteState`].
+    input_route: input_route::InputRouteState,
     /// The window/pane management chords (split % / split " / kill x /
     /// new-window c): the key bytes matched after the prefix. Live
     /// rebindable by the reload.
@@ -933,9 +855,22 @@ struct WindowSession {
     /// The config's `session-picker` (launch-only like
     /// `sidebar_on_launch`: the next target-less attach reads it).
     session_picker: bool,
+    /// The config's `prefer-default-workspace` (launch-only: the next
+    /// target-less attach's workspace preference).
+    prefer_default_workspace: bool,
     /// The config's `git-status` (the sidebar badge's render gate and
     /// its idle refresh poll's gate). Live on reload.
     git_status: bool,
+    /// The session strip's visibility mode (config `session-strip`).
+    /// Live on reload; `auto` hides the row at one workspace session.
+    session_strip_mode: SessionStripMode,
+    /// The agent-state dots on the session strip and the window tabs
+    /// (config `agent-state-dots`). Live on reload.
+    agent_state_dots: bool,
+    /// Whether the restart toast already fired this attach — it reads
+    /// the seed snapshot's restore age once (the toast must not refire
+    /// on later refreshes).
+    restart_toast_shown: bool,
     /// The git badge's snapshot re-query interval
     /// (`[client] git-poll-secs`, live on reload; the clock
     /// `git_poll` runs on). 0 disables the poll.
@@ -998,16 +933,14 @@ struct WindowSession {
     /// strip's motion/release can reorder — `None` when no drag is in
     /// flight.
     tab_drag_from: Option<usize>,
-    /// The scroll-mode line selection's anchor (the absolute line `v`
-    /// fixed); `None` when no selection is in progress.
-    copy_anchor: Option<usize>,
-    /// The scroll-mode search line's live typing (`/`); `None` when no
-    /// search is being typed. Enter commits it as the query.
-    scroll_query: Option<String>,
-    /// The committed search's matching absolute lines (n/N walk them).
-    scroll_matches: Vec<usize>,
+    /// Copy mode's committed search matches (n/N walk them): the
+    /// `(absolute line, column)` of every hit, in line order.
+    scroll_matches: Vec<(usize, usize)>,
     /// Where the match walk stands.
     scroll_match_ix: usize,
+    /// Whether a yank leaves copy mode ([`Modal::Copy`]; config
+    /// `copy-mode-auto-exit`). Default on.
+    copy_mode_auto_exit: bool,
     /// The daemon's last known (unzoomed) tree layout, so the
     /// prefix+arrow navigation can aim through a zoom.
     daemon_layout: Vec<PaneRect>,
@@ -1022,9 +955,23 @@ struct WindowSession {
     pending_cmds: pending_cmd::PendingCommands,
     /// Generation of the latest user navigation: see [`WindowSession::begin_nav`].
     nav_gen: u64,
-    /// The literal prefix byte to forward when the user types prefix
-    /// prefix (rebindable, so it is state, not the C_B constant).
-    literal: u8,
+    /// The window a deliberate `switch-client` landing is in flight
+    /// toward, `None` when none is. The pump's shared-selection follows
+    /// skip a re-seed aimed at the same window: the landing's own
+    /// `%client-session-changed`/`%session-window-changed` broadcast
+    /// parks a follow that must not beat its reply (which would re-seed
+    /// the window's first pane and nav-veto the clicked-pane landing —
+    /// the cross-workspace roster report).
+    nav_landing: Option<String>,
+    /// The roster click's in-flight landing: its `switch-client -t %pane`
+    /// reply token. While the reply is owed, `apply_pending` defers
+    /// consuming parked follows — the click's own broadcasts park follows
+    /// aimed at the landing's target, and one consumed early would re-seed
+    /// the window's first pane and veto the clicked-pane landing (the
+    /// race `nav_landing` covered; card 01a1995a6). Cleared the first
+    /// `apply_pending` after the reply dispatches (the token leaves the
+    /// table), so it cannot outlive the landing.
+    click_landing: Option<u64>,
     /// Host-cursor placement bookkeeping: the emit guard, the heartbeat
     /// clock, and the drag-shape option (see [`CursorState`]).
     cursor: CursorState,
@@ -1066,10 +1013,6 @@ struct WindowSession {
     /// top of every pump tick and before every refit, so paint, hit-test,
     /// and size report read one consistent snapshot per frame.
     geometry: geometry::FrameGeometry,
-    /// The stdin tokenizer. Session-level (not per pump call) because a
-    /// paste or escape sequence can span two stdin bursts, and the pump
-    /// returns between them every frame tick.
-    parser: InputParser,
 }
 
 /// What the modal prompt edits: rename flows seeded from the live name,
@@ -1181,15 +1124,17 @@ enum Modal {
     /// No modal: input goes to the panes.
     #[default]
     None,
-    /// The prefix-[ keyboard scroll viewport on the focused pane.
-    Scroll,
+    /// The prefix-[ vi copy mode on the focused pane: an independent
+    /// cursor roams scrollback plus the frozen screen, selects, yanks
+    /// (OSC 52), and searches. State in [`copy_mode::CopyModeState`].
+    Copy(copy_mode::CopyModeState),
     /// The rename/create prompt.
     Prompt(PromptState),
     /// A context menu.
     Menu(MenuState),
     /// The bindings help panel.
     Help(HelpState),
-    /// The session/window picker or the workspace picker.
+    /// The window picker or the workspace picker.
     Picker(PickerState),
     /// The settings dialog (the command menu's `settings`).
     Settings(modal_settings::SettingsState),
@@ -1203,8 +1148,9 @@ enum Modal {
 
 impl Modal {
     /// Whether the host cursor hides while this modal is up. Every modal
-    /// that paints an overlay or owns the keys hides it; the scroll
-    /// viewport keeps it (the pane's cursor maps through the scroll).
+    /// that paints an overlay or owns the keys hides it; copy mode does
+    /// too (its own cursor paints instead), the pane cursor would
+    /// otherwise map through the scroll.
     fn hides_cursor(&self) -> bool {
         matches!(
             self,
@@ -1215,6 +1161,7 @@ impl Modal {
                 | Modal::Settings(_)
                 | Modal::Layouts(_)
                 | Modal::Resize
+                | Modal::Copy(_)
         )
     }
 }
@@ -1240,7 +1187,7 @@ struct HelpState {
     scroll: usize,
 }
 
-/// The picker's state: the session/window picker, or the workspace
+/// The picker's state: the window picker, or the workspace
 /// picker when `workspaces` is set.
 #[derive(Debug, Default, Clone, PartialEq, Eq)]
 struct PickerState {
@@ -1321,7 +1268,7 @@ impl WindowSession {
         // `render_session_inner`. The status bar starts shown and the side
         // panel hidden (the launch config applies its width afterwards).
         let chords = crate::mux::config::Chords::with_defaults();
-        let geometry = geometry::FrameGeometry::new(cols, rows, true, 0);
+        let geometry = geometry::FrameGeometry::new(cols, rows, true, false, 0);
         let (frame_w, frame_h) = geometry.frame_size();
         Self {
             window: String::new(),
@@ -1330,18 +1277,9 @@ impl WindowSession {
             pending: PendingWork::default(),
             status: status::StatusState::default(),
             chrome: ChromeRows::new(cols),
-            status_dirty: true,
-            status_snapshot_inflight: None,
-            landing_reseed: false,
-            seed_snapshot_inflight: false,
-            seed_raced_panes: Vec::new(),
-            status_end: false,
+            status_inflight: StatusInflight::new(),
             modal: Modal::None,
-            prefix: chords.prefix,
-            reload_key: chords.reload,
-            prefix_pending: false,
-            prefix_utf8: None,
-            text_utf8: Default::default(),
+            input_route: input_route::InputRouteState::from_chords(&chords),
             management: chords.management,
             resize_step: chords.resize_step,
             agent_rows: chords.agent_rows.clone(),
@@ -1349,13 +1287,16 @@ impl WindowSession {
             held: std::collections::HashMap::new(),
             join_source: None,
             tab_drag_from: None,
-            copy_anchor: None,
-            scroll_query: None,
             scroll_matches: Vec::new(),
             scroll_match_ix: 0,
+            copy_mode_auto_exit: chords.copy_mode_auto_exit,
             sidebar_on_launch: chords.sidebar_on_launch,
             session_picker: chords.session_picker,
+            prefer_default_workspace: chords.prefer_default_workspace,
             git_status: chords.git_status,
+            session_strip_mode: SessionStripMode::from_config(&chords.session_strip),
+            agent_state_dots: chords.agent_state_dots == "on",
+            restart_toast_shown: false,
             git_poll_secs: chords.git_poll_secs,
             git_poll: std::time::Instant::now(),
             settings_path: None,
@@ -1376,7 +1317,8 @@ impl WindowSession {
             stdin_backlog: Vec::new(),
             pending_cmds: pending_cmd::PendingCommands::default(),
             nav_gen: 0,
-            literal: chords.prefix,
+            nav_landing: None,
+            click_landing: None,
             cursor: CursorState::new(std::time::Instant::now()),
             pointer: pointer::PointerState::default(),
             kitty: kitty::HostGraphics::default(),
@@ -1388,7 +1330,6 @@ impl WindowSession {
             pending_end: false,
             deferred: std::collections::VecDeque::new(),
             geometry,
-            parser: InputParser::default(),
         }
     }
 
@@ -1471,7 +1412,7 @@ impl WindowSession {
             self.apply_drag(conn);
 
             // 9. Frame whatever accumulated, then wait for the next push.
-            if self.pump_frame(conn, sink).is_break() {
+            if self.pump_frame(conn, sink, &mut stdin).is_break() {
                 return Ok(());
             }
         }
@@ -1493,19 +1434,20 @@ impl WindowSession {
     /// active window, the session gone on its workspace's landing
     /// session, the workspace gone on the daemon's active workspace. Only
     /// nothing left to show ends it — through the return value on the
-    /// legacy path, through `status_end` on the async path (the snapshot
+    /// legacy path, through `status_inflight.end` on the async path (the snapshot
     /// reply's continuation raises it on the tick the reply arrives).
     fn pump_status(
         &mut self,
         conn: &mut crate::mux::attach::conn::AttachConn,
     ) -> std::ops::ControlFlow<()> {
         if self.project_poll_due(std::time::Instant::now()) {
-            self.status_dirty = true;
+            self.status_inflight.dirty = true;
         }
         if self.git_poll_due(std::time::Instant::now()) {
-            self.status_dirty = true;
+            self.status_inflight.dirty = true;
         }
-        if self.status_end || (self.status_dirty && self.refresh_status(conn) == EventOutcome::End)
+        if self.status_inflight.end
+            || (self.status_inflight.dirty && self.refresh_status(conn) == EventOutcome::End)
         {
             return std::ops::ControlFlow::Break(());
         }
@@ -1526,6 +1468,7 @@ impl WindowSession {
         &mut self,
         conn: &mut crate::mux::attach::conn::AttachConn,
         sink: &mut dyn FlushSink,
+        stdin: &mut super::Stdin,
     ) -> std::ops::ControlFlow<()> {
         let mut handled = false;
         self.drain_pushes_counting(conn, &mut handled)?;
@@ -1538,7 +1481,7 @@ impl WindowSession {
         self.frame_hold_since = None;
         self.bridge_pane_clipboard();
         self.frame(sink);
-        self.wait_next_push(conn)
+        self.wait_next_push(conn, stdin)
     }
 
     /// Bridge the focused pane's OSC 52 clipboard writes to the host
@@ -1609,10 +1552,10 @@ impl WindowSession {
                         return std::ops::ControlFlow::Break(());
                     }
                 }
-                Err(std::sync::mpsc::TryRecvError::Empty) => {
+                Err(crossbeam_channel::TryRecvError::Empty) => {
                     return std::ops::ControlFlow::Continue(());
                 }
-                Err(std::sync::mpsc::TryRecvError::Disconnected) => {
+                Err(crossbeam_channel::TryRecvError::Disconnected) => {
                     return std::ops::ControlFlow::Break(());
                 }
             }
@@ -1653,27 +1596,58 @@ impl WindowSession {
             // A resize wiped the screen; the rows repaint whole.
             self.chrome.status_row.invalidate();
             self.draw_status_row();
+            self.chrome.session_strip.invalidate();
             self.chrome.tab_strip.invalidate();
-            self.draw_tab_strip();
+            self.draw_strips();
             self.fit_popup(conn);
         }
         Ok(std::ops::ControlFlow::Continue(()))
     }
 
-    /// Pump step 9's wait: block up to one poll interval for the next
-    /// push.
+    /// Pump step 9's wait: block until the next daemon push, the next
+    /// stdin chunk, or one poll interval — whichever lands first. The
+    /// stdin arm is the input-latency lever (card 01a19d78): the wait
+    /// used to block on the daemon channel alone, so a host click waited
+    /// out up to a full POLL tick before step 3 routed it. The stdin arm
+    /// only wakes the tick — the chunk it consumes is parked on `Stdin`
+    /// so step 3 sees it first, and all routing stays on the pump's
+    /// step-3 path. Select picks randomly among ready arms, so a push and
+    /// a click landing together serve both — the other stays queued for
+    /// the next tick's drains.
     fn wait_next_push(
         &mut self,
         conn: &mut crate::mux::attach::conn::AttachConn,
+        stdin: &mut super::Stdin,
     ) -> std::ops::ControlFlow<()> {
-        match conn.recv_timeout(super::POLL) {
-            Ok(event) => {
-                if self.handle_event(event) == EventOutcome::End {
-                    return std::ops::ControlFlow::Break(());
+        self.wait_next_push_with_tick(conn, stdin, crossbeam_channel::after(super::POLL))
+    }
+
+    /// [`Self::wait_next_push`] with the tick receiver in from the
+    /// caller (production: the `after(POLL)` channel). The receiver
+    /// seam is what lets a test park stdin ahead of a tick it fires
+    /// itself instead of racing the fixed 16 ms bound (card 01a1d8e1).
+    fn wait_next_push_with_tick(
+        &mut self,
+        conn: &mut crate::mux::attach::conn::AttachConn,
+        stdin: &mut super::Stdin,
+        tick: crossbeam_channel::Receiver<std::time::Instant>,
+    ) -> std::ops::ControlFlow<()> {
+        crossbeam_channel::select! {
+            recv(conn.notifications()) -> event => {
+                match event {
+                    Ok(event) => {
+                        if self.handle_event(event) == EventOutcome::End {
+                            return std::ops::ControlFlow::Break(());
+                        }
+                    }
+                    // Empty + disconnected: the reader thread ended and
+                    // dropped the sender — the connection-ended signal
+                    // (the recv-family disconnect contract).
+                    Err(_) => return std::ops::ControlFlow::Break(()),
                 }
             }
-            Err(RecvTimeoutError::Timeout) => {}
-            Err(RecvTimeoutError::Disconnected) => return std::ops::ControlFlow::Break(()),
+            recv(stdin.wake_rx()) -> msg => stdin.stash_wake(msg),
+            recv(tick) -> _ => {}
         }
         self.dispatch_replies(conn);
         self.drain_popup(conn);
@@ -1706,15 +1680,29 @@ impl WindowSession {
                 self.renderer.focus(p);
             }
         }
-        if let Some(window) = self.pending.follow_window.take() {
-            if window != self.window {
-                self.reseed_window(conn, &window);
+        // A roster click's landing is in flight: its own switch broadcasts
+        // park follows aimed at the landing's own target, and one consumed
+        // before the reply would re-seed the window's first pane and veto
+        // the clicked-pane landing (the follow race; card 01a1995a6).
+        // Deferred consumption, keyed on the reply token: once the reply
+        // dispatches, the token leaves the table and this clears itself.
+        if let Some(token) = self.click_landing {
+            if !self.pending_cmds.contains(token) {
+                self.click_landing = None;
             }
         }
-        if let Some(session) = self.pending.follow_session.take() {
-            if let Some(window) = session_active_window(conn, &session) {
-                if window != self.window {
-                    self.reseed_window(conn, &window);
+        let landing_in_flight = self.click_landing.is_some();
+        if !landing_in_flight {
+            if let Some(window) = self.pending.follow_window.take() {
+                if window != self.window && self.nav_landing.as_deref() != Some(&window) {
+                    self.reseed_window(conn, &window, false);
+                }
+            }
+            if let Some(session) = self.pending.follow_session.take() {
+                if let Some(window) = session_active_window(conn, &session) {
+                    if window != self.window && self.nav_landing.as_deref() != Some(&window) {
+                        self.reseed_window(conn, &window, false);
+                    }
                 }
             }
         }
@@ -1752,7 +1740,7 @@ impl WindowSession {
     /// bar and the strip. A gone session lands up the tree
     /// ([`cascade_landing`]); `End` only when nothing is left to show —
     /// as the return value on the legacy per-fact path, through the
-    /// snapshot continuation's `status_end` on the async path.
+    /// snapshot continuation's `status_inflight.end` on the async path.
     fn refresh_status(&mut self, conn: &mut crate::mux::attach::conn::AttachConn) -> EventOutcome {
         if conn.has_command_feature("client-snapshot", "v1") {
             // The snapshot is written without waiting (ENH-049): the pump
@@ -1761,7 +1749,7 @@ impl WindowSession {
             self.refresh_status_async(conn);
             return EventOutcome::Continue;
         }
-        self.status_dirty = false;
+        self.status_inflight.dirty = false;
         match self.refresh_status_facts(conn) {
             Ok(()) => {}
             // A wedged daemon: the stale bar stands. No immediate
@@ -1777,7 +1765,7 @@ impl WindowSession {
                 match cascade_landing(conn, session.as_deref(), workspace.as_deref()) {
                     // The reseed refreshes the status itself.
                     Ok(Some(window)) if window != self.window => {
-                        self.reseed_window(conn, &window);
+                        self.reseed_window(conn, &window, false);
                     }
                     // A failed landing retries on the next poll tick or
                     // event, not immediately (the same storm rule).
@@ -1788,9 +1776,9 @@ impl WindowSession {
             Err(status::StatusError::Query) => {} // stale state survives; the next mark retries
         }
         self.draw_status_row();
-        // The strip rides the same queried state: window
-        // add/close/rename refreshes it here.
-        self.draw_tab_strip();
+        // The strips ride the same queried state: window and session
+        // add/close/rename refresh them here.
+        self.draw_strips();
         EventOutcome::Continue
     }
 
@@ -1803,15 +1791,15 @@ impl WindowSession {
     /// TimedOut): the stale bar stands and nothing re-issues now — the
     /// next poll tick or event re-queries (the storm rule).
     fn refresh_status_async(&mut self, conn: &mut crate::mux::attach::conn::AttachConn) {
-        if let Some(since) = self.status_snapshot_inflight {
-            if since.elapsed() >= status::STATUS_TIMEOUT {
-                self.status_snapshot_inflight = None;
-                self.status_dirty = false;
+        if let Some(flight) = self.status_inflight.flight {
+            if flight.since().elapsed() >= status::STATUS_TIMEOUT {
+                self.status_inflight.abandon();
             }
             return;
         }
-        self.status_dirty = false;
-        self.status_snapshot_inflight = Some(std::time::Instant::now());
+        self.status_inflight.begin(SnapshotFlight::Refresh {
+            since: std::time::Instant::now(),
+        });
         let window = self.window.clone();
         self.send_then(
             conn,
@@ -1825,7 +1813,7 @@ impl WindowSession {
     /// The status snapshot's reply continuation (runs on the pump tick
     /// the reply arrives, [`Self::dispatch_replies`]): apply the facts,
     /// refresh the chrome that rides them, and land up the tree on the
-    /// SessionGone contract. `status_end` carries the nothing-left-
+    /// SessionGone contract. `status_inflight.end` carries the nothing-left-
     /// to-show `End` to the pump's status step, which cannot get it as
     /// a return value any more.
     fn apply_status_snapshot(
@@ -1834,7 +1822,7 @@ impl WindowSession {
         reply: Reply,
         window: String,
     ) {
-        self.status_snapshot_inflight = None;
+        self.status_inflight.complete();
         // A reply for a window the view already left is stale: the
         // switch's reseed re-queries (the nav_current rule).
         if self.window != window {
@@ -1856,7 +1844,7 @@ impl WindowSession {
             Err(status::StatusError::TimedOut) => {} // not produced by the reply half
         }
         self.draw_status_row();
-        self.draw_tab_strip();
+        self.draw_strips();
     }
 
     /// The SessionGone landing both snapshot continuations share (the
@@ -1870,15 +1858,13 @@ impl WindowSession {
     /// pathological daemon parks nothing extra on the landing path; a
     /// cache with no survivor — or a cached landing that died before it
     /// could be shown — walks the interactive ladder. Nothing left to
-    /// show raises `status_end`, the pump-visible `End`: during the
+    /// show raises `status_inflight.end`, the pump-visible `End`: during the
     /// seed it ends the view on the next tick, the way the sync seed's
     /// `Ok(false)` did. A landing that resolves back to the shown
     /// window ends too.
     fn land_gone_view(&mut self, conn: &mut crate::mux::attach::conn::AttachConn) {
         if let Some(window) = self.status.cached_cascade_landing(&self.window) {
-            self.landing_reseed = true;
-            let moved = self.reseed_window(conn, &window);
-            self.landing_reseed = false;
+            let moved = self.reseed_window(conn, &window, true);
             if moved {
                 return;
             }
@@ -1892,8 +1878,8 @@ impl WindowSession {
     /// workspace's landing session, else the daemon's active workspace.
     /// A failed landing retries on the next poll tick or event, not
     /// immediately (the storm rule); nothing left to show raises
-    /// `status_end`, the pump-visible `End`. A ladder landing that
-    /// resolves to a window re-seeds flagged ([`Self::landing_reseed`]),
+    /// `status_inflight.end`, the pump-visible `End`. A ladder landing that
+    /// resolves to a window re-seeds as a landing (`Reseed { landing: true }`),
     /// so its own `SessionGone` walks the ladder again instead of the
     /// stale cache.
     fn land_gone_ladder(&mut self, conn: &mut crate::mux::attach::conn::AttachConn) {
@@ -1902,14 +1888,12 @@ impl WindowSession {
         match cascade_landing(conn, session.as_deref(), workspace.as_deref()) {
             // The reseed refreshes the status itself.
             Ok(Some(window)) if window != self.window => {
-                self.landing_reseed = true;
-                self.reseed_window(conn, &window);
-                self.landing_reseed = false;
+                self.reseed_window(conn, &window, true);
             }
             // A failed landing retries on the next poll tick or
             // event, not immediately (the same storm rule).
             Err(_) => {}
-            _ => self.status_end = true,
+            _ => self.status_inflight.end = true,
         }
     }
 
@@ -1940,7 +1924,7 @@ impl WindowSession {
         let zoomed = flags.contains('Z');
         if zoomed != self.zoomed {
             self.zoomed = zoomed;
-            self.status_dirty = true;
+            self.status_inflight.dirty = true;
         }
         match layout::parse_layout_triple(layout, visible, flags) {
             Ok(next) if next != self.renderer.layout() => {
@@ -1964,7 +1948,7 @@ impl WindowSession {
                 self.renderer.focus(pane);
             }
         }
-        self.status_dirty = true;
+        self.status_inflight.dirty = true;
     }
 
     /// A `%session-window-changed`: the shared selection moved this
@@ -1975,7 +1959,7 @@ impl WindowSession {
         if self.status.session_id.as_deref() == Some(session_id) && window_id != self.window {
             self.pending.follow_window = Some(window_id.to_string());
         }
-        self.status_dirty = true;
+        self.status_inflight.dirty = true;
     }
 
     /// One daemon push. `End` on `%exit` (or the window's pane roster
@@ -2022,7 +2006,7 @@ impl WindowSession {
                 // window by query and reseeds. Re-selecting here would
                 // echo the notification back into a loop.
                 self.pending.follow_session = Some(session_id.clone());
-                self.status_dirty = true;
+                self.status_inflight.dirty = true;
                 EventOutcome::Continue
             }
             TmuxNotification::PaneTitleChanged { pane_id, title } => {
@@ -2077,7 +2061,7 @@ impl WindowSession {
             // left up would act on panes that no longer exist.
             TmuxNotification::SessionsChanged if matches!(self.modal, Modal::Layouts(_)) => {
                 self.leave_layouts();
-                self.status_dirty = true;
+                self.status_inflight.dirty = true;
                 EventOutcome::Continue
             }
             TmuxNotification::SessionsChanged
@@ -2091,7 +2075,7 @@ impl WindowSession {
             | TmuxNotification::WindowClose { .. }
             | TmuxNotification::ClientAttached { .. }
             | TmuxNotification::ClientLeft { .. } => {
-                self.status_dirty = true;
+                self.status_inflight.dirty = true;
                 EventOutcome::Continue
             }
             // Everything else — lifecycle elsewhere, paste buffers — is
@@ -2131,8 +2115,8 @@ impl WindowSession {
         conn: &mut crate::mux::attach::conn::AttachConn,
         bytes: &[u8],
     ) -> bool {
-        let tokens = self.parser.feed(bytes);
-        for report in self.parser.take_host_reports() {
+        let tokens = self.input_route.parser.feed(bytes);
+        for report in self.input_route.parser.take_host_reports() {
             self.on_host_report(conn, report);
         }
         for token in tokens {

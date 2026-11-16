@@ -420,6 +420,14 @@ pub struct PersistAgentSession {
     pub source: Option<String>,
     /// The reported resume invocation, verbatim JSON argv.
     pub resume_argv: Option<String>,
+    /// The reporting agent process's pid, tree-validated at report time
+    /// (hook v5) — the save gate's identity-liveness probe (card
+    /// 01a1a765). Absent on v4-era saves and unstamped reports.
+    #[cfg_attr(
+        feature = "serde",
+        serde(default, skip_serializing_if = "Option::is_none")
+    )]
+    pub agent_pid: Option<i32>,
     /// The last-known agent state (`metadata["agent_state"]`).
     #[cfg_attr(
         feature = "serde",

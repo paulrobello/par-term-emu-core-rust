@@ -255,16 +255,27 @@ par-term-streamer --download-frontend --frontend-version 0.14.0 --web-root ./web
 par-term-streamer --macro-file demo.yaml --macro-loop --macro-speed 1.5
 
 # With HTTP Basic Authentication (password protection)
-par-term-streamer --enable-http --http-user admin --http-password secret
-par-term-streamer --enable-http --http-user admin --http-password-hash '$2y$...'
+# Prefer the file/hash forms: a clear-text --http-password is visible in
+# `ps` output and shell history for the server's lifetime
 par-term-streamer --enable-http --http-user admin --http-password-file /path/to/password
+par-term-streamer --enable-http --http-user admin --http-password-hash '$2y$...'
+par-term-streamer --enable-http --http-user admin --http-password secret
 
 # With API key authentication (protects API routes: /ws, /sessions, /stats)
+# Prefer the environment variable for the same ps/history reason:
+#   export PAR_TERM_API_KEY=my-secret-key
 par-term-streamer --enable-http --api-key my-secret-key
 
 # Combined: API key + HTTP Basic Auth (either satisfies auth)
-par-term-streamer --enable-http --http-user admin --http-password secret --api-key my-secret-key
+par-term-streamer --enable-http --http-user admin --http-password-file /path/to/password --api-key my-secret-key
 ```
+
+**Non-loopback binds (SEC-001/SEC-002):** a bind whose host is not loopback
+refuses to start when no authentication is configured
+(`--allow-unauthenticated` acknowledges that risk), and again when
+authentication is configured but TLS is off, since the credentials would
+cross the network in cleartext (`--allow-cleartext-auth` acknowledges that
+one). The loopback default never trips either gate.
 
 ### Command-Line Options and Environment Variables
 
@@ -317,11 +328,17 @@ par-term-streamer --enable-http
 | `PAR_TERM_ENABLE_HTTP` | `--enable-http` | Enable HTTP serving |
 | `PAR_TERM_WEB_ROOT` | `--web-root` | Static files directory |
 | `PAR_TERM_API_KEY` | `--api-key` | WebSocket API key |
+| `PAR_TERM_API_KEY_FILE` | `--api-key-file` | Read the WebSocket API key from a file (first line, trimmed; keeps the secret out of `ps`/shell history; mutually exclusive with `--api-key`) |
 | `PAR_TERM_MAX_SESSIONS` | `--max-sessions` | Maximum concurrent sessions |
 | `PAR_TERM_SESSION_IDLE_TIMEOUT` | `--session-idle-timeout` | Idle session timeout (seconds) |
 | `PAR_TERM_ENABLE_SYSTEM_STATS` | `--enable-system-stats` | Enable system stats collection |
 | `PAR_TERM_SYSTEM_STATS_INTERVAL` | `--system-stats-interval` | Stats collection interval (seconds) |
 | `PAR_TERM_ALLOW_API_KEY_IN_QUERY` | `--allow-api-key-in-query` | Allow API key in URL query param (not recommended) |
+| `PAR_TERM_ALLOW_PANE_CREATE` | `--allow-pane-create` | Let writable clients create panes on the mux daemon (`pane_create_request`; default off, fail-closed; read-only connections always refused) |
+| `PAR_TERM_CSP_ALLOW_BLOB_CONNECT` | `--csp-allow-blob-connect` | Add `blob:` to the CSP's connect-src so a custom web root's own assets can fetch blob URLs (default off; the ENH-059 policy stays byte-identical) |
+| `PAR_TERM_CSP_CONNECT_ORIGINS` | `--csp-connect-origins` | Append HTTPS origins to the CSP's connect-src so a custom web root can fetch public APIs directly (comma-separated or repeat the flag; each value must be the strict `https://host[:port]` form, anything else is rejected at startup naming the value; default off, the ENH-059 policy stays byte-identical) |
+| `PAR_TERM_ALLOW_UNAUTHENTICATED` | `--allow-unauthenticated` | Let the server bind a non-loopback host with no authentication (SEC-002). Off by default: that configuration refuses to start; prefer `--host 127.0.0.1`, `--api-key`, or HTTP Basic Auth |
+| `PAR_TERM_ALLOW_CLEARTEXT_AUTH` | `--allow-cleartext-auth` | Let the server send auth credentials unencrypted on a non-loopback bind with no TLS (SEC-001). Off by default: that configuration refuses to start; prefer `--tls-pem` or `--tls-cert`/`--tls-key` |
 | `PAR_TERM_MAX_CLIENTS_PER_SESSION` | `--max-clients-per-session` | Maximum clients per session (0=unlimited) |
 | `PAR_TERM_INPUT_RATE_LIMIT` | `--input-rate-limit` | Per-client input rate limit (bytes/sec; default 1048576 = 1 MiB/s, 0=unlimited) |
 | `PAR_TERM_KITTY_FILE_MEDIA` | `--kitty-file-media` | Kitty graphics file media: `off` \| `temp_only` (default) \| `all` — see [SECURITY.md](SECURITY.md#kitty-graphics-protocol-file-transmission) |
@@ -371,7 +388,9 @@ Before extracting, the archive's SHA-256 is checked against the release's
 unreadable checksum file aborts without touching the web root. A release from
 v0.58.1 on that lacks the checksum asset is refused. Only releases published
 before v0.58.1, which predate the checksum asset, download with a warning
-(TLS-only integrity). Building the frontend into the web root with
+(TLS-only integrity). Extraction then writes regular files and directories
+only — an archive carrying symlink, hardlink, device, or FIFO entries is
+refused instead of unpacked. Building the frontend into the web root with
 `make web-build-static` avoids the download entirely.
 
 **Available Themes:**
@@ -861,14 +880,14 @@ The protocol is defined in `proto/terminal.proto`. Messages use Protocol Buffers
 
 | Message | Fields | Description |
 |---------|--------|-------------|
-| `output` | `data: bytes`, `timestamp?: uint64` | Terminal output data (the timestamp is never populated; see the note below the table) |
+| `output` | `data: bytes`, `timestamp?: uint64`, `damage?: DamageRange[]`, `damage_generation?: uint64` | Terminal output data (the timestamp is never populated; see the note below the table). `damage` is a list of `{start_row, end_row}` — 0-based, inclusive, viewport-relative, ascending, non-overlapping — the rows those `data` bytes changed relative to the pane’s previous state. Absent damage fields (both keys missing) mean `“unknown — full scan”`; `damage_generation` present with an empty `damage` list means the chunk changed no viewport row. A chunk whose change cannot be expressed compactly (scroll, alternate-screen switch, RIS, resize, snapshot restore) carries ranges covering the whole viewport — the complete-coverage form; there is no sentinel variant. Clients may always ignore the fields and full-scan. Damage flows end-to-end from the pane terminal’s tracker through `%pane-damage` (docs/MUX.md “Notifications”); mux-backed mirrors attach it when the daemon supplied it, and any chunk without damage information flushes with the fields absent |
 | `resize` | `cols: uint32`, `rows: uint32` | Terminal size changed |
 | `title` | `title: string` | Terminal title changed |
-| `connected` | `cols`, `rows`, `initial_screen?: bytes`, `session_id: string`, `theme?: ThemeInfo`, `badge?: string`, `faint_text_alpha?: float`, `cwd?: string`, `modify_other_keys?: uint32`, `client_id?: string`, `readonly?: bool`, `pointer_shape?: string` | Connection established |
+| `connected` | `cols`, `rows`, `initial_screen?: bytes`, `session_id: string`, `theme?: ThemeInfo`, `badge?: string`, `faint_text_alpha?: float`, `cwd?: string`, `cwd_hostname?: string`, `cwd_is_local?: bool`, `modify_other_keys?: uint32`, `client_id?: string`, `readonly?: bool`, `pointer_shape?: string`, `graphics: InlineImageFrame[]`, `pane_create_allowed?: bool` | Connection established. `pane_create_allowed` is the server's opt-in answer (`--allow-pane-create` AND a writable connection): present means a modern server (a `pane_create_request` is admitted when true and refused with `pane_create_read_only`/`pane_create_disabled` when false), absent means a pre-feature server. The cwd fields carry the pane's working directory and its locality: `cwd` is the daemon's known pane path (OSC 7 → child kernel cwd → spawn floor), `cwd_hostname`/`cwd_is_local` report the OSC 7 host and its SEC-128 locality verdict; all absent on pre-feature servers |
 | `refresh` | `cols`, `rows`, `screen_content: bytes` | Full screen content |
 | `cursor` | `col: uint32`, `row: uint32`, `visible: bool` | Cursor position |
 | `bell` | (none) | Bell event |
-| `cwd_changed` | `old_cwd?: string`, `new_cwd: string`, `hostname?: string`, `username?: string`, `timestamp?: uint64` | Working directory changed (OSC 7) |
+| `cwd_changed` | `old_cwd?: string`, `new_cwd: string`, `hostname?: string`, `username?: string`, `is_local?: bool`, `timestamp?: uint64` | Working directory changed (OSC 7); `is_local` is the SEC-128 locality verdict of the reported host, absent on pre-feature servers |
 | `trigger_matched` | `trigger_id: uint64`, `row: uint32`, `col: uint32`, `end_col: uint32`, `text: string`, `captures: string[]`, `timestamp: uint64` | Trigger pattern matched |
 | `action_notify` | `trigger_id: uint64`, `title: string`, `message: string` | Trigger action: notification |
 | `action_mark_line` | `trigger_id: uint64`, `row: uint32`, `label?: string`, `color?: Color` | Trigger action: mark line |
@@ -900,6 +919,9 @@ The protocol is defined in `proto/terminal.proto`. Messages use Protocol Buffers
 | `screen_cleared` | `include_scrollback: bool` | Screen cleared (ED 2J or ED 3J) |
 | `agent_roster` | `agents: AgentEntry[]` | Full agent roster snapshot (pane-id ascending), pushed once per client connect in mux-backed sessions |
 | `agent_state_changed` | `agent?: AgentEntry`, `released: bool` | Roster delta: upsert `agent`, or remove it when `released` is `true` |
+| `mux_tree_snapshot` | `workspaces: MuxTreeWorkspace[]` | Full par-mux tree snapshot (every workspace, session, window and pane). Pushed on connect and after every structural change in mux-backed servers; also the reply to `mux_tree_request`. See [Mux tree metadata](#mux-tree-metadata) |
+| `pane_process_state` | `pane_id: string`, `state: string`, `exit_code?: int` | A mirrored pane's process lifecycle transition: `state` is `running` \| `exited`, `exit_code` rides only with `exited` when the daemon read the status. Sent to the pane's session viewers on the transition and to every connecting viewer as the current state. See [Pane process lifecycle](#pane-process-lifecycle) |
+| `pane_created` | `correlation_id: string`, `session_id: string`, `window_id: string`, `pane_id: string` | Reply to `pane_create_request` on success: the new default-shell window and its single pane, with the request's correlation id echoed. Opt-in server-side (`--allow-pane-create`, default off); daemon refusals arrive as the error message with codes `pane_create_disabled` / `pane_create_read_only` / `pane_create_no_daemon` / `pane_create_failed`. See [Mux tree metadata](#mux-tree-metadata) |
 | `pointer_shape_changed` | `shape?: string` | Pointer shape changed (OSC 22); absent = the client's own pointer applies |
 | `inline_image` | `image_id: uint64`, `pane_id?: uint32`, `format: string`, `width: uint32`, `height: uint32`, `data: bytes`, `col: uint32`, `row: uint32`, `pane?: string` | One image frame a pane app placed (OSC 1337, Sixel, or Kitty), placed at its stored cell; subscription-gated under the Graphics event. See [Inline Images](#inline-images) |
 | `upload_started` | `upload_id: uint64` | A client upload began staging daemon-side; `upload_id` keys the matching `upload_finished` |
@@ -908,6 +930,8 @@ The protocol is defined in `proto/terminal.proto`. Messages use Protocol Buffers
 `AgentEntry` fields: `pane_id` (par-mux pane `%N`), `agent`, `state`, `source` (`hook` or `scrape`), `reason` (decoded blocked reason, empty when none), `workspace` (par-mux workspace id from the roster row's `ws=` token, empty when unknown), `project` (host-probe-attributed project from the roster row's `host_telemetry` token, empty when unattributed), and `pane_label` (the pane's effective title from the watcher's one bounded `list-panes -F '#{pane_id} #{pane_title}'` query, refreshed by `%pane-title-changed` pushes, empty when none is set). The v0.72 activity/presence stats ride the entry additively: `last_activity_at` (unix ms of the pane's last processed output read or accepted hook report), `last_report_at` (unix ms of the last accepted hook report; scrape classification never sets it), `last_input_at` (unix ms of the last CLIENT-sent keystroke or paste — the human-presence clock), `viewer_count` (attached clients whose focused window shows the pane), `last_viewed_at` (unix ms a viewer last held the pane; live while viewed, frozen at the last viewer's leave), `cpu_ms` (cumulative CPU milliseconds of the pane's child process tree), and `stalled` (`working` with no activity for the daemon's stall window). All timestamps are `0` and `viewer_count`/`cpu_ms` are `0` when the daemon pre-dates the token or the value is absent — absent beats guessed. Both roster messages are always sent — event subscriptions do not filter them. State-change deltas carry a full entry per pane, enriched from the watcher's cache: a pane the watcher has already fetched keeps its last known `project`, `pane_label`, and activity/presence stats on every upsert, because the wire push itself is identity-only (the state push carries none of those tokens, so the fetched values hold until the next full snapshot refetches them). The one cold-cache case is a pane first seen via a state push between full snapshots — its first delta carries the push's bare (empty) label and project until the next full `agent_roster` snapshot refills the cache (any telemetry push or watcher reconnect triggers a refetch). A watcher that (re)connects always sends a fresh full snapshot before it streams any delta, so a restarted watcher never sends stale cached labels. Clients therefore do not need to special-case upserts to preserve cached title/project values. Enrichment behavior is pinned by `state_deltas_enrich_from_the_cache_and_first_seen_panes_send_bare`.
 
 `output` frames carry no `timestamp` today. The field is reserved in the schema (proto field 2, Unix epoch milliseconds) but is never populated: standalone PTY sessions and mux-backed pane mirrors feed the same batching broadcaster (`output_broadcaster_loop`), and every frame it emits — batch-window flushes, size-cap flushes, and shutdown drains alike — leaves the field absent (the JSON key is omitted, the protobuf field unset). There is no capture-versus-send-time distinction to draw yet; a latency harness that needs transport-only delay cannot derive it from `output` frames and would need a ping/echo-style control message instead. Population behavior is pinned by `output_broadcaster_frames_carry_no_timestamp`.
+
+`output` damage is batch-merged (card 01a19ca4): the broadcaster groups chunks on its 16 ms window, and a batch flushes with damage fields only when EVERY chunk in the batch carried them — the generation is the maximum and the ranges the sorted, coalesced union (every row any chunk changed is claimed; no clean row is). One damage-less chunk in a batch drops the fields for the whole frame, the conservative direction. Merge behavior is pinned by `output_batch_damage_merges_union_max_generation_and_a_plain_chunk_poisons`.
 
 ### Inline Images
 
@@ -928,7 +952,7 @@ The connect handshake's replay is bounded: NEWEST graphics seed first — the on
 | `ping` | (none) | Keepalive ping |
 | `refresh` | (none) | Request full screen refresh |
 | `subscribe` | `events: EventType[]` | Subscribe to specific event types (filters server messages) |
-| `mouse` | `col: uint32`, `row: uint32`, `button: uint32`, `shift: bool`, `ctrl: bool`, `alt: bool`, `event_type: string` | Mouse input (press/release/move/scroll) |
+| `mouse` | `col: uint32`, `row: uint32`, `button: uint32`, `shift: bool`, `ctrl: bool`, `alt: bool`, `event_type: string` | Mouse input (press/release/move/scroll). `button` is the raw SGR code space — see [Mouse, Focus, and Paste](#mouse-focus-and-paste) |
 | `focus` | `focused: bool` | Window focus change (in/out) |
 | `paste` | `content: string` | Paste content (auto-wrapped in bracketed paste when active) |
 | `selection` | `start_col: uint32`, `start_row: uint32`, `end_col: uint32`, `end_row: uint32`, `mode: string` | Selection request (chars/line/block/word/clear) |
@@ -938,6 +962,8 @@ The connect handshake's replay is bounded: NEWEST graphics seed first — the on
 | `upload_chunk` | `data: bytes` | One chunk (≤ `MAX_UPLOAD_CHUNK_BYTES`, 64 KiB); a rejected chunk aborts the upload daemon-side |
 | `upload_commit` | (none) | Seal the staged file and bracket-paste its PATH into the pane; replies `upload_finished` with the path |
 | `upload_abort` | (none) | Abandon the staged upload (spool file deleted); replies `upload_finished` with `error: "aborted"` |
+| `mux_tree_request` | (none) | Request the current par-mux tree snapshot; answered from the server's cache (no daemon round trip) with `mux_tree_snapshot` |
+| `pane_create_request` | `correlation_id: string`, `session_id: string`, `name?: string` | Create one new default-shell window (a single new pane) in the daemon session named by `session_id` (`$N` or name). `name` (≤ 64 bytes, no control characters) names the created window via `new-window -n` — absent keeps the daemon default, violations are refused with `pane_create_failed`. Opt-in server-side (`--allow-pane-create`, default off); read-only connections are refused regardless of the flag. See [Mux tree metadata](#mux-tree-metadata) |
 
 > **Note: protobuf names vs serde-JSON tags.** The tables above use the
 > protobuf field/message names. The Rust types in `src/streaming/protocol.rs`
@@ -1081,10 +1107,10 @@ ws.send(encodeClientMessage(msg));
 The web frontend automatically handles mouse, focus, and paste events based on terminal mode state:
 
 **Mouse Events:**
-- When the server sends `modeChanged` with `mode: "mouse_tracking"` and `enabled: true`, the frontend captures mouse events (click, release, move, scroll) on the terminal element and sends `MouseInput` messages
+- The server syncs mouse state through `modeChanged` messages that carry the terminal's exact mode names — tracking: `mouse_x10` (DECSET 9), `mouse_normal` (1000), `mouse_button_event` (1002), `mouse_any_event` (1003); encoding: `mouse_sgr` (1006), `mouse_utf8` (1005), `mouse_urxvt` (1015). They arrive at connect time from the mode-sync block for already-active modes and live as the pane app sets or clears them. A client captures mouse events (click, release, move, scroll) on the terminal element and sends `MouseInput` messages while any tracking mode is enabled.
 - Mouse coordinates are translated from pixel positions to terminal cell coordinates
-- Button values: 0=left, 1=middle, 2=right, 3=release, 4=scroll_up, 5=scroll_down
-- Modifiers: shift, ctrl, alt bitmask
+- `button` is the RAW SGR code: 0=left, 1=middle, 2=right, 3=none/release, with the motion bit 32 and the wheel bit 64 ORed on top (wheel up=64, wheel down=65). Send `press`/`release`/`scroll` verbatim. For `move`, send either the raw code (32 = left-drag motion, 35 = buttonless motion) or the logical button (0 = left-held, 3 = buttonless) — the server normalizes a `move` with an idempotent `| 32`, so both encode identically. A move with button 0 reports `<32;…M`; button 3 reports `<35;…M`.
+- Modifiers: shift, ctrl, alt flags (the report ORs shift=4, alt=8, ctrl=16 into the SGR code)
 
 **Focus Events:**
 - When the server sends `modeChanged` with `mode: "focus_tracking"` and `enabled: true`, the frontend sends `FocusChange` messages on window focus/blur
@@ -1703,7 +1729,7 @@ The session id selects the pane: `pane-N` mirrors pane `%N`; `workspace-active` 
 | Several viewers | Each streaming session has its own daemon connection; two viewers of one pane both stay live. When the last websocket viewing a session disconnects, the mirror connection closes and withdraws its size contribution immediately, without waiting for the idle timeout. Remaining daemon viewers determine the pane's size. Reconnecting creates a fresh mirror at that size. |
 | Workspace follows | A `workspace-active` mirror re-resolves the daemon's active workspace's active pane on every `%workspaces-changed` broadcast and re-seeds the attached viewers in place — reset + fresh screen replay on the SAME streaming session, no reconnect; input and size contributions follow the new pane. `pane-N` and fixed-pane sessions never follow. |
 | Pane closes | A pane killed (`kill-pane`, `kill-window`, `kill-session`) or missing from its window's new layout (moved away by `break-pane`/`join-pane`), a closed window, or a daemon shutdown ends the session. Closing a streaming session never kills the pane. |
-| Process exits | The pane is held (remain-on-exit): the session stays open on the frozen screen, and viewers get no exit cue. `respawn-pane` restarts the process in the same pane, and its output reaches the same session. |
+| Process exits | The pane is held (remain-on-exit): the session stays open on the frozen screen and viewers get `pane_process_state` (`exited`, with the status when known) naming the pane. `respawn-pane` pushes `running` on the same stream and the fresh screen is re-seeded in place. See [Pane process lifecycle](#pane-process-lifecycle). |
 | Not applicable | `--shell`, `--command`, `--preset`, and shell restart: the daemon owns the process. |
 
 #### Pane size status and viewer presence
@@ -1727,6 +1753,45 @@ The bundled web frontend handles the size policy per viewer; the pane itself kee
 | Any viewer | A server-sent `resize` is applied without being echoed back, so it cannot undo a newer resize from another client. |
 
 Phones apply the same deliberate-only rule to plain (non-mux) sessions: they open at the server's current size instead of resizing the PTY to the phone.
+
+#### Pane process lifecycle
+
+A mirrored pane's process lifecycle is explicit protocol state, never an inference from output silence, the agent roster, or a re-seed. It is carried by two surfaces that state the same fact one way:
+
+- `pane_process_state` events, sent to the pane session's viewers: `{pane_id, state, exit_code?}` with `state` ∈ `running` \| `exited`. `exited` is the daemon's held-pane (remain-on-exit) state — the pane, its window, and its frozen screen stay in the tree, and the stream stays open. The event names the pane (`%N`) and carries the status the daemon read; a death whose status the daemon could not read arrives as `exited` with `exit_code` absent. `running` clears the exited state in place, without a reconnect.
+- The tree surface: every `MuxTreePane` in `mux_tree_snapshot` carries `process_state` (same vocabulary, plus `""` from a pre-lifecycle producer, which reads as running) and `exit_code`. `%pane-exited`/`%pane-respawned` are structural for the tree watcher, so tree browsers — including `?metadata=1` clients, which never receive the per-pane event — see the transition in the next full snapshot.
+
+Late joiners and reconnects: the attach's `pane-info` row carries the pane's current `exited=` token, so a viewer connecting after an exit reads `exited` (with the status) at connect, and after a respawn reads no exited state. The same holds after a `workspace-active` retarget: the re-seed's own pane-info row is the evidence, so a mirror that lands on a held-dead pane publishes THAT pane's state, and landing back on a live pane republishes `running` under the new pane id. The daemon contract is that `exited=` rides only on a held-dead pane, so absence of the token is the daemon's own running verdict, not an inference.
+
+Three terminal conditions stay distinct, and a client can rely on the difference:
+
+| Condition | Wire evidence | What the viewer sees |
+|-----------|---------------|----------------------|
+| Process exit (held) | `pane_process_state` `exited` (+ `exit_code` when known) | Stream stays open; frozen screen; respawn clears it in place |
+| Pane deletion (`kill-pane`, window/session cascade, moved away) | No lifecycle event; `window_close` / tree snapshot without the pane; the pane's session closes | Stream ends for that pane |
+| Daemon disconnect (daemon gone, connection lost) | No lifecycle event; the stream closes (`shutdown`/`error`) | Stream ends; the watcher re-syncs the tree on redial |
+
+Deletion and disconnect are never reported as lifecycle transitions; the real-daemon suite pins the distinctions in `pane_deletion_and_daemon_disconnect_are_not_lifecycle_transitions`. Badge and auto-respawn behavior are client decisions — the server never restarts a process.
+
+Respawn detail: the daemon gives the pane a fresh terminal, so on `%pane-respawned` the mirror re-seeds in place over a short-lived daemon connection (the same shape the retarget uses) and pushes the fresh screen through a screen-restore frame, then publishes `running` — the exited state clears on the same stream, no reconnect.
+
+#### Mux tree metadata
+
+A mux-backed server also exposes the daemon's whole tree — every workspace, session, window and pane, including inactive and non-agent ones — as read-only metadata. Terminal content streaming is unchanged; this surface carries structure only, and it never touches the daemon's selection or pane sizing: the fetch runs only `list-*` queries (`list-workspaces`, `list-sessions -F`, `list-windows -a -F`, `list-panes -F`), never `select-*` or resize commands.
+
+`mux_tree_snapshot` is a full replacement, nested `workspaces > sessions > windows > panes` (the nesting is the parent link), in daemon tree order. Every node carries its verbatim par-mux id (`+N`, `$N`, `@N`, `%N` — stable for the node's lifetime), `name`, and an `active` marker at its own level: workspace = the daemon's active workspace, session = its workspace's active session, window = its session's current window, pane = its window's active pane. A window additionally carries `layout`, the full (unzoomed) tmux layout string, and its panes carry the same geometry pre-parsed as `cols`/`rows`/`x`/`y` rectangles, so a client can compose the window without a layout-string parser. Pane `title` is the effective title (empty when none). Every pane also carries the process lifecycle — `process_state` (`running` \| `exited`, `""` from a pre-lifecycle producer reads as running) and `exit_code` — from the daemon's `#{pane_dead}`/`#{pane_exit_code}` tokens; see [Pane process lifecycle](#pane-process-lifecycle).
+
+Delivery is reconciliation by full snapshot, never deltas:
+
+- On connect (after the roster push) every client receives the current snapshot from the watcher's cache.
+- The server keeps one daemon control connection (the tree watcher, mirroring the roster watcher): the daemon's structural notifications (`%workspaces-changed`, `%sessions-changed`, window add/close/rename and their unlinked twins, `%session-renamed`, `%client-session-changed`, `%session-window-changed`, `%window-pane-changed`, `%layout-change`, `%pane-title-changed`, `%pane-exited`, `%pane-respawned`) each trigger a refetch, and the fresh full snapshot is broadcast to every client. A notification burst folds into one refetch.
+- A client may request the snapshot at any time with `mux_tree_request`; the reply is served from the watcher's cache with no daemon round trip.
+
+Races and reconnects: the cache is updated before the matching broadcast, so a request that races a change reads either the pre-change or the post-change state and the change's own push corrects a stale read — applying every push (each one a whole replacement) converges on the daemon's state with no merge logic. A watcher reconnect (daemon restart, dropped connection) always fetches and broadcasts a fresh snapshot before anything else, so no window or pane from before the restart survives as a ghost; a reconnecting client resyncs the same way, through its own connect push and, on a broadcast overflow (lagged receiver), an immediate fresh snapshot resync.
+
+#### Metadata-only connections (`?metadata=1`)
+
+A browser that only wants the tree — no pane content, no mirror session, no size contribution — connects to `/ws?metadata=1` (same auth and origin enforcement as any other connection; `ConnectionParams::metadata` from Rust). The connection creates no pane session: it rides a factory-free routing state under the reserved registry id `metadata` (never listed by `/sessions`; do not name a mirror session `metadata`), the connection is forced read-only (every write path refuses), and it receives the normal connect pushes (`mux_tree_snapshot`, and the roster when a watcher is attached) plus every subsequent tree broadcast. `mux_tree_request` works as on any connection. The routing state exists only while a metadata client is connected and disappears with its last client.
 
 ### File Transfer Events
 
@@ -1970,6 +2035,14 @@ par-term-streamer --enable-http --allowed-origins https://app.example.com
 # Multiple allowed origins: repeat the flag, use a comma-separated value, or set
 # PAR_TERM_ALLOWED_ORIGINS (comma-separated)
 par-term-streamer --enable-http --allowed-origins https://app.example.com,https://staging.example.com
+
+# Static-bundle Host allowlist (DNS-rebinding defense, SEC-003): when the server
+# binds a loopback address (the default 127.0.0.1), requests for the static web
+# frontend are refused with 403 unless their Host header names 127.0.0.1, ::1,
+# localhost, or the configured bind address — a page on attacker.com whose DNS
+# rebinds to 127.0.0.1 cannot load the frontend bundle. Always on for loopback
+# binds (there is no flag: loopback Host values are a closed set, so this cannot
+# break legitimate loopback use); inactive when binding a non-loopback address.
 
 # Clients can authenticate API key via:
 #   Header: Authorization: Bearer secret-token-here

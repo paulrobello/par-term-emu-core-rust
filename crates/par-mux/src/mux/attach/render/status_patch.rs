@@ -18,7 +18,7 @@ impl WindowSession {
             // title, which the payload does not carry: re-query
             // that pane on the next refresh.
             self.renderer.invalidate_title(pane);
-            self.status_dirty = true;
+            self.status_inflight.dirty = true;
             return;
         }
         // The payload IS the new effective title (a user title
@@ -56,9 +56,7 @@ impl WindowSession {
             // baseline; the async seed's adoption must too, or the
             // snapshot's entry suppresses an identical rebroadcast on a
             // record the push stream never made.
-            if self.seed_snapshot_inflight && !self.seed_raced_panes.contains(&pane) {
-                self.seed_raced_panes.push(pane);
-            }
+            self.status_inflight.note_seed_race(pane);
             let previous = self.record_pushed_state(pane, state);
             if let Some(state) = state {
                 self.notify_agent_state(pane, agent, previous.as_deref(), state, ws, msg);
@@ -66,7 +64,7 @@ impl WindowSession {
         }
         let patched = self.status.patch_agent(pane_id, agent, state, ws, msg);
         if state.is_some() && patched {
-            self.status_dirty = true;
+            self.status_inflight.dirty = true;
         }
         self.rebuild_agent_section();
         self.draw_status_row();
@@ -95,8 +93,8 @@ impl WindowSession {
                 .unwrap_or_else(|| "?".to_string());
             let chord = format!(
                 "{} {}",
-                crate::mux::attach::panels::spell_key(self.prefix),
-                crate::mux::attach::panels::spell_key(self.management.respawn)
+                crate::mux::attach::panels::spell_key(self.input_route.prefix),
+                crate::mux::config::spell_chord(&self.management.respawn)
             );
             self.chrome.flash(format!(
                 "pane %{pane} exited ({code}) — {chord} respawns when [daemon] remain-on-exit holds the pane"
@@ -144,8 +142,8 @@ impl WindowSession {
         };
         let chord = format!(
             "{} {}",
-            crate::mux::attach::panels::spell_key(self.prefix),
-            crate::mux::attach::panels::spell_key(self.management.respawn)
+            crate::mux::attach::panels::spell_key(self.input_route.prefix),
+            crate::mux::config::spell_chord(&self.management.respawn)
         );
         if Some(held) == focused {
             Some(format!("(exited {code} — {chord} respawns)"))

@@ -750,7 +750,7 @@ impl WindowSession {
             return;
         }
         if self.status.workspaces().is_empty() {
-            self.status_dirty = true;
+            self.status_inflight.dirty = true;
             return;
         }
         let active = self.status.chrome_workspace();
@@ -903,6 +903,8 @@ mod tests {
                 agent: "a".to_string(),
                 state: "blocked".to_string(),
                 workspace: Some("+0".to_string()),
+                session: None,
+                window: None,
                 project: None,
                 message: None,
             },
@@ -911,6 +913,8 @@ mod tests {
                 agent: "b".to_string(),
                 state: "question".to_string(),
                 workspace: Some("+0".to_string()),
+                session: None,
+                window: None,
                 project: None,
                 message: None,
             },
@@ -933,6 +937,8 @@ mod tests {
             agent: agent.to_string(),
             state: state.to_string(),
             workspace: ws.map(str::to_string),
+            session: None,
+            window: None,
             project: None,
             message: None,
         }

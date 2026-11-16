@@ -5,8 +5,8 @@ use super::*;
 impl StreamingServer {
     /// Send terminal output to all connected clients
     pub fn send_output(&self, data: String) -> Result<()> {
-        if let Some(ref session) = self.default_session {
-            match session.output_tx.try_send(data) {
+        if let Some(session) = self.default_session() {
+            match session.output_tx.try_send(OutputChunk::plain(data)) {
                 Ok(()) => Ok(()),
                 Err(mpsc::error::TrySendError::Full(_)) => {
                     session
@@ -53,7 +53,11 @@ impl StreamingServer {
         username: Option<String>,
         timestamp: u64,
     ) {
-        let msg = ServerMessage::cwd_changed_full(old_cwd, new_cwd, hostname, username, timestamp);
+        let is_local =
+            par_term_emu_core::shell_integration::osc7_host_is_local(hostname.as_deref());
+        let msg = ServerMessage::cwd_changed_full(
+            old_cwd, new_cwd, hostname, username, timestamp, is_local,
+        );
         self.broadcast(msg);
     }
 

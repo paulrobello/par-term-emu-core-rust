@@ -22,9 +22,10 @@ pub fn terminal_event_to_server_message(event: TerminalEvent) -> Option<ServerMe
         TerminalEvent::CwdChanged(cwd) => ServerMessage::cwd_changed_full(
             cwd.old_cwd,
             cwd.new_cwd,
-            cwd.hostname,
+            cwd.hostname.clone(),
             cwd.username,
             cwd.timestamp,
+            par_term_emu_core::shell_integration::osc7_host_is_local(cwd.hostname.as_deref()),
         ),
         TerminalEvent::TriggerMatched(tm) => ServerMessage::trigger_matched(
             tm.trigger_id,
@@ -148,6 +149,12 @@ pub fn terminal_event_to_server_message(event: TerminalEvent) -> Option<ServerMe
         }
         TerminalEvent::InlineImageDropped { .. } => {
             // Diagnostic-only event (OSC 1337 drop signal), not part of the
+            // streaming wire protocol; Python consumers read it via
+            // poll_events()/observers instead.
+            return None;
+        }
+        TerminalEvent::OutputBudgetExceeded { .. } => {
+            // Diagnostic-only budget event (ENH-062), not part of the
             // streaming wire protocol; Python consumers read it via
             // poll_events()/observers instead.
             return None;
@@ -335,6 +342,33 @@ pub const MAX_INLINE_IMAGE_BYTES: usize = 8 * 1024 * 1024;
 /// cap: Bytes accepted in one UploadChunk message payload from a streaming client.
 pub const MAX_UPLOAD_CHUNK_BYTES: usize = 64 * 1024;
 
+/// One inclusive run of viewport rows a terminal output chunk changed
+/// (card 01a19ca4). Rows are 0-based, inclusive, viewport-relative; the
+/// `damage` list on [`ServerMessage::Output`] is ascending and
+/// non-overlapping, and when a chunk's change cannot be expressed compactly
+/// (scroll, alternate-screen switch, RIS, resize, snapshot restore) it
+/// covers the whole viewport — the complete-coverage form; there is no
+/// sentinel variant. A client may always ignore the fields and full-scan.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize)]
+#[cfg_attr(
+    all(
+        any(feature = "python", feature = "python-test"),
+        feature = "streaming"
+    ),
+    derive(par_term_emu_derive::PyDictConvert)
+)]
+#[cfg_attr(feature = "streaming", derive(par_term_emu_derive::ProtoConvert))]
+#[cfg_attr(
+    feature = "streaming",
+    proto(wire = "crate::streaming::proto::pb::DamageRange")
+)]
+pub struct DamageRange {
+    /// First changed viewport row (0-based, inclusive).
+    pub start_row: u32,
+    /// Last changed viewport row (0-based, inclusive).
+    pub end_row: u32,
+}
+
 /// Messages sent from server to client
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[cfg_attr(
@@ -370,6 +404,33 @@ pub enum ServerMessage {
             pydict(encode_skip)
         )]
         timestamp: Option<u64>,
+        /// Viewport rows the accompanying `data` changed relative to the
+        /// pane's previous state (ascending, in-bounds). Empty means
+        /// "no damage info" ONLY together with an absent generation:
+        /// present generation + empty list = the chunk changed no viewport
+        /// row. JSON omits the key when empty.
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        #[cfg_attr(
+            all(
+                any(feature = "python", feature = "python-test"),
+                feature = "streaming"
+            ),
+            pydict(nested)
+        )]
+        damage: Vec<DamageRange>,
+        /// The pane's damage generation after `data` applied (monotonic per
+        /// pane). Present marks the damage fields authoritative —
+        /// distinguishes "no change" (present, `damage` empty) from "no
+        /// damage info" (both absent = full scan).
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        #[cfg_attr(
+            all(
+                any(feature = "python", feature = "python-test"),
+                feature = "streaming"
+            ),
+            pydict(encode_skip)
+        )]
+        damage_generation: Option<u64>,
     },
 
     /// Terminal size changed
@@ -521,6 +582,46 @@ pub enum ServerMessage {
             pydict(nested)
         )]
         graphics: Vec<InlineImageFrame>,
+        /// Server admits [`ClientMessage::PaneCreateRequest`]: the
+        /// `allow_pane_create` config is on AND this connection is not
+        /// read-only. Always set by `build_connect_message` so a client can
+        /// tell "new server, disabled" from "old server" (field absent).
+        /// `None` (absent on the wire) for hand-built defaults.
+        #[serde(skip_serializing_if = "Option::is_none")]
+        #[cfg_attr(
+            all(
+                any(feature = "python", feature = "python-test"),
+                feature = "streaming"
+            ),
+            pydict(encode_skip)
+        )]
+        pane_create_allowed: Option<bool>,
+        /// The OSC 7 hostname accompanying the `cwd` when the cwd came
+        /// from an OSC 7 report; `None` when the cwd has no OSC
+        /// 7 host (a kernel-cwd or spawn-floor cwd is local by
+        /// construction). Pairs with `cwd_is_local` so a client can both
+        /// display the host and decide locality without guessing.
+        #[serde(skip_serializing_if = "Option::is_none")]
+        #[cfg_attr(
+            all(
+                any(feature = "python", feature = "python-test"),
+                feature = "streaming"
+            ),
+            pydict(encode_skip)
+        )]
+        cwd_hostname: Option<String>,
+        /// Server-computed locality of `cwd` (SEC-128 rule): `true` when
+        /// the path lives on the streaming host. `None` = field absent on
+        /// the wire (pre-feature server).
+        #[serde(skip_serializing_if = "Option::is_none")]
+        #[cfg_attr(
+            all(
+                any(feature = "python", feature = "python-test"),
+                feature = "streaming"
+            ),
+            pydict(encode_skip)
+        )]
+        cwd_is_local: Option<bool>,
     },
 
     /// Screen refresh response (full screen content)
@@ -599,6 +700,11 @@ pub enum ServerMessage {
         /// Timestamp of change (Unix epoch milliseconds)
         #[serde(skip_serializing_if = "Option::is_none")]
         timestamp: Option<u64>,
+        /// Server-computed locality of `new_cwd` (SEC-128 rule): `true`
+        /// when the path lives on the streaming host. `None` = field
+        /// absent on the wire (pre-feature sender).
+        #[serde(skip_serializing_if = "Option::is_none")]
+        is_local: Option<bool>,
     },
 
     /// Trigger pattern matched terminal output
@@ -1165,6 +1271,77 @@ pub enum ServerMessage {
         #[serde(skip_serializing_if = "Option::is_none")]
         error: Option<String>,
     },
+
+    /// Full par-mux tree snapshot: every workspace, session, window and
+    /// pane (including inactive and non-agent ones). Pushed on connect and
+    /// again after every structural change; the reply to
+    /// `ClientMessage::MuxTreeRequest`; served from the watcher's cache.
+    #[serde(rename = "mux_tree_snapshot")]
+    #[cfg_attr(
+        all(
+            any(feature = "python", feature = "python-test"),
+            feature = "streaming"
+        ),
+        pydict(from = "crate::streaming::py_convert::mux_tree_snapshot_from")
+    )]
+    MuxTreeSnapshot {
+        /// Every workspace, in workspace-id order
+        #[serde(skip_serializing_if = "Vec::is_empty")]
+        #[cfg_attr(
+            all(
+                any(feature = "python", feature = "python-test"),
+                feature = "streaming"
+            ),
+            pydict(nested(keep_empty))
+        )]
+        workspaces: Vec<MuxTreeWorkspace>,
+    },
+
+    /// A mirrored pane's process lifecycle transition. `exited` is the
+    /// daemon's held-pane (remain-on-exit) state: the pane, its window
+    /// and its frozen screen stay in the tree, and the stream stays open
+    /// — this event names the pane and carries the status when known.
+    /// `running` clears the exited state on `respawn-pane`, on the same
+    /// connection. Late joiners receive the current state from the
+    /// pane-info-derived snapshot at connect, never inferred from output
+    /// silence. Pane deletion and daemon disconnect are DIFFERENT
+    /// terminal conditions: deletion tears the pane out of the tree (the
+    /// mirror session closes, `window_close` follows), a daemon
+    /// disconnect closes the stream with `error`/`shutdown` — neither is
+    /// ever reported as this event.
+    #[serde(rename = "pane_process_state")]
+    PaneProcessState {
+        /// par-mux pane id (`%N`)
+        pane_id: String,
+        /// `"running"` | `"exited"`
+        state: String,
+        /// The captured exit status while `"exited"`; absent while
+        /// running and when the daemon had no status to read
+        #[serde(skip_serializing_if = "Option::is_none")]
+        exit_code: Option<i32>,
+    },
+
+    /// A requested pane was created daemon-side: one new default-shell
+    /// window in the daemon session the request named. Echoes the
+    /// request's `correlation_id` so a client can match a reply that
+    /// arrives late — a drop between the daemon create and this reply
+    /// leaves the pane existing, so a client that saw neither this reply
+    /// nor an error must re-query the mux tree rather than retry blind.
+    /// Opt-in server-side (`allow-pane-create`); refusals arrive as the
+    /// error message with codes `pane_create_disabled`,
+    /// `pane_create_read_only`, `pane_create_no_daemon`, or
+    /// `pane_create_failed`.
+    #[serde(rename = "pane_created")]
+    PaneCreated {
+        /// The request's correlation id, echoed
+        correlation_id: String,
+        /// The daemon session the window was created in (echoed)
+        session_id: String,
+        /// The new window (`@N`)
+        window_id: String,
+        /// The window's single pane (`%N`, default shell)
+        pane_id: String,
+    },
 }
 
 /// One replayed inline-image frame: the payload of `Connected.graphics`, a
@@ -1249,7 +1426,7 @@ pub struct AgentEntry {
     pub agent: String,
     /// par-mux state string (working, blocked, ...)
     pub state: String,
-    /// `hook`, `scrape`, or empty when the daemon reported no provenance
+    /// `hook`, `scrape`, `self`, or empty when the daemon reported no provenance
     pub source: String,
     /// Decoded blocked reason, empty when none
     pub reason: String,
@@ -1305,6 +1482,149 @@ pub struct AgentEntry {
     /// `working` with no activity for the daemon's stall window, from
     /// `stalled=1`
     pub stalled: bool,
+}
+
+/// One pane in a [`ServerMessage::MuxTreeSnapshot`]: `%N` id, its window's
+/// active-pane marker, and the rectangle the window layout gives it.
+#[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[cfg_attr(
+    all(
+        any(feature = "python", feature = "python-test"),
+        feature = "streaming"
+    ),
+    derive(par_term_emu_derive::PyDictConvert)
+)]
+#[cfg_attr(feature = "streaming", derive(par_term_emu_derive::ProtoConvert))]
+#[cfg_attr(
+    feature = "streaming",
+    proto(wire = "crate::streaming::proto::pb::MuxTreePane")
+)]
+pub struct MuxTreePane {
+    /// par-mux pane id (`%N`)
+    pub id: String,
+    /// Effective pane title, empty when none
+    pub title: String,
+    /// The window's active pane
+    pub active: bool,
+    /// Layout-rect columns
+    pub cols: u32,
+    /// Layout-rect rows
+    pub rows: u32,
+    /// Layout-rect column origin
+    pub x: u32,
+    /// Layout-rect row origin
+    pub y: u32,
+    /// The pane's process lifecycle state: `"running"` | `"exited"`.
+    /// An empty string comes from a producer that predates the field and
+    /// reads as running.
+    pub process_state: String,
+    /// The captured exit status while `"exited"`; `None` while running
+    /// and when the daemon had no status to read
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub exit_code: Option<i32>,
+}
+
+/// One window in a [`ServerMessage::MuxTreeSnapshot`]: `@N` id, its
+/// session's active-window marker, and the split geometry. `layout` is the
+/// full (unzoomed) tmux layout string — the authoritative geometry — and
+/// `panes` carry the same geometry pre-parsed into per-pane rectangles.
+#[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[cfg_attr(
+    all(
+        any(feature = "python", feature = "python-test"),
+        feature = "streaming"
+    ),
+    derive(par_term_emu_derive::PyDictConvert)
+)]
+#[cfg_attr(feature = "streaming", derive(par_term_emu_derive::ProtoConvert))]
+#[cfg_attr(
+    feature = "streaming",
+    proto(wire = "crate::streaming::proto::pb::MuxTreeWindow")
+)]
+pub struct MuxTreeWindow {
+    /// par-mux window id (`@N`)
+    pub id: String,
+    /// Window name
+    pub name: String,
+    /// Its session's current window
+    pub active: bool,
+    /// Full unzoomed tmux layout string
+    pub layout: String,
+    /// The window's panes in layout leaf order
+    #[cfg_attr(
+        all(
+            any(feature = "python", feature = "python-test"),
+            feature = "streaming"
+        ),
+        pydict(nested(keep_empty))
+    )]
+    pub panes: Vec<MuxTreePane>,
+}
+
+/// One session in a [`ServerMessage::MuxTreeSnapshot`]: `$N` id, its
+/// workspace's active-session marker.
+#[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[cfg_attr(
+    all(
+        any(feature = "python", feature = "python-test"),
+        feature = "streaming"
+    ),
+    derive(par_term_emu_derive::PyDictConvert)
+)]
+#[cfg_attr(feature = "streaming", derive(par_term_emu_derive::ProtoConvert))]
+#[cfg_attr(
+    feature = "streaming",
+    proto(wire = "crate::streaming::proto::pb::MuxTreeSession")
+)]
+pub struct MuxTreeSession {
+    /// par-mux session id (`$N`)
+    pub id: String,
+    /// Session name
+    pub name: String,
+    /// Its workspace's active session
+    pub active: bool,
+    /// The session's windows in window order
+    #[cfg_attr(
+        all(
+            any(feature = "python", feature = "python-test"),
+            feature = "streaming"
+        ),
+        pydict(nested(keep_empty))
+    )]
+    pub windows: Vec<MuxTreeWindow>,
+}
+
+/// One workspace in a [`ServerMessage::MuxTreeSnapshot`]: `+N` id, the
+/// daemon's active-workspace marker.
+#[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[cfg_attr(
+    all(
+        any(feature = "python", feature = "python-test"),
+        feature = "streaming"
+    ),
+    derive(par_term_emu_derive::PyDictConvert)
+)]
+#[cfg_attr(feature = "streaming", derive(par_term_emu_derive::ProtoConvert))]
+#[cfg_attr(
+    feature = "streaming",
+    proto(wire = "crate::streaming::proto::pb::MuxTreeWorkspace")
+)]
+pub struct MuxTreeWorkspace {
+    /// par-mux workspace id (`+N`)
+    pub id: String,
+    /// Workspace name
+    pub name: String,
+    /// The daemon's active workspace
+    pub active: bool,
+    /// The workspace's sessions in session order
+    #[cfg_attr(
+        all(
+            any(feature = "python", feature = "python-test"),
+            feature = "streaming"
+        ),
+        pydict(nested(keep_empty))
+    )]
+    pub sessions: Vec<MuxTreeSession>,
 }
 
 /// Messages sent from client to server
@@ -1394,14 +1714,21 @@ pub enum ClientMessage {
         events: Vec<EventType>,
     },
 
-    /// Mouse input from client
+    /// Mouse input from client. `button` is the raw SGR code space: low
+    /// bits 0=left, 1=middle, 2=right, 3=none/release, plus the motion bit
+    /// 32 and the wheel bit 64 ORed on top. A `move` event may carry the
+    /// logical button (0 left-held, 3 buttonless); the server normalizes it
+    /// with an idempotent `| 32` before encoding.
     #[cfg_attr(feature = "streaming", proto(message = "MouseInput"))]
     Mouse {
         /// Column position
         col: u16,
         /// Row position
         row: u16,
-        /// Button: 0=left, 1=middle, 2=right, 3=release, 4=scroll_up, 5=scroll_down
+        /// Raw SGR code: 0=left, 1=middle, 2=right, 3=none/release,
+        /// +32 motion flag, +64 wheel flag. Scroll uses 64/65; a `move`
+        /// event's button is normalized to include the motion bit (0→32,
+        /// 3→35) before the report is encoded.
         #[cfg_attr(
             feature = "streaming",
             proto(with = "crate::streaming::proto::wire::mouse_button")
@@ -1524,12 +1851,45 @@ pub enum ClientMessage {
     /// deleted daemon-side.
     #[serde(rename = "upload_abort")]
     UploadAbort,
+
+    /// Request the current par-mux tree snapshot. Served from the
+    /// streaming server's cache (no daemon round trip); structural changes
+    /// arrive afterwards as fresh `mux_tree_snapshot` pushes.
+    #[serde(rename = "mux_tree_request")]
+    MuxTreeRequest,
+
+    /// Create one new default-shell window (a single new pane) in the
+    /// daemon session named by `session_id` (`$N` or name). Opt-in
+    /// server-side (`allow-pane-create`, default off); read-only
+    /// connections are refused regardless of the flag; non-mux sessions
+    /// are refused with `pane_create_no_daemon`. `correlation_id` is
+    /// client-chosen and echoed in the `pane_created` reply, so a client
+    /// can match a reply that arrives late: a drop between the daemon
+    /// create and the reply leaves the pane existing — re-query the mux
+    /// tree rather than retrying blind.
+    #[serde(rename = "pane_create_request")]
+    PaneCreateRequest {
+        /// Client-chosen id echoed in the `pane_created` reply
+        correlation_id: String,
+        /// Daemon session (`$N` or name) to create the window in
+        session_id: String,
+        /// Optional window name (card 01a1d0d5): the streamer validates it
+        /// (bounded length, no control characters) and hands it to the
+        /// daemon's `new-window -n`. Absent keeps the daemon's default
+        /// name.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        name: Option<String>,
+    },
 }
 
 /// The kind of a [`ClientMessage::Mouse`] event.
 ///
 /// On the protobuf wire and in the Python dict API it is the lowercase
 /// name (`"press"`, `"release"`, `"move"`, `"scroll"`).
+///
+/// A `move` event's `button` is normalized: the server ORs in the SGR
+/// motion bit 32 (button 0→32, 3→35; already-raw 32/35 pass unchanged).
+/// `press`/`release`/`scroll` pass `button` through verbatim.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum MouseEventType {
@@ -1676,6 +2036,15 @@ pub struct ConnectedBuilder {
     pub pointer_shape: Option<String>,
     /// Frames already on screen, replayed for a late joiner
     pub graphics: Vec<InlineImageFrame>,
+    /// Pane-create capability advertised to the client; `None` = field
+    /// absent on the wire (pre-feature servers omit it)
+    pub pane_create_allowed: Option<bool>,
+    /// The OSC 7 hostname accompanying `cwd`; `None` = no OSC 7 host
+    /// (a kernel-cwd or spawn-floor cwd is local by construction)
+    pub cwd_hostname: Option<String>,
+    /// Server-computed locality of `cwd` (SEC-128); `None` = field
+    /// absent on the wire (pre-feature servers omit it)
+    pub cwd_is_local: Option<bool>,
 }
 
 impl ConnectedBuilder {
@@ -1757,6 +2126,27 @@ impl ConnectedBuilder {
         self
     }
 
+    /// Advertise the pane-create capability (allow + writable); `None`
+    /// leaves the field absent on the wire
+    pub fn pane_create_allowed(mut self, allowed: Option<bool>) -> Self {
+        self.pane_create_allowed = allowed;
+        self
+    }
+
+    /// Set the OSC 7 hostname accompanying `cwd`; `None` leaves the
+    /// field absent on the wire
+    pub fn cwd_hostname(mut self, host: Option<String>) -> Self {
+        self.cwd_hostname = host;
+        self
+    }
+
+    /// Set the server-computed locality of `cwd`; `None` leaves the
+    /// field absent on the wire
+    pub fn cwd_is_local(mut self, local: Option<bool>) -> Self {
+        self.cwd_is_local = local;
+        self
+    }
+
     /// Finish and produce the `Connected` message
     pub fn build(self) -> ServerMessage {
         ServerMessage::Connected {
@@ -1773,6 +2163,9 @@ impl ConnectedBuilder {
             readonly: self.readonly,
             pointer_shape: self.pointer_shape,
             graphics: self.graphics,
+            pane_create_allowed: self.pane_create_allowed,
+            cwd_hostname: self.cwd_hostname,
+            cwd_is_local: self.cwd_is_local,
         }
     }
 }
@@ -1783,6 +2176,8 @@ impl ServerMessage {
         Self::Output {
             data,
             timestamp: None,
+            damage: Vec::new(),
+            damage_generation: None,
         }
     }
 
@@ -1791,6 +2186,27 @@ impl ServerMessage {
         Self::Output {
             data,
             timestamp: Some(timestamp),
+            damage: Vec::new(),
+            damage_generation: None,
+        }
+    }
+
+    /// Create a new output message carrying damage: the inclusive viewport
+    /// row ranges `data` changed (ascending, in-bounds) and the pane's
+    /// damage generation after `data` applied. With `generation` `Some`,
+    /// present ranges are authoritative; `Some` generation with empty
+    /// ranges says the chunk changed no viewport row. `None` (or empty
+    /// ranges with `None`) degrades to "no damage info — full scan".
+    pub fn output_with_damage(
+        data: String,
+        generation: Option<u64>,
+        damage: Vec<DamageRange>,
+    ) -> Self {
+        Self::Output {
+            data,
+            timestamp: None,
+            damage,
+            damage_generation: generation,
         }
     }
 
@@ -1943,16 +2359,22 @@ impl ServerMessage {
             hostname: None,
             username: None,
             timestamp: None,
+            is_local: None,
         }
     }
 
-    /// Create a fully-specified CWD changed message
+    /// Create a fully-specified CWD changed message. `is_local` is the
+    /// sender's SEC-128 locality verdict for `new_cwd` (the OSC 7
+    /// hostname against the streaming host); the mux mirror and the
+    /// standalone server both compute it with
+    /// `mux::pane::osc7_host_is_local`.
     pub fn cwd_changed_full(
         old_cwd: Option<String>,
         new_cwd: String,
         hostname: Option<String>,
         username: Option<String>,
         timestamp: u64,
+        is_local: bool,
     ) -> Self {
         Self::CwdChanged {
             old_cwd,
@@ -1960,6 +2382,7 @@ impl ServerMessage {
             hostname,
             username,
             timestamp: Some(timestamp),
+            is_local: Some(is_local),
         }
     }
 
@@ -2451,6 +2874,183 @@ impl ClientMessage {
     }
 }
 
+// ---------------------------------------------------------------------------
+// Variant-name registries (QA-005)
+//
+// The golden fixture-coverage test (proto_golden_tests.rs) asserts the
+// fixtures cover these name lists EXACTLY (both directions). The
+// `variant_name` matches below are the compile-side tie: they are
+// exhaustive with no wildcard arm (repo rule), so adding a variant is a
+// compile error until it is named there, and the coverage test then
+// demands its registry entry and a fixture. Keep registry and match in
+// the same order.
+
+/// Every [`ServerMessage`] variant name, in `variant_name` order.
+#[cfg(all(test, feature = "streaming"))]
+pub(crate) const SERVER_MESSAGE_VARIANT_NAMES: &[&str] = &[
+    "Output",
+    "Resize",
+    "Title",
+    "Connected",
+    "Refresh",
+    "CursorPosition",
+    "Bell",
+    "CwdChanged",
+    "TriggerMatched",
+    "ActionNotify",
+    "ActionMarkLine",
+    "Error",
+    "Shutdown",
+    "Pong",
+    "ModeChanged",
+    "GraphicsAdded",
+    "HyperlinkAdded",
+    "UserVarChanged",
+    "ProgressBarChanged",
+    "BadgeChanged",
+    "SelectionChanged",
+    "ClipboardSync",
+    "ShellIntegrationEvent",
+    "SystemStats",
+    "ZoneOpened",
+    "ZoneClosed",
+    "ZoneScrolledOut",
+    "EnvironmentChanged",
+    "RemoteHostTransition",
+    "SubShellDetected",
+    "SemanticSnapshot",
+    "FileTransferStarted",
+    "FileTransferProgress",
+    "FileTransferCompleted",
+    "FileTransferFailed",
+    "UploadRequested",
+    "ScreenCleared",
+    "AgentRoster",
+    "AgentStateChanged",
+    "PointerShapeChanged",
+    "PaneSizeStatus",
+    "ViewerPresence",
+    "InlineImage",
+    "UploadStarted",
+    "UploadFinished",
+    "MuxTreeSnapshot",
+    "PaneProcessState",
+    "PaneCreated",
+];
+
+/// Every [`ClientMessage`] variant name, in `variant_name` order.
+#[cfg(all(test, feature = "streaming"))]
+pub(crate) const CLIENT_MESSAGE_VARIANT_NAMES: &[&str] = &[
+    "ViewerIdentity",
+    "Input",
+    "Resize",
+    "Ping",
+    "RequestRefresh",
+    "Subscribe",
+    "Mouse",
+    "FocusChange",
+    "Paste",
+    "SelectionRequest",
+    "ClipboardRequest",
+    "SnapshotRequest",
+    "UploadBegin",
+    "UploadChunk",
+    "UploadCommit",
+    "UploadAbort",
+    "MuxTreeRequest",
+    "PaneCreateRequest",
+];
+
+#[cfg(feature = "streaming")]
+impl ServerMessage {
+    /// The variant's own name (`"Output"` for [`ServerMessage::Output`]),
+    /// the fixture-coverage key. Exhaustive with no wildcard arm (repo
+    /// rule), so an unnamed new variant fails to compile here.
+    #[cfg(all(test, feature = "streaming"))]
+    pub(crate) fn variant_name(&self) -> &'static str {
+        match self {
+            Self::Output { .. } => "Output",
+            Self::Resize { .. } => "Resize",
+            Self::Title { .. } => "Title",
+            Self::Connected { .. } => "Connected",
+            Self::Refresh { .. } => "Refresh",
+            Self::CursorPosition { .. } => "CursorPosition",
+            Self::Bell => "Bell",
+            Self::CwdChanged { .. } => "CwdChanged",
+            Self::TriggerMatched { .. } => "TriggerMatched",
+            Self::ActionNotify { .. } => "ActionNotify",
+            Self::ActionMarkLine { .. } => "ActionMarkLine",
+            Self::Error { .. } => "Error",
+            Self::Shutdown { .. } => "Shutdown",
+            Self::Pong => "Pong",
+            Self::ModeChanged { .. } => "ModeChanged",
+            Self::GraphicsAdded { .. } => "GraphicsAdded",
+            Self::HyperlinkAdded { .. } => "HyperlinkAdded",
+            Self::UserVarChanged { .. } => "UserVarChanged",
+            Self::ProgressBarChanged { .. } => "ProgressBarChanged",
+            Self::BadgeChanged { .. } => "BadgeChanged",
+            Self::SelectionChanged { .. } => "SelectionChanged",
+            Self::ClipboardSync { .. } => "ClipboardSync",
+            Self::ShellIntegrationEvent { .. } => "ShellIntegrationEvent",
+            Self::SystemStats { .. } => "SystemStats",
+            Self::ZoneOpened { .. } => "ZoneOpened",
+            Self::ZoneClosed { .. } => "ZoneClosed",
+            Self::ZoneScrolledOut { .. } => "ZoneScrolledOut",
+            Self::EnvironmentChanged { .. } => "EnvironmentChanged",
+            Self::RemoteHostTransition { .. } => "RemoteHostTransition",
+            Self::SubShellDetected { .. } => "SubShellDetected",
+            Self::SemanticSnapshot { .. } => "SemanticSnapshot",
+            Self::FileTransferStarted { .. } => "FileTransferStarted",
+            Self::FileTransferProgress { .. } => "FileTransferProgress",
+            Self::FileTransferCompleted { .. } => "FileTransferCompleted",
+            Self::FileTransferFailed { .. } => "FileTransferFailed",
+            Self::UploadRequested { .. } => "UploadRequested",
+            Self::ScreenCleared { .. } => "ScreenCleared",
+            Self::AgentRoster { .. } => "AgentRoster",
+            Self::AgentStateChanged { .. } => "AgentStateChanged",
+            Self::PointerShapeChanged { .. } => "PointerShapeChanged",
+            Self::PaneSizeStatus { .. } => "PaneSizeStatus",
+            Self::ViewerPresence { .. } => "ViewerPresence",
+            Self::InlineImage { .. } => "InlineImage",
+            Self::UploadStarted { .. } => "UploadStarted",
+            Self::UploadFinished { .. } => "UploadFinished",
+            Self::MuxTreeSnapshot { .. } => "MuxTreeSnapshot",
+            Self::PaneProcessState { .. } => "PaneProcessState",
+            Self::PaneCreated { .. } => "PaneCreated",
+        }
+    }
+}
+
+#[cfg(feature = "streaming")]
+impl ClientMessage {
+    /// The variant's own name (`"Input"` for [`ClientMessage::Input`]),
+    /// the fixture-coverage key. Exhaustive with no wildcard arm (repo
+    /// rule), so an unnamed new variant fails to compile here.
+    #[cfg(all(test, feature = "streaming"))]
+    pub(crate) fn variant_name(&self) -> &'static str {
+        match self {
+            Self::ViewerIdentity { .. } => "ViewerIdentity",
+            Self::Input { .. } => "Input",
+            Self::Resize { .. } => "Resize",
+            Self::Ping => "Ping",
+            Self::RequestRefresh => "RequestRefresh",
+            Self::Subscribe { .. } => "Subscribe",
+            Self::Mouse { .. } => "Mouse",
+            Self::FocusChange { .. } => "FocusChange",
+            Self::Paste { .. } => "Paste",
+            Self::SelectionRequest { .. } => "SelectionRequest",
+            Self::ClipboardRequest { .. } => "ClipboardRequest",
+            Self::SnapshotRequest { .. } => "SnapshotRequest",
+            Self::UploadBegin { .. } => "UploadBegin",
+            Self::UploadChunk { .. } => "UploadChunk",
+            Self::UploadCommit => "UploadCommit",
+            Self::UploadAbort => "UploadAbort",
+            Self::MuxTreeRequest => "MuxTreeRequest",
+            Self::PaneCreateRequest { .. } => "PaneCreateRequest",
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -2465,7 +3065,9 @@ mod tests {
         // Deserialize back
         let deserialized: ServerMessage = serde_json::from_str(&json).unwrap();
         match deserialized {
-            ServerMessage::Output { data, timestamp } => {
+            ServerMessage::Output {
+                data, timestamp, ..
+            } => {
                 assert_eq!(data, "Hello, World!");
                 assert_eq!(timestamp, None);
             }
@@ -2668,11 +3270,13 @@ mod tests {
             Some("myhost".to_string()),
             Some("user".to_string()),
             1234567890,
+            false,
         );
         let json = serde_json::to_string(&msg).unwrap();
         assert!(json.contains(r#""type":"cwdchanged"#));
         assert!(json.contains(r#""new_cwd":"/new/dir"#));
         assert!(json.contains(r#""old_cwd":"/old/dir"#));
+        assert!(json.contains(r#""is_local":false"#));
     }
 
     #[test]

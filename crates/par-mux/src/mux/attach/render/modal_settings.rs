@@ -219,8 +219,8 @@ impl SettingSpec {
 }
 
 /// A chord row's value: the bound byte in the tmux spelling.
-fn chord(byte: u8) -> FieldVal {
-    FieldVal::Text(spell_key(byte))
+fn chord(key: crate::mux::config::ChordKey) -> FieldVal {
+    FieldVal::Text(crate::mux::config::spell_chord(&key))
 }
 
 /// The sidebar section's rows.
@@ -338,6 +338,12 @@ const GENERAL_ROWS: &[SettingSpec] = &[
         |v, _| FieldVal::Bool(v.change_cursor_shape),
     ),
     SettingSpec::new(
+        "copy-mode-auto-exit",
+        "yank exits copy mode",
+        SettingKind::Toggle,
+        |v, _| FieldVal::Bool(v.copy_mode_auto_exit),
+    ),
+    SettingSpec::new(
         "resize-step",
         "resize step",
         SettingKind::Number { min: 1, max: 99 },
@@ -356,6 +362,18 @@ const GENERAL_ROWS: &[SettingSpec] = &[
         |v, _| FieldVal::Num(v.tab_width_max as u32),
     ),
     SettingSpec::new(
+        "session-strip",
+        "session strip",
+        SettingKind::Choice(&["auto", "always", "off"]),
+        |v, _| FieldVal::Text(v.session_strip.clone()),
+    ),
+    SettingSpec::new(
+        "agent-state-dots",
+        "agent dots",
+        SettingKind::Choice(&["off", "on"]),
+        |v, _| FieldVal::Text(v.agent_state_dots.clone()),
+    ),
+    SettingSpec::new(
         "kitty-graphics",
         "kitty graphics",
         SettingKind::Toggle,
@@ -366,6 +384,12 @@ const GENERAL_ROWS: &[SettingSpec] = &[
         "session picker",
         SettingKind::Toggle,
         |v, _| FieldVal::Bool(v.session_picker),
+    ),
+    SettingSpec::new(
+        "prefer-default-workspace",
+        "prefer default workspace",
+        SettingKind::Toggle,
+        |v, _| FieldVal::Bool(v.prefer_default_workspace),
     ),
     SettingSpec::new(
         "git-status",
@@ -409,7 +433,7 @@ const NOTIFY_ROWS: &[SettingSpec] = &[
 /// management chord.
 const KEYS_ROWS: &[SettingSpec] = &[
     SettingSpec::new("prefix", "prefix", SettingKind::Chord, |v, _| {
-        chord(v.prefix)
+        chord(crate::mux::config::ChordKey::plain(v.prefix))
     }),
     SettingSpec::new(
         "reload",
@@ -541,6 +565,36 @@ const KEYS_ROWS: &[SettingSpec] = &[
         |v, _| chord(v.management.notify_jump),
     ),
     SettingSpec::new(
+        "layout-even-horizontal",
+        "layout even horizontal",
+        SettingKind::Chord,
+        |v, _| chord(v.management.layout_even_horizontal),
+    ),
+    SettingSpec::new(
+        "layout-even-vertical",
+        "layout even vertical",
+        SettingKind::Chord,
+        |v, _| chord(v.management.layout_even_vertical),
+    ),
+    SettingSpec::new(
+        "layout-main-horizontal",
+        "layout main horizontal",
+        SettingKind::Chord,
+        |v, _| chord(v.management.layout_main_horizontal),
+    ),
+    SettingSpec::new(
+        "layout-main-vertical",
+        "layout main vertical",
+        SettingKind::Chord,
+        |v, _| chord(v.management.layout_main_vertical),
+    ),
+    SettingSpec::new(
+        "layout-tiled",
+        "layout tiled",
+        SettingKind::Chord,
+        |v, _| chord(v.management.layout_tiled),
+    ),
+    SettingSpec::new(
         "respawn",
         "respawn dead pane",
         SettingKind::Chord,
@@ -591,9 +645,11 @@ pub(super) struct SettingsValues {
     pub border_color: String,
     pub theme: crate::mux::theme::ThemeSelection,
     pub scrollbar_gutter: bool,
+    pub copy_mode_auto_exit: bool,
     pub change_cursor_shape: bool,
     pub kitty_graphics: bool,
     pub session_picker: bool,
+    pub prefer_default_workspace: bool,
     pub git_status: bool,
     /// The git badge poll interval in seconds (`[client] git-poll-secs`).
     pub git_poll_secs: u64,
@@ -602,6 +658,12 @@ pub(super) struct SettingsValues {
     /// 0 = none).
     pub tab_width_min: u16,
     pub tab_width_max: u16,
+    /// The session strip's visibility mode (config `session-strip`) —
+    /// the word in force, `auto`, `always`, or `off`.
+    pub session_strip: String,
+    /// The agent-state dots (config `agent-state-dots`) — the word in
+    /// force, `off` or `on`.
+    pub agent_state_dots: String,
     pub notify_delivery: String,
     pub notify_states: Vec<String>,
     pub sound: crate::mux::config::SoundSettings,
@@ -893,19 +955,23 @@ impl WindowSession {
             border_color: hex(self.render_opts.border_plain),
             theme: self.theme.clone(),
             scrollbar_gutter: self.render_opts.scrollbar_gutter,
+            copy_mode_auto_exit: self.copy_mode_auto_exit,
             change_cursor_shape: self.cursor.change_cursor_shape,
             kitty_graphics: self.kitty.enabled,
             session_picker: self.session_picker,
+            prefer_default_workspace: self.prefer_default_workspace,
             git_status: self.git_status,
             git_poll_secs: self.git_poll_secs,
             resize_step: self.resize_step,
             tab_width_min: self.chrome.tab_strip.bounds.min,
             tab_width_max: self.chrome.tab_strip.bounds.max,
+            session_strip: self.session_strip_mode.config_value().to_string(),
+            agent_state_dots: if self.agent_state_dots { "on" } else { "off" }.to_string(),
             notify_delivery: self.notify.delivery.name().to_string(),
             notify_states: self.notify.states.clone(),
             sound: self.notify.sound.clone(),
-            prefix: self.prefix,
-            reload: self.reload_key,
+            prefix: self.input_route.prefix,
+            reload: self.input_route.reload_key,
             management: self.management,
         }
     }
@@ -1149,11 +1215,18 @@ impl WindowSession {
                 }
             },
             SettingKind::Chord => {
-                if crate::mux::config::parse_prefix(text).is_some() {
+                // The prefix is a bare byte (no Alt); every other chord row
+                // accepts the full chord grammar.
+                let valid = if edit.key == "prefix" {
+                    crate::mux::config::parse_prefix(text).is_some()
+                } else {
+                    crate::mux::config::parse_chord(text).is_some()
+                };
+                if valid {
                     Some(SettingValue::Str(text.to_string()))
                 } else {
                     self.chrome.flash(format!(
-                        "{}: expected one key, tmux spelling (e.g. x or C-x)",
+                        "{}: expected one key, tmux spelling (e.g. x, C-x or M-1)",
                         edit.label
                     ));
                     None
@@ -1333,14 +1406,18 @@ mod tests {
                 ..crate::mux::theme::ThemeSelection::default()
             },
             scrollbar_gutter: false,
+            copy_mode_auto_exit: true,
             change_cursor_shape: false,
             kitty_graphics: true,
             session_picker: false,
+            prefer_default_workspace: false,
             git_status: true,
             git_poll_secs: 10,
             resize_step: 1,
             tab_width_min: 0,
             tab_width_max: 0,
+            session_strip: "auto".to_string(),
+            agent_state_dots: "off".to_string(),
             notify_delivery: "terminal".to_string(),
             notify_states: vec!["blocked".to_string(), "idle".to_string()],
             sound: crate::mux::config::SoundSettings::default(),
@@ -1419,11 +1496,11 @@ mod tests {
         let m = Management::default();
         assert_eq!(
             lookup("split-right").value(&values, "render"),
-            FieldVal::Text(spell_key(m.split_right))
+            FieldVal::Text(crate::mux::config::spell_chord(&m.split_right))
         );
         assert_eq!(
             lookup("notify-jump").value(&values, "render"),
-            FieldVal::Text(spell_key(m.notify_jump))
+            FieldVal::Text(crate::mux::config::spell_chord(&m.notify_jump))
         );
     }
 
@@ -1600,6 +1677,38 @@ mod tests {
         let last = composed.rows[5 + BODY_ROWS - 1].text.clone();
         assert!(last.contains("respawn dead pane"), "{last}");
         assert!(last.trim_end().ends_with(" r"), "{last}");
+    }
+
+    /// The five layout-preset chords each get a keys row, spelled
+    /// `M-1`..`M-5` by default.
+    #[test]
+    fn settings_keys_tab_lists_the_five_layout_chords() {
+        let expected = [
+            ("layout even horizontal", "M-1"),
+            ("layout even vertical", "M-2"),
+            ("layout main horizontal", "M-3"),
+            ("layout main vertical", "M-4"),
+            ("layout tiled", "M-5"),
+        ];
+        let mut seen = Vec::new();
+        for i in 0..SettingsSection::Keys.row_count() {
+            let mut st = state(SettingsSection::Keys);
+            st.selected = i;
+            st.top = i;
+            let row = compose_settings(&st, &values()).rows[5].text.clone();
+            // The row's selection pointer and padding lead the label.
+            let text = row.trim_start_matches(['\u{25B8}', ' ']);
+            for (label, value) in expected {
+                if text.starts_with(label) {
+                    assert!(
+                        text.trim_end().ends_with(value),
+                        "{label} spells {value}: {row}"
+                    );
+                    seen.push((label, value));
+                }
+            }
+        }
+        assert_eq!(seen, expected);
     }
 
     /// The preset mapping round-trips: a live default reads `default`,

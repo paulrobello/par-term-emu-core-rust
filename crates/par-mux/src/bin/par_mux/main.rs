@@ -33,6 +33,10 @@ fn effective(cli: &Cli, include_flags: bool) -> EffectiveConfig {
                 .map(|d| d.to_string_lossy().into_owned()),
             pane_endpoints: cli.pane_endpoints.then_some(true),
             expose_control_socket: cli.expose_control_socket.then_some(true),
+            // --keep-alive sits above the file tier — the one honest use of
+            // the flag: a bootstrap start must keep a fresh, still-empty
+            // daemon up regardless of the file or the default.
+            keep_alive: cli.keep_alive.then_some(true),
             ..Overrides::default()
         }
     } else {
@@ -173,6 +177,21 @@ struct Cli {
         "heal_agent_hooks", "print_schema", "print_completions",
     ])]
     no_attach: bool,
+
+    /// Daemon-only: keep serving after the tree empties instead of
+    /// self-exiting (disables `daemon.exit-empty` for this run) so a
+    /// daemon started ahead of its first window — a headless host
+    /// bootstrapped over ssh, where no client arrives during the start
+    /// — can wait for it. Composes with --foreground and --restart;
+    /// a file `exit-empty = true` still applies live on reload.
+    #[arg(long, conflicts_with_all = [
+        "stop", "command", "list_servers", "gen_config",
+        "install_skill", "install_agent_hooks", "uninstall_agent_hooks",
+        "agent_hooks_status", "integration_status",
+        "install_agent_extensions", "uninstall_agent_extensions",
+        "heal_agent_hooks", "print_schema", "print_completions",
+    ])]
+    keep_alive: bool,
 
     /// Export OpenTelemetry metrics over OTLP (default off; zero OTLP calls
     /// when off — kanban 01a18d2606). Daemon-only: a --cmd client or attach
@@ -621,6 +640,9 @@ struct StartArgs {
     /// Skip the auto-attach of the invoking terminal.
     #[arg(long)]
     no_attach: bool,
+    /// Keep serving after the tree empties (the `--keep-alive` spelling).
+    #[arg(long)]
+    keep_alive: bool,
     /// Give each pane its own hook-only socket endpoint.
     #[arg(long)]
     pane_endpoints: bool,
@@ -968,9 +990,9 @@ static STDERR_LOG: StderrLog = StderrLog;
 #[cfg(test)]
 mod mode_group_tests {
     use super::*;
-    #[cfg(target_os = "macos")]
-    use crate::daemon::app_handoff_launcher;
     use crate::daemon::stop_inside_pane_guard;
+    #[cfg(target_os = "macos")]
+    use crate::daemon::{app_handoff_launcher, launchd_handoff_job};
 
     /// The app hand-off decision (card 01a17f9f15): a bare binary outside
     /// the bundle hands off to the installed wrapper's launcher; the
@@ -1048,6 +1070,44 @@ mod mode_group_tests {
             app_handoff_launcher(&bare_exe, &dir.path().join("Par-mux.app"), true),
             None,
             "the opt-out wins"
+        );
+    }
+
+    /// The launchd hand-off decision (card 01a1b21b): only the default
+    /// instance (default socket, unpinned state dir) hands off to the
+    /// installed Par-mux.app job; the wrapper marker, a pinned state dir,
+    /// and the PAR_MUX_NO_LAUNCHD opt-out keep the bare fork.
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn launchd_handoff_decision() {
+        let default = par_mux::mux::ipc::default_socket_path("default");
+        assert_eq!(
+            launchd_handoff_job(&default, false, false, false),
+            Some(format!("gui/{}/com.paulrobello.par-mux", unsafe {
+                libc::getuid()
+            })),
+            "the default instance hands off to the launchd job"
+        );
+        let other = std::env::temp_dir().join("par-mux-launchd-handoff-test.sock");
+        assert_eq!(
+            launchd_handoff_job(&other, false, false, false),
+            None,
+            "a non-default socket keeps the bare fork"
+        );
+        assert_eq!(
+            launchd_handoff_job(&default, true, false, false),
+            None,
+            "a pinned state dir keeps the bare fork"
+        );
+        assert_eq!(
+            launchd_handoff_job(&default, false, true, false),
+            None,
+            "the wrapper marker keeps the bare fork"
+        );
+        assert_eq!(
+            launchd_handoff_job(&default, false, false, true),
+            None,
+            "the PAR_MUX_NO_LAUNCHD opt-out keeps the bare fork"
         );
     }
 
@@ -1175,6 +1235,34 @@ mod mode_group_tests {
         let err = Cli::try_parse_from(["par-mux", "--foreground", "--no-attach"])
             .expect_err("foreground and no_attach are opposites");
         assert_eq!(err.kind(), clap::error::ErrorKind::ArgumentConflict);
+    }
+
+    #[test]
+    fn keep_alive_conflicts_with_the_one_shots_but_composes_with_foreground_and_restart() {
+        // --keep-alive is a serve-path modifier like --no-attach, minus the
+        // opposite-of-foreground rule: a foreground daemon under nohup is
+        // exactly the shape a headless bootstrap wants keep-alive with.
+        for one_shot in [
+            "--stop",
+            "--cmd=list-sessions",
+            "--list-servers",
+            "--gen-config",
+            "--install-agent-hooks",
+            "--agent-hooks-status",
+            "--print-completions=zsh",
+        ] {
+            let err = Cli::try_parse_from(["par-mux", "--keep-alive", one_shot])
+                .expect_err(&format!("--keep-alive {one_shot} must conflict"));
+            assert_eq!(err.kind(), clap::error::ErrorKind::ArgumentConflict);
+        }
+        assert!(Cli::try_parse_from(["par-mux", "--keep-alive"]).is_ok());
+        assert!(Cli::try_parse_from(["par-mux", "--keep-alive", "--foreground"]).is_ok());
+        assert!(Cli::try_parse_from(["par-mux", "--keep-alive", "--no-attach"]).is_ok());
+        assert!(Cli::try_parse_from(["par-mux", "--keep-alive", "--restart"]).is_ok());
+        assert!(
+            Cli::try_parse_from(["par-mux", "start", "--keep-alive", "--no-attach"]).is_ok(),
+            "the start verb carries the flag too"
+        );
     }
 
     #[test]

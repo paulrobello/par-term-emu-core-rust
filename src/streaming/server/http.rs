@@ -38,6 +38,7 @@ pub(super) fn build_ws_header_callback(
     basic_auth: Option<HttpBasicAuthConfig>,
     allowed_origins: Option<Vec<String>>,
     allow_api_key_in_query: bool,
+    auth_throttle: Arc<Mutex<AuthFailureThrottle>>,
 ) -> (
     impl FnOnce(
         &WsHandshakeRequest,
@@ -74,6 +75,12 @@ pub(super) fn build_ws_header_callback(
                 allow_api_key_in_query,
             )
         {
+            // Record the failure into the shared throttle (SEC-004). The
+            // escalating delay itself is imposed on the async HTTP path
+            // only: this callback runs synchronously on a runtime worker,
+            // and sleeping here would let an attacker park every worker
+            // and stall the whole server.
+            auth_throttle.lock().record_failure();
             let reject = tokio_tungstenite::tungstenite::http::Response::builder()
                 .status(401)
                 .body(Some("Unauthorized".to_string()))
@@ -87,6 +94,59 @@ pub(super) fn build_ws_header_callback(
     (callback, uri_query)
 }
 
+/// Failed-auth throttle state (SEC-004): consecutive failed auth attempts
+/// escalate the delay imposed on the 401 response, so online guessing at an
+/// API key or Basic password costs wall-clock time even though every guess
+/// needs its own connection. One instance per server, shared by the HTTP
+/// middleware and the WS handshake callback — no per-peer bookkeeping. The
+/// counter decays after [`AuthFailureThrottle::DECAY`] without a failure
+/// (there is no reset-on-success: one shared counter reset by any client's
+/// successful request would let a legit client's traffic zero an attacker's
+/// escalation).
+#[derive(Debug, Default)]
+pub(super) struct AuthFailureThrottle {
+    /// Consecutive failures within the decay window.
+    consecutive_failures: u32,
+    /// When the last failure was recorded.
+    last_failure: Option<std::time::Instant>,
+}
+
+impl AuthFailureThrottle {
+    /// Delay imposed on the first failure; doubles per consecutive failure.
+    const BASE_DELAY_MS: u64 = 50;
+    /// Ceiling on the delay imposed on any single 401.
+    const MAX_DELAY_MS: u64 = 5_000;
+    /// Quiet period after which the escalation restarts from the base.
+    pub(super) const DECAY: Duration = Duration::from_secs(30);
+
+    /// Record a failure observed at `now` and return the delay to apply
+    /// before answering its 401.
+    pub(super) fn record_failure_at(&mut self, now: std::time::Instant) -> Duration {
+        if self
+            .last_failure
+            .is_some_and(|t| now.duration_since(t) > Self::DECAY)
+        {
+            self.consecutive_failures = 0;
+        }
+        self.last_failure = Some(now);
+        let delay_ms =
+            (Self::BASE_DELAY_MS << self.consecutive_failures.min(31)).min(Self::MAX_DELAY_MS);
+        self.consecutive_failures = self.consecutive_failures.saturating_add(1);
+        Duration::from_millis(delay_ms)
+    }
+
+    /// Record a failure observed now (see [`AuthFailureThrottle::record_failure_at`]).
+    pub(super) fn record_failure(&mut self) -> Duration {
+        self.record_failure_at(std::time::Instant::now())
+    }
+
+    /// Consecutive failures currently recorded.
+    #[cfg(test)]
+    pub(super) fn consecutive_failures(&self) -> u32 {
+        self.consecutive_failures
+    }
+}
+
 /// Unified API authentication middleware for Axum.
 /// Checks in order: Bearer header → X-API-Key header → ?api_key= query → Basic Auth header.
 /// When both API key and Basic Auth are configured, either one satisfies auth.
@@ -95,6 +155,7 @@ pub(super) async fn api_auth_middleware(
     req: axum::http::Request<axum::body::Body>,
     next: axum::middleware::Next,
     auth_config: ApiAuthConfig,
+    auth_throttle: Arc<Mutex<AuthFailureThrottle>>,
 ) -> axum::response::Response {
     use axum::http::{header, HeaderValue, StatusCode};
     use axum::response::IntoResponse;
@@ -139,7 +200,10 @@ pub(super) async fn api_auth_middleware(
             if let Some(query) = req.uri().query() {
                 for pair in query.split('&') {
                     if let Some(value) = pair.strip_prefix("api_key=") {
-                        if bool::from(value.as_bytes().ct_eq(expected_key.as_bytes())) {
+                        // SEC-002: the value may be URL-encoded — decode
+                        // before the constant-time comparison.
+                        let decoded = percent_decode_query_component(value);
+                        if bool::from(decoded.as_bytes().ct_eq(expected_key.as_bytes())) {
                             return next.run(req).await;
                         }
                     }
@@ -167,6 +231,12 @@ pub(super) async fn api_auth_middleware(
             }
         }
     }
+
+    // Failed auth: escalate a delay on consecutive failures so online
+    // guessing costs wall-clock time (SEC-004). The sleep parks this task
+    // only; the connection holds a client slot while it waits.
+    let delay = auth_throttle.lock().record_failure();
+    tokio::time::sleep(delay).await;
 
     // Build 401 response
     let mut response = (StatusCode::UNAUTHORIZED, "Unauthorized").into_response();
@@ -227,6 +297,44 @@ pub(super) fn host_of_authority(authority: &str) -> &str {
     }
 }
 
+/// Percent-decode one query-string value (SEC-002).
+///
+/// The `?api_key=` channel cannot carry `&`, `=`, `%`, or `+` raw (the
+/// `&`-split of the query breaks first), so clients must URL-encode such
+/// keys; decode `%XX` escapes before the constant-time comparison. This is
+/// RFC 3986 percent-decoding, not form decoding: a raw `+` passes through
+/// unchanged so it still matches a key containing `+`. A malformed escape
+/// is left as-is and the comparison simply fails.
+pub(super) fn percent_decode_query_component(s: &str) -> String {
+    fn hex_val(b: u8) -> Option<u8> {
+        match b {
+            b'0'..=b'9' => Some(b - b'0'),
+            b'a'..=b'f' => Some(b - b'a' + 10),
+            b'A'..=b'F' => Some(b - b'A' + 10),
+            _ => None,
+        }
+    }
+
+    let bytes = s.as_bytes();
+    if !bytes.contains(&b'%') {
+        return s.to_string();
+    }
+    let mut out = Vec::with_capacity(bytes.len());
+    let mut i = 0;
+    while i < bytes.len() {
+        if bytes[i] == b'%' && i + 2 < bytes.len() {
+            if let (Some(h), Some(l)) = (hex_val(bytes[i + 1]), hex_val(bytes[i + 2])) {
+                out.push(h * 16 + l);
+                i += 3;
+                continue;
+            }
+        }
+        out.push(bytes[i]);
+        i += 1;
+    }
+    String::from_utf8_lossy(&out).into_owned()
+}
+
 /// Build a CORS layer for the HTTP server reflecting the `allowed_origins`
 /// policy (SEC-005). When an allowlist is configured, only those origins may
 /// make cross-origin browser requests; otherwise only local (loopback)
@@ -257,6 +365,95 @@ pub(super) fn build_cors_layer(
     }
 }
 
+/// Static-route Host allowlist (SEC-003, DNS-rebinding defense).
+///
+/// When the server binds a loopback address, the browser-reachable static
+/// bundle under `web_root` is served only to requests whose `Host` header
+/// names a loopback literal or the bind host itself. A page on
+/// `attacker.com` that rebinds its DNS to 127.0.0.1 sends
+/// `Host: attacker.com` and is refused here; the WS and API routes keep
+/// their own origin/auth checks. Not gated behind a flag: loopback Host
+/// values are a closed set, so this cannot break legitimate loopback use.
+#[derive(Debug, Clone)]
+pub(super) struct StaticHostGuard {
+    /// Guard active (the bind address is loopback)
+    enabled: bool,
+    /// Lowercased host names allowed in the Host header
+    allowed_hosts: Vec<String>,
+}
+
+impl StaticHostGuard {
+    /// Build the guard for a bind address string (`host:port`). Active
+    /// only when that address is loopback.
+    pub(super) fn from_bind_addr(addr: &str) -> Self {
+        let bind_host = host_of_authority(addr).to_ascii_lowercase();
+        let is_loopback = match addr.parse::<std::net::SocketAddr>() {
+            Ok(socket) => socket.ip().is_loopback(),
+            Err(_) => matches!(bind_host.as_str(), "localhost" | "127.0.0.1" | "::1"),
+        };
+        if !is_loopback {
+            return Self {
+                enabled: false,
+                allowed_hosts: Vec::new(),
+            };
+        }
+        let mut allowed_hosts = vec![
+            "localhost".to_string(),
+            "127.0.0.1".to_string(),
+            "::1".to_string(),
+        ];
+        if !allowed_hosts.contains(&bind_host) {
+            allowed_hosts.push(bind_host);
+        }
+        Self {
+            enabled: true,
+            allowed_hosts,
+        }
+    }
+
+    /// Whether the guard is active for this bind.
+    #[cfg(test)]
+    pub(super) fn is_enabled(&self) -> bool {
+        self.enabled
+    }
+
+    /// True if a request with this Host header may reach the static
+    /// bundle. A missing Host is a non-browser client and passes, mirroring
+    /// `check_ws_origin`'s treatment of an absent Origin; a rebinding
+    /// attack always names its own host.
+    fn allows(&self, host_header: Option<&str>) -> bool {
+        let Some(header) = host_header else {
+            return true;
+        };
+        if !self.enabled {
+            return true;
+        }
+        let host = host_of_authority(header).to_ascii_lowercase();
+        self.allowed_hosts.contains(&host)
+    }
+}
+
+/// Reject static-route requests whose Host header is not in the loopback
+/// allowlist (SEC-003). Layered around the static fallback only; the API
+/// routes keep their own auth and origin checks.
+#[cfg(feature = "streaming")]
+pub(super) async fn static_host_guard_middleware(
+    axum::extract::State(guard): axum::extract::State<StaticHostGuard>,
+    req: axum::http::Request<axum::body::Body>,
+    next: axum::middleware::Next,
+) -> axum::response::Response {
+    use axum::response::IntoResponse;
+
+    let host = req
+        .headers()
+        .get(axum::http::header::HOST)
+        .and_then(|v| v.to_str().ok());
+    if !guard.allows(host) {
+        return (axum::http::StatusCode::FORBIDDEN, "Host not allowed").into_response();
+    }
+    next.run(req).await
+}
+
 /// Content-Security-Policy on every HTTP-app response (ENH-059, extends
 /// SEC-010). Sources are exactly what the shipped `web_term/` export
 /// loads: Google Fonts CSS + font files and the jsDelivr Nerd Font,
@@ -276,6 +473,108 @@ pub(super) const CONTENT_SECURITY_POLICY: &str = "default-src 'self'; \
     object-src 'none'; base-uri 'self'; form-action 'self'; \
     frame-ancestors 'none'";
 
+/// The opt-in variant (card 01a19895bd): identical to
+/// [`CONTENT_SECURITY_POLICY`] except `connect-src` also permits `blob:`,
+/// so a custom web root's own assets can `fetch()` blob URLs (GLTF
+/// embedded textures, Troika workers). Gated behind
+/// `allow_blob_connect_src` (default off, byte-identical baseline);
+/// a test pins the two strings' relationship so they cannot drift.
+pub(super) const CONTENT_SECURITY_POLICY_BLOB_CONNECT: &str = "default-src 'self'; \
+    script-src 'self' 'unsafe-inline' 'wasm-unsafe-eval'; \
+    style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; \
+    font-src 'self' data: https://fonts.gstatic.com https://cdn.jsdelivr.net; \
+    img-src 'self' data: blob:; \
+    connect-src 'self' ws: wss: blob:; \
+    object-src 'none'; base-uri 'self'; form-action 'self'; \
+    frame-ancestors 'none'";
+
+/// Validate one opt-in `connect-src` origin for the CSP allowlist
+/// (`--csp-connect-origins`). Only the strict `https://host[:port]`
+/// source-expression form is accepted: path, query, fragment, userinfo
+/// (credentials), backslash/percent escapes, whitespace and control
+/// characters, and non-HTTPS schemes are rejected, so the composed policy
+/// stays a valid, injection-free header value and the allowlist cannot
+/// grow broader than a host-source. The error text names the rejected
+/// value.
+pub fn validate_csp_connect_origin(origin: &str) -> std::result::Result<(), String> {
+    let invalid = |why: &str| format!("invalid CSP connect-src origin '{origin}': {why}");
+    let Some(rest) = origin.strip_prefix("https://") else {
+        return Err(invalid("expected the form https://host[:port]"));
+    };
+    if rest.is_empty() {
+        return Err(invalid("empty host"));
+    }
+    if rest.chars().any(|c| {
+        matches!(c, '/' | '?' | '#' | '@' | '\\' | '%') || c.is_whitespace() || c.is_ascii_control()
+    }) {
+        return Err(invalid(
+            "only host[:port] is allowed (no path, query, fragment, or userinfo)",
+        ));
+    }
+    // Bracketed IPv6 literals keep their colons; otherwise the last colon
+    // starts the port.
+    let (host, port) = if rest.starts_with('[') {
+        let Some(end) = rest.find(']') else {
+            return Err(invalid("unterminated IPv6 literal"));
+        };
+        let (host, after) = rest.split_at(end + 1);
+        (host, after.strip_prefix(':'))
+    } else {
+        match rest.rsplit_once(':') {
+            Some((h, p)) => (h, Some(p)),
+            None => (rest, None),
+        }
+    };
+    if let Some(port) = port {
+        let ok = !port.is_empty()
+            && port.bytes().all(|b| b.is_ascii_digit())
+            && matches!(port.parse::<u16>(), Ok(1..=65535));
+        if !ok {
+            return Err(invalid("port must be a number between 1 and 65535"));
+        }
+    }
+    if host.starts_with('[') {
+        let inner = &host[1..host.len() - 1];
+        let ok = host.ends_with(']')
+            && !inner.is_empty()
+            && inner.chars().all(|c| c == ':' || c.is_ascii_hexdigit());
+        if !ok {
+            return Err(invalid("malformed IPv6 literal"));
+        }
+    }
+    Ok(())
+}
+
+/// The Content-Security-Policy header value for a configuration. Without
+/// configured origins this is the pinned constant unchanged
+/// (byte-identical baseline); with origins configured they are appended to
+/// `connect-src` after the existing tokens, so the served policy permits
+/// exactly `'self'`, the `ws:`/`wss:` tokens, `blob:` when opted in, and
+/// nothing beyond the supplied HTTPS origins. Origins must have passed
+/// [`validate_csp_connect_origin`] — the streamer CLI and the Python
+/// binding both enforce it — or header composition panics rather than
+/// serving a weakened policy.
+pub(super) fn csp_header_value(
+    allow_blob_connect_src: bool,
+    csp_connect_origins: Option<&[String]>,
+) -> String {
+    let baseline = if allow_blob_connect_src {
+        CONTENT_SECURITY_POLICY_BLOB_CONNECT
+    } else {
+        CONTENT_SECURITY_POLICY
+    };
+    let Some(origins) = csp_connect_origins.filter(|o| !o.is_empty()) else {
+        return baseline.to_string();
+    };
+    let (head, tail) = baseline
+        .split_once("connect-src ")
+        .expect("connect-src directive in the CSP constant");
+    let (connect, rest) = tail
+        .split_once(';')
+        .expect("connect-src terminator in the CSP constant");
+    format!("{head}connect-src {connect} {};{rest}", origins.join(" "))
+}
+
 /// Anti-framing headers on every response (SEC-010), with the full CSP
 /// (ENH-059). The served web frontend drives a live shell; without
 /// `X-Frame-Options: DENY` and a `frame-ancestors 'none'` CSP, a
@@ -285,6 +584,7 @@ pub(super) const CONTENT_SECURITY_POLICY: &str = "default-src 'self'; \
 pub(super) async fn add_security_headers(
     req: axum::http::Request<axum::body::Body>,
     next: axum::middleware::Next,
+    csp: &str,
 ) -> axum::response::Response {
     use axum::http::{HeaderName, HeaderValue};
     let mut res = next.run(req).await;
@@ -293,10 +593,9 @@ pub(super) async fn add_security_headers(
         HeaderName::from_static("x-frame-options"),
         HeaderValue::from_static("DENY"),
     );
-    headers.insert(
-        HeaderName::from_static("content-security-policy"),
-        HeaderValue::from_static(CONTENT_SECURITY_POLICY),
-    );
+    let csp = HeaderValue::from_str(csp)
+        .expect("validated CSP origins keep the policy a valid header value");
+    headers.insert(HeaderName::from_static("content-security-policy"), csp);
     res
 }
 
@@ -342,7 +641,10 @@ pub(super) fn validate_ws_handshake_auth(
             if let Some(query) = req.uri().query() {
                 for pair in query.split('&') {
                     if let Some(value) = pair.strip_prefix("api_key=") {
-                        if bool::from(value.as_bytes().ct_eq(expected_key.as_bytes())) {
+                        // SEC-002: decode URL-encoded values before the
+                        // constant-time comparison.
+                        let decoded = percent_decode_query_component(value);
+                        if bool::from(decoded.as_bytes().ct_eq(expected_key.as_bytes())) {
                             return true;
                         }
                     }
@@ -418,7 +720,15 @@ pub(super) async fn sessions_handler(
         return (StatusCode::FORBIDDEN, "Origin not allowed").into_response();
     }
 
-    let sessions = server.sessions.list_sessions();
+    // The `?metadata=1` listener state is a routing shell, not a pane
+    // session: the reserved registry id `metadata` never appears in the
+    // listing. (Do not name a mirror session `metadata` — it is reserved.)
+    let sessions: Vec<_> = server
+        .sessions
+        .list_sessions()
+        .into_iter()
+        .filter(|s| s.id != "metadata")
+        .collect();
     let max = server.config.max_sessions;
     let available = max.saturating_sub(sessions.len());
     axum::Json(serde_json::json!({

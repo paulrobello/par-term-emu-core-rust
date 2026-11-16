@@ -5,14 +5,13 @@ name = "par-mux"
 # CARGO_PKG_VERSION, which a daemon and its clients compare. `make
 # core-version-check` fails when it drifts from the root version or the
 # root's exact pin on it.
-version = "0.75.0"
+version = "0.82.0"
 edition = "2021"
 rust-version = "1.99"
 authors = ["Paul Robello <probello@gmail.com>"]
 description = "par-mux terminal multiplexer: tmux control-mode daemon, session tree, persistence, and attach client for par-term-emu-core"
 license = "MIT"
 repository = "https://github.com/paulrobello/par-term-emu-core-rust"
-homepage = "https://github.com/paulrobello/par-term-emu-core-rust"
 documentation = "https://github.com/paulrobello/par-term-emu-core-rust/blob/main/docs/MUX.md"
 keywords = ["terminal", "multiplexer", "tmux", "pty"]
 categories = ["command-line-utilities", "development-tools"]
@@ -29,18 +28,22 @@ path = "src/bin/par_mux/main.rs"
 required-features = ["mux-bin"]
 
 [dependencies]
-unicode-width = "0.2.2"
+unicode-width = { workspace = true }
 # The terminal core. Exact pin + lockstep version (`make core-version-check`).
-par-term-emu-core = { path = "../par-term-emu-core", version = "=0.75.0", features = ["mux", "pty_session", "serde"] }
-log = "0.4"
-base64 = "0.22.1"
-regex = "1.12.3"
-serde = { version = "1.0.228", features = ["derive"] }
-serde_json = "1.0.150"
-parking_lot = "0.13"
+par-term-emu-core = { path = "../par-term-emu-core", version = "=0.82.0", features = ["mux", "pty_session", "serde"] }
+log = { workspace = true }
+base64 = { workspace = true }
+regex = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+parking_lot = { workspace = true }
 # Cross-platform local socket (Unix domain sockets / Windows named pipes) for
 # the control socket (par-mux.md D4).
-interprocess = { version = "2.4.2", optional = true }
+interprocess = { workspace = true, optional = true }
+# Multi-source pump wait (card 01a19d78): the render attach wait selects
+# over the daemon-push channel and the stdin reader channel, so a host
+# click wakes the tick instead of riding out the 16 ms poll remainder.
+crossbeam-channel = { version = "0.5", optional = true }
 # Agent scrape patterns (bundled + local override) — comments in the
 # override files are the point, so the format is TOML not JSON.
 toml = { version = "0.9", optional = true }
@@ -49,9 +52,9 @@ dirs = { version = "6.0", optional = true }
 # Agent-integration config merging (claude settings.json keeps the user comments and formatting).
 # `mux-bin` only: the installers back the binary's one-shot flags (ARC-143).
 jsonc-parser = { version = "0.33", default-features = false, features = ["serde"], optional = true }
-tempfile = { version = "3.27", optional = true }
+tempfile = { workspace = true, optional = true }
 # Daemon CLI parser (`mux-bin` only, ARC-106).
-clap = { version = "4.6.1", features = ["derive", "env"], optional = true }
+clap = { workspace = true, optional = true }
 # Shell-completion scripts generated from that CLI (`mux-bin` only).
 clap_complete = { version = "4.6", optional = true }
 # Attach client (feature `attach`): raw-mode terminal handling, size/keypress
@@ -65,21 +68,14 @@ toml_edit = { version = "0.25", optional = true }
 # Pane process-group CPU for pane-info (`process_cpu`); already a workspace
 # dependency of the root's `streaming` feature, so the lockfile resolves the
 # same version.
-sysinfo = { version = "0.39.3", optional = true }
-# Opt-in OTLP metrics (kanban 01a18d2606): same 0.33 trio and feature set as
-# the root's `otel` feature, so the workspace keeps a single dedup'd
-# opentelemetry tree (`cargo tree -d` must stay empty).
-opentelemetry = { version = "0.33", default-features = false, optional = true }
-opentelemetry_sdk = { version = "0.33", default-features = false, features = [
-    "metrics",
-], optional = true }
-opentelemetry-otlp = { version = "0.33", default-features = false, features = [
-    "metrics",
-    "grpc-tonic",
-    "http-proto",
-    "reqwest-blocking-client",
-    "reqwest-rustls",
-], optional = true }
+sysinfo = { workspace = true, optional = true }
+# Opt-in OTLP metrics (kanban 01a18d2606): the shared OTLP layer (protocol
+# grammar, provider lifecycle, reporting exporter) lives in the core member's
+# `otel` feature (ARC-001), which this crate's `otel` feature forwards to;
+# only the instrument facade below names the plain `opentelemetry` crate
+# directly, so the workspace keeps a single dedup'd opentelemetry tree
+# (`cargo tree -d` must stay empty).
+opentelemetry = { workspace = true, optional = true }
 
 [target.'cfg(target_os = "linux")'.dependencies]
 # logind inhibitor for the `shutdown-inhibit` feature (MUX_DECISIONS.md D9);
@@ -87,7 +83,7 @@ opentelemetry-otlp = { version = "0.33", default-features = false, features = [
 zbus = { version = "5", default-features = false, features = ["async-io", "blocking-api"], optional = true }
 
 [target.'cfg(unix)'.dependencies]
-libc = "0.2.186"
+libc = { workspace = true }
 nix = { version = "0.31.3", features = ["process", "term", "signal", "poll"], optional = true }
 
 # Windows-only: UTF-16 SDDL input for the named-pipe security descriptor
@@ -102,11 +98,11 @@ windows-sys = { version = "0.61", optional = true, features = [
 ] }
 
 [dev-dependencies]
-tempfile = "3.27"
+tempfile = { workspace = true }
 # The metrics module's in-memory-exporter test (feature `otel`) — the
 # exporter lives behind the SDK's test-only `testing` feature, mirroring the
 # root crate's dev-dependency.
-opentelemetry_sdk = { version = "0.33", features = ["testing"] }
+opentelemetry_sdk = { workspace = true, features = ["testing"] }
 # tests/mux_attach.rs drives the attach client through a real PTY.
 portable-pty = "0.9.0"
 # pane.rs unit test: a PNG round-trip through the kitty retention path.
@@ -117,7 +113,7 @@ default = []
 # The multiplexer library: PTYs, session tree, control-mode socket, on-disk
 # persistence. `serde` and `dirs` are intrinsic — a mux build that cannot
 # save is not a configuration the daemon supports (par-mux.md D3).
-mux = ["dep:interprocess", "dep:toml", "dep:dirs", "dep:nix", "dep:widestring", "dep:windows-sys", "dep:sysinfo", "serde"]
+mux = ["dep:interprocess", "dep:crossbeam-channel", "dep:toml", "dep:dirs", "dep:nix", "dep:widestring", "dep:windows-sys", "dep:sysinfo", "serde"]
 # Serde derives on the mux ids/layout/persist types (the on-disk format).
 serde = ["par-term-emu-core/serde"]
 # The `par-mux` daemon binary: `mux` plus its CLI parser and the
@@ -137,7 +133,7 @@ shutdown-inhibit = ["dep:zbus"]
 # operator opts in at runtime (`--otel-enabled` / PAR_MUX_OTEL_ENABLED). The
 # runtime gate and instrument list live in `mux/metrics.rs`; gate:
 # `make mux-otel-check`.
-otel = ["dep:opentelemetry", "dep:opentelemetry_sdk", "dep:opentelemetry-otlp"]
+otel = ["par-term-emu-core/otel", "dep:opentelemetry"]
 
 # cargo-fuzz builds with `--cfg fuzzing` (the ENH-046 attach_input entry point).
 [lints.rust]
