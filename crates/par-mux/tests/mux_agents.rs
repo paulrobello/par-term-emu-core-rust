@@ -612,7 +612,14 @@ fn client_snapshot_matches_the_individual_queries() {
     );
 
     let snapshot = control.body_lines(&format!("client-snapshot -t {window}"));
-    assert_eq!(snapshot.first().map(String::as_str), Some("snapshot 1"));
+    // Position-independent header lookup: %output/%pane-damage pushes from
+    // the live panes can race the reply and land ahead of the header, and
+    // first() then sees a push (measured on ubuntu CI, both retry attempts).
+    let header = snapshot
+        .iter()
+        .find(|l| l.starts_with("snapshot "))
+        .expect("the snapshot reply carries a header");
+    assert_eq!(header, "snapshot 1", "snapshot header: {snapshot:?}");
     let rows = |kind: &str| -> Vec<String> {
         snapshot
             .iter()
