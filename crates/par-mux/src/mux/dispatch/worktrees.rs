@@ -291,13 +291,33 @@ fn cmd_worktree_remove(ctx: &Ctx<'_>, workspace: Target<WorkspaceId>, force: boo
             ),
         );
     }
+    // The force path is the only teardown that reaches a kill with claims
+    // alive (the non-force path refused above), so this snapshot — taken
+    // before git runs, and before the Windows retry path closes the
+    // workspace's panes on the way — is what the release notices are built
+    // from. Composed ahead of the removal geometry through the same
+    // helper the cascade kills use, or the roster keeps stale agents.
+    let claims = {
+        let guard = ctx.tree.lock();
+        let mut windows = Vec::new();
+        for session_id in guard
+            .workspace(id)
+            .map(|ws| ws.sessions.clone())
+            .unwrap_or_default()
+        {
+            if let Some(session) = guard.session(session_id) {
+                windows.extend(session.windows.iter().copied());
+            }
+        }
+        guard.agent_claims_for_windows(&windows)
+    };
     let (removed, mut killed) = remove_checkout(ctx, id, &link, force);
     if let Err(err) = removed {
         let outcome = Outcome::err(ctx, &format!("worktree-remove: {err}"));
         return if killed.is_empty() {
             outcome
         } else {
-            notify_kill_cascade(outcome, &killed, true)
+            notify_kill_cascade(notify_agent_releases(outcome, &claims), &killed, true)
         };
     }
     // The workspace closing on its own meanwhile is not a failure: the
@@ -305,7 +325,11 @@ fn cmd_worktree_remove(ctx: &Ctx<'_>, workspace: Target<WorkspaceId>, force: boo
     if let Ok(more) = ctx.tree.lock().kill_workspace(id) {
         killed.extend(more);
     }
-    notify_kill_cascade(Outcome::ok(ctx, ""), &killed, true)
+    notify_kill_cascade(
+        notify_agent_releases(Outcome::ok(ctx, ""), &claims),
+        &killed,
+        true,
+    )
 }
 
 /// `git worktree remove` the link's checkout; the windows it had to close

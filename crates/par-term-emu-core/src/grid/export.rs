@@ -53,16 +53,21 @@ impl SgrLayer {
 }
 
 /// Append one color's SGR parameters (with leading `;`), omitting `default`.
+/// Writes into `result` directly (no per-cell temp `String` — this runs once
+/// per styled cell on the export hot path).
 fn push_sgr_color(result: &mut String, color: &Color, default: NamedColor, layer: SgrLayer) {
+    use std::fmt::Write as _;
     match color {
         Color::Named(nc) if *nc == default => {}
         Color::Named(nc) => {
             let code = named_fg_code(*nc) + layer.named_offset();
-            result.push_str(&format!(";{}", code));
+            let _ = write!(result, ";{code}");
         }
-        Color::Indexed(i) => result.push_str(&format!(";{};5;{}", layer.extended(), i)),
+        Color::Indexed(i) => {
+            let _ = write!(result, ";{};5;{i}", layer.extended());
+        }
         Color::Rgb(r, g, b) => {
-            result.push_str(&format!(";{};2;{};{};{}", layer.extended(), r, g, b))
+            let _ = write!(result, ";{};2;{r};{g};{b}", layer.extended());
         }
     }
 }
@@ -321,13 +326,14 @@ impl Grid {
 
     /// Export only the visible screen with ANSI styling
     pub fn export_visible_screen_styled(&self) -> String {
+        use std::fmt::Write as _;
         let mut result = String::new();
         result.push_str("\x1b[H");
 
         for row in 0..self.rows {
             if let Some(row_cells) = self.row(row) {
                 let row_start = result.len();
-                result.push_str(&format!("\x1b[{};1H", row + 1));
+                let _ = write!(result, "\x1b[{};1H", row + 1);
                 if self.push_standalone_row(&mut result, row_cells).is_some() {
                     result.push_str("\x1b[0m");
                 } else {

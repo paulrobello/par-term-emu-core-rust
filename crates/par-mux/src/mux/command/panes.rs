@@ -246,6 +246,14 @@ pub(super) fn parse_pane_exited_replay(_a: &Args<'_>) -> Result<MuxCommand, Stri
     Ok(MuxCommand::PaneExitedReplay)
 }
 
+pub(super) fn parse_window_add_replay(a: &Args<'_>) -> Result<MuxCommand, String> {
+    Ok(MuxCommand::WindowAddReplay {
+        session: a
+            .session("-t")?
+            .ok_or("window-add-replay requires -t <session>")?,
+    })
+}
+
 pub(super) fn parse_clear_history(a: &Args<'_>) -> Result<MuxCommand, String> {
     Ok(MuxCommand::ClearHistory {
         pane: a.pane("-t")?,
@@ -307,6 +315,28 @@ pub(super) fn parse_swap_pane(a: &Args<'_>) -> Result<MuxCommand, String> {
         target: a.pane("-t")?,
         source: a.pane("-s")?,
     })
+}
+
+/// `select-layout -t <target> <preset>`.
+pub(super) fn parse_select_layout(a: &Args<'_>) -> Result<MuxCommand, String> {
+    let a = a.with_value_flags(&["-t"]);
+    let target = a.any_target("-t", "window")?;
+    let mut words = a.args.iter().copied();
+    let mut name = None;
+    while let Some(word) = words.next() {
+        if word == "-t" {
+            words.next();
+        } else if name.replace(word).is_some() {
+            return Err("select-layout takes exactly one layout name".to_string());
+        }
+    }
+    let name = name.ok_or_else(|| "select-layout requires a layout name".to_string())?;
+    let preset = LayoutPreset::parse(name).ok_or_else(|| {
+        format!(
+            "select-layout: unknown layout {name} (expected one of even-horizontal, even-vertical, main-horizontal, main-vertical, tiled)"
+        )
+    })?;
+    Ok(MuxCommand::SelectLayout { target, preset })
 }
 
 pub(super) fn parse_break_pane(a: &Args<'_>) -> Result<MuxCommand, String> {

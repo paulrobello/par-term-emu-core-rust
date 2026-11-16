@@ -5,6 +5,8 @@ use pyo3::prelude::*;
 use pyo3::types::PyBytes;
 
 #[cfg(feature = "streaming")]
+use crate::streaming::session::OutputChunk;
+#[cfg(feature = "streaming")]
 use crate::streaming::{StreamingConfig, StreamingServer, TlsConfig};
 #[cfg(feature = "streaming")]
 use std::sync::Arc;
@@ -33,7 +35,7 @@ impl Clone for PyStreamingConfig {
 #[pymethods]
 impl PyStreamingConfig {
     #[new]
-    #[pyo3(signature = (max_clients=1000, send_initial_screen=true, keepalive_interval=30, default_read_only=false, initial_cols=0, initial_rows=0, enable_http=false, web_root="./web_term", max_clients_per_session=0, input_rate_limit_bytes_per_sec=0, enable_system_stats=false, system_stats_interval_secs=5, api_key=None, allow_api_key_in_query=false, allowed_origins=None, kitty_file_media="temp_only"))]
+    #[pyo3(signature = (max_clients=1000, send_initial_screen=true, keepalive_interval=30, default_read_only=false, initial_cols=0, initial_rows=0, enable_http=false, web_root="./web_term", max_clients_per_session=0, input_rate_limit_bytes_per_sec=0, enable_system_stats=false, system_stats_interval_secs=5, api_key=None, allow_api_key_in_query=false, allowed_origins=None, kitty_file_media="temp_only", allow_pane_create=false, allow_blob_connect_src=false, csp_connect_origins=None))]
     #[allow(
         clippy::too_many_arguments,
         reason = "Python keyword arguments, one per StreamingConfig field; a struct would change the Python API"
@@ -55,6 +57,9 @@ impl PyStreamingConfig {
         allow_api_key_in_query: bool,
         allowed_origins: Option<Vec<String>>,
         kitty_file_media: &str,
+        allow_pane_create: bool,
+        allow_blob_connect_src: bool,
+        csp_connect_origins: Option<Vec<String>>,
     ) -> PyResult<Self> {
         let kitty_file_media = crate::graphics::kitty::FileMediaMode::from_name(kitty_file_media)
             .ok_or_else(|| {
@@ -63,6 +68,13 @@ impl PyStreamingConfig {
                 kitty_file_media
             ))
         })?;
+        if let Some(origins) = &csp_connect_origins {
+            for origin in origins {
+                if let Err(why) = crate::streaming::server::validate_csp_connect_origin(origin) {
+                    return Err(pyo3::exceptions::PyValueError::new_err(why));
+                }
+            }
+        }
         Ok(Self {
             inner: StreamingConfig {
                 max_clients,
@@ -86,6 +98,9 @@ impl PyStreamingConfig {
                 allow_api_key_in_query,
                 allowed_origins,
                 kitty_file_media,
+                allow_pane_create,
+                allow_blob_connect_src,
+                csp_connect_origins,
             },
         })
     }
@@ -166,6 +181,105 @@ impl PyStreamingConfig {
     #[setter]
     fn set_keepalive_interval(&mut self, keepalive_interval: u64) {
         self.inner.keepalive_interval = keepalive_interval;
+    }
+
+    /// Get whether clients may create panes on the backing mux daemon
+    ///
+    /// Returns:
+    ///     bool: True if writable clients may create panes (default False)
+    ///
+    /// Example:
+    ///     >>> config = StreamingConfig()
+    ///     >>> config.allow_pane_create
+    ///     False
+    ///     >>> config.allow_pane_create = True
+    ///     >>> config.allow_pane_create
+    ///     True
+    #[getter]
+    fn allow_pane_create(&self) -> bool {
+        self.inner.allow_pane_create
+    }
+
+    /// Set whether clients may create panes on the backing mux daemon
+    ///
+    /// Args:
+    ///     allow_pane_create: True to let writable clients create panes
+    #[setter]
+    fn set_allow_pane_create(&mut self, allow_pane_create: bool) {
+        self.inner.allow_pane_create = allow_pane_create;
+    }
+
+    /// Get whether the CSP's connect-src permits blob URLs
+    ///
+    /// Intended for custom web roots serving owned blob assets (GLTF
+    /// embedded textures, Troika workers). Default False keeps the
+    /// ENH-059 policy byte-identical.
+    ///
+    /// Returns:
+    ///     bool: True if connect-src permits blob URLs (default False)
+    ///
+    /// Example:
+    ///     >>> config = StreamingConfig()
+    ///     >>> config.allow_blob_connect_src
+    ///     False
+    ///     >>> config.allow_blob_connect_src = True
+    ///     >>> config.allow_blob_connect_src
+    ///     True
+    #[getter]
+    fn allow_blob_connect_src(&self) -> bool {
+        self.inner.allow_blob_connect_src
+    }
+
+    /// Set whether the CSP's connect-src permits blob URLs
+    ///
+    /// Args:
+    ///     allow_blob_connect_src: True to add ``blob:`` to connect-src
+    ///         (custom web roots serving owned blob assets)
+    #[setter]
+    fn set_allow_blob_connect_src(&mut self, allow_blob_connect_src: bool) {
+        self.inner.allow_blob_connect_src = allow_blob_connect_src;
+    }
+
+    /// Get the opt-in HTTPS origins appended to the CSP's connect-src
+    ///
+    /// For custom web roots that fetch public APIs directly. Values use the
+    /// strict https://host[:port] form and are validated at config time.
+    ///
+    /// Returns:
+    ///     list[str] | None: Origins appended to connect-src (default None)
+    ///
+    /// Example:
+    ///     >>> config = StreamingConfig()
+    ///     >>> config.csp_connect_origins is None
+    ///     True
+    ///     >>> config.csp_connect_origins = ["https://api.zippopotam.us", "https://api.weather.gov"]
+    ///     >>> config.csp_connect_origins
+    ///     ['https://api.zippopotam.us', 'https://api.weather.gov']
+    #[getter]
+    fn csp_connect_origins(&self) -> Option<Vec<String>> {
+        self.inner.csp_connect_origins.clone()
+    }
+
+    /// Set the opt-in HTTPS origins appended to the CSP's connect-src
+    ///
+    /// Args:
+    ///     csp_connect_origins (list[str] | None): HTTPS origins in the
+    ///         strict https://host[:port] form; None clears the allowlist.
+    ///         Raises ValueError naming any invalid origin.
+    #[setter]
+    fn set_csp_connect_origins(
+        &mut self,
+        csp_connect_origins: Option<Vec<String>>,
+    ) -> PyResult<()> {
+        if let Some(origins) = &csp_connect_origins {
+            for origin in origins {
+                if let Err(why) = crate::streaming::server::validate_csp_connect_origin(origin) {
+                    return Err(pyo3::exceptions::PyValueError::new_err(why));
+                }
+            }
+        }
+        self.inner.csp_connect_origins = csp_connect_origins;
+        Ok(())
     }
 
     /// Get default read-only mode
@@ -576,34 +690,6 @@ impl PyStreamingConfig {
         Ok(())
     }
 
-    fn __repr__(&self) -> String {
-        let tls_status = if self.inner.tls.is_some() {
-            ", tls=enabled"
-        } else {
-            ""
-        };
-        let api_key_status = if self.inner.api_key.is_some() {
-            ", api_key=***"
-        } else {
-            ""
-        };
-        format!(
-            "StreamingConfig(max_clients={}, send_initial_screen={}, keepalive_interval={}, default_read_only={}, initial_cols={}, initial_rows={}, enable_http={}, web_root='{}'{}{}, enable_system_stats={}, system_stats_interval_secs={})",
-            self.inner.max_clients,
-            self.inner.send_initial_screen,
-            self.inner.keepalive_interval,
-            self.inner.default_read_only,
-            self.inner.initial_cols,
-            self.inner.initial_rows,
-            self.inner.enable_http,
-            self.inner.web_root,
-            tls_status,
-            api_key_status,
-            self.inner.enable_system_stats,
-            self.inner.system_stats_interval_secs,
-        )
-    }
-
     /// Configure TLS from separate certificate and key files
     ///
     /// Args:
@@ -677,6 +763,35 @@ impl PyStreamingConfig {
         self.inner.tls = None;
     }
 }
+
+#[cfg(feature = "streaming")]
+crate::python_bindings::common::impl_repr!(PyStreamingConfig, |s| {
+    let tls_status = if s.inner.tls.is_some() {
+        ", tls=enabled"
+    } else {
+        ""
+    };
+    let api_key_status = if s.inner.api_key.is_some() {
+        ", api_key=***"
+    } else {
+        ""
+    };
+    format!(
+            "StreamingConfig(max_clients={}, send_initial_screen={}, keepalive_interval={}, default_read_only={}, initial_cols={}, initial_rows={}, enable_http={}, web_root='{}'{}{}, enable_system_stats={}, system_stats_interval_secs={})",
+            s.inner.max_clients,
+            s.inner.send_initial_screen,
+            s.inner.keepalive_interval,
+            s.inner.default_read_only,
+            s.inner.initial_cols,
+            s.inner.initial_rows,
+            s.inner.enable_http,
+            s.inner.web_root,
+            tls_status,
+            api_key_status,
+            s.inner.enable_system_stats,
+            s.inner.system_stats_interval_secs,
+        )
+});
 
 /// Python wrapper for StreamingServer
 #[cfg(feature = "streaming")]
@@ -759,7 +874,7 @@ impl PyStreamingServer {
                         // All bytes are valid UTF-8
                         let output = valid_str.to_string();
                         buffer.clear();
-                        if output_sender.try_send(output).is_err() {
+                        if output_sender.try_send(OutputChunk::plain(output)).is_err() {
                             crate::debug_info!("STREAMING", "Output channel full, message dropped");
                         }
                     }
@@ -772,7 +887,7 @@ impl PyStreamingServer {
                             let valid_str = std::str::from_utf8(&buffer[..valid_up_to])
                                 .expect("valid_up_to guarantees valid UTF-8");
                             let output = valid_str.to_string();
-                            if output_sender.try_send(output).is_err() {
+                            if output_sender.try_send(OutputChunk::plain(output)).is_err() {
                                 crate::debug_info!(
                                     "STREAMING",
                                     "Output channel full, message dropped"
@@ -788,7 +903,7 @@ impl PyStreamingServer {
                         if buffer.len() > 100 {
                             let output = String::from_utf8_lossy(&buffer).to_string();
                             buffer.clear();
-                            if output_sender.try_send(output).is_err() {
+                            if output_sender.try_send(OutputChunk::plain(output)).is_err() {
                                 crate::debug_info!(
                                     "STREAMING",
                                     "Output channel full, message dropped"
@@ -814,6 +929,11 @@ impl PyStreamingServer {
     /// Start the streaming server (non-blocking)
     ///
     /// This spawns the server in a background thread
+    ///
+    /// Returns:
+    ///     None on success
+    /// Raises:
+    ///     RuntimeError: If the server has been stopped
     fn start(&mut self) -> PyResult<()> {
         if let Some(server) = &self.server {
             let server = server.clone();
@@ -935,6 +1055,12 @@ impl PyStreamingServer {
     /// Args:
     ///     data: The output data to send (ANSI escape sequences)
     ///
+    ///
+    /// Returns:
+    ///     None on success
+    ///
+    /// Raises:
+    ///     RuntimeError: If the server has been stopped or the send fails
     /// Example:
     ///     ```python
     ///     server = StreamingServer(PtyTerminal(80, 24), "127.0.0.1:0")
@@ -960,6 +1086,9 @@ impl PyStreamingServer {
     ///
     /// Args:
     ///     data: Raw bytes to send to the PTY
+    ///
+    /// Returns:
+    ///     None on success
     ///
     /// Raises:
     ///     RuntimeError: If the server has been stopped
@@ -988,6 +1117,12 @@ impl PyStreamingServer {
     ///     cols: Number of columns
     ///     rows: Number of rows
     ///
+    ///
+    /// Returns:
+    ///     None on success
+    ///
+    /// Raises:
+    ///     RuntimeError: If the server has been stopped
     /// Example:
     ///     ```python
     ///     server = StreamingServer(PtyTerminal(80, 24), "127.0.0.1:0")
@@ -1034,6 +1169,12 @@ impl PyStreamingServer {
     /// Args:
     ///     title: The new terminal title
     ///
+    ///
+    /// Returns:
+    ///     None on success
+    ///
+    /// Raises:
+    ///     RuntimeError: If the server has been stopped
     /// Example:
     ///     ```python
     ///     server = StreamingServer(PtyTerminal(80, 24), "127.0.0.1:0")
@@ -1050,6 +1191,12 @@ impl PyStreamingServer {
 
     /// Send a bell event to all clients
     ///
+    ///
+    /// Returns:
+    ///     None on success
+    ///
+    /// Raises:
+    ///     RuntimeError: If the server has been stopped
     /// Example:
     ///     ```python
     ///     server = StreamingServer(PtyTerminal(80, 24), "127.0.0.1:0")
@@ -1070,6 +1217,12 @@ impl PyStreamingServer {
     ///     mode: Mode name (e.g. "alt_screen", "cursor_visible")
     ///     enabled: Whether the mode is now enabled
     ///
+    ///
+    /// Returns:
+    ///     None on success
+    ///
+    /// Raises:
+    ///     RuntimeError: If the server has been stopped
     /// Example:
     ///     ```python
     ///     server = StreamingServer(PtyTerminal(80, 24), "127.0.0.1:0")
@@ -1089,6 +1242,12 @@ impl PyStreamingServer {
     /// Args:
     ///     row: Grid row the new graphic was placed on
     ///
+    ///
+    /// Returns:
+    ///     None on success
+    ///
+    /// Raises:
+    ///     RuntimeError: If the server has been stopped
     /// Example:
     ///     ```python
     ///     server = StreamingServer(PtyTerminal(80, 24), "127.0.0.1:0")
@@ -1111,6 +1270,12 @@ impl PyStreamingServer {
     ///     col: Grid column the link starts at (0-indexed)
     ///     id: Optional link id for grouping multi-cell links
     ///
+    ///
+    /// Returns:
+    ///     None on success
+    ///
+    /// Raises:
+    ///     RuntimeError: If the server has been stopped
     /// Example:
     ///     ```python
     ///     server = StreamingServer(PtyTerminal(80, 24), "127.0.0.1:0")
@@ -1139,6 +1304,12 @@ impl PyStreamingServer {
     ///     value: New variable value
     ///     old_value: Previous value, if known
     ///
+    ///
+    /// Returns:
+    ///     None on success
+    ///
+    /// Raises:
+    ///     RuntimeError: If the server has been stopped
     /// Example:
     ///     ```python
     ///     server = StreamingServer(PtyTerminal(80, 24), "127.0.0.1:0")
@@ -1166,6 +1337,12 @@ impl PyStreamingServer {
     ///     row: Cursor row (0-indexed)
     ///     visible: Whether the cursor is visible
     ///
+    ///
+    /// Returns:
+    ///     None on success
+    ///
+    /// Raises:
+    ///     RuntimeError: If the server has been stopped
     /// Example:
     ///     ```python
     ///     server = StreamingServer(PtyTerminal(80, 24), "127.0.0.1:0")
@@ -1185,6 +1362,12 @@ impl PyStreamingServer {
     /// Args:
     ///     badge: New badge text, or None to clear the badge
     ///
+    ///
+    /// Returns:
+    ///     None on success
+    ///
+    /// Raises:
+    ///     RuntimeError: If the server has been stopped
     /// Example:
     ///     ```python
     ///     server = StreamingServer(PtyTerminal(80, 24), "127.0.0.1:0")
@@ -1207,6 +1390,12 @@ impl PyStreamingServer {
     ///     shape: OSC 22 shape name (``ew-resize``, ``text``, ...), or None to
     ///         restore the client's own pointer
     ///
+    ///
+    /// Returns:
+    ///     None on success
+    ///
+    /// Raises:
+    ///     RuntimeError: If the server has been stopped
     /// Example:
     ///     ```python
     ///     server = StreamingServer(PtyTerminal(80, 24), "127.0.0.1:0")
@@ -1230,6 +1419,12 @@ impl PyStreamingServer {
     ///     title: Notification title
     ///     message: Notification message
     ///
+    ///
+    /// Returns:
+    ///     None on success
+    ///
+    /// Raises:
+    ///     RuntimeError: If the server has been stopped
     /// Example:
     ///     ```python
     ///     server = StreamingServer(PtyTerminal(80, 24), "127.0.0.1:0")
@@ -1252,6 +1447,12 @@ impl PyStreamingServer {
     ///     label: Optional label for the mark
     ///     color: Optional RGB color tuple (r, g, b)
     ///
+    ///
+    /// Returns:
+    ///     None on success
+    ///
+    /// Raises:
+    ///     RuntimeError: If the server has been stopped
     /// Example:
     ///     ```python
     ///     server = StreamingServer(PtyTerminal(80, 24), "127.0.0.1:0")
@@ -1282,6 +1483,12 @@ impl PyStreamingServer {
     ///     username: Username associated with the CWD (optional)
     ///     timestamp: Unix timestamp of the change
     ///
+    ///
+    /// Returns:
+    ///     None on success
+    ///
+    /// Raises:
+    ///     RuntimeError: If the server has been stopped
     /// Example:
     ///     ```python
     ///     server = StreamingServer(PtyTerminal(80, 24), "127.0.0.1:0")
@@ -1314,6 +1521,12 @@ impl PyStreamingServer {
     ///     text: The matched text
     ///     captures: List of capture group strings
     ///     timestamp: Unix timestamp of the match
+    ///
+    /// Returns:
+    ///     None on success
+    ///
+    /// Raises:
+    ///     RuntimeError: If the server has been stopped
     ///
     /// Example:
     ///     ```python
@@ -1352,6 +1565,12 @@ impl PyStreamingServer {
     ///     percent: Optional progress percentage (0-100)
     ///     label: Optional label text
     ///
+    ///
+    /// Returns:
+    ///     None on success
+    ///
+    /// Raises:
+    ///     RuntimeError: If the server has been stopped
     /// Example:
     ///     ```python
     ///     server = StreamingServer(PtyTerminal(80, 24), "127.0.0.1:0")

@@ -946,7 +946,10 @@ connected client can execute arbitrary commands as the user running the server.
   has been used in a URL. The key and password
   arguments declare `hide_env_values`, so values supplied through
   `PAR_TERM_API_KEY`, `PAR_TERM_HTTP_PASSWORD`, and
-  `PAR_TERM_HTTP_PASSWORD_HASH` are never echoed by `--help`.
+  `PAR_TERM_HTTP_PASSWORD_HASH` are never echoed by `--help`. Supply the
+  key via `--api-key-file <path>` / `PAR_TERM_API_KEY_FILE` (first line,
+  trimmed; loose file permissions warn) to keep it out of `ps` output and
+  shell history entirely.
 - **HTTP Basic Auth** (`--http-user` / `--http-password[-hash|-file]`):
   htpasswd-format hashes verified via maintained RustCrypto crates (bcrypt,
   `$apr1$`, `$1$` MD5-crypt, `{SHA}`). See `src/streaming/auth_hash.rs`.
@@ -959,7 +962,10 @@ connected client can execute arbitrary commands as the user running the server.
   credential is a bcrypt hash, rejecting cleartext too. The library-level
   `verify_htpasswd_hash` still verifies every format for embedders.
 - **Default**: auth is **disabled**. The binary binds to `127.0.0.1` by
-  default and warns loudly if binding a public interface without auth (SEC-002).
+  default; a non-loopback bind with no authentication **refuses to start**
+  (SEC-002) unless `--allow-unauthenticated`
+  (`PAR_TERM_ALLOW_UNAUTHENTICATED`) acknowledges that anyone who can reach
+  the port gets an interactive shell.
 
 ### Transport Security (TLS)
 
@@ -967,6 +973,11 @@ connected client can execute arbitrary commands as the user running the server.
   `rustls-pki-types` for PEM loading (replacing the unmaintained
   `rustls-pemfile` crate, RUSTSEC-2025-0134). Certificate verification is
   never disabled.
+- A non-loopback bind with authentication configured but TLS off **refuses
+  to start** (SEC-001): the API key / Basic Auth password would cross the
+  network in cleartext on every request. `--allow-cleartext-auth`
+  (`PAR_TERM_ALLOW_CLEARTEXT_AUTH`) acknowledges the risk. Loopback binds
+  are exempt.
 - Private key files are rejected on Unix when group or other can read them
   (owner-only `0600`/`0400` required, SEC-006).
 
@@ -1169,12 +1180,15 @@ adversary:
   line gets the connection closed, and a pending command reports
   "server closed the connection" (`ConnectionAborted`) instead of the
   client process growing without bound.
-- **Per-client broadcast queue (`CLIENT_QUEUE_DEPTH` lines):** a `%output`
+- **Per-client broadcast queue (`CLIENT_QUEUE_BYTES`):** a `%output`
   line carries one PTY read (up to 16 KiB raw, roughly doubled by escape
-  encoding), so a client that stops draining pins at most
-  `CLIENT_QUEUE_DEPTH` such lines (about 128 MiB at the current depth)
-  before it is evicted and disconnected, and the disconnect frees the
-  queue.
+  encoding), so a client that stops draining pins a known amount — the
+  8 MiB byte budget — before it is evicted and disconnected, and the
+  disconnect frees the queue. The budget is counted in bytes, not lines:
+  a line cap pinned an amount that swung with the line size (~160 KiB
+  for short PTY fragments, ~128 MiB for full-size lines, at the same
+  4096-line count), and the fragment shape evicted a modestly lagging
+  observer mid-flood.
 
 ### Debug Logging
 
@@ -1419,10 +1433,10 @@ sections; the numbers live here.
 | `MAX_REPLY_LINE_BYTES` | 4 MiB | `crates/par-mux/src/mux/client.rs:33` | Bytes accumulated from one daemon reply or notification line before the client closes the connection. |
 | `NOTIFICATION_TITLE_MAX` | 80 | `crates/par-mux/src/mux/command/buffers.rs:181` | Characters of a `show-notification` title (herdr's 80); longer is truncated. |
 | `NOTIFICATION_BODY_MAX` | 240 | `crates/par-mux/src/mux/command/buffers.rs:184` | Characters of a `show-notification` body (herdr's 240); longer is truncated. |
-| `MAX_CLIENT_COLS` | 1,000 | `crates/par-mux/src/mux/command/mod.rs:991` | Columns a par-mux client may report for a window grid (`refresh-client -C`). |
-| `MAX_CLIENT_ROWS` | 500 | `crates/par-mux/src/mux/command/mod.rs:993` | Rows a par-mux client may report for a window grid (`refresh-client -C`). |
-| `MAX_CELL_PIXELS` | 512 | `crates/par-mux/src/mux/command/mod.rs:995` | Pixels per cell axis a par-mux client may report (`refresh-client -p`). |
-| `STALLED_AFTER_MS` | 300,000 | `crates/par-mux/src/mux/dispatch/client.rs:312` | Milliseconds of no output and no report before a working agent reads stalled. |
+| `MAX_CLIENT_COLS` | 1,000 | `crates/par-mux/src/mux/command/mod.rs:1018` | Columns a par-mux client may report for a window grid (`refresh-client -C`). |
+| `MAX_CLIENT_ROWS` | 500 | `crates/par-mux/src/mux/command/mod.rs:1020` | Rows a par-mux client may report for a window grid (`refresh-client -C`). |
+| `MAX_CELL_PIXELS` | 512 | `crates/par-mux/src/mux/command/mod.rs:1022` | Pixels per cell axis a par-mux client may report (`refresh-client -p`). |
+| `STALLED_AFTER_MS` | 300,000 | `crates/par-mux/src/mux/dispatch/client.rs:319` | Milliseconds of no output and no report before a working agent reads stalled. |
 | `EVENT_RING_CAPACITY` | 1,024 | `crates/par-mux/src/mux/events.rs:27` | Lifecycle events retained by the daemon's replay ring. |
 | `MAX_FOREGROUND_NAME_LEN` | 128 | `crates/par-mux/src/mux/foreground.rs:42` | Bytes of a pane's foreground command name served by pane-info. |
 | `MAX_REPORT_VALUE_LEN` | 4,096 | `crates/par-mux/src/mux/hooks/mod.rs:148` | Bytes accepted for one hook or agent report value sent from a pane. |
@@ -1433,9 +1447,10 @@ sections; the numbers live here.
 | `MAX_PERSISTED_SCROLLBACK_CELLS` | 100,000 | `crates/par-mux/src/mux/persist/format.rs:35` | Scrollback cells restored per pane from an untrusted on-disk state file. |
 | `MAX_RESTORED_COLS` | 1,000 | `crates/par-mux/src/mux/persist/format.rs:45` | Columns one restored window may claim from an untrusted state file. |
 | `MAX_RESTORED_ROWS` | 500 | `crates/par-mux/src/mux/persist/format.rs:47` | Rows one restored window may claim from an untrusted state file. |
-| `CLIENT_QUEUE_DEPTH` | 4,096 | `crates/par-mux/src/mux/server/mod.rs:87` | Broadcast lines queued per control-socket client before the daemon evicts it. |
-| `CLIENT_QUEUE_AGGREGATE_DEPTH` | `CLIENT_QUEUE_DEPTH * 2` | `crates/par-mux/src/mux/server/mod.rs:99` | Broadcast lines queued across all control-socket clients before the daemon evicts the deepest queue. |
-| `MAX_CONTROL_LINE_BYTES` | 1 MiB | `crates/par-mux/src/mux/server/mod.rs:108` | Bytes accumulated from one control-socket client line before the daemon closes it. |
+| `CLIENT_QUEUE_BYTES` | 8 MiB | `crates/par-mux/src/mux/server/mod.rs:96` | Bytes of broadcast lines queued per control-socket client before the daemon evicts it. |
+| `CLIENT_QUEUE_AGGREGATE_BYTES` | `CLIENT_QUEUE_BYTES * 2` | `crates/par-mux/src/mux/server/mod.rs:108` | Bytes of broadcast lines queued across all control-socket clients before the daemon evicts the deepest queue. |
+| `CLIENT_QUEUE_MAX_ITEMS` | `CLIENT_QUEUE_BYTES / MIN_BROADCAST_LINE_BYTES` | `crates/par-mux/src/mux/server/mod.rs:123` | Broadcast queue items per control-socket client before the daemon evicts it (backstop to the CLIENT_QUEUE_BYTES budget). |
+| `MAX_CONTROL_LINE_BYTES` | 1 MiB | `crates/par-mux/src/mux/server/mod.rs:132` | Bytes accumulated from one control-socket client line before the daemon closes it. |
 | `MAX_UPLOAD_CHUNK_BYTES` | 64 KiB | `crates/par-mux/src/mux/uploads.rs:33` | Base64-decoded bytes accepted for one `upload-chunk`. |
 | `MAX_UPLOAD_TOTAL_BYTES` | 100 MiB | `crates/par-mux/src/mux/uploads.rs:36` | Total bytes one upload may stage. |
 | `MAX_UPLOAD_CHUNKS` | 4,096 | `crates/par-mux/src/mux/uploads.rs:39` | Chunks one upload may accept (bounds a tiny-chunk flood below the |
@@ -1443,15 +1458,16 @@ sections; the numbers live here.
 | `MAX_UPLOAD_NAME_BYTES` | 200 | `crates/par-mux/src/mux/uploads.rs:46` | Bytes of one `upload-begin` filename (a bare file name, never a |
 | `MAX_BADGE_FORMAT_LENGTH` | 4 KiB | `crates/par-term-emu-core/src/badge.rs:189` | Badge format bytes accepted from one OSC 1337 SetBadgeFormat payload. |
 | `MAX_ANIMATION_FRAMES` | 1,024 | `crates/par-term-emu-core/src/graphics/animation.rs:18` | Frames retained per kitty animation from escape payloads. |
+| `DEFAULT_OUTPUT_MEMORY_BUDGET` | 335,544,320 | `crates/par-term-emu-core/src/graphics/budget.rs:17` | Aggregate bytes of graphics pixels, iTerm2 multipart buffers, and file-transfer payloads retained from untrusted output. |
 | `MAX_IMAGE_DATA_SIZE` | 100 MiB | `crates/par-term-emu-core/src/graphics/iterm.rs:17` | Base64 image bytes accepted from one iTerm2 inline-image sequence. |
 | `MAX_FILE_SIZE` | 100 MiB | `crates/par-term-emu-core/src/graphics/kitty/decode.rs:155` | Bytes read from one kitty file medium named by an escape payload. |
-| `MAX_KITTY_PAYLOAD_BYTES` | 64 MiB | `crates/par-term-emu-core/src/graphics/kitty/mod.rs:21` | Decoded bytes one kitty transmission may accumulate across chunks |
-| `MAX_KITTY_DECOMPRESSED_BYTES` | `MAX_IMAGE_PIXELS * 4` | `crates/par-term-emu-core/src/graphics/kitty/mod.rs:26` | Upper bound on one kitty zlib stream's decompressed output |
-| `MAX_IMAGE_DIMENSION` | 16 KiB | `crates/par-term-emu-core/src/graphics/mod.rs:42` | Width or height accepted for a graphic decoded from a protocol payload. |
-| `MAX_IMAGE_PIXELS` | 67,108,864 | `crates/par-term-emu-core/src/graphics/mod.rs:49` | Total pixels accepted for a graphic decoded from a protocol payload. |
-| `DEFAULT_MAX_GRAPHICS_MEMORY_BYTES` | 256 MiB | `crates/par-term-emu-core/src/graphics/mod.rs:57` | Bytes of decoded kitty image and animation-frame pixels retained store-wide. |
-| `MAX_KITTY_IMAGES` | 4,096 | `crates/par-term-emu-core/src/graphics/mod.rs:62` | Kitty image IDs (stored images plus animations) retained store-wide. |
-| `MAX_VIRTUAL_PLACEMENTS` | 4,096 | `crates/par-term-emu-core/src/graphics/mod.rs:67` | Distinct kitty virtual placements retained from escape payloads. |
+| `MAX_KITTY_PAYLOAD_BYTES` | 64 MiB | `crates/par-term-emu-core/src/graphics/kitty/mod.rs:20` | Decoded bytes one kitty transmission may accumulate across chunks |
+| `MAX_KITTY_DECOMPRESSED_BYTES` | `MAX_IMAGE_PIXELS * 4` | `crates/par-term-emu-core/src/graphics/kitty/mod.rs:25` | Upper bound on one kitty zlib stream's decompressed output |
+| `MAX_IMAGE_DIMENSION` | 16 KiB | `crates/par-term-emu-core/src/graphics/mod.rs:47` | Width or height accepted for a graphic decoded from a protocol payload. |
+| `MAX_IMAGE_PIXELS` | 67,108,864 | `crates/par-term-emu-core/src/graphics/mod.rs:54` | Total pixels accepted for a graphic decoded from a protocol payload. |
+| `DEFAULT_MAX_GRAPHICS_MEMORY_BYTES` | 256 MiB | `crates/par-term-emu-core/src/graphics/mod.rs:62` | Bytes of decoded kitty image and animation-frame pixels retained store-wide. |
+| `MAX_KITTY_IMAGES` | 4,096 | `crates/par-term-emu-core/src/graphics/mod.rs:67` | Kitty image IDs (stored images plus animations) retained store-wide. |
+| `MAX_VIRTUAL_PLACEMENTS` | 4,096 | `crates/par-term-emu-core/src/graphics/mod.rs:72` | Distinct kitty virtual placements retained from escape payloads. |
 | `MAX_EVICTED_ZONES` | 10,000 | `crates/par-term-emu-core/src/grid/zone.rs:11` | Evicted zones buffered per grid before they become events. |
 | `SIXEL_HARD_MAX_WIDTH` | 4 KiB | `crates/par-term-emu-core/src/sixel.rs:25` | Hard ceiling on sixel raster width from payload geometry or user config. |
 | `SIXEL_HARD_MAX_HEIGHT` | 4 KiB | `crates/par-term-emu-core/src/sixel.rs:28` | Hard ceiling on sixel raster height from payload geometry or user config. |
@@ -1465,30 +1481,31 @@ sections; the numbers live here.
 | `MAX_CLIPBOARD_CONTENT_SIZE` | 10 MiB | `crates/par-term-emu-core/src/terminal/clipboard.rs:6` | Clipboard content bytes accepted from an OSC 52 sequence. |
 | `MAX_TERMINAL_EVENTS` | 10,000 | `crates/par-term-emu-core/src/terminal/event_broker.rs:20` | Unpolled terminal events retained from processed output. |
 | `MAX_BELL_EVENTS` | 1,024 | `crates/par-term-emu-core/src/terminal/event_broker.rs:27` | Undrained bell events retained from processed output. |
-| `DEFAULT_MAX_TRANSFER_SIZE` | 50 MiB | `crates/par-term-emu-core/src/terminal/file_transfer.rs:88` | Bytes accepted for one file-transfer payload. |
-| `DEFAULT_MAX_COMPLETED` | 32 | `crates/par-term-emu-core/src/terminal/file_transfer.rs:92` | Completed transfers retained from client file-transfer requests. |
+| `DEFAULT_MAX_TRANSFER_SIZE` | 50 MiB | `crates/par-term-emu-core/src/terminal/file_transfer.rs:97` | Bytes accepted for one file-transfer payload. |
+| `DEFAULT_MAX_COMPLETED` | 32 | `crates/par-term-emu-core/src/terminal/file_transfer.rs:101` | Completed transfers retained from client file-transfer requests. |
+| `DEFAULT_MAX_ACTIVE_TRANSFERS` | 8 | `crates/par-term-emu-core/src/terminal/file_transfer.rs:105` | Concurrent in-progress downloads from client file-transfer requests. |
 | `MAX_RESPONSE_BYTES` | 64 KiB | `crates/par-term-emu-core/src/terminal/mod.rs:82` | Undrained device-query response bytes retained from processed output. |
-| `MAX_CLIPBOARD_CONTENT_SIZE` | 10 MiB | `crates/par-term-emu-core/src/terminal/mod.rs:146` | Clipboard content bytes accepted from an OSC 52 sequence. |
+| `MAX_CLIPBOARD_CONTENT_SIZE` | 10 MiB | `crates/par-term-emu-core/src/terminal/mod.rs:147` | Clipboard content bytes accepted from an OSC 52 sequence. |
 | `MAX_BOOKMARKS` | 1,000 | `crates/par-term-emu-core/src/terminal/semantic_snapshot.rs:543` | Bookmark entries retained for one terminal session. |
 | `MAX_DCS_BUFFER` | 65,536 | `crates/par-term-emu-core/src/terminal/sequences/dcs/mod.rs:47` | Payload bytes accumulated for one DCS sequence from terminal output. |
 | `MAX_SIXEL_DIMENSION` | 16 KiB | `crates/par-term-emu-core/src/terminal/sequences/dcs/sixel.rs:12` | Width or height accepted for a sixel raster declared in a DCS payload. |
 | `MAX_SIXEL_COLORS` | 4,096 | `crates/par-term-emu-core/src/terminal/sequences/dcs/sixel.rs:16` | Color registers accepted in a sixel palette from a DCS payload. |
 | `DEFAULT_MAX_MEMORY_BYTES` | 4 MiB | `crates/par-term-emu-core/src/terminal/snapshot_manager.rs:14` | Memory held by snapshots retained from processed terminal output. |
-| `DEFAULT_MAX_NOTIFICATIONS` | 128 | `crates/par-term-emu-core/src/terminal/state.rs:80` | Terminal notifications queued from processed escape-sequence output. |
-| `DEFAULT_MAX_CLIPBOARD_SYNC_EVENTS` | 256 | `crates/par-term-emu-core/src/terminal/state.rs:82` | Clipboard sync events queued from processed escape-sequence output. |
-| `DEFAULT_MAX_CLIPBOARD_EVENT_BYTES` | 4 KiB | `crates/par-term-emu-core/src/terminal/state.rs:84` | Bytes retained for one queued clipboard sync event. |
-| `DEFAULT_MAX_OSC_DATA_LENGTH` | 1 MiB | `crates/par-term-emu-core/src/terminal/state.rs:938` | Payload bytes accepted for one OSC sequence from terminal output. |
+| `DEFAULT_MAX_NOTIFICATIONS` | 128 | `crates/par-term-emu-core/src/terminal/state.rs:82` | Terminal notifications queued from processed escape-sequence output. |
+| `DEFAULT_MAX_CLIPBOARD_SYNC_EVENTS` | 256 | `crates/par-term-emu-core/src/terminal/state.rs:84` | Clipboard sync events queued from processed escape-sequence output. |
+| `DEFAULT_MAX_CLIPBOARD_EVENT_BYTES` | 4 KiB | `crates/par-term-emu-core/src/terminal/state.rs:86` | Bytes retained for one queued clipboard sync event. |
+| `DEFAULT_MAX_OSC_DATA_LENGTH` | 1 MiB | `crates/par-term-emu-core/src/terminal/state.rs:971` | Payload bytes accepted for one OSC sequence from terminal output. |
 | `MAX_ARCHIVE_BYTES` | 50 MiB | `src/bin/streaming_server/frontend_download.rs:34` | Bytes accepted from a downloaded web-frontend archive response. |
-| `MAX_SIDECAR_BYTES` | 1 KiB | `src/bin/streaming_server/frontend_download.rs:67` | Bytes accepted from a `.sha256` checksum sidecar response (SEC-203). |
+| `MAX_SIDECAR_BYTES` | 1 KiB | `src/bin/streaming_server/frontend_download.rs:71` | Bytes accepted from a `.sha256` checksum sidecar response (SEC-203). |
 | `MAX_DECOMPRESSED_SIZE` | 9 MiB | `src/streaming/proto.rs:48` | Decompressed bytes accepted from one zlib-compressed streaming frame. |
-| `MAX_INLINE_IMAGE_BYTES` | 8 MiB | `src/streaming/protocol.rs:326` | Image bytes accepted in one InlineImage streaming frame. |
-| `MAX_UPLOAD_CHUNK_BYTES` | 64 KiB | `src/streaming/protocol.rs:335` | Bytes accepted in one UploadChunk message payload from a streaming client. |
+| `MAX_INLINE_IMAGE_BYTES` | 8 MiB | `src/streaming/protocol.rs:333` | Image bytes accepted in one InlineImage streaming frame. |
+| `MAX_UPLOAD_CHUNK_BYTES` | 64 KiB | `src/streaming/protocol.rs:342` | Bytes accepted in one UploadChunk message payload from a streaming client. |
 | `WS_MAX_MESSAGE_SIZE` | 16 MiB | `src/streaming/server/mod.rs:45` | Bytes accepted in one inbound WebSocket message from a streaming client. |
 | `WS_MAX_FRAME_SIZE` | 16 MiB | `src/streaming/server/mod.rs:47` | Bytes accepted in one inbound WebSocket frame from a streaming client. |
 | `MAX_INPUT_PAYLOAD_BYTES` | 64 KiB | `src/streaming/server/mod.rs:53` | Bytes accepted in one Input message payload from a streaming client. |
 | `MAX_PASTE_PAYLOAD_BYTES` | 256 KiB | `src/streaming/server/mod.rs:57` | Bytes accepted in one Paste message payload from a streaming client. |
-| `MAX_COLS` | 1,000 | `src/streaming/server/mod.rs:95` | Columns a streaming client may request for its terminal. |
-| `MAX_ROWS` | 500 | `src/streaming/server/mod.rs:98` | Rows a streaming client may request for its terminal. |
+| `MAX_COLS` | 1,000 | `src/streaming/server/mod.rs:96` | Columns a streaming client may request for its terminal. |
+| `MAX_ROWS` | 500 | `src/streaming/server/mod.rs:99` | Rows a streaming client may request for its terminal. |
 | `INPUT_QUEUE_MESSAGES` | 256 | `src/streaming/session.rs:31` | Client input chunks queued per session pending write to the PTY. |
 | `MAX_QUEUED_INPUT_BYTES` | 4 MiB | `src/streaming/session.rs:40` | Client input bytes queued per session pending write to the PTY. |
 | `MAX_CONNECT_REPLAY_FRAMES` | 24 | `src/streaming/session.rs:45` | Graphics frames replayed to one client in the connect handshake. |

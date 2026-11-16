@@ -119,9 +119,10 @@ pub(crate) use state::{
     ApcPrefilterState, BadgeState, BellVolumeState, BookmarksState, CharsetState, ClipboardState,
     ClipboardSyncState, ColorPaletteSnapshot, ColorThemeState, CommandHistoryState, DcsState,
     HostConfig, HyperlinkState, InlineImageState, KeyboardState, MarginState, MouseHistoryState,
-    NotificationState, PointerShapeState, ProfilingState, ProgressBellState, RecordingState,
-    RenderingState, SavedCursorState, SearchState, SecurityFlagsState, ShellState, SyncState,
-    TerminalModes, TextAttributes, TitleState, TmuxState, UnicodeConfigState,
+    NotificationState, OutputBudgetState, ParseBuffers, PointerShapeState, ProfilingState,
+    ProgressBellState, RecordingState, RenderingState, SavedCursorState, SearchState,
+    SecurityFlagsState, ShellState, SyncState, TerminalModes, TextAttributes, TitleState,
+    TmuxState, UnicodeConfigState,
 };
 pub use state::{AttributeChangeExtent, Charset, GraphicsState, DEFAULT_MAX_OSC_DATA_LENGTH};
 // Generic helpers relocated to `crate::text_utils` (ARC-009); re-exported so
@@ -253,10 +254,9 @@ pub struct Terminal {
     /// Kitty TGP APC pre-filter: filter state, payload accumulator, and
     /// reusable passthrough buffer (ARC-001 sub-struct)
     pub(crate) apc: ApcPrefilterState,
-    /// SEC-003: scratch buffer reused by the incremental OSC guard in
-    /// [`Terminal::advance_parser`] so guarded chunks (those containing ESC or
-    /// mid-OSC state) do not allocate per call.
-    pub(crate) osc_scratch: Vec<u8>,
+    /// Byte buffers a parse pass reuses: the OSC guard's scratch and the
+    /// pending run of printable ASCII (ARC-001 sub-struct)
+    pub(crate) parse_buffers: ParseBuffers,
     /// Long-lived Kitty TGP parser; reset between unrelated transmissions.
     pub(crate) kitty_parser: KittyParser,
     /// DECAWM delayed wrap: set after printing in last column
@@ -327,6 +327,11 @@ pub struct Terminal {
     // === ACS (Alternate Character Set) state ===
     /// G0/G1 charset designations and active slot (ARC-001 sub-struct)
     pub(crate) charset_state: CharsetState,
+
+    // === Unified untrusted-output memory budget (ENH-062) ===
+    /// Aggregate budget sub-struct: graphics store, iTerm2 multipart buffer,
+    /// and file-transfer manager all reserve against one total (ARC-001)
+    pub(crate) output_budget: OutputBudgetState,
 }
 
 impl std::fmt::Debug for Terminal {
@@ -360,7 +365,7 @@ impl Terminal {
             tab_stops[i] = true;
         }
 
-        Self {
+        let mut terminal = Self {
             grid: Grid::new(cols, rows, scrollback),
             alt_grid: Grid::new(cols, rows, 0), // Alt screen has no scrollback
             default_consumer_gen: 0,
@@ -386,7 +391,7 @@ impl Terminal {
             progress_state: ProgressBellState::default(),
             parser: vte::Parser::new(),
             apc: ApcPrefilterState::default(),
-            osc_scratch: Vec::new(),
+            parse_buffers: ParseBuffers::default(),
             kitty_parser: KittyParser::new(),
             pending_wrap: false,
             // Initialize pixel dimensions with reasonable defaults (10x20 per cell)
@@ -423,7 +428,23 @@ impl Terminal {
             },
             triggers: trigger::TriggerState::default(),
             charset_state: CharsetState::default(),
-        }
+            output_budget: OutputBudgetState::default(),
+        };
+        terminal.wire_output_budget();
+        terminal
+    }
+
+    /// Share the aggregate untrusted-output budget (ENH-062) with the two
+    /// stores that enforce it. Called by the constructor and again after
+    /// RIS, which replaces the graphics store wholesale (ARC-100).
+    pub(crate) fn wire_output_budget(&mut self) {
+        let budget = self.output_budget.budget.clone();
+        self.graphics
+            .graphics_store
+            .set_shared_budget(budget.clone());
+        self.graphics
+            .file_transfer_manager
+            .set_shared_budget(budget);
     }
 
     /// Return the currently-active character set (G0 or G1 based on SO/SI state).
@@ -489,8 +510,20 @@ impl Terminal {
     /// pushed off the scrollback floor are queued as `ZoneScrolledOut` and
     /// delivered to observers before this returns.
     pub fn resize(&mut self, cols: usize, rows: usize) {
-        self.resize_internal(cols, rows);
+        self.resize_internal(cols, rows, None);
         self.finish_applied_actions();
+    }
+
+    /// [`Terminal::resize`] for a host whose viewport on the
+    /// primary screen is scrolled to `viewport_top` (a buffer line,
+    /// scrollback first). Returns the viewport's top line after the
+    /// resize: with [`Terminal::set_xterm_resize`] it moves by xterm.js's
+    /// rules (a viewport at the bottom stays there), otherwise it is the
+    /// bottom.
+    pub fn resize_with_viewport(&mut self, cols: usize, rows: usize, viewport_top: usize) -> usize {
+        let top = self.resize_internal(cols, rows, Some(viewport_top));
+        self.finish_applied_actions();
+        top
     }
 
     /// [`Terminal::resize`] without invoking observer callbacks: the
@@ -499,14 +532,14 @@ impl Terminal {
     /// releasing that lock.
     #[doc(hidden)]
     pub fn resize_deferred(&mut self, cols: usize, rows: usize) -> ObserverDispatchBatch {
-        self.resize_internal(cols, rows);
+        self.resize_internal(cols, rows, None);
         self.flush_evicted_zones();
         let batch = self.take_observer_dispatch_batch();
         self.cap_terminal_events();
         batch
     }
 
-    fn resize_internal(&mut self, cols: usize, rows: usize) {
+    fn resize_internal(&mut self, cols: usize, rows: usize, viewport_top: Option<usize>) -> usize {
         crate::debug_log!("TERMINAL_RESIZE", "Requested resize to {}x{}", cols, rows);
 
         // Reflow moves rows across the scrollback boundary; pending trigger
@@ -520,9 +553,14 @@ impl Terminal {
         let old_cols = self.grid.cols().max(1);
         let old_rows = self.grid.rows().max(1);
 
-        self.grid.resize(cols, rows);
-        // The alt screen never reflows (see Grid::resize_without_reflow).
-        self.alt_grid.resize_without_reflow(cols, rows);
+        let viewport_top = if self.host.xterm_resize {
+            self.resize_screens_xterm(cols, rows, viewport_top)
+        } else {
+            self.grid.resize(cols, rows);
+            // The alt screen never reflows (see Grid::resize_without_reflow).
+            self.alt_grid.resize_without_reflow(cols, rows);
+            self.grid.scrollback_len()
+        };
         // Both grids' damage bitsets were resized and fully marked by their
         // resize calls: a resize reflows/redraws the whole screen, and a
         // damage-driven renderer (FFI readback) must repaint all of it.
@@ -596,6 +634,122 @@ impl Terminal {
             .set_dimensions(cols as u16, rows as u16);
 
         self.record_resize(cols, rows);
+        viewport_top
+    }
+
+    /// Resize both screens as xterm.js resizes its normal and
+    /// alternate buffers (`Grid::resize_xterm`), moving each screen's
+    /// cursor, the saved cursor of the active one and the on-screen images
+    /// with their lines. A pending wrap ends, as xterm.js clamps its cursor
+    /// into the last column. Returns the primary viewport's new top line.
+    fn resize_screens_xterm(
+        &mut self,
+        cols: usize,
+        rows: usize,
+        viewport_top: Option<usize>,
+    ) -> usize {
+        use crate::grid::BufferPositions;
+
+        // xterm.js ignores a resize to the size it has (a pending wrap stays pending).
+        if (self.grid.cols(), self.grid.rows()) == (cols, rows) || cols == 0 || rows == 0 {
+            return viewport_top.unwrap_or(self.grid.scrollback_len());
+        }
+        let old_cols = self.grid.cols();
+        let primary_active = !self.alt_screen_active;
+        let saved = self.saved_state.saved_cursor;
+        // The saved cursor belongs to the buffer it was saved on. The one
+        // save that matters while the alternate screen is shown is 1049's
+        // entry save, taken on the primary just before the switch, so the
+        // saved position always reflows with the primary buffer's lines.
+        let positions_of =
+            |cursor: &Cursor, active: bool, pending_wrap: bool, owns_saved: bool| BufferPositions {
+                cursor_col: if active && pending_wrap {
+                    old_cols
+                } else {
+                    cursor.col
+                },
+                cursor_row: cursor.row,
+                saved_col: saved.filter(|_| owns_saved).map_or(0, |saved| saved.col),
+                saved_row: saved.filter(|_| owns_saved).map_or(0, |saved| saved.row),
+                viewport_top: 0,
+            };
+        // While the alternate screen is shown the primary cursor waits in `alt_cursor`.
+        let (primary_cursor, alternate_cursor) = if primary_active {
+            (self.cursor, self.alt_cursor)
+        } else {
+            (self.alt_cursor, self.cursor)
+        };
+        let mut primary = positions_of(&primary_cursor, primary_active, self.pending_wrap, true);
+        let mut alternate =
+            positions_of(&alternate_cursor, !primary_active, self.pending_wrap, false);
+        let scrollback = self.grid.scrollback_len();
+        let alt_scrollback = self.alt_grid.scrollback_len();
+        primary.viewport_top = viewport_top.unwrap_or(scrollback);
+
+        self.grid.resize_xterm(cols, rows, true, &mut primary);
+        self.alt_grid
+            .resize_xterm(cols, rows, false, &mut alternate);
+        // Placements follow their own buffer's reflow: primary-owned ones even
+        // while the alternate screen is shown, alt-owned ones with the
+        // alternate screen's lines. The alternate reflow is kept for them now;
+        // nothing else follows the alternate screen.
+        let primary_reflow = self.grid.buffer_reflow();
+        let alternate_reflow = self.alt_grid.take_buffer_reflow();
+        if primary_reflow.is_some() || alternate_reflow.is_some() {
+            let new_base = self.grid.scrollback_len() as isize;
+            let alternate_base = self.alt_grid.scrollback_len() as isize;
+            let old_scrollback = scrollback as isize;
+            let old_alternate_scrollback = alt_scrollback as isize;
+            // Where the reflow moved a top edge: the nearest surviving line at
+            // or above it, or for a line trimmed off the top, its old line
+            // number less the trimmed count.
+            let follow = |reflow: Option<&crate::grid::BufferReflow>,
+                          old_scrollback: isize,
+                          new_base: isize,
+                          top: isize|
+             -> isize {
+                let Some(reflow) = reflow else {
+                    return top;
+                };
+                let old = old_scrollback + top;
+                let last = reflow.lines.len() as isize - 1;
+                let line = if (0..=last).contains(&old) {
+                    reflow.follow(old as usize).map(|line| line as isize)
+                } else {
+                    None
+                };
+                line.unwrap_or(old - reflow.trimmed as isize) - new_base
+            };
+            self.graphics.graphics_store.move_placements(
+                |top| follow(primary_reflow, old_scrollback, new_base, top),
+                |top| {
+                    follow(
+                        alternate_reflow.as_ref(),
+                        old_alternate_scrollback,
+                        alternate_base,
+                        top,
+                    )
+                },
+            );
+        }
+
+        let place = |cursor: &mut Cursor, positions: &BufferPositions| {
+            cursor.col = positions.cursor_col;
+            cursor.row = positions.cursor_row;
+        };
+        if primary_active {
+            place(&mut self.cursor, &primary);
+            place(&mut self.alt_cursor, &alternate);
+        } else {
+            place(&mut self.alt_cursor, &primary);
+            place(&mut self.cursor, &alternate);
+        }
+        if let Some(saved) = self.saved_state.saved_cursor.as_mut() {
+            saved.col = primary.saved_col;
+            saved.row = primary.saved_row;
+        }
+        self.pending_wrap = false;
+        primary.viewport_top
     }
 
     /// Check if synchronized updates mode is enabled
@@ -747,8 +901,11 @@ impl Terminal {
                         }
                         self.kitty_parser.reset();
                     } else {
-                        // Errors here are non-fatal.
+                        // Errors here are non-fatal: they become graphics
+                        // replies per the spec's q= matrix below.
                         let position = (self.cursor.col, self.cursor.row);
+                        let mut failure: Option<crate::graphics::GraphicsError> = None;
+                        let dropped_before = self.graphics.graphics_store.dropped_count();
                         match self
                             .kitty_parser
                             .build_graphic(position, &mut self.graphics.graphics_store)
@@ -760,7 +917,7 @@ impl Terminal {
                                 graphic.set_cell_dimensions(cell_width, cell_height);
                                 let span_rows = graphic.cell_span(cell_width, cell_height).1;
                                 let image_id = graphic.id;
-                                self.graphics.graphics_store.add_graphic(graphic);
+                                self.add_placement(graphic);
                                 // Graphic landed on screen: notify like the Sixel
                                 // (DCS) and iTerm2 inline paths do, so observers
                                 // and streaming graphics subscribers hear kitty
@@ -790,14 +947,72 @@ impl Terminal {
                                     ..
                                 }
                                 | crate::graphics::kitty::KittyGraphicResult::None,
-                            )
-                            | Err(_) => {}
+                            ) => {}
+                            Err(crate::graphics::GraphicsError::ImageTooLarge(pixels, max)) => {
+                                // A size/budget refusal: publish the unified
+                                // budget event (ENH-062) so an oversized
+                                // payload is visible alongside the per-store
+                                // diagnostics. The error carries the attempted
+                                // pixel count; the RGBA cost is 4 bytes/px.
+                                let bytes = pixels.saturating_mul(4);
+                                self.output_budget.report_exceeded(
+                                    &mut self.events,
+                                    crate::graphics::budget::BudgetStore::Graphics,
+                                    bytes,
+                                );
+                                failure = Some(crate::graphics::GraphicsError::ImageTooLarge(
+                                    pixels, max,
+                                ));
+                            }
+                            Err(err) => {
+                                crate::debug_log!("KITTY", "kitty command failed: {}", err);
+                                failure = Some(err);
+                            }
+                        }
+                        let dropped_after = self.graphics.graphics_store.dropped_count();
+                        if dropped_after > dropped_before {
+                            self.output_budget.report_exceeded(
+                                &mut self.events,
+                                crate::graphics::budget::BudgetStore::Graphics,
+                                0,
+                            );
+                        }
+                        // Reply on the graphics channel per the spec's
+                        // quietness matrix: q=0 sends OK responses for
+                        // successful commands and error responses for
+                        // failures, q=1 suppresses the OK responses only,
+                        // q=2 suppresses all replies. Error codes are
+                        // ENOENT for unknown ids and EINVAL for malformed
+                        // commands; the response echoes the command's
+                        // i=/p= keys (see KittyParser::response_id_prefix).
+                        let quietness = self.kitty_parser.quietness;
+                        let reply = if quietness < 2 {
+                            match failure {
+                                Some(err) => Some(
+                                    self.kitty_parser
+                                        .error_response(err.kitty_code(), &err.kitty_message()),
+                                ),
+                                None if quietness == 0 => Some(self.kitty_parser.ok_response()),
+                                None => None,
+                            }
+                        } else {
+                            None
+                        };
+                        if let Some(reply) = reply {
+                            self.response_buffer.extend_from_slice(reply.as_bytes());
                         }
                         self.kitty_parser.reset();
                     }
                 }
-                Err(_) => {
-                    // Malformed chunk — reset and continue.
+                Err(err) => {
+                    // Malformed chunk: EINVAL reply per the q= matrix (q=2
+                    // suppresses), then reset and continue.
+                    if self.kitty_parser.quietness < 2 {
+                        let response = self
+                            .kitty_parser
+                            .error_response(err.kitty_code(), &err.kitty_message());
+                        self.response_buffer.extend_from_slice(response.as_bytes());
+                    }
                     self.kitty_parser.reset();
                 }
             }
@@ -833,20 +1048,53 @@ impl Terminal {
             let mut parser = std::mem::replace(&mut self.parser, vte::Parser::new());
             parser.advance(self, bytes);
             self.parser = parser;
+            self.flush_print_run();
             return;
         }
 
-        let mut kept = std::mem::take(&mut self.osc_scratch);
-        kept.clear();
-        for &b in bytes {
-            if self.osc_guard_step(b) {
-                kept.push(b);
+        // The guard runs over the whole chunk before vte sees any of it.
+        // Outside an OSC every byte but ESC passes the guard untouched, so
+        // those runs are skipped with memchr; the bytes are copied only once
+        // the guard drops one (an over-cap OSC payload), and otherwise vte
+        // reads the chunk in place.
+        let mut kept: Option<Vec<u8>> = None;
+        let mut i = 0;
+        while i < bytes.len() {
+            let state = &self.security_state;
+            if !state.osc_in_osc && !state.osc_seen_esc {
+                let next = memchr_esc(&bytes[i..]).map_or(bytes.len(), |offset| i + offset);
+                if let Some(kept) = kept.as_mut() {
+                    kept.extend_from_slice(&bytes[i..next]);
+                }
+                i = next;
+                if i == bytes.len() {
+                    break;
+                }
             }
+            let b = bytes[i];
+            let keep = self.osc_guard_step(b);
+            match (kept.as_mut(), keep) {
+                (Some(kept), true) => kept.push(b),
+                (None, false) => {
+                    let mut scratch = std::mem::take(&mut self.parse_buffers.osc_scratch);
+                    scratch.clear();
+                    scratch.extend_from_slice(&bytes[..i]);
+                    kept = Some(scratch);
+                }
+                _ => {}
+            }
+            i += 1;
         }
         let mut parser = std::mem::replace(&mut self.parser, vte::Parser::new());
-        parser.advance(self, &kept);
+        match kept {
+            Some(kept) => {
+                parser.advance(self, &kept);
+                self.parse_buffers.osc_scratch = kept;
+            }
+            None => parser.advance(self, bytes),
+        }
         self.parser = parser;
-        self.osc_scratch = kept;
+        self.flush_print_run();
     }
 
     /// One step of the SEC-003 incremental OSC guard. Updates the tracking
@@ -1092,6 +1340,13 @@ impl Terminal {
         fresh.graphics.graphics_store =
             GraphicsStore::with_limits(*self.graphics.graphics_store.limits());
 
+        // The aggregate output budget total survives RIS like the other
+        // limits (ENH-062); stores are rewired below after the swap.
+        std::mem::swap(
+            &mut fresh.output_budget.budget,
+            &mut self.output_budget.budget,
+        );
+
         // Answerback is embedder identification, not terminal state.
         fresh.title_state.answerback_string = self.title_state.answerback_string.take();
 
@@ -1159,6 +1414,7 @@ impl Terminal {
 
         *self = fresh;
         self.tab_stops = tab_stops;
+        self.wire_output_budget();
 
         self.grid.raise_generation(max_gen);
         self.invalidate_visible_screen();
@@ -1178,6 +1434,55 @@ impl Terminal {
         self.conformance_level = self.host.configured_conformance_level;
         self.bell_volumes.warning = self.host.configured_warning_bell_volume;
         self.bell_volumes.margin = self.host.configured_margin_bell_volume;
+        self.grid
+            .set_compact_scrollback(self.host.compact_scrollback);
+        self.alt_grid
+            .set_compact_scrollback(self.host.compact_scrollback);
+    }
+
+    /// Store the lines entering the scrollback without their trailing
+    /// default cells, so a scrolled line costs time and memory in
+    /// proportion to its text instead of the screen width (see
+    /// [`Grid::set_compact_scrollback`]). Off by default; survives RIS.
+    pub fn set_compact_scrollback(&mut self, compact: bool) {
+        self.host.compact_scrollback = compact;
+        self.grid.set_compact_scrollback(compact);
+        self.alt_grid.set_compact_scrollback(compact);
+    }
+
+    /// Whether scrollback lines are stored compactly
+    /// ([`Terminal::set_compact_scrollback`]).
+    pub fn compact_scrollback(&self) -> bool {
+        self.host.compact_scrollback
+    }
+
+    /// Change the scrollback capacity of the primary screen while the
+    /// terminal runs (see [`Grid::set_max_scrollback`]): a smaller capacity
+    /// drops the oldest lines. The alternate screen keeps none.
+    pub fn set_max_scrollback(&mut self, max_scrollback: usize) {
+        self.sync_damage_generations();
+        let excess = self.grid.set_max_scrollback(max_scrollback);
+        // Graphics anchored in the scrollback follow the same shrink: the
+        // dropped lines' images leave the store, survivors rebase.
+        self.graphics
+            .graphics_store
+            .rebase_scrollback_after_shrink(excess);
+    }
+
+    /// Resize the screens the way xterm.js resizes its buffers
+    /// (`Grid::resize_xterm`): the primary screen and its scrollback reflow
+    /// as one buffer, so the cursor follows its line and lines come back
+    /// from the scrollback, and both screens drop the rows below the cursor
+    /// before the rows above it. Off by default; survives RIS.
+    pub fn set_xterm_resize(&mut self, on: bool) {
+        self.host.xterm_resize = on;
+    }
+
+    /// Where the last resize moved the primary screen's lines,
+    /// once ([`Grid::take_buffer_reflow`]; only with
+    /// [`Terminal::set_xterm_resize`]).
+    pub fn take_buffer_reflow(&mut self) -> Option<crate::grid::BufferReflow> {
+        self.grid.take_buffer_reflow()
     }
 
     /// Soft terminal reset (DECSTR, `CSI ! p`) per VT510.
@@ -1234,6 +1539,11 @@ impl Terminal {
 }
 
 mod perform;
+
+/// Offset of the first ESC byte in `bytes`.
+fn memchr_esc(bytes: &[u8]) -> Option<usize> {
+    memchr::memchr(0x1b, bytes)
+}
 
 #[cfg(test)]
 mod tests;

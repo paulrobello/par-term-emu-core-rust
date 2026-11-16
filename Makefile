@@ -1,7 +1,7 @@
 .PHONY: help build build-release build-streaming dev-streaming app test test-rust test-rust-streaming test-python test-pty coverage coverage-html coverage-python clean install install-force python-install python-uninstall par-mux-install par-mux-uninstall streamer-uninstall uninstall dev fmt lint check \
-        examples examples-basic examples-pty examples-streaming examples-all setup-venv watch \
+        examples examples-basic examples-pty examples-streaming examples-all setup-venv watch test-integrations \
         typecheck clippy fmt-python lint-python lint-check checkall checkall-ci test-mux-ci test-python-streaming-ci cross-target-check check-features bench pre-commit-install pre-commit-uninstall \
-        caps-table caps-table-check gen-extensions extensions-check ffi-header ffi-header-check ffi-surface-check core-version-check doc-hidden-check api-surface-check terminal-fields-check mux-docs-check mux-schema mux-schema-check completions completions-check _completions-into env-docs-check pinned-tests-check stub-docs-check doc-links-check release-check derive-version-check set-version version-train-check audit-deps \
+        caps-table caps-table-check gen-extensions extensions-check ffi-header ffi-header-check ffi-surface-check core-version-check doc-hidden-check api-surface-check python-features-check terminal-fields-check mux-docs-check mux-schema mux-schema-check completions completions-check _completions-into env-docs-check pinned-tests-check stub-docs-check doc-links-check release-check derive-version-check set-version version-train-check audit-deps \
         mux-manual-seed mux-package-check rustdoc-check \
         pre-commit-run pre-commit-update deploy \
         proto-generate proto-rust proto-typescript proto-clean \
@@ -47,6 +47,7 @@ help:
 	@echo "  test-python     - Run Python tests only"
 	@echo "  test-pty        - Run the PTY test family with a longer per-test timeout"
 	@echo "  test-web        - Run web frontend tests (vitest)"
+	@echo "  test-integrations - Agent-state extension wire tests (vitest; part of checkall)"
 	@echo "  coverage        - Rust coverage via cargo-llvm-cov (lib + integration tests, streaming feature)"
 	@echo "  coverage-html   - Generate and open an HTML Rust coverage report"
 	@echo "  coverage-python - Python coverage via pytest-cov"
@@ -81,6 +82,7 @@ help:
 	@echo "  version-train-check - Self-test the set-version writer against a temp copy of the train (ARC-009)"
 	@echo "  doc-hidden-check - Fail when par-term-emu-core's #[doc(hidden)] pub set differs from the DESIGN.md baseline (ARC-005)"
 	@echo "  api-surface-check - Fail when Terminal/PtyTerminal method counts in _native.pyi leave the frozen baseline (ARC-001)"
+	@echo "  python-features-check - Fail when the python and python-test feature lists differ beyond the pyo3 activation entry (audit 2026-11-06 ARC-001)"
 	@echo "  terminal-fields-check - Fail when the core Terminal struct's field count leaves its frozen baseline (ARC-001)"
 	@echo "  stub-docs-check - Fail when a _native.pyi def lacks a docstring outside the accessor/__init__ allow-list (DOC-004)"
 	@echo "  doc-links-check - Fail on broken intra-repo links or heading anchors in docs/ and the top-level guides (lychee; needs: brew install lychee)"
@@ -97,7 +99,7 @@ help:
 	@echo "  check-features  - Feature matrix + dependency-tree assertions (not part of checkall; needs cargo-hack)"
 	@echo ""
 	@echo "Fuzzing (nightly + cargo-fuzz; not part of checkall):"
-	@echo "  fuzz-all              - Run all nine fuzz targets for FUZZ_SECONDS each (default 60)"
+	@echo "  fuzz-all              - Run all ten fuzz targets for FUZZ_SECONDS each (default 60)"
 	@echo "  fuzz-terminal_process - Fuzz the whole VTE pipeline"
 	@echo "  fuzz-sixel            - Fuzz the Sixel state machine"
 	@echo "  fuzz-kitty            - Fuzz the Kitty graphics APC parser"
@@ -107,6 +109,7 @@ help:
 	@echo "  fuzz-mux_hook_report  - Fuzz the par-mux hook-report JSON grammar"
 	@echo "  fuzz-attach_input     - Fuzz the par-mux attach stdin tokenizer (paste + split invariants)"
 	@echo "  fuzz-ipc_rows         - Fuzz the par-mux reply-row parsers (roster/snapshot rows)"
+	@echo "  fuzz-iterm_transfer   - Fuzz the OSC 1337 file-transfer state machine (ENH-064)"
 	@echo ""
 	@echo "Pre-commit Hooks:"
 	@echo "  pre-commit-install   - Install pre-commit hooks"
@@ -271,8 +274,9 @@ app:
 		codesign --force --timestamp --options runtime --entitlements crates/par-mux/app/Par-mux.entitlements --sign "$$ID" build/Par-mux.app/Contents/MacOS/Par-mux && \
 		codesign --force --timestamp --options runtime --entitlements crates/par-mux/app/Par-mux.entitlements --sign "$$ID" build/Par-mux.app; \
 	else \
-		echo "WARNING: no Developer ID identity in keychain; leaving bundle ad-hoc signed — TCC grants (screen recording, microphone, local network) reset on every rebuild"; \
-		codesign --force -s - build/Par-mux.app; \
+		echo "ERROR: no Developer ID identity in keychain; refusing to build the bundle ad-hoc" >&2; \
+		echo "(ad-hoc signatures void TCC grants on every rebuild and cannot hold a stored deny)" >&2; \
+		exit 1; \
 	fi
 	plutil -lint build/Par-mux.app/Contents/Info.plist
 
@@ -325,7 +329,19 @@ test-rust:
 	@echo "Running the full par-mux member suite (lib + bin unit tests + integration tests; serialized because PTY spawns contend in parallel)..."
 	PAR_MUX_NO_APP_WRAPPER=1 cargo test -p par-mux --features attach -- --test-threads=1
 	@echo "Running the mux-backed streaming tests (MuxSessionFactory needs both features; no other run enables them together)..."
-	cargo test --lib --no-default-features --features rust-only,streaming,mux,serde streaming::mux_factory -- --test-threads=1
+	@set -e; \
+	retry_once() { \
+		name="$$1"; shift; \
+		if ! "$$@"; then \
+			echo ""; \
+			echo "RETRY 1 for $$name: first run failed above; re-running the suite once."; \
+			"$$@" || { echo "$$name failed on the retry too"; exit 1; }; \
+			echo "$$name: PASSED ON RETRY 1 (first run failed; treating as a load flake)"; \
+		else \
+			echo "$$name: passed"; \
+		fi; \
+	}; \
+	retry_once "mux-backed streaming suite" cargo test --lib --no-default-features --features rust-only,streaming,mux,serde streaming::mux_factory -- --test-threads=1
 	@echo "Running the par-term-emu-core member suites (ARC-007 O2: each mirrors the root run above that compiled the same core features before the split)..."
 	cargo test -p par-term-emu-core --features ffi
 	cargo test -p par-term-emu-core --lib --features python,pty_session,screenshot,macro-yaml
@@ -589,6 +605,7 @@ env-docs-check:
 # build OTel-free (criterion 1).
 otel-check:
 	cargo check --locked --no-default-features --features rust-only,streaming,otel
+	cargo test --locked -p par-term-emu-core --features otel --lib otel::
 	@count=$$(cargo tree --no-default-features --features rust-only -e normal | grep -ci "^opentelemetry"); \
 	if [ "$$count" != "0" ]; then echo "ERROR: default build pulls opentelemetry ($$count refs)"; exit 1; fi
 	@dup=$$(cargo tree -d | grep -cE "^opentelemetry"); \
@@ -641,6 +658,13 @@ doc-hidden-check:
 api-surface-check:
 	python3 scripts/check_api_surface.py
 	python3 scripts/check_api_surface.py --self-test
+
+# python/python-test feature parity gate (audit 2026-11-06 ARC-001): the
+# two lists must differ only in the pyo3 activation entry, so cargo test
+# exercises the same surface the shipped wheel builds. Pure python3.
+python-features-check:
+	python3 scripts/check_python_features.py
+	python3 scripts/check_python_features.py --self-test
 
 # ARC-001: field-count ratchet on the core Terminal struct. New state goes
 # into a terminal/state.rs sub-struct, never a new top-level field.
@@ -739,7 +763,7 @@ audit-deps:
 	uvx --python-preference only-system pip-audit --strict -r $$reqs; \
 	status=$$?; rm -f $$reqs; exit $$status
 
-checkall: extensions-check ffi-header-check ffi-surface-check derive-version-check core-version-check version-train-check doc-hidden-check api-surface-check terminal-fields-check mux-docs-check mux-schema-check completions-check env-docs-check otel-check mux-otel-check pinned-tests-check stub-docs-check mux-package-check rustdoc-check doc-links-check test-rust test-rust-streaming lint-check stub-check test-python test-web caps-table-check
+checkall: extensions-check ffi-header-check ffi-surface-check derive-version-check core-version-check version-train-check doc-hidden-check api-surface-check python-features-check terminal-fields-check mux-docs-check caps-table-check mux-schema-check completions-check env-docs-check otel-check mux-otel-check pinned-tests-check stub-docs-check mux-package-check rustdoc-check doc-links-check lint-check test-integrations test-rust test-rust-streaming stub-check test-python test-web
 	@echo ""
 	@echo "======================================================================"
 	@echo "  All code quality checks passed!"
@@ -757,6 +781,7 @@ checkall: extensions-check ffi-header-check ffi-surface-check derive-version-che
 	@echo "  ✓ Python type check (pyright)"
 	@echo "  ✓ Python stub check (pyright)"
 	@echo "  ✓ Python tests"
+	@echo "  ✓ Agent-state extension wire tests (vitest)"
 	@echo "  ✓ Web frontend tests (vitest)"
 	@echo "  ✓ Caps table in sync"
 	@echo "  ✓ Doc links + anchors (lychee, offline)"
@@ -776,6 +801,10 @@ checkall-ci: cross-target-check checkall test-mux-ci test-python-streaming-ci
 
 # The mux nextest runs of CI's mux-test job, same serial ci profile
 # (.config/nextest.toml), plus the D1 isolation build and dep assertion.
+# The three daemon-spawning legs retry once on failure — a first run lost
+# to host-load flake re-runs the whole suite once before the gate fails,
+# while a genuine failure still fails on the retry. The retry is printed
+# ("RETRY 1 for ...") so gate readers see it; assertions are untouched.
 test-mux-ci:
 	@echo "Running the mux CI suites (nextest ci profile, serial)..."
 	cargo build --locked --no-default-features --features sim
@@ -783,10 +812,22 @@ test-mux-ci:
 		echo "D1 violation: sim pulled tokio, portable-pty, subtle, zeroize, prost, axum, or swash"; \
 		exit 1; \
 	fi
-	PAR_MUX_NO_APP_WRAPPER=1 cargo nextest run --profile ci --locked -p par-mux --features attach --run-ignored all
-	cargo nextest run --profile ci --locked --no-default-features --features rust-only,mux-bin,serde,attach --run-ignored all
+	@set -e; \
+	retry_once() { \
+		name="$$1"; shift; \
+		if ! "$$@"; then \
+			echo ""; \
+			echo "RETRY 1 for $$name: first run failed above; re-running the suite once."; \
+			"$$@" || { echo "$$name failed on the retry too"; exit 1; }; \
+			echo "$$name: PASSED ON RETRY 1 (first run failed; treating as a load flake)"; \
+		else \
+			echo "$$name: passed"; \
+		fi; \
+	}; \
+	retry_once "mux integration suites" env PAR_MUX_NO_APP_WRAPPER=1 cargo nextest run --profile ci --locked -p par-mux --features attach --run-ignored all; \
+	retry_once "root mux re-export suites" cargo nextest run --profile ci --locked --no-default-features --features rust-only,mux-bin,serde,attach --run-ignored all; \
+	retry_once "streaming mux_factory suite" cargo nextest run --profile ci --locked --lib --no-default-features --features rust-only,streaming,mux,serde streaming::mux_factory; \
 	cargo nextest run --profile ci --locked -p par-term-emu-core --features mux,serde --run-ignored all
-	cargo nextest run --profile ci --locked --lib --no-default-features --features rust-only,streaming,mux,serde streaming::mux_factory
 
 # Windows MSVC cross-target checks: a misplaced #[cfg(unix)] broke the Windows
 # attach build for weeks (merge 37da2f8d) while every host gate stayed green.
@@ -1225,11 +1266,21 @@ test-web:
 		exit 1; \
 	fi
 	@if [ ! -d "web-terminal-frontend/node_modules" ]; then \
-		echo "Error: web-terminal-frontend/node_modules is missing (a fresh git worktree does not copy it)."; \
-		echo "  Bootstrap it first:  cd web-terminal-frontend && bun install"; \
-		exit 1; \
+		echo "node_modules missing - bootstrapping (bun install --frozen-lockfile)..."; \
+		cd web-terminal-frontend && bun install --frozen-lockfile; \
+	else \
+		echo "node_modules already present - skipping install"; \
 	fi
 	cd web-terminal-frontend && bun run test
+	@echo ""
+
+# ENH-063: the shipped agent-state extensions' vitest wire-shape harness.
+# bun install --frozen-lockfile self-bootstraps a fresh checkout or
+# worktree; it is a fast no-op once node_modules matches the lockfile.
+test-integrations:
+	@echo "Running agent-state extension wire tests (vitest)..."
+	cd crates/par-mux/integrations && bun install --frozen-lockfile
+	cd crates/par-mux/integrations && bun run test
 	@echo ""
 
 web-clean:
@@ -1381,4 +1432,7 @@ fuzz-attach_input: ## Fuzz the par-mux attach stdin tokenizer (ENH-046)
 fuzz-ipc_rows: ## Fuzz the par-mux reply-row parsers (ENH-060)
 	cargo +nightly fuzz run ipc_rows -- -max_total_time=$(FUZZ_SECONDS) -rss_limit_mb=512
 
-fuzz-all: fuzz-terminal_process fuzz-sixel fuzz-kitty fuzz-apc_filter fuzz-tmux_control fuzz-mux_parse_command fuzz-mux_hook_report fuzz-attach_input fuzz-ipc_rows ## Run all nine fuzz targets for FUZZ_SECONDS each (default 60)
+fuzz-iterm_transfer: ## Fuzz the OSC 1337 file-transfer state machine (ENH-064)
+	cargo +nightly fuzz run iterm_transfer -- -max_total_time=$(FUZZ_SECONDS) -rss_limit_mb=512
+
+fuzz-all: fuzz-terminal_process fuzz-sixel fuzz-kitty fuzz-apc_filter fuzz-tmux_control fuzz-mux_parse_command fuzz-mux_hook_report fuzz-attach_input fuzz-ipc_rows fuzz-iterm_transfer ## Run all ten fuzz targets for FUZZ_SECONDS each (default 60)

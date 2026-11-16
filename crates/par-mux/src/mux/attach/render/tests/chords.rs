@@ -2,6 +2,34 @@
 
 use super::*;
 
+/// The settings dialog's `prefix` row is a bare byte: `M-1` is rejected
+/// at the prompt (flash, nothing written) while a management chord row
+/// still accepts the Alt spelling.
+#[test]
+fn settings_prefix_row_rejects_alt_but_chord_rows_accept_it() {
+    let (_rx, mut conn, mut session) = command_menu_session("prefixalt");
+    let dir = tempfile::tempdir().expect("tempdir");
+    let path = dir.path().join("config.toml");
+    std::fs::write(&path, "[client]\n").unwrap();
+    session.settings_path = Some(path.clone());
+    session.enter_settings();
+    session.route_stdin_bytes(&mut conn, b"\t\t\t\t\t");
+    session.route_stdin_bytes(&mut conn, b"\r");
+    assert!(session.is_prompt(), "the prefix row opens the prompt");
+    type_and_commit(&mut session, &mut conn, "M-1");
+    assert!(session.is_prompt(), "an Alt prefix keeps the prompt up");
+    assert!(session.chrome.flash_text().is_some(), "and flashes");
+    let written = std::fs::read_to_string(&path).unwrap();
+    assert!(!written.contains("prefix"), "nothing written: {written}");
+    session.leave_prompt();
+
+    session.route_stdin_bytes(&mut conn, b"jj\r");
+    assert!(session.is_prompt(), "the split-right row opens the prompt");
+    type_and_commit(&mut session, &mut conn, "M-1");
+    let written = std::fs::read_to_string(&path).unwrap();
+    assert!(written.contains("split-right = \"M-1\""), "{written}");
+}
+
 /// A session whose status saw `$0` but whose session roster comes
 /// back EMPTY (another client killed the last session before the
 /// throttled refresh noticed): prefix `)` must be a no-op — no
@@ -118,7 +146,7 @@ fn kill_chord_lands_on_the_survivor_or_marks_the_view_stale() {
 
     // No survivor: list-panes comes back empty.
     let (rx, mut conn, mut session) = two_pane_session("kill-last", FakeScript::default());
-    session.status_dirty = false;
+    session.status_inflight.dirty = false;
     chord(&mut session, &mut conn, b'x');
     assert_eq!(
         drained(&rx),
@@ -128,7 +156,7 @@ fn kill_chord_lands_on_the_survivor_or_marks_the_view_stale() {
         ],
         "no reseed, no select"
     );
-    assert!(session.status_dirty, "the refresh ends the view");
+    assert!(session.status_inflight.dirty, "the refresh ends the view");
 }
 
 /// Swap prev/next pick the layout-order neighbor and wrap; a single
@@ -254,9 +282,9 @@ fn join_pane_chord_picks_a_window_and_joins() {
     drained(&rx);
     settle(&mut session, &mut conn);
     // The picker is up with the join intent; walk to the @1 window row
-    // (refs: session header, @0, @1) and activate it.
-    chord(&mut session, &mut conn, b'j');
-    chord(&mut session, &mut conn, b'j');
+    // (refs: @0, @1) with arrows (the filter is live, so typed letters
+    // filter) and activate it.
+    session.picker_key(&mut conn, &TermKeyEvent::functional(TermKey::Down, 0));
     chord(&mut session, &mut conn, b'\r');
     settle(&mut session, &mut conn);
     let lines = drained(&rx);
@@ -419,7 +447,7 @@ fn border_cycle_reaches_herdr_boxes_that_survive_a_reseed() {
     assert_eq!(session.render_opts.glyphs, Glyphs::Herdr);
     assert!(session.render_opts.pane_borders && session.renderer.pane_borders);
     assert_eq!(session.chrome.flash_text(), Some("border style: herdr"));
-    session.reseed_window(&mut conn, "@0");
+    session.reseed_window(&mut conn, "@0", false);
     assert!(
         session.renderer.pane_borders,
         "the re-fit renderer keeps the herdr boxes"
@@ -703,7 +731,7 @@ fn workspace_landing_takes_the_resumed_session_not_the_first_listed() {
 #[test]
 fn landing_on_an_empty_workspace_only_marks_the_status_stale() {
     let (rx, mut conn, mut session) = two_pane_session("ws-empty", FakeScript::default());
-    session.status_dirty = false;
+    session.status_inflight.dirty = false;
     session.land_on_workspace(&mut conn, "+3");
     settle(&mut session, &mut conn);
     assert_eq!(
@@ -715,7 +743,7 @@ fn landing_on_an_empty_workspace_only_marks_the_status_stale() {
         ]
     );
     assert_eq!(session.window, "@0");
-    assert!(session.status_dirty);
+    assert!(session.status_inflight.dirty);
 }
 
 /// The workspace-picker chord lists the roster, opens on the active
@@ -753,7 +781,7 @@ fn workspace_picker_opens_on_the_active_row_and_lands_on_enter() {
     );
     assert!(text.contains(" +2  gamma"), "{text}");
     drained(&rx);
-    session.picker_byte(&mut conn, b'j');
+    session.picker_key(&mut conn, &TermKeyEvent::functional(TermKey::Down, 0));
     settle(&mut session, &mut conn);
     session.picker_byte(&mut conn, b'\r');
     settle(&mut session, &mut conn);
@@ -800,12 +828,15 @@ fn prompt_commits_send_each_targets_wire_spelling() {
         ),
     ] {
         session.enter_prompt(target.clone());
-        session.status_dirty = false;
+        session.status_inflight.dirty = false;
         type_and_commit(&mut session, &mut conn, typed);
         assert_eq!(drained(&rx), vec![wire.to_string()], "{target:?}");
         assert!(!session.is_prompt(), "{target:?}: the commit closes");
         assert_eq!(session.renderer.overlay, None);
-        assert!(session.status_dirty, "{target:?}: the status re-queries");
+        assert!(
+            session.status_inflight.dirty,
+            "{target:?}: the status re-queries"
+        );
     }
 }
 
@@ -975,14 +1006,14 @@ fn new_workspace_prompt_creates_and_lands_or_stops_on_error() {
 #[test]
 fn closing_an_unshown_tab_only_kills_it() {
     let (rx, mut conn, mut session) = two_pane_session("close-other", FakeScript::default());
-    session.status_dirty = false;
+    session.status_inflight.dirty = false;
     session.open_menu(MenuTarget::Tab("@7".to_string()));
     session.menu_click(&mut conn, 2);
     settle(&mut session, &mut conn);
     assert!(session.menu().is_none());
     assert_eq!(drained(&rx), vec!["kill-window -t @7".to_string()]);
     assert_eq!(session.window, "@0");
-    assert!(session.status_dirty);
+    assert!(session.status_inflight.dirty);
 }
 
 /// Closing the SHOWN tab lands on the session's `*`-marked survivor
@@ -1014,7 +1045,7 @@ fn closing_the_shown_tab_lands_on_the_marked_survivor() {
     assert_eq!(session.window, "@2");
 
     let (rx, mut conn, mut session) = two_pane_session("close-last", FakeScript::default());
-    session.status_dirty = false;
+    session.status_inflight.dirty = false;
     session.open_menu(MenuTarget::Tab("@0".to_string()));
     session.menu_click(&mut conn, 2);
     settle(&mut session, &mut conn);
@@ -1026,7 +1057,7 @@ fn closing_the_shown_tab_lands_on_the_marked_survivor() {
         ]
     );
     assert_eq!(session.window, "@0");
-    assert!(session.status_dirty);
+    assert!(session.status_inflight.dirty);
 }
 
 /// The tab menu's move rows: one row per move for the RIGHT-CLICKED
@@ -1045,12 +1076,12 @@ fn tab_menu_move_rows_reorder_the_targeted_tab() {
         "pane %0",
         "pane %1",
     ]));
-    session.status_dirty = false;
+    session.status_inflight.dirty = false;
     session.open_menu(MenuTarget::Tab("@1".to_string()));
     session.menu_click(&mut conn, 6); // the "move to start" row
     settle(&mut session, &mut conn);
     assert_eq!(drained(&rx), vec!["move-window -s @1 -t 0".to_string()]);
-    assert!(session.status_dirty);
+    assert!(session.status_inflight.dirty);
 
     // The first tab's move left flashes and sends nothing.
     let (rx, mut conn, mut session) = two_pane_session("tab-move-edge", FakeScript::default());
@@ -1063,7 +1094,7 @@ fn tab_menu_move_rows_reorder_the_targeted_tab() {
         "pane %0",
         "pane %1",
     ]));
-    session.status_dirty = false;
+    session.status_inflight.dirty = false;
     session.open_menu(MenuTarget::Tab("@0".to_string()));
     session.menu_click(&mut conn, 4); // the "move left" row
     settle(&mut session, &mut conn);
@@ -1163,7 +1194,7 @@ fn closing_a_workspace_lands_on_a_survivor_only_when_it_was_shown() {
             ..FakeScript::default()
         },
     );
-    session.status_dirty = false;
+    session.status_inflight.dirty = false;
     session.open_menu(MenuTarget::Workspace("+5".to_string()));
     session.menu_click(&mut conn, 2);
     settle(&mut session, &mut conn);
@@ -1174,7 +1205,7 @@ fn closing_a_workspace_lands_on_a_survivor_only_when_it_was_shown() {
             "kill-workspace -t +5".to_string()
         ]
     );
-    assert!(session.status_dirty);
+    assert!(session.status_inflight.dirty);
 
     // The last workspace: nothing survives to land on.
     let mut replies = std::collections::HashMap::new();
@@ -1189,7 +1220,7 @@ fn closing_a_workspace_lands_on_a_survivor_only_when_it_was_shown() {
             ..FakeScript::default()
         },
     );
-    session.status_dirty = false;
+    session.status_inflight.dirty = false;
     session.open_menu(MenuTarget::Workspace("+0".to_string()));
     session.menu_click(&mut conn, 2);
     settle(&mut session, &mut conn);
@@ -1201,7 +1232,7 @@ fn closing_a_workspace_lands_on_a_survivor_only_when_it_was_shown() {
             "list-workspaces".to_string()
         ]
     );
-    assert!(session.status_dirty);
+    assert!(session.status_inflight.dirty);
     assert_eq!(session.window, "@0");
 }
 
@@ -1237,7 +1268,7 @@ fn refused_workspace_close_flashes_and_arms_the_group_close() {
             ..FakeScript::default()
         },
     );
-    session.status_dirty = false;
+    session.status_inflight.dirty = false;
     session.open_menu(MenuTarget::Workspace("+0".to_string()));
     assert_eq!(overlay_text(&session)[2].trim(), "close");
     session.menu_click(&mut conn, 2);
@@ -1255,7 +1286,7 @@ fn refused_workspace_close_flashes_and_arms_the_group_close() {
         flash.contains("2 linked worktrees") && flash.contains("-g"),
         "{flash}"
     );
-    assert!(!session.status_dirty, "nothing closed");
+    assert!(!session.status_inflight.dirty, "nothing closed");
 
     // The same workspace's menu now offers the group close in place.
     session.open_menu(MenuTarget::Workspace("+0".to_string()));
@@ -1582,7 +1613,7 @@ fn plain_router_forwards_literals_and_consumes_unbound_keys() {
     // A prefix at the END of one run completes in the next run.
     assert!(!session.route_plain(&[crate::mux::attach::C_B], &mut conn));
     settle(&mut session, &mut conn);
-    assert!(session.prefix_pending);
+    assert!(session.input_route.prefix_pending);
     assert!(session.route_plain(b"d", &mut conn), "d detaches");
     settle(&mut session, &mut conn);
 
@@ -1604,12 +1635,12 @@ fn non_ascii_chord_key_is_swallowed_whole_or_folded() {
     let kanji = "中".as_bytes();
     assert!(!session.route_plain(&[crate::mux::attach::C_B, kanji[0]], &mut conn));
     assert!(
-        session.prefix_pending,
+        session.input_route.prefix_pending,
         "armed until the character completes"
     );
     assert!(!session.route_plain(&kanji[1..], &mut conn));
     settle(&mut session, &mut conn);
-    assert!(!session.prefix_pending);
+    assert!(!session.input_route.prefix_pending);
     assert!(drained(&rx).is_empty(), "no byte of it reached the pane");
     assert_eq!(
         session.chrome.flash_text(),
@@ -1655,16 +1686,17 @@ fn cjk_text_reaches_the_prompt_and_commits_intact() {
     assert_eq!(session.prompt().text, "a");
 }
 
-/// The scroll-mode search takes CJK and the render status row paints
+/// The copy-mode search line takes CJK and the render status row paints
 /// it whole: each wide glyph two columns, the next glyph past its right
 /// half (one char per cell would let the buffer diff skip the glyph
 /// after every wide one).
 #[test]
 fn cjk_search_echo_paints_whole_in_the_status_row() {
     let (_rx, mut conn, mut session) = two_pane_session("cjk-search", FakeScript::default());
-    session.begin_scroll_search();
-    assert!(!session.route_plain("日本語".as_bytes(), &mut conn));
-    assert_eq!(session.scroll_query.as_deref(), Some("日本語"));
+    chord(&mut session, &mut conn, b'[');
+    assert!(session.is_copy());
+    assert!(!session.route_plain("/日本語".as_bytes(), &mut conn));
+    assert_eq!(session.copy_state().search_query, "日本語");
     let text = status_row_text(&mut session);
     assert!(text.contains("search: 日本語"), "{text:?}");
 }
@@ -1723,79 +1755,75 @@ fn prefix_arrows_navigate_swap_and_aim_through_a_zoom() {
     );
 }
 
-/// Scroll mode's keys: Up/PgUp scroll back, Down returns, Home jumps
-/// to the top of history, and End or q leave the mode back at live.
+/// Copy mode's functional keys: Up/PgUp roam back, Down/PgDn forward,
+/// Home/End jump the line's ends, and q (plain byte or key) leaves the
+/// mode back at live.
 #[test]
-fn scroll_mode_keys_move_the_viewport_and_exit() {
-    let (_rx, _conn, mut session) = two_pane_session("scrollkeys", FakeScript::default());
+fn copy_mode_keys_move_the_cursor_and_exit() {
+    let (_rx, mut conn, mut session) = two_pane_session("copykeys", FakeScript::default());
     for i in 0..60 {
         session
             .renderer
             .feed_output(1, format!("line{i}\r\n").as_bytes());
     }
-    let history = session
+    chord(&mut session, &mut conn, b'[');
+    assert!(session.is_copy());
+    let start = session.copy_state().cursor_absolute_line;
+    session.copy_mode_input(&mut conn, &TermKeyEvent::functional(TermKey::Up, 0));
+    assert_eq!(session.copy_state().cursor_absolute_line, start - 1);
+    session.copy_mode_input(&mut conn, &TermKeyEvent::functional(TermKey::Down, 0));
+    assert_eq!(session.copy_state().cursor_absolute_line, start);
+    session.copy_mode_input(&mut conn, &TermKeyEvent::functional(TermKey::PageDown, 0));
+    assert_eq!(
+        session.copy_state().cursor_absolute_line.min(start),
+        start,
+        "a page down clamps at the buffer bottom"
+    );
+    session.copy_mode_input(&mut conn, &TermKeyEvent::functional(TermKey::PageUp, 0));
+    session.copy_mode_input(&mut conn, &TermKeyEvent::functional(TermKey::Home, 0));
+    assert_eq!(session.copy_state().cursor_col, 0, "Home is line start");
+    session.copy_mode_input(&mut conn, &TermKeyEvent::functional(TermKey::End, 0));
+    assert!(session.copy_state().cursor_col > 0, "End is line end");
+    session.copy_mode_input(&mut conn, &TermKeyEvent::char_('q', 0));
+    assert!(!session.is_copy(), "q leaves too");
+    assert_eq!(session.renderer.scroll_offset_of(1), 0, "back at live");
+}
+
+/// prefix [ enters copy mode on EVERY pane — an empty-scrollback pane
+/// roams its visible screen. Typed bytes never reach the pane and q
+/// leaves it.
+#[test]
+fn scroll_chord_enters_copy_mode_on_every_pane() {
+    let (rx, mut conn, mut session) = two_pane_session("copychord", FakeScript::default());
+    chord(&mut session, &mut conn, b'[');
+    assert!(
+        session.is_copy(),
+        "an empty pane enters: it roams the screen"
+    );
+    session.route_plain(b"abc", &mut conn);
+    assert!(session.is_copy());
+    assert!(drained(&rx).is_empty(), "typed bytes stay out of the pane");
+    session.route_plain(b"q", &mut conn);
+    assert!(!session.is_copy());
+}
+
+/// An alt-screen pane enters copy mode too: the mode roams the alt
+/// screen's visible rows (the frozen snapshot).
+#[test]
+fn scroll_chord_enters_copy_mode_on_alt_screen() {
+    let (_rx, mut conn, mut session) = two_pane_session("copyalt", FakeScript::default());
+    session
+        .renderer
+        .feed_output(1, b"\x1b[?1049h".to_vec().as_slice());
+    assert!(session
         .renderer
         .pane_terminal(1)
         .expect("pane")
-        .active_grid()
-        .scrollback_len();
-    assert!(history > 0);
-    assert!(session.renderer.enter_scroll_mode(1));
-    session.modal = Modal::Scroll;
-    let start = session.renderer.scroll_offset_of(1);
-    session.scroll_mode_key(&TermKeyEvent::functional(TermKey::Up, 0));
-    assert_eq!(session.renderer.scroll_offset_of(1), start + 1);
-    session.scroll_mode_key(&TermKeyEvent::functional(TermKey::Down, 0));
-    assert_eq!(session.renderer.scroll_offset_of(1), start);
-    session.scroll_mode_key(&TermKeyEvent::functional(TermKey::PageDown, 0));
-    assert_eq!(
-        session.renderer.scroll_offset_of(1),
-        0,
-        "a page down to live"
-    );
-    session.scroll_mode_key(&TermKeyEvent::functional(TermKey::PageUp, 0));
-    assert_eq!(
-        session.renderer.scroll_offset_of(1),
-        start,
-        "a page is the pane height"
-    );
-    session.scroll_mode_key(&TermKeyEvent::functional(TermKey::Home, 0));
-    assert_eq!(
-        session.renderer.scroll_offset_of(1),
-        history,
-        "the top of history"
-    );
-    session.scroll_mode_key(&TermKeyEvent::functional(TermKey::End, 0));
-    assert!(!session.is_scroll());
-    assert!(!session.renderer.scroll_mode_active(1));
-    assert_eq!(session.renderer.scroll_offset_of(1), 0);
-
-    assert!(session.renderer.enter_scroll_mode(1));
-    session.modal = Modal::Scroll;
-    session.scroll_mode_key(&TermKeyEvent::char_('q', 0));
-    assert!(!session.is_scroll(), "q leaves too");
-}
-
-/// prefix [ enters scroll mode only when the focused pane has
-/// history; in the mode, typed bytes never reach the pane and q
-/// leaves it.
-#[test]
-fn scroll_chord_needs_history_and_owns_typed_bytes() {
-    let (rx, mut conn, mut session) = two_pane_session("scrollchord", FakeScript::default());
+        .is_alt_screen_active());
     chord(&mut session, &mut conn, b'[');
-    assert!(!session.is_scroll(), "no history: nothing to scroll");
-    for i in 0..40 {
-        session
-            .renderer
-            .feed_output(1, format!("l{i}\r\n").as_bytes());
-    }
-    chord(&mut session, &mut conn, b'[');
-    assert!(session.is_scroll());
-    session.route_plain(b"abc", &mut conn);
-    assert!(session.is_scroll());
-    assert!(drained(&rx).is_empty(), "typed bytes stay out of the pane");
+    assert!(session.is_copy(), "alt screen roams its visible rows");
     session.route_plain(b"q", &mut conn);
-    assert!(!session.is_scroll());
+    assert!(!session.is_copy());
 }
 
 /// The help panel's key path: j/k and arrows scroll (clamped at the
@@ -1846,17 +1874,19 @@ fn help_keys_scroll_filter_and_close() {
     assert!(!session.help().filtering && session.is_help());
 }
 
-/// The picker's key and byte paths: j/k/arrows move (wrapping), `/`
-/// filters as you type (Backspace pops, Enter commits, Escape
-/// closes), and an unbound key closes.
+/// The picker's key and byte paths from the live-filter open: typing
+/// filters immediately (no `/` first), arrows move the selection
+/// without leaving the filter, Enter activates straight from the
+/// filter, Backspace pops, Escape closes, and an unbound key commits
+/// the box (then j moves, `q` closes).
 #[test]
-fn picker_keys_move_filter_and_close() {
+fn picker_opens_in_search_mode_filters_arrows_and_enter() {
     let replies = std::collections::HashMap::from([
         ("list-sessions".to_string(), "$0: work\n$1: lab".to_string()),
         ("list-windows -t $0".to_string(), "@0 * main".to_string()),
         ("list-windows -t $1".to_string(), "@2 * logs".to_string()),
     ]);
-    let (_rx, mut conn, mut session) = two_pane_session(
+    let (rx, mut conn, mut session) = two_pane_session(
         "pickkeys",
         FakeScript {
             replies,
@@ -1865,44 +1895,80 @@ fn picker_keys_move_filter_and_close() {
     );
     chord(&mut session, &mut conn, b'w');
     assert!(session.is_picker());
+    assert!(
+        session.picker().filtering,
+        "the filter is live from the open"
+    );
     let count = session.picker().refs.len();
-    assert_eq!(count, 4, "two sessions with one window each");
-    assert_eq!(session.picker().selected, 0, "opens on the current session");
+    assert_eq!(
+        count, 2,
+        "two sessions with one window each, no session rows"
+    );
+    assert_eq!(session.picker().selected, 0, "opens on the shown window");
+
+    // Arrows move the selection without leaving the filter.
     session.picker_key(&mut conn, &TermKeyEvent::functional(TermKey::Up, 0));
     assert_eq!(
         session.picker().selected,
         count - 1,
         "Up wraps to the bottom"
     );
+    assert!(session.picker().filtering, "arrows keep the filter up");
     session.picker_key(&mut conn, &TermKeyEvent::functional(TermKey::Down, 0));
-    session.picker_key(&mut conn, &TermKeyEvent::char_('j', 0));
-    session.picker_key(&mut conn, &TermKeyEvent::char_('k', 0));
     assert_eq!(session.picker().selected, 0);
-    session.picker_key(&mut conn, &TermKeyEvent::char_('/', 0));
+
+    // Typing filters immediately, no `/` first.
     for c in "logs".chars() {
         session.picker_key(&mut conn, &TermKeyEvent::char_(c, 0));
     }
     assert_eq!(session.picker().filter, "logs");
+    assert!(session.picker().filtering);
+    assert_eq!(
+        session.picker().refs.len(),
+        1,
+        "only the lab session's logs window remains"
+    );
     let text = overlay_text(&session).join("\n");
     assert!(text.contains("logs") && !text.contains("main"), "{text}");
-    session.picker_key(&mut conn, &TermKeyEvent::functional(TermKey::Down, 0));
-    assert!(!session.picker().filtering, "a non-char key commits");
-    session.picker_byte(&mut conn, b'/');
+
+    // Enter activates the selected row straight from the live filter —
+    // the clamped selection sits on the logs window row (@2), the
+    // landing target.
+    drained(&rx);
+    session.picker_byte(&mut conn, b'\r');
+    settle(&mut session, &mut conn);
+    assert!(!session.is_picker(), "Enter from the live filter activates");
+    assert_eq!(drained(&rx)[0], "switch-client -t @2");
+
+    // Reopen: Backspace pops the live filter; Escape closes from it.
+    chord(&mut session, &mut conn, b'w');
+    for c in "logs".chars() {
+        session.picker_byte(&mut conn, c as u8);
+    }
     session.picker_byte(&mut conn, 0x7f);
     assert_eq!(session.picker().filter, "log");
-    session.picker_byte(&mut conn, b'\r');
-    assert!(!session.picker().filtering && session.is_picker());
-    session.picker_key(&mut conn, &TermKeyEvent::functional(TermKey::Tab, 0));
-    assert!(!session.is_picker(), "an unbound key closes");
-
-    chord(&mut session, &mut conn, b'w');
-    session.picker_byte(&mut conn, b'/');
     assert!(!session.picker_byte(&mut conn, 0x1b), "Escape closes");
     assert!(!session.is_picker());
+
+    // An unbound key commits the box; j moves the committed list and
+    // `q` closes it, `/` re-opening the box.
     chord(&mut session, &mut conn, b'w');
-    session.picker_key(&mut conn, &TermKeyEvent::char_('/', 0));
-    session.picker_key(&mut conn, &TermKeyEvent::functional(TermKey::Escape, 0));
-    assert!(!session.is_picker());
+    session.picker_key(&mut conn, &TermKeyEvent::functional(TermKey::Tab, 0));
+    assert!(
+        !session.picker().filtering,
+        "a non-char key commits the box"
+    );
+    assert!(session.is_picker());
+    let count = session.picker().refs.len();
+    let before = session.picker().selected;
+    session.picker_byte(&mut conn, b'j');
+    assert_eq!(
+        session.picker().selected,
+        (before + 1) % count,
+        "j moved the committed list by one"
+    );
+    session.picker_byte(&mut conn, b'q');
+    assert!(!session.is_picker(), "q closes the committed box");
 }
 
 /// Coordinates SGR never sends (column or row 0) are dropped
@@ -2259,24 +2325,18 @@ fn picker_pointer_wheels_move_and_a_click_activates() {
     assert!(session.is_picker(), "the footer does nothing");
     assert!(drained(&rx).is_empty());
 
-    // Filtering: panel row 0 is the filter line.
-    session.picker_byte(&mut conn, b'/');
-    settle(&mut session, &mut conn);
-    session.picker_byte(&mut conn, b'a');
-    settle(&mut session, &mut conn);
-    session.picker_byte(&mut conn, b'\r');
-    settle(&mut session, &mut conn);
-    assert!(!session.picker().filtering);
+    // The picker opens with the live filter up: panel row 0 is the
+    // filter line, and a click on a content row activates straight
+    // from the filter.
     let (x0, y0, _, _) = session.renderer.overlay_geometry().expect("picker up");
     session.route_mouse(&mut conn, sgr(0, (x0 + 4) as u16, (y0 + 3) as u16, false));
     settle(&mut session, &mut conn);
     assert!(
         session.picker().filtering,
-        "the filter line re-opens the box"
+        "the filter line keeps the box up"
     );
     assert!(drained(&rx).is_empty());
-    // "a" keeps all three rows: panel row 3 is the third content
-    // row (gamma).
+    // Content row 2 (gamma) sits at panel row 3.
     session.route_mouse(&mut conn, sgr(0, (x0 + 4) as u16, (y0 + 6) as u16, false));
     settle(&mut session, &mut conn);
     assert!(!session.is_picker(), "a content click activates");
@@ -2836,7 +2896,10 @@ fn mouse_hit_maps_drags_and_the_pointer_modals() {
     session.picker_mut().entries = vec![super::super::super::PickerEntry {
         session_id: "$0".to_string(),
         session_name: "work".to_string(),
-        windows: vec![("@0".to_string(), "main".to_string())],
+        windows: vec![
+            ("@0".to_string(), "main".to_string()),
+            ("@1".to_string(), "vim".to_string()),
+        ],
         active_window: Some("@0".to_string()),
         current: true,
     }];
@@ -3034,7 +3097,8 @@ fn prefix_chord_classifies_bytes_in_precedence_order() {
     assert_eq!(session.prefix_chord(b'?'), PrefixChord::Help);
     assert_eq!(session.prefix_chord(b'w'), PrefixChord::Picker);
     assert_eq!(session.prefix_chord(b'd'), PrefixChord::Detach);
-    assert_eq!(session.prefix_chord(b'['), PrefixChord::Scroll);
+    assert_eq!(session.prefix_chord(b'['), PrefixChord::CopyMode);
+    assert_eq!(session.prefix_chord(b'e'), PrefixChord::EditScrollback);
     for key in *b"np()o" {
         assert_eq!(session.prefix_chord(key), PrefixChord::Switch);
     }
@@ -3042,16 +3106,16 @@ fn prefix_chord_classifies_bytes_in_precedence_order() {
     assert_eq!(session.prefix_chord(b'q'), PrefixChord::Unbound);
 
     // A management key rebound onto a fixed-table byte wins over it.
-    session.management.zoom = b'n';
+    session.management.zoom = crate::mux::config::ChordKey::plain(b'n');
     assert_eq!(
         session.prefix_chord(b'n'),
         PrefixChord::Management(ManagementKey::Zoom)
     );
     // The reload key never shadows detach.
-    session.reload_key = b'd';
+    session.input_route.reload_key = b'd';
     assert_eq!(session.prefix_chord(b'd'), PrefixChord::Detach);
     // Reload outranks a management chord on the same byte.
-    session.reload_key = b'%';
+    session.input_route.reload_key = b'%';
     assert_eq!(session.prefix_chord(b'%'), PrefixChord::Reload);
 }
 
@@ -3115,14 +3179,14 @@ fn prefix_indicator_paints_the_row_and_clears_on_the_next_key() {
         !session.route_plain(&[crate::mux::attach::C_B], &mut conn),
         "the prefix alone never detaches"
     );
-    assert!(session.prefix_pending, "the chord is armed");
+    assert!(session.input_route.prefix_pending, "the chord is armed");
     assert!(
         status_row_text(&mut session).contains("prefix"),
         "the armed prefix paints the row cue"
     );
     assert!(!session.route_plain(b"Q", &mut conn));
     assert!(
-        !session.prefix_pending,
+        !session.input_route.prefix_pending,
         "the unbound key consumed the chord"
     );
     assert!(
@@ -3144,7 +3208,7 @@ fn reload_chord_flash_paints_on_the_arming_tick() {
     std::fs::write(&path, "[client]\n").unwrap();
     session.settings_path = Some(path);
     drained(&rx);
-    let reload = session.reload_key;
+    let reload = session.input_route.reload_key;
     assert!(!session.route_plain(&[crate::mux::attach::C_B, reload], &mut conn));
     session.tick_flash(std::time::Instant::now());
     assert!(
@@ -3208,7 +3272,7 @@ fn exit_cue_and_respawn_chord_follow_the_held_pane() {
         pane_id: "%1".to_string(),
         exit_code: None,
     });
-    session.management.respawn = b'&';
+    session.management.respawn = crate::mux::config::ChordKey::plain(b'&');
     assert_eq!(
         session.exit_cue().as_deref(),
         Some("(exited ? — C-b & respawns)")
@@ -3352,4 +3416,58 @@ fn drag_selection_paints_the_swept_cells_reversed() {
     assert!(!reversed(5, 3), "past the head is untouched");
     assert!(!reversed(2, 4), "below the span is untouched");
     assert!(!reversed(2, 0), "above the span is untouched");
+}
+
+/// Committing a layout row's chord writes `layout-* = "M-1"`; a bogus
+/// chord flashes and writes nothing.
+#[test]
+fn settings_chord_prompt_accepts_m_keys() {
+    let (_rx, mut conn, mut session) = command_menu_session("layoutchord");
+    let dir = tempfile::tempdir().expect("tempdir");
+    let path = dir.path().join("config.toml");
+    std::fs::write(&path, "[client]\n").unwrap();
+    session.settings_path = Some(path.clone());
+    session.enter_settings();
+    session.route_stdin_bytes(&mut conn, b"\t\t\t\t\t");
+    // layout-even-horizontal sits five rows above the last (respawn).
+    let row = super::modal_settings::SettingsSection::Keys.row_count() - 6;
+    for _ in 0..row {
+        session.route_stdin_bytes(&mut conn, b"j");
+    }
+    session.route_stdin_bytes(&mut conn, b"\r");
+    assert!(session.is_prompt(), "the layout row opens the prompt");
+    type_and_commit(&mut session, &mut conn, "bogus");
+    assert!(session.is_prompt(), "a bogus chord keeps the prompt up");
+    assert!(session.chrome.flash_text().is_some(), "and flashes");
+    let written = std::fs::read_to_string(&path).unwrap();
+    assert!(!written.contains("layout-"), "nothing written: {written}");
+    type_and_commit(&mut session, &mut conn, "M-1");
+    let written = std::fs::read_to_string(&path).unwrap();
+    assert!(
+        written.contains("layout-even-horizontal = \"M-1\""),
+        "{written}"
+    );
+}
+
+/// The help panel and the palette both list the five layout chords at
+/// their live bindings.
+#[test]
+fn help_and_palette_list_the_layout_chords() {
+    let rows = crate::mux::attach::help_rows(0x02, 0x12, Default::default(), 1);
+    assert!(
+        rows.iter()
+            .any(|r| r.text.contains("C-b M-1 / M-2 / M-3 / M-4 / M-5")),
+        "help lists the layout chords"
+    );
+    let m = crate::mux::config::Management::default();
+    let chords: Vec<_> = crate::mux::attach::panels::PALETTE_ACTIONS
+        .iter()
+        .enumerate()
+        .filter(|(_, (_, l))| l.starts_with("layout "))
+        .map(|(i, _)| crate::mux::attach::panels::palette_action_chord(i, 0x02, 0x12, &m).unwrap())
+        .collect();
+    assert_eq!(
+        chords,
+        ["C-b M-1", "C-b M-2", "C-b M-3", "C-b M-4", "C-b M-5"]
+    );
 }

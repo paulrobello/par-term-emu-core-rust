@@ -2,7 +2,10 @@
 //! cadence, host resize, the status row, the tab strip, and the
 //! config-driven display setters.
 
-use super::{DragState, FlushSink, Glyphs, Modal, PaneRect, RenderOptions, WindowSession};
+use super::{
+    copy_mode, trace_input, DragState, FlushSink, Glyphs, Modal, PaneRect, RenderOptions,
+    SessionStripMode, SnapshotFlight, WindowSession, RESTART_TOAST_WINDOW_SECS,
+};
 use crate::mux::attach::status::{Segment, StatusRow};
 use crate::mux::attach::tabs::TabStrip;
 use crate::mux::attach::targets::{active_window_row, cascade_landing, initial_attach_session};
@@ -150,6 +153,7 @@ impl WindowSession {
             cols,
             rows,
             self.chrome.status_bar_on,
+            self.chrome.session_strip_on,
             self.effective_render_opts().sidebar_width,
         );
     }
@@ -276,9 +280,9 @@ impl WindowSession {
         chords: &crate::mux::config::Chords,
         file: &crate::mux::config::ConfigFile,
     ) -> bool {
-        self.prefix = chords.prefix;
-        self.literal = chords.prefix;
-        self.reload_key = chords.reload;
+        self.input_route.prefix = chords.prefix;
+        self.input_route.literal = chords.prefix;
+        self.input_route.reload_key = chords.reload;
         self.management = chords.management;
         self.resize_step = chords.resize_step;
         if self.agent_rows != chords.agent_rows {
@@ -292,6 +296,23 @@ impl WindowSession {
                 "priority" => crate::mux::attach::panels::AgentSortMode::Priority,
                 _ => crate::mux::attach::panels::AgentSortMode::Grouped,
             });
+        // The session strip's mode and the agent dots: a change re-paints
+        // both strips (the texts gain/lose the dot column; the mode may
+        // add or remove the row, which draw_strips turns into a refit).
+        let mode = SessionStripMode::from_config(&chords.session_strip);
+        if self.session_strip_mode != mode {
+            self.session_strip_mode = mode;
+            self.chrome.session_strip.invalidate();
+            self.chrome.tab_strip.invalidate();
+            self.draw_strips();
+        }
+        let dots = chords.agent_state_dots == "on";
+        if self.agent_state_dots != dots {
+            self.agent_state_dots = dots;
+            self.chrome.session_strip.invalidate();
+            self.chrome.tab_strip.invalidate();
+            self.draw_strips();
+        }
         // An unknown delivery keeps the default (its warning rides
         // `display_option_warnings`).
         self.notify.delivery = super::notify::NotifyDelivery::parse(&chords.notify_delivery)
@@ -318,6 +339,7 @@ impl WindowSession {
         self.set_show_label_in_border(chords.show_label_in_border);
         self.set_pane_gaps(chords.pane_gaps);
         self.set_scrollbar_gutter(chords.scrollbar_gutter);
+        self.copy_mode_auto_exit = chords.copy_mode_auto_exit;
         self.cursor.change_cursor_shape = chords.change_cursor_shape;
         self.set_kitty_enabled(chords.kitty_graphics);
         let eff = crate::mux::config::resolve(file, &crate::mux::config::Overrides::default());
@@ -359,8 +381,9 @@ impl WindowSession {
         self.chrome.status_row.palette = palette;
         self.chrome.status_row.invalidate();
         self.draw_status_row();
+        self.chrome.session_strip.invalidate();
         self.chrome.tab_strip.invalidate();
-        self.draw_tab_strip();
+        self.draw_strips();
     }
 
     /// A host background report (the launch probe, or a later OSC 11
@@ -551,8 +574,9 @@ impl WindowSession {
 
         self.chrome.status_row.invalidate();
         self.draw_status_row();
+        self.chrome.session_strip.invalidate();
         self.chrome.tab_strip.invalidate();
-        self.draw_tab_strip();
+        self.draw_strips();
         // First frame: clear + full paint. repaint_all hides the host
         // cursor, so the frame's place_cursor must fire even if the
         // mapped state matches the hidden default.
@@ -631,7 +655,15 @@ impl WindowSession {
         // Replay every visible pane's state into its emulator: grid,
         // scrollback, cursor, and input modes ride the screen-restore
         // byte stream, the same stream passthrough writes to the host.
-        self.replay_all_panes(conn);
+        // A pane whose replay failed even after its retry would sit
+        // stale behind an otherwise-complete seed. A persistent refusal
+        // or transport failure is not survivable at this point (a
+        // broken transport ends the session anyway; a daemon refusing
+        // refresh-client for a live pane is abnormal), so the seed
+        // fails loudly rather than showing a silently stale window.
+        if !self.replay_all_panes(conn) {
+            return Err("seed replay failed for one or more panes after retry".to_string());
+        }
         // The status bar seeds with the view. On a client-snapshot
         // daemon the seed rides the pump's continuation machinery (the
         // async status path): the snapshot is written without waiting —
@@ -682,8 +714,9 @@ impl WindowSession {
         }
         self.chrome.status_row.invalidate();
         self.draw_status_row();
+        self.chrome.session_strip.invalidate();
         self.chrome.tab_strip.invalidate();
-        self.draw_tab_strip();
+        self.draw_strips();
         Ok(true)
     }
 
@@ -714,13 +747,13 @@ impl WindowSession {
         conn: &mut crate::mux::attach::conn::AttachConn,
         pending: Vec<u32>,
     ) {
-        if self.status_snapshot_inflight.is_some() {
-            self.status_dirty = true;
+        if self.status_inflight.flight.is_some() {
+            self.status_inflight.dirty = true;
             return;
         }
-        self.status_dirty = false;
-        self.status_snapshot_inflight = Some(std::time::Instant::now());
-        self.seed_snapshot_inflight = true;
+        self.status_inflight.begin(SnapshotFlight::Seed {
+            since: std::time::Instant::now(),
+        });
         let window = self.window.clone();
         self.send_then(
             conn,
@@ -744,9 +777,7 @@ impl WindowSession {
         window: String,
         pending: Vec<u32>,
     ) {
-        self.status_snapshot_inflight = None;
-        self.seed_snapshot_inflight = false;
-        let seed_raced = std::mem::take(&mut self.seed_raced_panes);
+        let seed_raced = self.status_inflight.complete();
         // A reply for a window the view already left is stale: the
         // switch's reseed re-queries (the nav_current rule).
         if self.window != window {
@@ -775,10 +806,11 @@ impl WindowSession {
                 }
                 // The snapshot carried every pane title: query-free.
                 let _ = self.refresh_pane_titles(conn);
+                self.maybe_restart_toast();
             }
             Err(status::StatusError::SessionGone) => {
                 // The session died mid-seed: the landing contract runs on
-                // the pump tick, where `status_end` ends the view the
+                // the pump tick, where `status_inflight.end` ends the view the
                 // way the sync path's `Ok(false)` did.
                 self.land_gone_view(conn);
             }
@@ -787,7 +819,37 @@ impl WindowSession {
             Err(status::StatusError::TimedOut) => {} // not produced by the reply half
         }
         self.draw_status_row();
-        self.draw_tab_strip();
+        self.draw_strips();
+    }
+
+    /// The restart toast: once per attach, when the seed's status
+    /// snapshot proves the daemon rebuilt its tree from persisted state
+    /// at boot (the `restored` row) within the toast window. A plain
+    /// re-attach — to a long-running daemon, or long after the restart —
+    /// fires nothing: the age has left the window, or the row is absent.
+    pub(super) fn maybe_restart_toast(&mut self) {
+        if self.restart_toast_shown {
+            return;
+        }
+        let Some(age) = self.status.restored_age else {
+            return;
+        };
+        // Seen once, decided once: a later refresh cannot make the
+        // restore fresher, so the window is applied to the first fact.
+        self.restart_toast_shown = true;
+        if age > RESTART_TOAST_WINDOW_SECS {
+            return;
+        }
+        let now = std::time::Instant::now();
+        let status = crate::mux::attach::panels::AgentStatus::None;
+        self.notify.toast_until = Some(now + super::toast::toast_lifetime(status));
+        self.renderer.set_toast(Some(super::toast::Toast {
+            title: "server was restarted".to_string(),
+            body: String::new(),
+            message: None,
+            status,
+            pane: None,
+        }));
     }
 
     /// The re-seed's issue half on a client-snapshot daemon: the same
@@ -796,19 +858,23 @@ impl WindowSession {
     /// While a snapshot is owed the re-seed leaves the bar to the
     /// machinery and marks the state dirty, so the owed reply's
     /// application re-issues for the new window on a later tick.
+    /// `landing` says the re-seed is the gone-view landing's: its
+    /// reply's `SessionGone` walks the interactive ladder directly.
     pub(super) fn reseed_status_snapshot(
         &mut self,
         conn: &mut crate::mux::attach::conn::AttachConn,
         window: &str,
+        landing: bool,
     ) {
-        if self.status_snapshot_inflight.is_some() {
-            self.status_dirty = true;
+        if self.status_inflight.flight.is_some() {
+            self.status_inflight.dirty = true;
             return;
         }
-        self.status_dirty = false;
-        self.status_snapshot_inflight = Some(std::time::Instant::now());
+        self.status_inflight.begin(SnapshotFlight::Reseed {
+            landing,
+            since: std::time::Instant::now(),
+        });
         let window = window.to_string();
-        let landing = self.landing_reseed;
         self.send_then(
             conn,
             &format!("client-snapshot -t {window}"),
@@ -836,7 +902,7 @@ impl WindowSession {
         window: String,
         landing: bool,
     ) {
-        self.status_snapshot_inflight = None;
+        self.status_inflight.complete();
         // A reply for a window the view already left is stale: the
         // next mark re-queries (the nav_current rule).
         if self.window != window {
@@ -858,9 +924,10 @@ impl WindowSession {
         }
         self.chrome.status_row.invalidate();
         self.draw_status_row();
+        self.chrome.session_strip.invalidate();
         self.chrome.tab_strip.invalidate();
         self.chrome.tab_strip.reset_scroll();
-        self.draw_tab_strip();
+        self.draw_strips();
         // A landing (or any reseed) can move the focus onto the freshly
         // seeded layout's marked pane: repaint the side panel's highlight
         // from the cache with it.
@@ -872,12 +939,29 @@ impl WindowSession {
     /// re-announces held panes, which must not flash), pane output is
     /// covered by the seed's replay, and a `%layout-change` drained ahead
     /// of the size report predates it — those three are not deferred.
+    ///
+    /// The output-coverage claim is a daemon contract, not a hope: the
+    /// PTY reader invokes the output sink while holding the terminal
+    /// write lock (`MuxPane::detach_output`'s no-in-flight contract,
+    /// mux/pane.rs), so a chunk in the client's queue is already in the
+    /// grid any later `refresh-client` replay captures. Traced so the
+    /// discarded byte counts stay observable.
     fn defer_seed_events(&mut self, events: Vec<TmuxNotification>) {
         for event in events {
             match event {
-                TmuxNotification::Output { .. }
-                | TmuxNotification::ExtendedOutput { .. }
-                | TmuxNotification::LayoutChange { .. } => {}
+                TmuxNotification::Output { pane_id, data }
+                | TmuxNotification::ExtendedOutput { pane_id, data, .. } => {
+                    // Card 01a19947: the daemon enqueues the seed reply
+                    // under the clients lock with the output-epoch
+                    // re-check, so every %output enqueued before the reply
+                    // is reflected in the replay — discarding pre-reply
+                    // output for the seeded panes loses nothing.
+                    super::trace_input(format_args!(
+                        "seed discards {} output bytes for pane {pane_id} (replay-covered: the daemon orders the reply after every %output it subsumes)",
+                        data.len()
+                    ));
+                }
+                TmuxNotification::LayoutChange { .. } => {}
                 TmuxNotification::PaneExited { pane_id, exit_code } => {
                     if let Some(pane) = pane_id.strip_prefix('%').and_then(|p| p.parse().ok()) {
                         self.held.insert(pane, exit_code);
@@ -891,14 +975,23 @@ impl WindowSession {
     pub(super) fn feed_pane(&mut self, pane_id: &str, data: &[u8]) {
         if let Some(n) = pane_id.strip_prefix('%').and_then(|n| n.parse().ok()) {
             super::trace_input(format_args!("feed pane %{n} {} bytes", data.len()));
-            self.renderer.feed_output(n, data);
+            let pushed = self.renderer.feed_output(n, data);
+            if pushed > 0 {
+                self.rebase_copy_state(n, pushed);
+            }
         }
     }
 
     /// Replay every visible pane's state into its emulator (the seed).
-    pub(super) fn replay_all_panes(&mut self, conn: &mut crate::mux::attach::conn::AttachConn) {
+    /// False when any pane's replay failed even after its retry — the
+    /// seed escalates that to its landing ladder instead of showing a
+    /// silently stale window.
+    pub(super) fn replay_all_panes(
+        &mut self,
+        conn: &mut crate::mux::attach::conn::AttachConn,
+    ) -> bool {
         let all: Vec<u32> = self.renderer.layout().iter().map(|r| r.pane).collect();
-        self.replay_panes(conn, &all);
+        self.replay_panes(conn, &all)
     }
 
     /// Replay `panes`' state into their emulators (the seed, and the
@@ -914,16 +1007,40 @@ impl WindowSession {
         &mut self,
         conn: &mut crate::mux::attach::conn::AttachConn,
         panes: &[u32],
-    ) {
+    ) -> bool {
         super::trace_input(format_args!("replay panes {panes:?}"));
+        let mut all_ok = true;
         for &id in panes {
-            if let Ok(reply) = conn.send_checked(&format!("refresh-client -t %{id}")) {
-                if reply.ok {
-                    let bytes = reply.body.join("\n").into_bytes();
-                    self.renderer.feed_replay(id, &bytes);
+            let mut replayed = false;
+            for attempt in 0..2 {
+                match conn.send_checked(&format!("refresh-client -t %{id}")) {
+                    Ok(reply) if reply.ok => {
+                        let bytes = reply.body.join("\n").into_bytes();
+                        self.renderer.feed_replay(id, &bytes);
+                        replayed = true;
+                        break;
+                    }
+                    Ok(reply) => {
+                        super::trace_input(format_args!(
+                            "replay pane %{id}: refused ({}), attempt {attempt}",
+                            reply.body.join(" ")
+                        ));
+                    }
+                    Err(err) => {
+                        super::trace_input(format_args!(
+                            "replay pane %{id}: failed ({err}), attempt {attempt}"
+                        ));
+                    }
                 }
             }
+            if !replayed {
+                all_ok = false;
+                super::trace_input(format_args!(
+                    "replay pane %{id}: still stale after retry — the pane shows its pre-replay state until its next full repaint"
+                ));
+            }
         }
+        all_ok
     }
 
     /// The zoom state's effective layout — the daemon's zoom re-lays the
@@ -967,6 +1084,25 @@ impl WindowSession {
         focused
     }
 
+    /// Copy mode's status-row badge: the mode word plus the cursor's
+    /// `absolute-line:column`, beside the scroll cue. `None` outside
+    /// copy mode.
+    fn copy_mode_badge(&self) -> Option<String> {
+        let Modal::Copy(state) = &self.modal else {
+            return None;
+        };
+        let mode = match state.visual_mode {
+            copy_mode::VisualMode::None => "COPY",
+            copy_mode::VisualMode::Char => "VISUAL",
+            copy_mode::VisualMode::Line => "V-LINE",
+            copy_mode::VisualMode::Block => "V-BLOCK",
+        };
+        Some(format!(
+            "-- {mode} -- {}:{}",
+            state.cursor_absolute_line, state.cursor_col
+        ))
+    }
+
     /// Draw the status row: fresh state composed and painted into the row
     /// buffer (the pump flushes the diff with the next frame). Hidden,
     /// nothing paints: the row belongs to the pane grid, and the refit's
@@ -981,13 +1117,14 @@ impl WindowSession {
         if !self.chrome.status_bar_on {
             return;
         }
-        let scroll = if matches!(self.modal, Modal::Scroll) {
+        let scroll = if matches!(self.modal, Modal::Copy(_)) {
             self.renderer
                 .focused()
                 .map(|id| self.renderer.scroll_offset_of(id))
         } else {
             None
         };
+        let copy_badge = self.copy_mode_badge();
         // The flash cue, the prefix-armed cue, and the zoom marker lead
         // the line and the Help chip RIGHT-ALIGNS at the row's end: all
         // four reserve their widths up front so the composed state
@@ -1004,7 +1141,7 @@ impl WindowSession {
                 shaded: false,
             });
         }
-        if self.prefix_pending {
+        if self.input_route.prefix_pending {
             head.push(Segment {
                 text: " prefix |".to_string(),
                 bold: true,
@@ -1028,7 +1165,7 @@ impl WindowSession {
                 shaded: false,
             });
         }
-        let chip = status::help_chip(self.prefix, self.management.help);
+        let chip = status::help_chip(self.input_route.prefix, self.management.help);
         let reserved: usize = head
             .iter()
             .chain(std::iter::once(&chip))
@@ -1037,6 +1174,7 @@ impl WindowSession {
         let segments = self.status.compose(
             cols.saturating_sub(reserved as u16),
             scroll,
+            copy_badge,
             self.sidebar.is_on(),
         );
         let mut with_head = head;
@@ -1118,8 +1256,9 @@ impl WindowSession {
         // rows).
         self.chrome.status_row.invalidate();
         self.draw_status_row();
+        self.chrome.session_strip.invalidate();
         self.chrome.tab_strip.invalidate();
-        self.draw_tab_strip();
+        self.draw_strips();
         let stale = self.kitty.invalidate();
         if !stale.is_empty() {
             sink.write_raw(&stale);
@@ -1158,8 +1297,12 @@ impl WindowSession {
                     (*x, *y) = geometry.frame_to_host(*x, *y);
                 }
                 sink.flush(&diff);
+                trace_input(format_args!("frame painted cells={}", diff.len()));
                 flushed = true;
             }
+        }
+        if self.flush_session_strip(sink) {
+            flushed = true;
         }
         if self.flush_tab_strip(sink) {
             flushed = true;
@@ -1225,17 +1368,97 @@ impl WindowSession {
         }
     }
 
+    /// Paint both top strips from the queried state: the session strip
+    /// (the workspace's sessions) above the tab strip (the shown
+    /// session's windows). A visibility flip re-derives the geometry and
+    /// parks a refit — the row count moved — and both strips invalidate
+    /// (the host rows are not known to match), the toggle_status_bar
+    /// contract.
+    pub(super) fn draw_strips(&mut self) {
+        let visible = self.session_strip_visible();
+        if visible != self.chrome.session_strip_on {
+            self.chrome.session_strip_on = visible;
+            self.chrome_geometry_changed();
+            self.pending.grid_refit = true;
+            // Both rows move: the tab strip row becomes/exits host row 1.
+            self.chrome.session_strip.invalidate();
+            self.chrome.tab_strip.invalidate();
+        }
+        if self.chrome.session_strip_on {
+            self.draw_session_strip();
+        }
+        self.draw_tab_strip();
+    }
+
+    /// Whether the session strip row shows: the `session-strip` setting
+    /// (`auto` = while the workspace holds two or more sessions;
+    /// `always` = regardless; `off` = never). A workspace of unknown
+    /// membership counts as one (hidden in `auto`): nothing to list
+    /// before the first status facts land.
+    fn session_strip_visible(&self) -> bool {
+        match self.session_strip_mode {
+            SessionStripMode::Off => false,
+            SessionStripMode::Always => true,
+            SessionStripMode::Auto => self.status.workspace_sessions().len() >= 2,
+        }
+    }
+
+    /// Repaint the session strip alone (the wheel's visible-run move;
+    /// the diff flushes on the next frame).
+    pub(super) fn draw_session_strip_only(&mut self) {
+        if self.chrome.session_strip_on {
+            self.draw_session_strip();
+        }
+    }
+
+    /// Paint the session strip: one entry per session of the shown
+    /// session's workspace, the shown one accented, each prefixed with
+    /// the entry's agent dot when `agent-state-dots` is on.
+    fn draw_session_strip(&mut self) {
+        let cols = self.geometry.host_cols;
+        if self.chrome.session_strip.cols() != cols {
+            let palette = self.chrome.session_strip.palette;
+            self.chrome.session_strip = TabStrip::new(cols);
+            self.chrome.session_strip.palette = palette;
+            self.chrome.session_strip.plus = false;
+        }
+        let dots = self.agent_state_dots;
+        // The design adds no new-session button on this row: the tab
+        // strip's ` + ` stays off it even on the constructor's instance.
+        self.chrome.session_strip.plus = false;
+        let shown = self.status.session_id.clone();
+        let entries: Vec<(String, String)> = self
+            .status
+            .workspace_sessions()
+            .into_iter()
+            .map(|(id, name)| {
+                let text = if dots {
+                    format!("{} {name}", self.status.session_agent_status(&id).glyph())
+                } else {
+                    name
+                };
+                (id, text)
+            })
+            .collect();
+        self.chrome
+            .session_strip
+            .paint(&entries, shown.as_deref(), None);
+    }
+
     /// Paint the tab strip from the queried window state (the same
     /// state the status row composes from): the shown session's windows
     /// in order, the active one accented. With the side panel up the
     /// strip leads with the panel's title (the lead segment the hit-test
     /// offsets through) — the panel itself opens directly with its rows.
+    /// Each tab carries its agent dot when `agent-state-dots` is on.
     pub(super) fn draw_tab_strip(&mut self) {
         let cols = self.geometry.host_cols;
         if self.chrome.tab_strip.cols() != cols {
             let palette = self.chrome.tab_strip.palette;
+            let bounds = self.chrome.tab_strip.bounds;
             self.chrome.tab_strip = TabStrip::new(cols);
             self.chrome.tab_strip.palette = palette;
+            self.chrome.tab_strip.bounds = bounds;
         }
         // The rail is too narrow for the title; its columns stay blank.
         let strip = self.renderer.sidebar_width();
@@ -1246,26 +1469,55 @@ impl WindowSession {
         };
         let lead = (strip > 0).then_some((title, strip));
         // An open popup's scratch window is not a tab of this view.
+        let dots = self.agent_state_dots;
         let windows: Vec<(String, String)> = self
             .status
             .windows()
             .iter()
             .filter(|(id, _)| Some(id.as_str()) != self.popup_window())
-            .cloned()
+            .map(|(id, name)| {
+                let text = if dots {
+                    format!("{} {name}", self.status.window_agent_status(id).glyph())
+                } else {
+                    name.clone()
+                };
+                (id.clone(), text)
+            })
             .collect();
         self.chrome
             .tab_strip
             .paint(&windows, self.status.active_window.as_deref(), lead);
     }
 
-    /// Flush the tab strip's changed cells to the host's top row.
-    /// Returns whether anything flushed (its per-cell CUPs move the host
-    /// cursor, so the caller must re-place it).
+    /// Flush the session strip's changed cells to host row 0. Returns
+    /// whether anything flushed (its per-cell CUPs move the host cursor,
+    /// so the caller must re-place it).
+    pub(super) fn flush_session_strip(&mut self, sink: &mut dyn FlushSink) -> bool {
+        if !self.chrome.session_strip_on {
+            return false;
+        }
+        let diff = self.chrome.session_strip.diff();
+        if diff.is_empty() {
+            return false;
+        }
+        sink.flush(&diff);
+        true
+    }
+
+    /// Flush the tab strip's changed cells to its host row — host row 0
+    /// alone, one row down while the session strip shows. Returns
+    /// whether anything flushed (its per-cell CUPs move the host cursor,
+    /// so the caller must re-place it).
     pub(super) fn flush_tab_strip(&mut self, sink: &mut dyn FlushSink) -> bool {
         let diff = self.chrome.tab_strip.diff();
         if diff.is_empty() {
             return false;
         }
+        let session_rows = self.geometry.session_strip_rows;
+        let diff = diff
+            .into_iter()
+            .map(|(x, y, cell)| (x, y + session_rows, cell))
+            .collect::<Vec<_>>();
         sink.flush(&diff);
         true
     }

@@ -2,14 +2,14 @@
 //! viewer-status protocol, the seed (screen replay plus graphics
 //! placements), and the `workspace-active` follow that re-seeds in place.
 
-use super::control::{command, parse_pane_info, MuxLines};
+use super::control::{command, parse_cwd_token, parse_cwdhost_token, parse_pane_info, MuxLines};
 use super::lifecycle::{debug_log_active_workspace, query_active_workspace_pane};
 use super::stream::forward;
 use crate::mux::{connect_local_stream, LocalStream};
 use crate::streaming::apply_inline_image;
 use crate::streaming::protocol::{ServerMessage, MAX_INLINE_IMAGE_BYTES};
 use crate::streaming::server::StreamingServer;
-use crate::streaming::session::StreamSessionState;
+use crate::streaming::session::{OutputChunk, StreamSessionState};
 use crate::terminal::Terminal;
 use interprocess::TryClone as _;
 use parking_lot::{Mutex, RwLock};
@@ -39,9 +39,15 @@ pub(super) struct MirrorLink {
     pub(super) alive: AtomicBool,
     /// Set by teardown so the drain thread stops forwarding.
     pub(super) closed: AtomicBool,
-    /// Output buffered until `setup_session` connects the broadcaster
-    /// (`Buffering`), then the broadcaster's sender (`Live`).
+    /// Output chunks buffered until `setup_session` connects the
+    /// broadcaster (`Buffering`), then the broadcaster's sender (`Live`).
     pub(super) sink: Mutex<Sink>,
+    /// Trailing bytes of a multi-byte UTF-8 sequence severed at a relay
+    /// chunk seam: `forward` holds them back until the sequence's
+    /// continuation bytes arrive with the next chunk, so `from_utf8_lossy`
+    /// never sees a half-glyph. Pane output is a byte stream — a glyph has
+    /// no obligation to align with the daemon's `%output` line boundaries.
+    pub(super) pending_utf8: Mutex<Vec<u8>>,
     /// Graphics ids already streamed as InlineImage frames. A placement
     /// raises `GraphicsAdded` exactly once per mirror, but re-fits re-seed
     /// and a future seed carrying graphics could re-raise an id — this is
@@ -54,6 +60,17 @@ pub(super) struct MirrorLink {
     /// replaces the entries of the frames it replaces.
     pub(super) graphics_panes: Arc<Mutex<HashMap<u64, String>>>,
     pub(super) status: Mutex<Option<(ServerMessage, Vec<String>)>>,
+    /// The pane's process lifecycle (`pane_process_state`), seeded from
+    /// the pane-info row at attach and kept current by the drain loop, so
+    /// a session created after a transition still connects with the
+    /// pane's current state.
+    pub(super) process: Mutex<Option<ServerMessage>>,
+    /// The pane's cwd and its OSC 7 hostname (card 01a1ce6a), seeded from
+    /// the attach's pane-info row and kept current by the drain loop (OSC
+    /// 7 events and the pane-info poll). Serves the `Connected.cwd`
+    /// fallback for a session created before the mirror saw any OSC 7,
+    /// and the dedupe state for cwd-change broadcasts.
+    pub(super) cwd: Mutex<Option<(String, Option<String>)>>,
     pub(super) session: RwLock<Option<std::sync::Weak<StreamSessionState>>>,
 }
 
@@ -86,8 +103,10 @@ impl MirrorLink {
 }
 
 pub(super) enum Sink {
-    Buffering(Vec<u8>),
-    Live(tokio::sync::mpsc::Sender<String>),
+    /// Chunks buffered until `setup_session` connects the broadcaster;
+    /// each keeps its damage.
+    Buffering(Vec<OutputChunk>),
+    Live(tokio::sync::mpsc::Sender<OutputChunk>),
     Closed,
 }
 
@@ -134,6 +153,111 @@ pub(super) fn apply_viewer_status(link: &MirrorLink, line: &str) {
             session.update_mux_status(size, viewers);
         }
     }
+}
+
+/// The pane-info row's `exited=<code|?>` token: `Some((true, code))` for
+/// a held-dead pane (code `None` when the daemon had no status to read),
+/// `None` when the pane is running — the token rides only on a dead pane,
+/// so absence is the daemon's own running verdict, not an inference.
+pub(super) fn parse_pane_exited_token(line: &str) -> Option<(bool, Option<i32>)> {
+    line.split_whitespace()
+        .find_map(|field| field.strip_prefix("exited="))
+        .map(|value| (true, value.parse::<i32>().ok()))
+}
+
+/// Record the pane's process lifecycle on the link and push it to the
+/// session's viewers (`update_pane_process` broadcasts only on change).
+/// The link's copy serves the next session created for this pane, so a
+/// viewer connecting after a transition still reads the current state.
+pub(super) fn publish_process_state(
+    link: &MirrorLink,
+    pane_id: &str,
+    exited: bool,
+    exit_code: Option<i32>,
+) {
+    let message = ServerMessage::PaneProcessState {
+        pane_id: pane_id.to_string(),
+        state: if exited { "exited" } else { "running" }.to_string(),
+        exit_code: exited.then_some(exit_code).flatten(),
+    };
+    *link.process.lock() = Some(message.clone());
+    if let Some(session) = link
+        .session
+        .read()
+        .as_ref()
+        .and_then(std::sync::Weak::upgrade)
+    {
+        session.update_pane_process(message);
+    }
+}
+
+/// One cwd change to broadcast: the prior path (when known), the new path,
+/// and its OSC 7 hostname (`None` when the cwd did not come from an OSC 7
+/// report).
+pub(super) struct CwdUpdate {
+    pub(super) old: Option<String>,
+    pub(super) new: String,
+    pub(super) host: Option<String>,
+}
+
+/// Record `cwd`/`host` as the pane's state (card 01a1ce6a). Returns the
+/// update to broadcast — `None` when nothing changed, so the 1s pane-info
+/// poll stays silent while the OSC 7 arm and the poll agree. Also pushes
+/// the new state to a live session, so `Connected` for the NEXT client
+/// names the pane's cwd even though the mirror never saw an OSC 7.
+pub(super) fn record_cwd(
+    link: &MirrorLink,
+    cwd: String,
+    host: Option<String>,
+) -> Option<CwdUpdate> {
+    let mut state = link.cwd.lock();
+    if state.as_ref() == Some(&(cwd.clone(), host.clone())) {
+        return None;
+    }
+    let old = state.as_ref().map(|(c, _)| c.clone());
+    *state = Some((cwd.clone(), host.clone()));
+    drop(state);
+    let update = CwdUpdate {
+        old,
+        new: cwd,
+        host,
+    };
+    if let Some(session) = link
+        .session
+        .read()
+        .as_ref()
+        .and_then(std::sync::Weak::upgrade)
+    {
+        session.update_mux_cwd(update.new.clone(), update.host.clone());
+    }
+    Some(update)
+}
+
+/// The `CwdChanged` message for `update`, with the sender's SEC-128
+/// locality verdict computed from the OSC 7 hostname.
+pub(super) fn cwd_changed_message(update: &CwdUpdate) -> ServerMessage {
+    let is_local = par_term_emu_core::shell_integration::osc7_host_is_local(update.host.as_deref());
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_millis() as u64)
+        .unwrap_or(0);
+    ServerMessage::cwd_changed_full(
+        update.old.clone(),
+        update.new.clone(),
+        update.host.clone(),
+        None,
+        now,
+        is_local,
+    )
+}
+
+/// Parse the cwd tokens off a `pane-info` reply row and, when they name a
+/// different (path, host) than the link's last state, record the change
+/// for the caller to broadcast.
+pub(super) fn apply_pane_cwd(link: &MirrorLink, line: &str) -> Option<CwdUpdate> {
+    let cwd = super::control::parse_cwd_token(line)?;
+    let host = super::control::parse_cwdhost_token(line);
+    record_cwd(link, cwd, host)
 }
 
 pub(super) fn query_viewer_status(link: &MirrorLink) -> io::Result<()> {
@@ -389,7 +513,11 @@ fn apply_workspace_target(
     if link.closed.load(Ordering::Relaxed) {
         return;
     }
-    debug_log_active_workspace(&target.session, target.pane);
+    // The respawn path reuses this apply with an unnamed target; only a
+    // workspace retarget logs the active-workspace resolution.
+    if !target.session.is_empty() {
+        debug_log_active_workspace(&target.session, target.pane);
+    }
     link.set_target(target.pane, target.window.clone());
     let mut batches = Vec::new();
     let mut resized = false;
@@ -422,6 +550,31 @@ fn apply_workspace_target(
     if !target.status_line.is_empty() {
         apply_viewer_status(link, &target.status_line);
     }
+    // The re-seed lands on whatever state the pane is in now — a retarget
+    // follows the daemon's active pane, a respawn restarts it — and the
+    // pane-info row is the evidence, so viewers of the OLD pane state
+    // converge without a reconnect.
+    let (exited, code) = parse_pane_exited_token(&target.status_line).unwrap_or((false, None));
+    publish_process_state(link, &format!("%{}", link.pane()), exited, code);
+    // The pane (possibly a different one) the mirror now serves: its cwd
+    // replaces the old pane's, and connected viewers learn the switch as a
+    // CwdChanged (card 01a1ce6a). A row without cwd tokens (older daemon)
+    // clears the state so the next Connected does not name the previous
+    // pane's directory.
+    let new_cwd = parse_cwd_token(&target.status_line)
+        .map(|cwd| (cwd, parse_cwdhost_token(&target.status_line)));
+    match new_cwd {
+        Some((cwd, host)) => {
+            if let Some(update) = record_cwd(link, cwd, host) {
+                if let Some(server) = server.as_ref().and_then(std::sync::Weak::upgrade) {
+                    server.send_to_session(session_id, cwd_changed_message(&update));
+                }
+            }
+        }
+        None => {
+            *link.cwd.lock() = None;
+        }
+    }
     let restore = link.terminal.read().export_screen_restore_sequence();
     if resized {
         if let Some(server) = server.as_ref().and_then(std::sync::Weak::upgrade) {
@@ -431,5 +584,62 @@ fn apply_workspace_target(
             );
         }
     }
-    forward(link, restore.as_bytes());
+    forward(link, restore.as_bytes(), None);
+}
+
+/// Re-seed the mirror in place after `%pane-respawned`: the daemon gave
+/// the pane a fresh terminal, so the held pane's frozen screen is stale
+/// and incremental output would paint over it. The seed runs over a
+/// short-lived connection (the mirror's own reader cannot absorb a reply
+/// block mid-drain), then the same in-place apply a retarget uses resets
+/// the mirror and pushes the fresh screen to the viewers. The pane-info
+/// row fetched here also re-derives the process state — `running` — so
+/// the exited state clears on the same connection, no reconnect.
+pub(super) fn reseed_after_respawn(
+    link: &Arc<MirrorLink>,
+    session_id: &str,
+    socket: &std::path::Path,
+    timeout: Duration,
+    server: &Option<std::sync::Weak<StreamingServer>>,
+) {
+    if link.closed.load(Ordering::Relaxed) {
+        return;
+    }
+    let pane = link.pane();
+    let result = (|| -> io::Result<WorkspaceTarget> {
+        let stream = connect_local_stream(socket)?;
+        let mut writer = stream.try_clone()?;
+        let reader = MuxLines::spawn(stream)?;
+        let info = command(
+            &mut writer,
+            &reader,
+            &format!("pane-info -t %{pane} -M"),
+            timeout,
+        )?;
+        let (window, cols, rows) = info
+            .first()
+            .and_then(|l| parse_pane_info(l))
+            .ok_or_else(|| io::Error::other(format!("bad pane-info reply {info:?}")))?;
+        let status_line = info.first().cloned().unwrap_or_default();
+        let seed = seed_reply(&mut writer, &reader, pane, timeout)?;
+        let (screen, graphics) = split_graphics_seed(&seed);
+        Ok(WorkspaceTarget {
+            session: String::new(),
+            pane,
+            window,
+            cols,
+            rows,
+            status_line,
+            screen,
+            graphics,
+        })
+    })();
+    match result {
+        Ok(target) => apply_workspace_target(link, session_id, server, target),
+        Err(err) => {
+            // The state still clears: the notification is the evidence.
+            publish_process_state(link, &format!("%{pane}"), false, None);
+            crate::debug_error!("STREAMING", "respawn re-seed failed: {err}")
+        }
+    }
 }

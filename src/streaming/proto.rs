@@ -656,7 +656,10 @@ mod tests {
         let encoded = encode_server_message(&msg).unwrap();
         let decoded = decode_server_message(&encoded).unwrap();
 
-        let AppServerMessage::Output { data, timestamp } = decoded else {
+        let AppServerMessage::Output {
+            data, timestamp, ..
+        } = decoded
+        else {
             panic!("Wrong message type");
         };
         assert_eq!(data, "Hello, World!");
@@ -1016,6 +1019,9 @@ mod tests {
             readonly: None,
             pointer_shape: None,
             graphics: Vec::new(),
+            pane_create_allowed: None,
+            cwd_hostname: None,
+            cwd_is_local: None,
         };
         let encoded = encode_server_message(&msg).unwrap();
         let decoded = decode_server_message(&encoded).unwrap();
@@ -1054,6 +1060,40 @@ mod tests {
     }
 
     #[test]
+    fn test_encode_decode_client_pane_create_named_and_unnamed() {
+        let named = AppClientMessage::PaneCreateRequest {
+            correlation_id: "c-7".to_string(),
+            session_id: "$0".to_string(),
+            name: Some("agent-bench".to_string()),
+        };
+        let encoded = encode_client_message(&named).unwrap();
+        let decoded = decode_client_message(&encoded).unwrap();
+        let AppClientMessage::PaneCreateRequest {
+            correlation_id,
+            session_id,
+            name,
+        } = decoded
+        else {
+            panic!("Wrong message type");
+        };
+        assert_eq!(correlation_id, "c-7");
+        assert_eq!(session_id, "$0");
+        assert_eq!(name, Some("agent-bench".to_string()));
+
+        let unnamed = AppClientMessage::PaneCreateRequest {
+            correlation_id: "c-8".to_string(),
+            session_id: "$0".to_string(),
+            name: None,
+        };
+        let encoded = encode_client_message(&unnamed).unwrap();
+        let decoded = decode_client_message(&encoded).unwrap();
+        let AppClientMessage::PaneCreateRequest { name, .. } = decoded else {
+            panic!("Wrong message type");
+        };
+        assert_eq!(name, None, "an absent name round-trips as None");
+    }
+
+    #[test]
     fn test_encode_decode_client_subscribe() {
         let msg = AppClientMessage::Subscribe {
             events: vec![
@@ -1083,6 +1123,8 @@ mod tests {
         let msg = AppServerMessage::Output {
             data: unicode_content.to_string(),
             timestamp: None,
+            damage: Vec::new(),
+            damage_generation: None,
         };
         let encoded = encode_server_message(&msg).unwrap();
         let decoded = decode_server_message(&encoded).unwrap();
@@ -1098,6 +1140,8 @@ mod tests {
         let msg = AppServerMessage::Output {
             data: ansi_data.to_string(),
             timestamp: None,
+            damage: Vec::new(),
+            damage_generation: None,
         };
         let encoded = encode_server_message(&msg).unwrap();
         let decoded = decode_server_message(&encoded).unwrap();
@@ -1114,10 +1158,15 @@ mod tests {
         let msg = AppServerMessage::Output {
             data: "test".to_string(),
             timestamp: Some(1234567890123),
+            damage: Vec::new(),
+            damage_generation: None,
         };
         let encoded = encode_server_message(&msg).unwrap();
         let decoded = decode_server_message(&encoded).unwrap();
-        let AppServerMessage::Output { data, timestamp } = decoded else {
+        let AppServerMessage::Output {
+            data, timestamp, ..
+        } = decoded
+        else {
             panic!("Wrong message type");
         };
         assert_eq!(data, "test");
@@ -1139,6 +1188,8 @@ mod tests {
         let msg = AppServerMessage::Output {
             data: String::new(),
             timestamp: None,
+            damage: Vec::new(),
+            damage_generation: None,
         };
         let encoded = encode_server_message(&msg).unwrap();
         let decoded = decode_server_message(&encoded).unwrap();
@@ -1212,6 +1263,7 @@ mod tests {
             hostname: Some("myhost".to_string()),
             username: Some("user".to_string()),
             timestamp: Some(1234567890),
+            is_local: Some(false),
         };
         let encoded = encode_server_message(&msg).unwrap();
         let decoded = decode_server_message(&encoded).unwrap();
@@ -1221,6 +1273,7 @@ mod tests {
             hostname,
             username,
             timestamp,
+            is_local,
         } = decoded
         else {
             panic!("Wrong message type");
@@ -1230,6 +1283,7 @@ mod tests {
         assert_eq!(hostname, Some("myhost".to_string()));
         assert_eq!(username, Some("user".to_string()));
         assert_eq!(timestamp, Some(1234567890));
+        assert_eq!(is_local, Some(false));
     }
 
     #[test]
@@ -1240,6 +1294,7 @@ mod tests {
             hostname: None,
             username: None,
             timestamp: None,
+            is_local: None,
         };
         let encoded = encode_server_message(&msg).unwrap();
         let decoded = decode_server_message(&encoded).unwrap();
@@ -1249,6 +1304,7 @@ mod tests {
             hostname,
             username,
             timestamp,
+            is_local,
         } = decoded
         else {
             panic!("Wrong message type");
@@ -1258,6 +1314,7 @@ mod tests {
         assert_eq!(hostname, None);
         assert_eq!(username, None);
         assert_eq!(timestamp, None);
+        assert_eq!(is_local, None);
     }
 
     #[test]
@@ -1308,6 +1365,9 @@ mod tests {
             .client_id(Some("client-42".to_string()))
             .readonly(Some(true))
             .pointer_shape(Some("ew-resize".to_string()))
+            .pane_create_allowed(Some(true))
+            .cwd_hostname(Some("mirror-host".to_string()))
+            .cwd_is_local(Some(false))
             .build();
         let encoded = encode_server_message(&msg).unwrap();
         let decoded = decode_server_message(&encoded).unwrap();
@@ -1325,6 +1385,9 @@ mod tests {
             readonly,
             pointer_shape,
             graphics,
+            pane_create_allowed,
+            cwd_hostname,
+            cwd_is_local,
         } = decoded
         else {
             panic!("Wrong message type");
@@ -1345,6 +1408,9 @@ mod tests {
         assert_eq!(client_id, Some("client-42".to_string()));
         assert_eq!(readonly, Some(true));
         assert_eq!(pointer_shape, Some("ew-resize".to_string()));
+        assert_eq!(pane_create_allowed, Some(true));
+        assert_eq!(cwd_hostname, Some("mirror-host".to_string()));
+        assert_eq!(cwd_is_local, Some(false));
     }
 
     #[test]

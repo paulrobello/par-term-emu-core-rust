@@ -254,6 +254,13 @@ pub(super) fn cmd_kill_session(ctx: &Ctx<'_>, session: Target<SessionId>) -> Out
         session,
         MuxTree::resolve_session_target,
         MuxTree::kill_session,
+        |tree, id| {
+            let windows = tree
+                .session(id)
+                .map(|s| s.windows.clone())
+                .unwrap_or_default();
+            tree.agent_claims_for_windows(&windows)
+        },
     ) {
         Ok(killed) => killed,
         Err(outcome) => return outcome,
@@ -261,7 +268,7 @@ pub(super) fn cmd_kill_session(ctx: &Ctx<'_>, session: Target<SessionId>) -> Out
     // The workspace cue only when the session's death emptied its
     // workspace away.
     notify_kill_cascade(
-        Outcome::ok(ctx, ""),
+        notify_agent_releases(Outcome::ok(ctx, ""), &killed.claims),
         &killed.removed,
         killed.workspaces_changed,
     )
@@ -315,6 +322,14 @@ pub(super) fn cmd_list_sessions(
                         ("workspace_name", ws.name.as_str()),
                         ("session_id", session.id.to_string().as_str()),
                         ("session_name", session.name.as_str()),
+                        (
+                            "session_active",
+                            if ws.sessions.get(ws.active) == Some(session_id) {
+                                "1"
+                            } else {
+                                "0"
+                            },
+                        ),
                     ],
                 )),
                 None => lines.push(
@@ -579,10 +594,15 @@ pub(super) fn cmd_switch_client(ctx: &Ctx<'_>, target: Option<AnyTarget>) -> Out
             workspace != previous_workspace,
             resized,
             pane_changed,
+            shown,
         )
     };
-    let (session, name, workspace, moved, workspace_moved, resized, pane_changed) = switched;
-    let mut result = Outcome::ok(ctx, "");
+    let (session, name, workspace, moved, workspace_moved, resized, pane_changed, shown) = switched;
+    // The body names the landed window, the same contract select-window
+    // just gained: the render client's roster-click landing reads it (one
+    // round trip replaces the pane-info + landing switch chain, card
+    // 01a1995a6).
+    let mut result = Outcome::ok(ctx, &shown.map(|w| w.to_string()).unwrap_or_default());
     for window_id in resized {
         result = result.with_layout(window_id);
     }
@@ -722,13 +742,37 @@ pub(super) fn cmd_kill_workspace(
         workspace,
         MuxTree::resolve_workspace_target,
         |tree, id| tree.kill_workspace_grouped(id, group),
+        |tree, id| {
+            // The group rule kills the linked worktree members too
+            // (`kill_workspace_grouped` computes the same list), so their
+            // claimed panes must snapshot before the kill as well.
+            let mut workspaces = vec![id];
+            workspaces.extend(tree.linked_worktrees_of(id));
+            let mut windows = Vec::new();
+            for ws_id in workspaces {
+                for session_id in tree
+                    .workspace(ws_id)
+                    .map(|ws| ws.sessions.clone())
+                    .unwrap_or_default()
+                {
+                    if let Some(session) = tree.session(session_id) {
+                        windows.extend(session.windows.iter().copied());
+                    }
+                }
+            }
+            tree.agent_claims_for_windows(&windows)
+        },
     ) {
         Ok(killed) => killed,
         Err(outcome) => return outcome,
     };
     // The workspace-roster cue is unconditional: the killed workspace
     // itself left the roster.
-    notify_kill_cascade(Outcome::ok(ctx, ""), &killed.removed, true)
+    notify_kill_cascade(
+        notify_agent_releases(Outcome::ok(ctx, ""), &killed.claims),
+        &killed.removed,
+        true,
+    )
 }
 
 /// Snapshot the workspace roster for [`workspace_roster_changed`]: the

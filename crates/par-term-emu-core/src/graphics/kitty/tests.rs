@@ -1,3 +1,5 @@
+use std::sync::Arc;
+
 use super::*;
 
 #[test]
@@ -34,21 +36,21 @@ fn test_kitty_parser_basic() {
 #[test]
 fn test_kitty_parser_c_key_controls_cursor_movement_flag() {
     let mut parser = KittyParser::new();
-    parser.parse_chunk("a=p,i=1").unwrap();
+    let _ = parser.parse_chunk("a=p,i=1").unwrap();
     assert!(
         !parser.suppress_cursor_move,
         "omitted C= keeps the default (cursor moves)"
     );
 
     parser.reset();
-    parser.parse_chunk("a=p,i=1,C=1").unwrap();
+    let _ = parser.parse_chunk("a=p,i=1,C=1").unwrap();
     assert!(
         parser.suppress_cursor_move,
         "C=1 suppresses the cursor move"
     );
 
     parser.reset();
-    parser.parse_chunk("a=p,i=1,C=0").unwrap();
+    let _ = parser.parse_chunk("a=p,i=1,C=0").unwrap();
     assert!(
         !parser.suppress_cursor_move,
         "C=0 keeps the default (cursor moves)"
@@ -317,7 +319,7 @@ fn test_kitty_zlib_build_graphic() {
     // Parse and build graphic
     let mut parser = KittyParser::new();
     let payload = format!("a=T,f=32,o=z,s=2,v=2,i=42;{}", b64_compressed);
-    parser.parse_chunk(&payload).unwrap();
+    let _ = parser.parse_chunk(&payload).unwrap();
 
     let mut store = GraphicsStore::new();
     let result = parser.build_graphic((0, 0), &mut store);
@@ -354,7 +356,7 @@ fn test_kitty_zlib_transmit_display_sets_compressed_flag() {
     // TransmitDisplay with compression
     let mut parser = KittyParser::new();
     let payload = format!("a=T,f=32,o=z,s=2,v=2;{}", b64_compressed);
-    parser.parse_chunk(&payload).unwrap();
+    let _ = parser.parse_chunk(&payload).unwrap();
 
     let mut store = GraphicsStore::new();
     let result = parser.build_graphic((5, 10), &mut store).unwrap();
@@ -381,7 +383,7 @@ fn test_kitty_no_compression_flag_unset() {
 
     let mut parser = KittyParser::new();
     let payload = format!("a=T,f=32,s=2,v=2;{}", b64_data);
-    parser.parse_chunk(&payload).unwrap();
+    let _ = parser.parse_chunk(&payload).unwrap();
 
     let mut store = GraphicsStore::new();
     let result = parser.build_graphic((0, 0), &mut store).unwrap();
@@ -507,7 +509,7 @@ fn test_chunk_accumulation_cap_resets_parser() {
     assert!(parser.data_chunks.is_empty(), "parser reset on overflow");
     assert_eq!(parser.data_bytes, 0, "byte counter reset with it");
     // A fresh small transmission parses cleanly afterward.
-    parser.parse_chunk("a=T;QUFB").unwrap();
+    let _ = parser.parse_chunk("a=T;QUFB").unwrap();
     assert_eq!(parser.get_data().unwrap(), b"AAA");
 }
 
@@ -530,7 +532,7 @@ fn test_kitty_build_placement_defaults() {
 #[test]
 fn test_kitty_build_placement_with_columns_rows() {
     let mut parser = KittyParser::new();
-    parser.parse_chunk("a=T,f=100,c=10,r=5;").unwrap();
+    let _ = parser.parse_chunk("a=T,f=100,c=10,r=5;").unwrap();
     let placement = parser.build_placement();
     assert_eq!(placement.columns, Some(10));
     assert_eq!(placement.rows, Some(5));
@@ -564,7 +566,7 @@ fn test_kitty_build_placement_with_offsets() {
 #[test]
 fn test_kitty_z_index_for_placement() {
     let mut parser = KittyParser::new();
-    parser.parse_chunk("a=p,i=1,z=-1;").unwrap();
+    let _ = parser.parse_chunk("a=p,i=1,z=-1;").unwrap();
     let placement = parser.build_placement();
     assert_eq!(placement.z_index, -1);
 }
@@ -572,10 +574,21 @@ fn test_kitty_z_index_for_placement() {
 #[test]
 fn test_kitty_z_as_frame_delay_for_frames() {
     let mut parser = KittyParser::new();
-    parser.parse_chunk("a=f,i=1,z=100;").unwrap();
-    // For frames, z is frame_delay, not z_index
-    assert_eq!(parser.frame_delay_ms, Some(100));
+    let _ = parser.parse_chunk("a=f,i=1,z=100;").unwrap();
+    // For frames, z is the (signed) frame gap, not z_index
+    assert_eq!(parser.frame_gap_ms, Some(100));
     assert!(parser.z_index.is_none());
+
+    let mut parser = KittyParser::new();
+    let _ = parser.parse_chunk("a=f,i=1,z=-1;").unwrap();
+    // Negative creates a gapless frame
+    assert_eq!(parser.frame_gap_ms, Some(-1));
+
+    let mut parser = KittyParser::new();
+    let _ = parser.parse_chunk("a=p,i=1,z=100;").unwrap();
+    // For image commands, z is the z-index and takes any i32
+    assert_eq!(parser.z_index, Some(100));
+    assert!(parser.frame_gap_ms.is_none());
 }
 
 #[test]
@@ -587,7 +600,7 @@ fn test_kitty_transmit_display_has_placement() {
 
     let mut parser = KittyParser::new();
     let payload = format!("a=T,f=32,s=2,v=2,c=10,r=5,X=2,Y=3;{}", b64_data);
-    parser.parse_chunk(&payload).unwrap();
+    let _ = parser.parse_chunk(&payload).unwrap();
 
     let mut store = GraphicsStore::new();
     let result = parser.build_graphic((0, 0), &mut store).unwrap();
@@ -615,13 +628,13 @@ fn test_kitty_put_placement_with_z_index() {
 
     let mut parser = KittyParser::new();
     let payload = format!("a=t,f=32,s=1,v=1,i=42;{}", b64_data);
-    parser.parse_chunk(&payload).unwrap();
+    let _ = parser.parse_chunk(&payload).unwrap();
     let mut store = GraphicsStore::new();
     parser.build_graphic((0, 0), &mut store).unwrap();
 
     // Now put with z-index
     let mut parser2 = KittyParser::new();
-    parser2.parse_chunk("a=p,i=42,z=5;").unwrap();
+    let _ = parser2.parse_chunk("a=p,i=42,z=5;").unwrap();
     let result = parser2.build_graphic((0, 0), &mut store).unwrap();
 
     match result {
@@ -760,22 +773,41 @@ fn test_parse_chunk_columns_rows_for_non_frame() {
 }
 
 #[test]
-fn test_parse_chunk_frame_overloads_c_and_r() {
-    // For Frame: c= is composition, r= is frame number
+fn test_parse_chunk_frame_overloads_c_r_x_and_y() {
+    // As kitty: for Frame, c= is the base frame, r= the frame to edit, X= the
+    // composition mode and Y= the background color.
     let mut parser = KittyParser::new();
-    let _ = parser.parse_chunk("a=f,c=1,r=5;");
-    assert_eq!(parser.frame_composition, Some(CompositionMode::Overwrite));
+    let _ = parser.parse_chunk("a=f,c=2,r=5,X=1,Y=4278190335;");
+    assert_eq!(parser.base_frame, Some(2));
     assert_eq!(parser.frame_number, Some(5));
-    // columns/rows should NOT be set for frame action
+    assert_eq!(parser.frame_composition, Some(CompositionMode::Overwrite));
+    assert_eq!(parser.background_color, Some(0xFF00_00FF));
+    // columns/rows and the cell offsets should NOT be set for frame action
     assert_eq!(parser.columns, None);
     assert_eq!(parser.rows, None);
+    assert_eq!(parser.x_offset, None);
+    assert_eq!(parser.y_offset, None);
 }
 
 #[test]
 fn test_parse_chunk_frame_composition_invalid_char() {
     let mut parser = KittyParser::new();
-    let _ = parser.parse_chunk("a=f,c=Z;");
+    let _ = parser.parse_chunk("a=f,X=Z;");
     assert_eq!(parser.frame_composition, None);
+}
+
+#[test]
+fn test_parse_chunk_animation_control_overloads_c_r_and_z() {
+    // As kitty: for AnimationControl, c= is the frame to show, r= with z= a
+    // frame's gap.
+    let mut parser = KittyParser::new();
+    let _ = parser.parse_chunk("a=a,i=1,c=3,r=2,z=40;");
+    assert_eq!(parser.current_frame, Some(3));
+    assert_eq!(parser.frame_number, Some(2));
+    assert_eq!(parser.frame_gap_ms, Some(40));
+    assert_eq!(parser.columns, None);
+    assert_eq!(parser.rows, None);
+    assert_eq!(parser.z_index, None);
 }
 
 #[test]
@@ -951,93 +983,133 @@ fn test_get_data_uncompressed_returns_raw_concat() {
 // --- parse_delete_target variants ---
 
 #[test]
-fn test_parse_delete_target_uppercase_letters() {
-    // A, C, Z uppercase are valid per parse_delete_target match arms.
+fn test_parse_delete_target_letters_and_case() {
+    // Each letter resolves per the spec's deleting grammar; uppercase sets
+    // delete_frees_data.
     let mut parser = KittyParser::new();
-    parser.action = KittyAction::Delete;
-
     let _ = parser.parse_chunk("a=d,d=A;");
     assert_eq!(parser.delete_target, Some(KittyDeleteTarget::All));
+    assert!(parser.delete_frees_data);
 
     let mut parser = KittyParser::new();
-    parser.action = KittyAction::Delete;
+    let _ = parser.parse_chunk("a=d,d=a;");
+    assert_eq!(parser.delete_target, Some(KittyDeleteTarget::All));
+    assert!(!parser.delete_frees_data);
+
+    let mut parser = KittyParser::new();
     let _ = parser.parse_chunk("a=d,d=C;");
     assert_eq!(parser.delete_target, Some(KittyDeleteTarget::AtCursor));
+    assert!(parser.delete_frees_data);
 
     let mut parser = KittyParser::new();
-    parser.action = KittyAction::Delete;
-    let _ = parser.parse_chunk("a=d,d=Z;");
-    assert_eq!(parser.delete_target, Some(KittyDeleteTarget::OnScreen));
+    let _ = parser.parse_chunk("a=d,d=f,i=3;");
+    assert_eq!(parser.delete_target, Some(KittyDeleteTarget::Frames));
+    assert!(!parser.delete_frees_data);
+
+    let mut parser = KittyParser::new();
+    let _ = parser.parse_chunk("a=d,d=F,i=3;");
+    assert_eq!(parser.delete_target, Some(KittyDeleteTarget::Frames));
+    assert!(parser.delete_frees_data);
+
+    let mut parser = KittyParser::new();
+    let _ = parser.parse_chunk("a=d,d=I,i=42;");
+    assert_eq!(
+        parser.delete_target,
+        Some(KittyDeleteTarget::ById(42, None))
+    );
+    assert!(parser.delete_frees_data);
+
+    let mut parser = KittyParser::new();
+    let _ = parser.parse_chunk("a=d,d=i,i=42,p=7;");
+    assert_eq!(
+        parser.delete_target,
+        Some(KittyDeleteTarget::ById(42, Some(7)))
+    );
+    assert!(!parser.delete_frees_data);
+
+    let mut parser = KittyParser::new();
+    let _ = parser.parse_chunk("a=d,d=P,x=4,y=6;");
+    assert_eq!(parser.delete_target, Some(KittyDeleteTarget::ByCell(4, 6)));
+
+    let mut parser = KittyParser::new();
+    let _ = parser.parse_chunk("a=d,d=q,x=4,y=6,z=-1;");
+    assert_eq!(
+        parser.delete_target,
+        Some(KittyDeleteTarget::ByCellZ(4, 6, -1))
+    );
+
+    let mut parser = KittyParser::new();
+    let _ = parser.parse_chunk("a=d,d=R,x=2,y=9;");
+    assert_eq!(
+        parser.delete_target,
+        Some(KittyDeleteTarget::ByIdRange(2, 9))
+    );
+
+    let mut parser = KittyParser::new();
+    let _ = parser.parse_chunk("a=d,d=x,x=3;");
+    assert_eq!(parser.delete_target, Some(KittyDeleteTarget::ByColumn(3)));
+
+    let mut parser = KittyParser::new();
+    let _ = parser.parse_chunk("a=d,d=y,y=9;");
+    assert_eq!(parser.delete_target, Some(KittyDeleteTarget::ByRow(9)));
+
+    let mut parser = KittyParser::new();
+    let _ = parser.parse_chunk("a=d,d=z,z=-2;");
+    assert_eq!(parser.delete_target, Some(KittyDeleteTarget::ByZIndex(-2)));
 }
 
 #[test]
-fn test_parse_delete_target_lowercase_c_and_z() {
-    let mut parser = KittyParser::new();
-    parser.action = KittyAction::Delete;
-    let _ = parser.parse_chunk("a=d,d=c;");
-    assert_eq!(parser.delete_target, Some(KittyDeleteTarget::AtCursor));
-
-    let mut parser = KittyParser::new();
-    parser.action = KittyAction::Delete;
-    let _ = parser.parse_chunk("a=d,d=z;");
-    assert_eq!(parser.delete_target, Some(KittyDeleteTarget::OnScreen));
-}
-
-#[test]
-fn test_parse_delete_target_unknown_char_is_none() {
-    // 'x', 'y', 'i', 'p' are NOT handled by parse_delete_target,
-    // so the target stays None even though build_graphic has branches
-    // for ByColumn/ByRow/ById/ByPlacement/InCell that are never reached.
-    let mut parser = KittyParser::new();
-    parser.action = KittyAction::Delete;
-    let _ = parser.parse_chunk("a=d,d=x;");
-    assert_eq!(parser.delete_target, None);
-
-    let mut parser = KittyParser::new();
-    parser.action = KittyAction::Delete;
-    let _ = parser.parse_chunk("a=d,d=p;");
-    assert_eq!(parser.delete_target, None);
+fn test_parse_delete_target_unresolvable_letters_are_none() {
+    // Letters whose identifying parameter is missing resolve to None.
+    let cases = [
+        "a=d,d=x;", // no x=
+        "a=d,d=p;", // no x=/y=
+        "a=d,d=q;", // no x=/y=/z=
+        "a=d,d=z;", // no z=
+        "a=d,d=i;", // no i=
+        "a=d,d=f;", // f resolves without i=; dispatch errors EINVAL
+        "a=d,d=r;", // no x=/y=
+    ];
+    for case in cases {
+        let mut parser = KittyParser::new();
+        let _ = parser.parse_chunk(case);
+        if case.starts_with("a=d,d=f;") {
+            assert_eq!(parser.delete_target, Some(KittyDeleteTarget::Frames));
+        } else {
+            assert_eq!(parser.delete_target, None, "case: {case}");
+        }
+    }
 }
 
 #[test]
 fn test_parse_delete_target_empty_value_is_none() {
     let mut parser = KittyParser::new();
-    parser.action = KittyAction::Delete;
     let _ = parser.parse_chunk("a=d,d=;");
     assert_eq!(parser.delete_target, None);
+    assert!(!parser.delete_frees_data);
 }
-
-// --- parse_delete_target: by-id / by-placement / by-column / by-row ---
 
 #[test]
 fn parse_delete_target_by_id_column_row_placement() {
-    // d=i -> ById(image_id)
+    // d=i -> ById(image_id, placement_id)
     let mut p = KittyParser::new();
-    p.image_id = Some(7);
-    let _ = p.parse_chunk("d=i;");
-    assert_eq!(p.delete_target, Some(KittyDeleteTarget::ById(7)));
+    let _ = p.parse_chunk("i=7,d=i;");
+    assert_eq!(p.delete_target, Some(KittyDeleteTarget::ById(7, None)));
 
     // d=x -> ByColumn(source_x)
     let mut p = KittyParser::new();
-    p.source_x = Some(3);
-    let _ = p.parse_chunk("d=x;");
+    let _ = p.parse_chunk("x=3,d=x;");
     assert_eq!(p.delete_target, Some(KittyDeleteTarget::ByColumn(3)));
 
     // d=y -> ByRow(source_y)
     let mut p = KittyParser::new();
-    p.source_y = Some(9);
-    let _ = p.parse_chunk("d=y;");
+    let _ = p.parse_chunk("y=9,d=y;");
     assert_eq!(p.delete_target, Some(KittyDeleteTarget::ByRow(9)));
 
-    // d=p -> ByPlacement(image_id, placement_id)
+    // d=p -> ByCell(x, y)
     let mut p = KittyParser::new();
-    p.image_id = Some(5);
-    p.placement_id = Some(2);
-    let _ = p.parse_chunk("d=p;");
-    assert_eq!(
-        p.delete_target,
-        Some(KittyDeleteTarget::ByPlacement(5, Some(2)))
-    );
+    let _ = p.parse_chunk("x=1,y=2,d=p;");
+    assert_eq!(p.delete_target, Some(KittyDeleteTarget::ByCell(1, 2)));
 }
 
 #[test]
@@ -1047,21 +1119,6 @@ fn parse_delete_target_by_id_without_identifying_param_is_none() {
     let _ = p.parse_chunk("d=i;");
     assert_eq!(p.delete_target, None);
 }
-
-#[test]
-fn herdr_delete_order_resolves_id_and_placement_targets() {
-    let mut by_id = KittyParser::new();
-    by_id.parse_chunk("a=d,d=I,i=42;").unwrap();
-    assert_eq!(by_id.delete_target, Some(KittyDeleteTarget::ById(42)));
-
-    let mut by_placement = KittyParser::new();
-    by_placement.parse_chunk("a=d,d=i,i=42,p=7;").unwrap();
-    assert_eq!(
-        by_placement.delete_target,
-        Some(KittyDeleteTarget::ByPlacement(42, Some(7)))
-    );
-}
-
 #[test]
 fn herdr_by_placement_delete_preserves_sibling_placement() {
     let mut store = GraphicsStore::new();
@@ -1070,7 +1127,7 @@ fn herdr_by_placement_delete_preserves_sibling_placement() {
     assert_eq!(store.placements.len(), 2);
 
     let mut delete = KittyParser::new();
-    delete.parse_chunk("a=d,d=i,i=42,p=1;").unwrap();
+    let _ = delete.parse_chunk("a=d,d=i,i=42,p=1;").unwrap();
     delete.build_graphic((0, 0), &mut store).unwrap();
 
     assert_eq!(store.placements.len(), 1);
@@ -1086,7 +1143,7 @@ fn herdr_by_id_delete_removes_all_image_placements() {
     assert_eq!(store.placements.len(), 2);
 
     let mut delete = KittyParser::new();
-    delete.parse_chunk("a=d,d=I,i=42;").unwrap();
+    let _ = delete.parse_chunk("a=d,d=I,i=42;").unwrap();
     delete.build_graphic((0, 0), &mut store).unwrap();
 
     assert!(store.placements.is_empty());
@@ -1109,34 +1166,46 @@ fn parse_chunk_v_offset_without_parent_is_parsed() {
 
 #[test]
 fn decode_pixels_rejects_rgba_dimension_overflow() {
-    // Regression: width*height*4 must not wrap usize. Attacker-controlled
-    // u32 dimensions that overflow must report "overflow" (previously the
-    // wrapping arithmetic bypassed the size check -> huge dims over a tiny
-    // buffer -> OOB/panic downstream).
+    // u32::MAX squared fits 64-bit usize (no arithmetic overflow), but the
+    // product is far past MAX_IMAGE_PIXELS: the pixel-cap check (SEC-002
+    // consistency) now rejects it before the payload-size check that used
+    // to raise the overflow error.
     let mut parser = KittyParser::new();
     parser.format = KittyFormat::Rgba;
     parser.width = Some(u32::MAX);
     parser.height = Some(u32::MAX);
     let result = parser.decode_pixels(&[0u8; 8]);
-    assert!(result.is_err());
-    assert!(
-        result.unwrap_err().to_string().contains("overflow"),
-        "overflowing dimensions must be reported as an overflow error"
-    );
+    match result {
+        Err(GraphicsError::ImageTooLarge(pixels, max)) => {
+            assert_eq!(max, crate::graphics::MAX_IMAGE_PIXELS);
+            assert!(pixels > max, "declared pixels must exceed the cap");
+        }
+        other => {
+            panic!("oversized RGBA dimensions must be rejected with the pixel cap, got {other:?}")
+        }
+    }
 }
 
 #[test]
 fn decode_pixels_rejects_rgb_dimension_overflow() {
+    // u32::MAX squared fits 64-bit usize (no arithmetic overflow), but the
+    // product is far past MAX_IMAGE_PIXELS: the pixel-cap check (card
+    // 01a1c2fd, SEC-002 consistency) now rejects it before the payload-size
+    // check that used to raise the overflow error.
     let mut parser = KittyParser::new();
     parser.format = KittyFormat::Rgb;
     parser.width = Some(u32::MAX);
     parser.height = Some(u32::MAX);
     let result = parser.decode_pixels(&[0u8; 8]);
-    assert!(result.is_err());
-    assert!(
-        result.unwrap_err().to_string().contains("overflow"),
-        "overflowing RGB dimensions must be reported as an overflow error"
-    );
+    match result {
+        Err(GraphicsError::ImageTooLarge(pixels, max)) => {
+            assert_eq!(max, crate::graphics::MAX_IMAGE_PIXELS);
+            assert!(pixels > max, "declared pixels must exceed the cap");
+        }
+        other => {
+            panic!("oversized RGB dimensions must be rejected with the pixel cap, got {other:?}")
+        }
+    }
 }
 
 // --- build_graphic: Delete action coverage ---
@@ -1170,7 +1239,7 @@ fn transmit_and_add(
         Some(pid) => format!("a=T,f=32,s=1,v=1,i={},p={};{}", image_id, pid, b64),
         None => format!("a=T,f=32,s=1,v=1,i={};{}", image_id, b64),
     };
-    tx.parse_chunk(&payload).unwrap();
+    let _ = tx.parse_chunk(&payload).unwrap();
     match tx.build_graphic(position, store).unwrap() {
         KittyGraphicResult::Graphic(g) => store.add_graphic(g),
         other => panic!("transmit_and_add expected Graphic, got {:?}", other),
@@ -1185,7 +1254,7 @@ fn place_only(
 ) {
     let mut p = KittyParser::new();
     let payload = format!("a=p,i={},p={};", image_id, placement_id);
-    p.parse_chunk(&payload).unwrap();
+    let _ = p.parse_chunk(&payload).unwrap();
     match p.build_graphic(position, store).unwrap() {
         KittyGraphicResult::Graphic(g) => store.add_graphic(g),
         other => panic!("place_only expected Graphic, got {:?}", other),
@@ -1232,7 +1301,7 @@ fn test_build_graphic_delete_all_clears_store() {
     assert_eq!(store.placements.len(), 1);
 
     let mut del = KittyParser::new();
-    del.parse_chunk("a=d,d=a;").unwrap();
+    let _ = del.parse_chunk("a=d,d=a;").unwrap();
     let result = del.build_graphic((0, 0), &mut store).unwrap();
     assert!(matches!(result, KittyGraphicResult::None));
     assert!(store.placements.is_empty());
@@ -1246,7 +1315,7 @@ fn test_build_graphic_delete_at_cursor() {
 
     // Delete at cursor (3,4) — should remove it.
     let mut del = KittyParser::new();
-    del.parse_chunk("a=d,d=c;").unwrap();
+    let _ = del.parse_chunk("a=d,d=c;").unwrap();
     let _ = del.build_graphic((3, 4), &mut store).unwrap();
     assert!(store.placements.is_empty());
 
@@ -1255,25 +1324,9 @@ fn test_build_graphic_delete_at_cursor() {
     assert_eq!(store.placements.len(), 1);
 
     let mut del2 = KittyParser::new();
-    del2.parse_chunk("a=d,d=c;").unwrap();
+    let _ = del2.parse_chunk("a=d,d=c;").unwrap();
     let _ = del2.build_graphic((0, 0), &mut store).unwrap(); // cursor elsewhere
     assert_eq!(store.placements.len(), 1); // still there
-}
-
-#[test]
-fn test_build_graphic_delete_in_cell_uses_cursor() {
-    // InCell behaves the same as AtCursor in this implementation.
-    // parse_delete_target never produces InCell, so we set it directly
-    // to cover the InCell branch.
-    let mut store = GraphicsStore::new();
-    transmit_and_add(&mut store, 1, None, (7, 8));
-    assert_eq!(store.placements.len(), 1);
-
-    let mut del = KittyParser::new();
-    del.action = KittyAction::Delete;
-    del.delete_target = Some(KittyDeleteTarget::InCell);
-    let _ = del.build_graphic((7, 8), &mut store).unwrap();
-    assert!(store.placements.is_empty());
 }
 
 #[test]
@@ -1284,8 +1337,10 @@ fn test_build_graphic_delete_on_screen() {
     }
     assert_eq!(store.placements.len(), 3);
 
+    // Bare `a=d` (the spec's "specified without any other keys") clears
+    // every placement on screen.
     let mut del = KittyParser::new();
-    del.parse_chunk("a=d,d=z;").unwrap();
+    let _ = del.parse_chunk("a=d;").unwrap();
     let _ = del.build_graphic((0, 0), &mut store).unwrap();
     assert!(store.placements.is_empty());
 }
@@ -1302,7 +1357,7 @@ fn test_build_graphic_delete_by_id() {
     // Delete only image id=1
     let mut del = KittyParser::new();
     del.action = KittyAction::Delete;
-    del.delete_target = Some(KittyDeleteTarget::ById(1));
+    del.delete_target = Some(KittyDeleteTarget::ById(1, None));
     let _ = del.build_graphic((0, 0), &mut store).unwrap();
     // One placement should remain (image id=2).
     assert_eq!(store.placements.len(), 1);
@@ -1319,7 +1374,7 @@ fn test_build_graphic_delete_by_placement() {
     // Delete only (image_id=1, placement_id=100)
     let mut del = KittyParser::new();
     del.action = KittyAction::Delete;
-    del.delete_target = Some(KittyDeleteTarget::ByPlacement(1, Some(100)));
+    del.delete_target = Some(KittyDeleteTarget::ById(1, Some(100)));
     let _ = del.build_graphic((0, 0), &mut store).unwrap();
     assert_eq!(store.placements.len(), 1);
     assert_eq!(store.placements[0].kitty_placement_id, Some(200));
@@ -1424,7 +1479,7 @@ fn test_build_graphic_put_regular_uses_stored_pixels() {
     let _ = tx.build_graphic((0, 0), &mut store).unwrap();
 
     let mut put = KittyParser::new();
-    put.parse_chunk("a=p,i=5,z=7,X=1,Y=2;").unwrap();
+    let _ = put.parse_chunk("a=p,i=5,z=7,X=1,Y=2;").unwrap();
     let result = put.build_graphic((9, 9), &mut store).unwrap();
     match result {
         KittyGraphicResult::Graphic(g) => {
@@ -1451,7 +1506,7 @@ fn test_build_graphic_put_with_relative_positioning() {
 
     let mut put = KittyParser::new();
     // P= parent_image_id enables the relative-positioning branch.
-    put.parse_chunk("a=p,i=8,P=99,Q=88,H=5;").unwrap();
+    let _ = put.parse_chunk("a=p,i=8,P=99,Q=88,H=5;").unwrap();
     let result = put.build_graphic((1, 1), &mut store).unwrap();
     match result {
         KittyGraphicResult::Graphic(g) => {
@@ -1762,6 +1817,71 @@ fn png_pixel_bomb_is_rejected_from_header() {
     }
 }
 
+/// SEC-002 consistency (card 01a1c2fd): a raw-RGB payload whose declared
+/// dimensions pass MAX_IMAGE_DIMENSION on each axis but multiply past
+/// MAX_IMAGE_PIXELS is refused with the same pixel-product error as the PNG
+/// branch, before the size check and any RGBA conversion allocation.
+#[test]
+fn rgb_pixel_bomb_is_rejected_like_the_png_branch() {
+    let mut parser = KittyParser::new();
+    parser.format = KittyFormat::Rgb;
+    // 16384 * 8192 = 134,217,728 px, above MAX_IMAGE_PIXELS (67,108,864),
+    // each axis within MAX_IMAGE_DIMENSION (16384).
+    parser.width = Some(16_384);
+    parser.height = Some(8_192);
+    // A stub payload: the pixel cap fires before the payload-length check.
+    let data = [0u8; 3];
+    match parser.decode_pixels(&data) {
+        Err(GraphicsError::ImageTooLarge(pixels, max)) => {
+            assert_eq!(pixels, 16_384 * 8_192);
+            assert_eq!(max, crate::graphics::MAX_IMAGE_PIXELS);
+        }
+        other => panic!("expected raw-branch ImageTooLarge, got {other:?}"),
+    }
+}
+
+/// SEC-002 consistency (RGBA half): a raw-RGBA payload whose declared
+/// dimensions pass MAX_IMAGE_DIMENSION on each axis but multiply past
+/// MAX_IMAGE_PIXELS is refused with the same pixel-product error as the PNG
+/// and RGB branches, before the payload-length check and the payload copy.
+#[test]
+fn rgba_pixel_bomb_is_rejected_like_the_png_branch() {
+    let mut parser = KittyParser::new();
+    parser.format = KittyFormat::Rgba;
+    // 16384 * 8192 = 134,217,728 px, above MAX_IMAGE_PIXELS (67,108,864),
+    // each axis within MAX_IMAGE_DIMENSION (16384).
+    parser.width = Some(16_384);
+    parser.height = Some(8_192);
+    // A stub payload: the pixel cap fires before the payload-length check.
+    let data = [0u8; 4];
+    match parser.decode_pixels(&data) {
+        Err(GraphicsError::ImageTooLarge(pixels, max)) => {
+            assert_eq!(pixels, 16_384 * 8_192);
+            assert_eq!(max, crate::graphics::MAX_IMAGE_PIXELS);
+        }
+        other => panic!("expected raw-branch ImageTooLarge, got {other:?}"),
+    }
+}
+
+/// The cap is exclusive (`pixels > MAX_IMAGE_PIXELS`), so a raw-RGBA payload
+/// just under it decodes normally. Uses a real full-length payload so the
+/// size check and the copy run end to end.
+#[test]
+fn rgba_just_under_pixel_cap_is_accepted() {
+    let mut parser = KittyParser::new();
+    parser.format = KittyFormat::Rgba;
+    // 8192 * 8191 = 67,100,672 px, below MAX_IMAGE_PIXELS (67,108,864),
+    // each axis within MAX_IMAGE_DIMENSION (16384).
+    let width = 8_192usize;
+    let height = 8_191usize;
+    parser.width = Some(width as u32);
+    parser.height = Some(height as u32);
+    let data = vec![0u8; width * height * 4];
+    let (w, h, rgba) = parser.decode_pixels(&data).expect("under-cap RGBA decodes");
+    assert_eq!((w, h), (width, height));
+    assert_eq!(rgba.len(), width * height * 4);
+}
+
 // --- build_graphic: Frame action ---
 
 #[test]
@@ -1804,67 +1924,267 @@ fn test_build_graphic_frame_shared_memory_unsupported() {
         .contains("Shared memory not supported for frames"));
 }
 
-#[test]
-fn test_build_graphic_frame_num_one_creates_placement_and_animation() {
-    let pixels: Vec<u8> = vec![
-        255, 0, 0, 255, 0, 255, 0, 255, 0, 0, 255, 255, 255, 255, 0, 255,
-    ];
-    let b64 = base64::Engine::encode(&base64::engine::general_purpose::STANDARD, &pixels);
+/// Run one complete kitty command against `store`, committing a placement it builds.
+fn kitty_command(store: &mut GraphicsStore, command: &str) -> Result<(), GraphicsError> {
     let mut parser = KittyParser::new();
-    // Frame 1: should create both an animation frame AND a placement.
-    parser
-        .parse_chunk(&format!(
-            "a=f,f=32,s=2,v=2,i=77,r=1,z=50,c=1,x=1,y=2;{}",
-            b64
-        ))
-        .unwrap();
-    assert_eq!(parser.frame_number, Some(1));
-    assert_eq!(parser.frame_delay_ms, Some(50));
-    assert_eq!(parser.frame_composition, Some(CompositionMode::Overwrite));
-
-    let mut store = GraphicsStore::new();
-    let result = parser.build_graphic((3, 4), &mut store).unwrap();
-    match result {
-        KittyGraphicResult::Graphic(g) => {
-            assert_eq!(g.kitty_image_id, Some(77));
-            assert_eq!(g.position, (3, 4));
-            assert_eq!(g.placement.x_offset, 0);
-            assert_eq!(g.placement.y_offset, 0);
-            // x= was also used for frame offset
-        }
-        other => panic!("Expected Graphic for frame 1, got {:?}", other),
+    parser.parse_chunk(command)?;
+    if let KittyGraphicResult::Graphic(graphic) = parser.build_graphic((0, 0), store)? {
+        store.add_graphic(graphic);
     }
-    // Animation frame should be present.
-    let anim = store.get_animation(77);
-    assert!(anim.is_some(), "animation should exist for image_id=77");
-    let frame = anim.unwrap().get_frame(1);
-    assert!(frame.is_some());
-    assert_eq!(frame.unwrap().delay_ms, 50);
-    // Image should also be stored for Put reuse.
-    assert!(store.get_kitty_image(77).is_some());
+    Ok(())
+}
+
+fn rgba_b64(pixels: &[[u8; 4]]) -> String {
+    base64::Engine::encode(&base64::engine::general_purpose::STANDARD, pixels.concat())
+}
+
+/// Transmit a 1×1 image under `id` and append a second frame, so it has an animation.
+fn seed_animation(store: &mut GraphicsStore, id: u32) {
+    let b64 = rgba_b64(&[[255, 0, 0, 255]]);
+    kitty_command(store, &format!("a=t,f=32,s=1,v=1,i={id};{b64}")).unwrap();
+    kitty_command(store, &format!("a=f,f=32,s=1,v=1,i={id};{b64}")).unwrap();
 }
 
 #[test]
-fn test_build_graphic_frame_subsequent_no_placement() {
-    // Pre-seed an animation by transmitting frame 1 first.
-    let pixels: Vec<u8> = vec![255, 0, 0, 255];
-    let b64 = base64::Engine::encode(&base64::engine::general_purpose::STANDARD, &pixels);
+fn test_build_graphic_frame_of_an_unknown_image_is_an_error() {
+    // As kitty: a frame belongs to an image transmitted before it.
     let mut store = GraphicsStore::new();
+    let b64 = rgba_b64(&[[255, 0, 0, 255]]);
+    let result = kitty_command(&mut store, &format!("a=f,f=32,s=1,v=1,i=77,r=1;{b64}"));
+    assert!(result.unwrap_err().to_string().contains("Image not found"));
+    assert!(store.get_kitty_image(77).is_none());
+    assert!(store.all_graphics().is_empty());
+}
 
-    let mut f1 = KittyParser::new();
-    f1.parse_chunk(&format!("a=f,f=32,s=1,v=1,i=9,r=1;{}", b64))
-        .unwrap();
-    let _ = f1.build_graphic((0, 0), &mut store).unwrap();
+#[test]
+fn test_build_graphic_frame_one_edits_the_image_in_place() {
+    // As kitty: r=1 edits the root frame. The placement keeps its id and its
+    // cell size and shows the new pixels; no placement is added.
+    let red = [255, 0, 0, 255];
+    let blue = [0, 0, 255, 255];
+    let mut store = GraphicsStore::new();
+    let b64 = rgba_b64(&[red, red, red, red]);
+    kitty_command(
+        &mut store,
+        &format!("a=T,f=32,s=2,v=2,i=7,c=10,r=5,C=1;{b64}"),
+    )
+    .unwrap();
+    let placed = store.all_graphics()[0].id;
 
-    // Now frame 2: should NOT create a new placement.
-    let mut f2 = KittyParser::new();
-    f2.parse_chunk(&format!("a=f,f=32,s=1,v=1,i=9,r=2;{}", b64))
+    let mut parser = KittyParser::new();
+    parser
+        .parse_chunk(&format!(
+            "a=f,f=32,r=1,i=7,x=1,y=1,s=1,v=1;{}",
+            rgba_b64(&[blue])
+        ))
         .unwrap();
-    let result = f2.build_graphic((0, 0), &mut store).unwrap();
+    let result = parser.build_graphic((3, 4), &mut store).unwrap();
     assert!(matches!(result, KittyGraphicResult::None));
-    // Animation should now have 2 frames.
+
+    let graphics = store.all_graphics();
+    assert_eq!(graphics.len(), 1);
+    assert_eq!(graphics[0].id, placed);
+    assert_eq!(graphics[0].position, (0, 0));
+    assert_eq!(
+        (graphics[0].placement.columns, graphics[0].placement.rows),
+        (Some(10), Some(5))
+    );
+    assert_eq!(
+        graphics[0].pixels.as_slice(),
+        [red, red, red, blue].concat()
+    );
+    let (_, _, stored) = store.get_kitty_image(7).unwrap();
+    assert!(Arc::ptr_eq(&stored, &graphics[0].pixels));
+    assert!(
+        store.get_animation(7).is_none(),
+        "an edit of the root adds no frames"
+    );
+}
+
+#[test]
+fn test_build_graphic_frame_without_r_appends_a_frame() {
+    let red = [255, 0, 0, 255];
+    let mut store = GraphicsStore::new();
+    kitty_command(
+        &mut store,
+        &format!("a=T,f=32,s=1,v=1,i=9;{}", rgba_b64(&[red])),
+    )
+    .unwrap();
+    let b64 = rgba_b64(&[[0, 255, 0, 255]]);
+    kitty_command(&mut store, &format!("a=f,f=32,s=1,v=1,i=9,z=40;{b64}")).unwrap();
+    kitty_command(&mut store, &format!("a=f,f=32,s=1,v=1,i=9;{b64}")).unwrap();
+
     let anim = store.get_animation(9).unwrap();
+    assert_eq!(
+        anim.frame_count(),
+        3,
+        "the root frame and two appended frames"
+    );
+    assert_eq!(anim.get_frame(2).unwrap().delay_ms, 40);
+    let (_, _, root) = store.get_kitty_image(9).unwrap();
+    assert!(Arc::ptr_eq(&anim.get_frame(1).unwrap().pixels, &root));
+    assert_eq!(root.as_slice(), red, "appending leaves the root frame");
+    assert_eq!(store.all_graphics().len(), 1, "a frame adds no placement");
+    assert_eq!(store.all_graphics()[0].pixels.as_slice(), red);
+}
+
+#[test]
+fn test_build_graphic_new_frame_starts_from_its_base_or_its_background() {
+    let (red, green, blue) = ([255, 0, 0, 255], [0, 255, 0, 255], [0, 0, 255, 255]);
+    let mut store = GraphicsStore::new();
+    kitty_command(
+        &mut store,
+        &format!("a=t,f=32,s=2,v=1,i=3;{}", rgba_b64(&[red, green])),
+    )
+    .unwrap();
+    let b64 = rgba_b64(&[blue]);
+    kitty_command(&mut store, &format!("a=f,f=32,s=1,v=1,x=1,i=3,c=1;{b64}")).unwrap();
+    // Opaque black (0x000000FF) where the data does not reach.
+    kitty_command(&mut store, &format!("a=f,f=32,s=1,v=1,x=1,i=3,Y=255;{b64}")).unwrap();
+
+    let anim = store.get_animation(3).unwrap();
+    assert_eq!(
+        anim.get_frame(2).unwrap().pixels.as_slice(),
+        [red, blue].concat()
+    );
+    assert_eq!(
+        anim.get_frame(3).unwrap().pixels.as_slice(),
+        [[0, 0, 0, 255], blue].concat()
+    );
+}
+
+#[test]
+fn test_animation_control_root_gap_before_the_first_append_is_kept() {
+    let red = [255, 0, 0, 255];
+    let mut store = GraphicsStore::new();
+    kitty_command(
+        &mut store,
+        &format!("a=t,f=32,s=1,v=1,i=5;{}", rgba_b64(&[red])),
+    )
+    .unwrap();
+
+    // The spec-mandated flow: set the root frame's gap right after
+    // transmission, before any a=f append. The entry is created here with the
+    // root frame sharing the image buffer.
+    kitty_command(&mut store, "a=a,i=5,r=1,z=1000;").unwrap();
+    let anim = store
+        .get_animation(5)
+        .expect("entry created for the root gap");
+    assert_eq!(anim.get_frame(1).unwrap().delay_ms, 1000);
+    let (_, _, root) = store.get_kitty_image(5).unwrap();
+    assert!(Arc::ptr_eq(&anim.get_frame(1).unwrap().pixels, &root));
+
+    // The append keeps the root gap and adds frame 2.
+    let b64 = rgba_b64(&[[0, 255, 0, 255]]);
+    kitty_command(&mut store, &format!("a=f,f=32,s=1,v=1,i=5;{b64}")).unwrap();
+    let anim = store.get_animation(5).unwrap();
     assert_eq!(anim.frame_count(), 2);
+    assert_eq!(anim.get_frame(1).unwrap().delay_ms, 1000);
+}
+
+#[test]
+fn test_build_graphic_compose_is_rejected_not_treated_as_transmit() {
+    // a=c (kitty 0.22 compose) parsed as a transmission would REPLACE the
+    // image under the id and drop its placements; it is rejected cleanly.
+    let mut store = GraphicsStore::new();
+    let b64 = rgba_b64(&[[1, 2, 3, 255]]);
+    kitty_command(&mut store, &format!("a=t,f=32,s=1,v=1,i=9;{b64}")).unwrap();
+    let result = kitty_command(&mut store, &format!("a=c,i=9,f=32,s=1,v=1;{b64}"));
+    assert!(result.unwrap_err().to_string().contains("not supported"));
+    // The original image survives.
+    assert!(store.get_kitty_image(9).is_some());
+}
+
+#[test]
+fn test_build_graphic_base_frame_out_of_range_is_an_error() {
+    let mut store = GraphicsStore::new();
+    let b64 = rgba_b64(&[[1, 2, 3, 255]]);
+    kitty_command(&mut store, &format!("a=t,f=32,s=1,v=1,i=6;{b64}")).unwrap();
+    // c= referencing a nonexistent frame errors (kitty replies ENOENT)
+    // instead of silently filling from the background color.
+    let result = kitty_command(&mut store, &format!("a=f,f=32,s=1,v=1,x=1,i=6,c=5;{b64}"));
+    assert!(result.unwrap_err().to_string().contains("does not exist"));
+    assert!(store.get_animation(6).is_none());
+}
+
+#[test]
+fn test_build_graphic_r_zero_appends_a_new_frame() {
+    let mut store = GraphicsStore::new();
+    let b64 = rgba_b64(&[[1, 2, 3, 255]]);
+    kitty_command(&mut store, &format!("a=t,f=32,s=1,v=1,i=8;{b64}")).unwrap();
+    // The control-data default r=0 means "create a new frame".
+    kitty_command(&mut store, &format!("a=f,f=32,s=1,v=1,i=8,r=0;{b64}")).unwrap();
+    assert_eq!(store.get_animation(8).unwrap().frame_count(), 2);
+}
+
+#[test]
+fn test_build_graphic_frame_edit_of_a_missing_frame_is_an_error() {
+    let mut store = GraphicsStore::new();
+    let b64 = rgba_b64(&[[1, 2, 3, 255]]);
+    kitty_command(&mut store, &format!("a=t,f=32,s=1,v=1,i=4;{b64}")).unwrap();
+    let result = kitty_command(&mut store, &format!("a=f,f=32,s=1,v=1,i=4,r=2;{b64}"));
+    assert!(result
+        .unwrap_err()
+        .to_string()
+        .contains("Frame 2 does not exist"));
+    assert!(store.get_animation(4).is_none());
+}
+
+#[test]
+fn test_animation_control_c_shows_a_frame_and_edits_reach_the_shown_frame() {
+    let (red, green, blue) = ([255, 0, 0, 255], [0, 255, 0, 255], [0, 0, 255, 255]);
+    let mut store = GraphicsStore::new();
+    kitty_command(
+        &mut store,
+        &format!("a=T,f=32,s=1,v=1,i=6;{}", rgba_b64(&[red])),
+    )
+    .unwrap();
+    kitty_command(
+        &mut store,
+        &format!("a=f,f=32,s=1,v=1,i=6;{}", rgba_b64(&[green])),
+    )
+    .unwrap();
+    assert_eq!(store.all_graphics()[0].pixels.as_slice(), red);
+
+    kitty_command(&mut store, "a=a,i=6,c=2;").unwrap();
+    assert_eq!(store.all_graphics()[0].pixels.as_slice(), green);
+    assert_eq!(store.get_animation(6).unwrap().current_frame, 2);
+
+    // An edit of the shown frame shows; an edit of another frame does not.
+    kitty_command(
+        &mut store,
+        &format!("a=f,f=32,s=1,v=1,i=6,r=2;{}", rgba_b64(&[blue])),
+    )
+    .unwrap();
+    assert_eq!(store.all_graphics()[0].pixels.as_slice(), blue);
+    kitty_command(
+        &mut store,
+        &format!("a=f,f=32,s=1,v=1,i=6,r=1;{}", rgba_b64(&[green])),
+    )
+    .unwrap();
+    assert_eq!(store.all_graphics()[0].pixels.as_slice(), blue);
+
+    kitty_command(&mut store, "a=a,i=6,c=1;").unwrap();
+    assert_eq!(store.all_graphics()[0].pixels.as_slice(), green);
+    // A frame that does not exist is not shown.
+    kitty_command(&mut store, "a=a,i=6,c=9;").unwrap();
+    assert_eq!(store.get_animation(6).unwrap().current_frame, 1);
+}
+
+#[test]
+fn test_animation_control_r_and_z_set_a_frame_gap() {
+    let mut store = GraphicsStore::new();
+    seed_animation(&mut store, 2);
+    kitty_command(&mut store, "a=a,i=2,r=2,z=125;").unwrap();
+    assert_eq!(
+        store
+            .get_animation(2)
+            .unwrap()
+            .get_frame(2)
+            .unwrap()
+            .delay_ms,
+        125
+    );
 }
 
 // --- build_graphic: AnimationControl ---
@@ -1886,17 +2206,12 @@ fn test_build_graphic_animation_control_missing_image_id() {
 #[test]
 fn test_build_graphic_animation_control_with_state() {
     // Seed an animation so control_animation has something to act on.
-    let pixels: Vec<u8> = vec![255, 0, 0, 255];
-    let b64 = base64::Engine::encode(&base64::engine::general_purpose::STANDARD, &pixels);
     let mut store = GraphicsStore::new();
-    let mut f1 = KittyParser::new();
-    f1.parse_chunk(&format!("a=f,f=32,s=1,v=1,i=5,r=1;{}", b64))
-        .unwrap();
-    let _ = f1.build_graphic((0, 0), &mut store).unwrap();
+    seed_animation(&mut store, 5);
 
     // Now send animation control: s=1 (stop), v=2 (num_plays=2).
     let mut ctrl = KittyParser::new();
-    ctrl.parse_chunk("a=a,i=5,s=1,v=2;").unwrap();
+    let _ = ctrl.parse_chunk("a=a,i=5,s=1,v=2;").unwrap();
     let result = ctrl.build_graphic((0, 0), &mut store).unwrap();
     assert!(matches!(result, KittyGraphicResult::None));
 
@@ -1908,17 +2223,12 @@ fn test_build_graphic_animation_control_with_state() {
 #[test]
 fn test_build_graphic_animation_control_num_plays_zero_ignored() {
     // Per spec, v=0 is ignored.
-    let pixels: Vec<u8> = vec![255, 0, 0, 255];
-    let b64 = base64::Engine::encode(&base64::engine::general_purpose::STANDARD, &pixels);
     let mut store = GraphicsStore::new();
-    let mut f1 = KittyParser::new();
-    f1.parse_chunk(&format!("a=f,f=32,s=1,v=1,i=6,r=1;{}", b64))
-        .unwrap();
-    let _ = f1.build_graphic((0, 0), &mut store).unwrap();
+    seed_animation(&mut store, 6);
 
     let anim_before = store.get_animation(6).unwrap().loop_count;
     let mut ctrl = KittyParser::new();
-    ctrl.parse_chunk("a=a,i=6,v=0;").unwrap();
+    let _ = ctrl.parse_chunk("a=a,i=6,v=0;").unwrap();
     let _ = ctrl.build_graphic((0, 0), &mut store).unwrap();
     let anim_after = store.get_animation(6).unwrap().loop_count;
     assert_eq!(anim_before, anim_after, "v=0 must be ignored");
@@ -1927,16 +2237,11 @@ fn test_build_graphic_animation_control_num_plays_zero_ignored() {
 #[test]
 fn test_build_graphic_animation_control_num_plays_one_is_infinite() {
     // v=1 means infinite -> loop_count = 0.
-    let pixels: Vec<u8> = vec![255, 0, 0, 255];
-    let b64 = base64::Engine::encode(&base64::engine::general_purpose::STANDARD, &pixels);
     let mut store = GraphicsStore::new();
-    let mut f1 = KittyParser::new();
-    f1.parse_chunk(&format!("a=f,f=32,s=1,v=1,i=7,r=1;{}", b64))
-        .unwrap();
-    let _ = f1.build_graphic((0, 0), &mut store).unwrap();
+    seed_animation(&mut store, 7);
 
     let mut ctrl = KittyParser::new();
-    ctrl.parse_chunk("a=a,i=7,v=1;").unwrap();
+    let _ = ctrl.parse_chunk("a=a,i=7,v=1;").unwrap();
     let _ = ctrl.build_graphic((0, 0), &mut store).unwrap();
     let anim = store.get_animation(7).unwrap();
     assert_eq!(anim.loop_count, 0, "v=1 must mean infinite (loop_count=0)");
@@ -1945,13 +2250,8 @@ fn test_build_graphic_animation_control_num_plays_one_is_infinite() {
 #[test]
 fn test_build_graphic_animation_control_no_state_only_loops() {
     // Animation control with only v= (no s=) should still set loop_count.
-    let pixels: Vec<u8> = vec![255, 0, 0, 255];
-    let b64 = base64::Engine::encode(&base64::engine::general_purpose::STANDARD, &pixels);
     let mut store = GraphicsStore::new();
-    let mut f1 = KittyParser::new();
-    f1.parse_chunk(&format!("a=f,f=32,s=1,v=1,i=8,r=1;{}", b64))
-        .unwrap();
-    let _ = f1.build_graphic((0, 0), &mut store).unwrap();
+    seed_animation(&mut store, 8);
 
     let mut ctrl = KittyParser::new();
     ctrl.parse_chunk("a=a,i=8,v=3;").unwrap(); // no s=
@@ -2504,4 +2804,254 @@ fn test_kitty_medium_from_char_invalid_chars() {
     assert_eq!(KittyMedium::from_char('D'), None); // uppercase not valid
     assert_eq!(KittyMedium::from_char('F'), None);
     assert_eq!(KittyMedium::from_char(' '), None);
+}
+
+// --- spec delete grammar: placement-vs-data semantics ---
+
+#[test]
+fn delete_lowercase_keeps_stored_data_and_uppercase_frees_it() {
+    let mut store = GraphicsStore::new();
+    transmit_and_add(&mut store, 1, None, (0, 0));
+
+    // Lowercase `a` deletes placements only; the data stays so the image
+    // can be re-displayed with a=p without retransmitting.
+    kitty_command(&mut store, "a=d,d=a;").unwrap();
+    assert!(store.all_graphics().is_empty());
+    assert!(
+        store.get_kitty_image(1).is_some(),
+        "lowercase d=a keeps stored data"
+    );
+    place_only(&mut store, 1, 2, (2, 0));
+    assert_eq!(store.all_graphics().len(), 1);
+
+    // Uppercase `A` frees the stored data as well.
+    kitty_command(&mut store, "a=d,d=A;").unwrap();
+    assert!(store.all_graphics().is_empty());
+    assert!(
+        store.get_kitty_image(1).is_none(),
+        "uppercase d=A frees stored data"
+    );
+    assert!(store.all_animations().is_empty());
+}
+
+#[test]
+fn delete_at_cursor_is_kitty_scoped_and_uppercase_frees_orphaned_data() {
+    let mut store = GraphicsStore::new();
+    transmit_and_add(&mut store, 1, None, (3, 4));
+    transmit_and_add(&mut store, 2, None, (5, 6));
+
+    // Lowercase `c` at the cursor deletes only the kitty placement there.
+    let mut del = KittyParser::new();
+    let _ = del.parse_chunk("a=d,d=c;");
+    del.build_graphic((3, 4), &mut store).unwrap();
+    assert_eq!(store.all_graphics().len(), 1);
+    assert_eq!(store.all_graphics()[0].kitty_image_id, Some(2));
+    assert!(
+        store.get_kitty_image(1).is_some(),
+        "lowercase keeps stored data"
+    );
+
+    // Uppercase `C` frees the orphaned image's data; other images keep it.
+    let mut del = KittyParser::new();
+    let _ = del.parse_chunk("a=d,d=C;");
+    del.build_graphic((5, 6), &mut store).unwrap();
+    assert!(store.all_graphics().is_empty());
+    assert!(store.get_kitty_image(2).is_none());
+    assert!(
+        store.get_kitty_image(1).is_some(),
+        "untouched image keeps its data"
+    );
+}
+
+#[test]
+fn delete_frames_forms_drop_the_animation_and_uppercase_frees_the_image() {
+    let mut store = GraphicsStore::new();
+    seed_animation(&mut store, 5);
+    assert!(store.get_animation(5).is_some());
+
+    // Lowercase `f`: the animation frames go, the static image stays.
+    kitty_command(&mut store, "a=d,d=f,i=5;").unwrap();
+    assert!(store.get_animation(5).is_none());
+    assert!(
+        store.get_kitty_image(5).is_some(),
+        "lowercase d=f keeps the image itself"
+    );
+
+    // Uppercase `F`: the image data goes too.
+    kitty_command(&mut store, "a=d,d=F,i=5;").unwrap();
+    assert!(store.get_kitty_image(5).is_none());
+}
+
+#[test]
+fn delete_by_cell_column_and_row_hit_only_the_targeted_placements() {
+    let mut store = GraphicsStore::new();
+    transmit_and_add(&mut store, 1, Some(1), (0, 0));
+    place_only(&mut store, 1, 2, (5, 3));
+
+    // d=p at cell (0,0)
+    kitty_command(&mut store, "a=d,d=p,x=0,y=0;").unwrap();
+    assert_eq!(store.all_graphics().len(), 1);
+    assert_eq!(store.all_graphics()[0].position, (5, 3));
+
+    // d=x column 5
+    kitty_command(&mut store, "a=d,d=x,x=5;").unwrap();
+    assert!(store.all_graphics().is_empty());
+
+    // d=y row 0
+    transmit_and_add(&mut store, 2, Some(1), (7, 0));
+    kitty_command(&mut store, "a=d,d=y,y=0;").unwrap();
+    assert!(store.all_graphics().is_empty());
+}
+
+#[test]
+fn delete_by_zindex_and_by_cell_z_select_on_z() {
+    let mut store = GraphicsStore::new();
+    transmit_and_add(&mut store, 1, Some(1), (0, 0));
+    // A z=5 placement of the same image, elsewhere on screen.
+    let mut put = KittyParser::new();
+    let _ = put.parse_chunk("a=p,i=1,p=2,z=5;");
+    match put.build_graphic((7, 7), &mut store).unwrap() {
+        KittyGraphicResult::Graphic(g) => store.add_graphic(g),
+        _ => panic!("expected a graphic"),
+    }
+
+    // d=z deletes only the z=5 placement.
+    kitty_command(&mut store, "a=d,d=z,z=5;").unwrap();
+    assert_eq!(store.all_graphics().len(), 1);
+    assert_eq!(store.all_graphics()[0].position, (0, 0));
+
+    // d=q at cell (0,0) with a z that does not match deletes nothing.
+    kitty_command(&mut store, "a=d,d=q,x=0,y=0,z=3;").unwrap();
+    assert_eq!(store.all_graphics().len(), 1);
+    // d=q with the matching z deletes it.
+    kitty_command(&mut store, "a=d,d=q,x=0,y=0,z=0;").unwrap();
+    assert!(store.all_graphics().is_empty());
+}
+
+#[test]
+fn delete_by_id_range_covers_data_only_images_and_uppercase_frees() {
+    let mut store = GraphicsStore::new();
+    transmit_and_add(&mut store, 3, Some(1), (0, 0));
+    // A transmitted-but-never-placed image inside the range.
+    let b64 = rgba_b64(&[[255, 0, 0, 255]]);
+    kitty_command(&mut store, &format!("a=t,f=32,s=1,v=1,i=4;{b64}")).unwrap();
+    transmit_and_add(&mut store, 9, Some(1), (4, 4));
+
+    // Lowercase r: placements in 2..=5 go; stored data stays.
+    kitty_command(&mut store, "a=d,d=r,x=2,y=5;").unwrap();
+    assert_eq!(store.all_graphics().len(), 1);
+    assert_eq!(store.all_graphics()[0].kitty_image_id, Some(9));
+    assert!(store.get_kitty_image(3).is_some());
+    assert!(
+        store.get_kitty_image(4).is_some(),
+        "data-only image in range keeps its data in the lowercase form"
+    );
+
+    // Uppercase R over the same range frees the stored data too.
+    kitty_command(&mut store, "a=d,d=R,x=2,y=5;").unwrap();
+    assert!(store.get_kitty_image(3).is_none());
+    assert!(
+        store.get_kitty_image(4).is_none(),
+        "uppercase frees data-only images in range"
+    );
+    assert!(
+        store.get_kitty_image(9).is_some(),
+        "out-of-range image untouched"
+    );
+}
+
+#[test]
+fn bare_delete_without_d_clears_placements_and_keeps_data() {
+    let mut store = GraphicsStore::new();
+    transmit_and_add(&mut store, 1, None, (0, 0));
+    kitty_command(&mut store, "a=d;").unwrap();
+    assert!(store.all_graphics().is_empty());
+    assert!(
+        store.get_kitty_image(1).is_some(),
+        "bare a=d keeps stored data"
+    );
+}
+
+#[test]
+fn unresolved_delete_target_is_einval_and_missing_ids_are_noops() {
+    let mut store = GraphicsStore::new();
+    // d=i with no i= is malformed (EINVAL in the reply).
+    let mut del = KittyParser::new();
+    let _ = del.parse_chunk("a=d,d=i;");
+    let err = del.build_graphic((0, 0), &mut store).unwrap_err();
+    assert_eq!(err.kitty_code(), "EINVAL");
+
+    // Deleting ids that do not exist is an idempotent no-op, not an error.
+    transmit_and_add(&mut store, 1, None, (0, 0));
+    kitty_command(&mut store, "a=d,d=I,i=999;").unwrap();
+    assert_eq!(store.all_graphics().len(), 1);
+}
+
+#[test]
+fn put_missing_image_is_enoent() {
+    let mut parser = KittyParser::new();
+    let _ = parser.parse_chunk("a=p,i=31337;");
+    let err = parser
+        .build_graphic((0, 0), &mut GraphicsStore::new())
+        .unwrap_err();
+    assert_eq!(err.kitty_code(), "ENOENT");
+}
+
+// --- negative frame gap (gapless frames) ---
+
+#[test]
+fn negative_z_makes_a_frame_gapless_and_zero_is_ignored() {
+    let mut store = GraphicsStore::new();
+    seed_animation(&mut store, 2);
+    // Negative z on a=a: the frame becomes gapless (0 ms).
+    kitty_command(&mut store, "a=a,i=2,r=2,z=-1;").unwrap();
+    assert_eq!(
+        store
+            .get_animation(2)
+            .unwrap()
+            .get_frame(2)
+            .unwrap()
+            .delay_ms,
+        0,
+        "negative z creates a gapless frame"
+    );
+
+    // z=0 is ignored (acts as though z was unspecified).
+    store.set_kitty_frame_gap(2, 2, 40);
+    kitty_command(&mut store, "a=a,i=2,r=2,z=0;").unwrap();
+    assert_eq!(
+        store
+            .get_animation(2)
+            .unwrap()
+            .get_frame(2)
+            .unwrap()
+            .delay_ms,
+        40,
+        "z=0 must not change the gap"
+    );
+
+    // Negative z on a=f rides along with frame data: the appended frame 3
+    // is gapless. Positive z sets the gap.
+    let b64 = rgba_b64(&[[0, 255, 0, 255]]);
+    kitty_command(&mut store, &format!("a=f,f=32,s=1,v=1,i=2,z=-1;{b64}")).unwrap();
+    assert_eq!(
+        store
+            .get_animation(2)
+            .unwrap()
+            .get_frame(3)
+            .unwrap()
+            .delay_ms,
+        0,
+        "the appended frame is gapless"
+    );
+    kitty_command(&mut store, "a=a,i=2,r=3,z=88;").unwrap();
+    assert_eq!(
+        store
+            .get_animation(2)
+            .unwrap()
+            .get_frame(3)
+            .unwrap()
+            .delay_ms,
+        88
+    );
 }

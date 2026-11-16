@@ -4,9 +4,10 @@
 use super::{Glyphs, Modal, PromptTarget, WindowSession};
 use crate::mux::attach::targets::{
     active_window_row, displayed_session_of, marked_pane, next_in_cycle, next_workspace,
-    parse_session_line,
+    parse_session_line, session_active_window,
 };
 use crate::mux::attach::{layout, status, ManagementKey};
+use crate::mux::layout::LayoutPreset;
 
 impl WindowSession {
     /// Start a user navigation: the latest one wins. Every chain captures
@@ -14,6 +15,10 @@ impl WindowSession {
     /// (or a follow reseed) moved the view since it was issued, so a slow
     /// reply never pulls the view back.
     pub(super) fn begin_nav(&mut self) -> u64 {
+        // A newer navigation supersedes any landing still marked in
+        // flight — including one whose continuation a failed write
+        // dropped (a follow aimed at that window must follow again).
+        self.nav_landing = None;
         self.nav_gen += 1;
         self.nav_gen
     }
@@ -27,6 +32,9 @@ impl WindowSession {
     /// notification channel).
     pub(super) fn flash_if_busy(&mut self, err: &std::io::Error) {
         if err.kind() == std::io::ErrorKind::TimedOut {
+            // The timed-out command's continuation was dropped, so an
+            // in-flight landing marker would suppress follows forever.
+            self.nav_landing = None;
             self.chrome.flash("daemon busy".to_string());
             self.draw_status_row();
         }
@@ -70,6 +78,13 @@ impl WindowSession {
             ManagementKey::Sidebar => self.toggle_sidebar(conn),
             ManagementKey::Respawn => self.chord_respawn(conn),
             ManagementKey::NotifyJump => self.chord_notify_jump(conn),
+            key @ (ManagementKey::LayoutEvenHorizontal
+            | ManagementKey::LayoutEvenVertical
+            | ManagementKey::LayoutMainHorizontal
+            | ManagementKey::LayoutMainVertical
+            | ManagementKey::LayoutTiled) => {
+                self.chord_select_layout(conn, key.layout_preset().expect("layout key"));
+            }
         }
     }
 
@@ -138,7 +153,7 @@ impl WindowSession {
                     .and_then(|id| id.trim().strip_prefix('%'))
                     .and_then(|n| n.parse::<u32>().ok());
                 let window = s.window.clone();
-                s.reseed_window(c, &window);
+                s.reseed_window(c, &window, false);
                 if let Some(new_pane) = new_pane {
                     // A re-seed whose %layout-change lagged the drain
                     // (fresh pane not installed yet) parks the fresh pane
@@ -182,7 +197,7 @@ impl WindowSession {
                             .then(|| marked_pane(&listed.body, &window).ok())
                             .flatten();
                         if let Some(pane) = survivor {
-                            s.reseed_window(c, &window);
+                            s.reseed_window(c, &window, false);
                             if let Some(n) =
                                 pane.trim().strip_prefix('%').and_then(|n| n.parse().ok())
                             {
@@ -196,7 +211,7 @@ impl WindowSession {
                         // or ends the view when the session went with it.
                         // Ending NOW would skip the terminal restore; flag it
                         // and let the pump's normal path decide.
-                        s.status_dirty = true;
+                        s.status_inflight.dirty = true;
                     },
                 );
             },
@@ -318,7 +333,7 @@ impl WindowSession {
             "swap-window -s {} -t {}",
             self.window, windows[neighbor_at]
         ));
-        self.status_dirty = true;
+        self.status_inflight.dirty = true;
     }
 
     /// The tab-strip scroll chords: shift the overflowing strip's
@@ -335,6 +350,23 @@ impl WindowSession {
 
     fn chord_new_window(&mut self, _conn: &mut crate::mux::attach::conn::AttachConn) {
         self.enter_prompt(PromptTarget::NewWindow);
+    }
+
+    /// prefix M-1..M-5: apply a layout preset to the shown window
+    /// (`select-layout`). The daemon unzooms and broadcasts the new
+    /// `%layout-change`; a refusal flashes.
+    fn chord_select_layout(
+        &mut self,
+        conn: &mut crate::mux::attach::conn::AttachConn,
+        preset: LayoutPreset,
+    ) {
+        let command = format!("select-layout {} -t {}", preset.name(), self.window);
+        self.send_then(conn, &command, move |s, _c, reply| {
+            if !reply.ok {
+                s.chrome.flash(format!("layout {}: refused", preset.name()));
+                s.draw_status_row();
+            }
+        });
     }
 
     /// tmux's zoom: the daemon's `resize-pane -Z` toggle. The
@@ -500,20 +532,24 @@ impl WindowSession {
     }
 
     /// Focus an agent's pane from a side-panel agent-row click: move the
-    /// daemon's shared selection with `select-pane` + `pane-info` lookup,
-    /// then land the view on the pane's window when it is not already
-    /// shown (the select+resync contract every switch follows).
-    /// Same-window clicks just move focus; the throttled status refresh
-    /// repaints the panel highlight. A refused `select-pane` (the pane is
-    /// gone) stops there: no `pane-info`, no landing. A timed-out one
-    /// flashes "daemon busy" and stops the same way (ARC-137).
+    /// daemon's shared selection with `select-pane`, then let ONE
+    /// `switch-client -t %pane` round trip do the landing decision — the
+    /// daemon resolves the pane's window and replies it (the body
+    /// contract select-window and switch-client carry), so a cross-window
+    /// pane lands straight into the re-seed. The old chain's pane-info
+    /// leg and the landing's own switch-client leg are gone: the click's
+    /// serialized waits drop from two to one (card 01a1995a6). Same-window
+    /// clicks just move focus; the throttled status refresh repaints the
+    /// panel highlight. A refused switch (the pane is gone) stops there:
+    /// no landing. A timed-out one flashes "daemon busy" and stops the
+    /// same way (ARC-137).
     pub(super) fn focus_pane(
         &mut self,
         conn: &mut crate::mux::attach::conn::AttachConn,
         pane: u32,
     ) {
         // In-order daemon: the pane-info below observes the select. A gone
-        // pane yields no pane-info row, which lands in the status_dirty arm.
+        // pane yields no pane-info row, which lands in the `status_inflight.dirty` arm.
         if conn
             .send_forget(&format!("select-pane -t %{pane}"))
             .is_err()
@@ -534,31 +570,31 @@ impl WindowSession {
         self.rebuild_agent_section();
         let gen = self.begin_nav();
         let expected = self.window.clone();
-        self.send_then(
+        let token = self.send_then_tracking(
             conn,
-            &format!("pane-info -t %{pane}"),
+            &format!("switch-client -t %{pane}"),
             move |s, c, reply| {
                 // A landing that completed since the click moved the view;
                 // this one must not pull it back.
-                if !s.nav_current(gen, &expected) {
+                if !reply.ok || !s.nav_current(gen, &expected) {
                     return;
                 }
-                let window = reply
-                    .ok
-                    .then(|| {
-                        reply
-                            .body
-                            .first()
-                            .and_then(|l| crate::mux::ipc::PaneInfoRow::parse(l))
-                    })
-                    .flatten()
-                    .map(|row| row.window);
-                match window {
-                    Some(window) if window != s.window => s.land_window_focused(c, &window, pane),
-                    _ => s.status_dirty = true,
+                let landed = reply
+                    .body
+                    .first()
+                    .map(|l| l.trim().to_string())
+                    .filter(|l| l.starts_with('@'));
+                match landed {
+                    Some(window) if window != s.window => {
+                        s.reseed_window_focused(c, &window, Some(pane));
+                    }
+                    _ => s.status_inflight.dirty = true,
                 }
             },
         );
+        // Park the reply token while the landing is in flight (cleared by
+        // the first apply_pending after the reply dispatches).
+        self.click_landing = token;
     }
 
     /// Land the view on `ws_id`: the session `select-workspace` resumed
@@ -611,7 +647,7 @@ impl WindowSession {
                         .filter(|id| sessions.contains(id));
                     let Some(session) = resumed.or_else(|| sessions.first().cloned()) else {
                         // An empty workspace only marks the status stale.
-                        s.status_dirty = true;
+                        s.status_inflight.dirty = true;
                         return;
                     };
                     s.send_then(
@@ -695,21 +731,25 @@ impl WindowSession {
         match crate::mux::config::reload_client_chords(
             file,
             &crate::mux::config::Chords {
-                prefix: self.prefix,
-                reload: self.reload_key,
+                prefix: self.input_route.prefix,
+                reload: self.input_route.reload_key,
                 management: self.management,
                 resize_step: self.resize_step,
                 pane_borders: self.render_opts.pane_borders,
                 show_label_in_border: self.render_opts.show_label_in_border,
                 pane_gaps: self.render_opts.pane_gaps,
                 scrollbar_gutter: self.render_opts.scrollbar_gutter,
+                copy_mode_auto_exit: self.copy_mode_auto_exit,
                 change_cursor_shape: self.cursor.change_cursor_shape,
                 kitty_graphics: self.kitty.enabled,
                 session_picker: self.session_picker,
+                prefer_default_workspace: self.prefer_default_workspace,
                 git_status: self.git_status,
                 git_poll_secs: self.git_poll_secs,
                 border_lines: self.render_opts.glyphs.name().to_string(),
                 agents_sort: self.renderer.agents_sort().config_value().to_string(),
+                session_strip: "auto".to_string(),
+                agent_state_dots: "off".to_string(),
                 sidebar_width: self.render_opts.sidebar_width,
                 // Launch-only: the live panel's visibility stays as it
                 // is; the session keeps the configured value for the
@@ -891,20 +931,39 @@ impl WindowSession {
         Self::land_window_inner(self, conn, window, None);
     }
 
-    /// `land_window` for a roster click: the landing carries the clicked
-    /// pane, so the re-seed focuses it instead of the window's first pane
-    /// (the second-click-required roster report). The daemon-side select
-    /// already happened in `focus_pane`, so `switch-client` lands on a
-    /// window whose active pane is the clicked one.
-    pub(super) fn land_window_focused(
+    /// A press on a session-strip entry: land the view on that session's
+    /// active window through the same `switch-client` landing every
+    /// switch follows ([`Self::land_window`]). A click on the shown
+    /// session is a no-op, like a tab click.
+    pub(super) fn session_click(
         &mut self,
         conn: &mut crate::mux::attach::conn::AttachConn,
-        window: &str,
-        pane: u32,
+        rx: u16,
     ) {
-        Self::land_window_inner(self, conn, window, Some(pane));
+        let Some(index) = self.chrome.session_strip.hit_test(rx) else {
+            return;
+        };
+        let sessions = self.status.workspace_sessions();
+        let Some((id, _)) = sessions.get(index) else {
+            return;
+        };
+        let id = id.clone();
+        if Some(id.as_str()) == self.status.session_id.as_deref() {
+            return; // the shown session: a no-op click
+        }
+        if let Some(window) = session_active_window(conn, &id) {
+            if window != self.window {
+                self.land_window(conn, &window);
+            }
+        }
     }
 
+    /// Land the view on a window the daemon already points the client at:
+    /// switch, then re-seed — focusing `focus` instead of the window's
+    /// first pane when a roster click carried one (the
+    /// second-click-required roster report). The roster-click caller is
+    /// gone since the merged switch-client round trip (card 01a1995a6);
+    /// the generic path keeps its focus plumbing for the other landings.
     fn land_window_inner(
         &mut self,
         conn: &mut crate::mux::attach::conn::AttachConn,
@@ -914,10 +973,17 @@ impl WindowSession {
         let gen = self.begin_nav();
         let expected = self.window.clone();
         let target = window.to_string();
+        // Mark the landing in flight: its own switch broadcasts park a
+        // shared-selection follow, and a follow consumed before this
+        // reply would re-seed the window's first pane and veto the
+        // landing here (the cross-workspace roster report). Cleared when
+        // the reply dispatches, whatever it answers.
+        self.nav_landing = Some(target.clone());
         self.send_then(
             conn,
             &format!("switch-client -t {window}"),
             move |s, c, reply| {
+                s.nav_landing = None;
                 if !s.nav_current(gen, &expected) {
                     return;
                 }
@@ -955,21 +1021,23 @@ impl WindowSession {
         &mut self,
         conn: &mut crate::mux::attach::conn::AttachConn,
         window: &str,
+        landing: bool,
     ) -> bool {
-        Self::reseed_window_inner(self, conn, window, None)
+        Self::reseed_window_inner(self, conn, window, None, landing)
     }
 
     /// `reseed_window` landing from a roster click: `focus` is the clicked
     /// pane — it seeds the view and keeps the focus after the layout
     /// install. Without it the landing fell back to the window's first
-    /// pane (the second-click-required roster report).
+    /// pane (the second-click-required roster report). Never a gone-view
+    /// landing, so the re-seed's snapshot carries `landing: false`.
     pub(super) fn reseed_window_focused(
         &mut self,
         conn: &mut crate::mux::attach::conn::AttachConn,
         window: &str,
         focus: Option<u32>,
     ) -> bool {
-        Self::reseed_window_inner(self, conn, window, focus)
+        Self::reseed_window_inner(self, conn, window, focus, false)
     }
 
     fn reseed_window_inner(
@@ -977,6 +1045,7 @@ impl WindowSession {
         conn: &mut crate::mux::attach::conn::AttachConn,
         window: &str,
         focus: Option<u32>,
+        landing: bool,
     ) -> bool {
         super::trace_input(format_args!("reseed_window {window}"));
         let pane = match focus {
@@ -1008,8 +1077,8 @@ impl WindowSession {
         // The emulators survive the re-seed now, so leaving scroll mode
         // also clears the focused pane's hold rather than relying on a
         // fresh emulator.
-        if matches!(self.modal, Modal::Scroll) {
-            self.leave_scroll_mode();
+        if matches!(self.modal, Modal::Copy(_)) {
+            self.leave_copy_mode();
         }
         let (layout_event, race) = self.drain_around_layout(conn);
         let drain_installed = layout_event.is_some();
@@ -1047,10 +1116,10 @@ impl WindowSession {
         // never carried, and a session gone mid-switch leaves the view
         // put (`false`), the caller falling to the ladder.
         if conn.has_command_feature("client-snapshot", "v1") {
-            self.reseed_status_snapshot(conn, window);
+            self.reseed_status_snapshot(conn, window, landing);
         } else {
             let focused = self.renderer.focused().unwrap_or(0);
-            self.status_dirty = true;
+            self.status_inflight.dirty = true;
             match self.status.refresh(conn, window, focused) {
                 Ok(_) => self.seed_transitions(),
                 // The window vanished between the select and the query: leave

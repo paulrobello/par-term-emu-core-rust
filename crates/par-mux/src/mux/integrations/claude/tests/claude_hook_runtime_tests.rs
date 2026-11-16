@@ -174,8 +174,15 @@ fn collect_requests(
 /// re-key the parent's claim and the SessionEnd release that used to wipe
 /// it. Acceptance criteria 1 and 2, hook side: nothing leaves the nested
 /// run, so the pane's claim, roster entry, and resume identity are untouched.
+///
+/// Load-sensitive: the test asserts on the hook's recorded wire calls
+/// inside a bounded collect window, and under full-gate parallel load
+/// the scripted claude wrapper's output landed after the window (a late
+/// release recorded, measured 2026-11-01 at 8.0s vs the solo 4.4s run),
+/// so it joins the deferred set like the PTY/attach suites.
 #[cfg(unix)]
 #[test]
+#[ignore = "load-sensitive: bounded wire-collect window flaked under full-gate parallel load (2026-11-01)"]
 fn the_hook_speaks_at_top_level_and_stays_silent_for_a_nested_claude() {
     if !python3_or_skip() {
         eprintln!("skipping: python3 is not available");
@@ -216,6 +223,16 @@ fn the_hook_speaks_at_top_level_and_stays_silent_for_a_nested_claude() {
     assert_eq!(
         request["params"]["session_resume_argv"][2], "s-parent",
         "the resume argv is intact: {request}"
+    );
+    // No agent_pid here, BY DESIGN: the double-fork launcher severs the
+    // hook's ancestry (launchd above it), so the v5 stamp's ancestry walk
+    // finds no claude parent and the hook correctly sends none — the
+    // daemon falls back to label liveness, the documented degradation.
+    // Runtime-pinning the stamp needs a single-fork launcher mode with a
+    // claude-named parent (card 01a1a7d2 notes the harness gap).
+    assert!(
+        request["params"].get("agent_pid").is_none(),
+        "a severed ancestry sends no stamp: {request}"
     );
 
     // Nested: the child's SessionStart sends nothing (the report that used

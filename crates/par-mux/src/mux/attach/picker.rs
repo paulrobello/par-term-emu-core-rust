@@ -330,6 +330,7 @@ pub(crate) fn picked_target_on_host(
     socket: &std::path::Path,
     target: Option<&str>,
     setting: bool,
+    prefer_default: bool,
 ) -> Result<Option<String>, Option<String>> {
     use std::io::IsTerminal as _;
     let active = picker_active(
@@ -337,14 +338,18 @@ pub(crate) fn picked_target_on_host(
         std::io::stdin().is_terminal(),
         std::io::stdout().is_terminal(),
     );
-    if target.is_some() || !active {
+    if target.is_some() {
         return Ok(target.map(str::to_string));
+    }
+    if !active && !prefer_default {
+        return Ok(None);
     }
     let mut client = crate::mux::client::MuxClient::connect(socket).map_err(|_| None)?;
     super::targets::picked_target(
         &mut |command| client.send_checked(command),
         None,
-        true,
+        active,
+        prefer_default,
         &mut terminal_chooser,
     )
     .map_err(Some)

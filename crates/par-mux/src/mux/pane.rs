@@ -3,7 +3,7 @@
 use crate::mux::agent_resume::render_surviving;
 use crate::mux::ids::{PaneId, SessionId, WindowId, WorkspaceId};
 use par_term_emu_core::pty_error::PtyError;
-use par_term_emu_core::pty_session::{OutputCallback, PtyInputHandle, PtySession};
+use par_term_emu_core::pty_session::{OutputDamageCallback, PtyInputHandle, PtySession};
 use par_term_emu_core::terminal::replay_snapshot::TerminalSnapshot;
 use par_term_emu_core::terminal::{ObserverDispatchBatch, Terminal};
 use parking_lot::{Mutex, RwLock};
@@ -386,6 +386,14 @@ impl MuxPane {
         self.spawn_command.as_deref()
     }
 
+    /// Overwrite the recorded start command — restore's seam for keeping a
+    /// resumed pane's respawn default at its PERSISTED command: the factory
+    /// records the daemon-generated resume wrapper it executed, which must
+    /// not become what the next restore respawns (card 01a1a75c).
+    pub(crate) fn set_spawn_command(&mut self, command: Option<String>) {
+        self.spawn_command = command;
+    }
+
     /// Whether this pane restores via its start command (`--restore
     /// start-command` at creation), not an agent resume invocation.
     pub(crate) fn restore_start_command(&self) -> bool {
@@ -485,7 +493,11 @@ impl MuxPane {
             let term = self.terminal();
             let term = term.read();
             term.current_directory()
-                .filter(|_| osc7_host_is_local(term.shell_integration().hostname()))
+                .filter(|_| {
+                    par_term_emu_core::shell_integration::osc7_host_is_local(
+                        term.shell_integration().hostname(),
+                    )
+                })
                 .map(std::path::PathBuf::from)
         };
         if let Some(dir) = reported.filter(|dir| dir.is_dir()) {
@@ -739,8 +751,11 @@ impl MuxPane {
     /// [`Self::on_output`] for a sink already shared as an [`OutputSink`] —
     /// the dispatcher re-installs the one it handed the spawn, so a factory
     /// that ignored [`SpawnContext::output`] still forwards (ARC-103).
+    /// Damage-aware: the sink receives the chunk's damage generation and
+    /// viewport row ranges, which the control-mode fan-out forwards as the
+    /// adjacent `%pane-damage` line.
     pub fn on_output_sink(&mut self, sink: OutputSink) {
-        self.session.set_output_callback(sink.0);
+        self.session.set_output_callback_with_damage(sink.0);
     }
 
     /// Feed `bytes` to the pane's terminal as if the program printed them
@@ -786,30 +801,6 @@ impl MuxPane {
         self.session.resize(cols, rows).map_err(MuxError::from)
     }
 
-    /// [`Self::resize`] with the client's per-cell pixel size, so
-    /// XTWINOPS reports (`CSI 14 t`/`16 t`), `TIOCGWINSZ`, and image
-    /// cell-span math all carry the size the client actually renders
-    /// cells at instead of the 10×20 construction default. Total text-area
-    /// pixels are derived per pane (`cols × cell_w`) because the protocol
-    /// carries the cell size — the one renderer-metric every pane shares —
-    /// while grid extents differ per pane.
-    pub fn resize_with_cell_pixels(
-        &mut self,
-        cols: u16,
-        rows: u16,
-        cell_w: u16,
-        cell_h: u16,
-    ) -> Result<(), MuxError> {
-        self.session
-            .resize_with_pixels(
-                cols,
-                rows,
-                par_term_emu_core::pty_session::pixel_extent(cols, cell_w),
-                par_term_emu_core::pty_session::pixel_extent(rows, cell_h),
-            )
-            .map_err(MuxError::from)
-    }
-
     /// [`Self::resize`] with observer delivery left to the caller: the
     /// returned batch is delivered once the caller's tree lock drops, so an
     /// observer callback never runs under it. The batch returns even when
@@ -823,8 +814,15 @@ impl MuxPane {
         (result.map_err(MuxError::from), batch)
     }
 
-    /// [`Self::resize_with_cell_pixels`] with observer delivery left to the
-    /// caller, as [`Self::resize_deferred`].
+    /// [`Self::resize`] with the client's per-cell pixel size and observer
+    /// delivery left to the caller, as [`Self::resize_deferred`]: the
+    /// derived text-area pixels make XTWINOPS reports (`CSI 14 t`/`16 t`),
+    /// `TIOCGWINSZ`, and image cell-span math carry the size the client
+    /// actually renders cells at instead of the 10×20 construction default.
+    /// Total text-area pixels are derived per pane (`cols × cell_w`)
+    /// because the protocol carries the cell size — the one
+    /// renderer-metric every pane shares — while grid extents differ per
+    /// pane.
     pub(crate) fn resize_with_cell_pixels_deferred(
         &mut self,
         cols: u16,
@@ -851,9 +849,10 @@ impl MuxPane {
 
 /// A pane output sink carried into the spawn so it is installed before the
 /// reader thread starts (ARC-103). A newtype so [`SpawnContext`] keeps
-/// `Debug`.
+/// `Debug`. Holds the damage-aware callback type, so a sink installed here
+/// also receives the chunk's damage generation and viewport row ranges.
 #[derive(Clone)]
-pub struct OutputSink(pub OutputCallback);
+pub struct OutputSink(pub OutputDamageCallback);
 
 impl std::fmt::Debug for OutputSink {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -1062,7 +1061,7 @@ impl ShellPaneFactory {
         // Before the spawn: the reader thread reads this slot from its
         // first read(), so no output can precede the sink.
         if let Some(OutputSink(sink)) = context.output {
-            session.set_output_callback(Arc::clone(sink));
+            session.set_output_callback_with_damage(Arc::clone(sink));
         }
         session
     }
@@ -1346,51 +1345,6 @@ fn process_cwd(_pid: u32) -> Option<std::path::PathBuf> {
     None
 }
 
-/// This machine's hostname, or `None` when the OS will not say.
-#[cfg(unix)]
-pub(crate) fn local_hostname() -> Option<String> {
-    let mut buf = [0u8; 256];
-    // SAFETY: `buf` is a live, writable 256-byte buffer and the length
-    // passed is its exact size, so gethostname(3) writes only inside it.
-    let rc = unsafe { libc::gethostname(buf.as_mut_ptr().cast(), buf.len()) };
-    if rc != 0 {
-        return None;
-    }
-    // POSIX leaves a truncated name unterminated; treat that as unknown.
-    let end = buf.iter().position(|&b| b == 0)?;
-    let name = std::str::from_utf8(&buf[..end]).ok()?;
-    (!name.is_empty()).then(|| name.to_string())
-}
-
-/// This machine's hostname, or `None` when the OS will not say.
-#[cfg(windows)]
-pub(crate) fn local_hostname() -> Option<String> {
-    std::env::var("COMPUTERNAME").ok().filter(|n| !n.is_empty())
-}
-
-/// This machine's hostname, or `None` when the OS will not say.
-#[cfg(not(any(unix, windows)))]
-pub(crate) fn local_hostname() -> Option<String> {
-    None
-}
-
-/// Whether an OSC 7 hostname names this machine (SEC-128). `None` is local:
-/// the parser already folds an empty host and `localhost` into it. Any
-/// other name must match the local hostname, full or short form, case
-/// insensitively. Shells commonly emit `file://$HOSTNAME/path`, so `None`
-/// alone would reject every local zsh/bash integration. An unknown local
-/// name trusts nothing.
-fn osc7_host_is_local(host: Option<&str>) -> bool {
-    let Some(host) = host else {
-        return true;
-    };
-    let Some(local) = local_hostname() else {
-        return false;
-    };
-    let short = |name: &str| name.split('.').next().unwrap_or(name).to_string();
-    host.eq_ignore_ascii_case(&local) || short(host).eq_ignore_ascii_case(&short(&local))
-}
-
 /// A factory recording the [`SpawnContext`] of every spawn, for tests that
 /// assert what each tree path hands the factory.
 #[cfg(test)]
@@ -1565,9 +1519,11 @@ mod tests {
     fn spawn_context_output_sink_sees_the_first_byte() {
         let collected = Arc::new(Mutex::new(Vec::new()));
         let into = Arc::clone(&collected);
-        let sink = OutputSink(Arc::new(move |bytes: &[u8]| {
-            into.lock().extend_from_slice(bytes)
-        }));
+        let sink = OutputSink(Arc::new(
+            move |bytes: &[u8], _gen: u64, _rows: &[(u32, u32)]| {
+                into.lock().extend_from_slice(bytes)
+            },
+        ));
         let _pane = ShellPaneFactory::default()
             .create_pane(
                 PaneId(12),
@@ -1775,6 +1731,7 @@ mod tests {
             session_path: Some("/tmp/pi-session.jsonl".to_string()),
             session_start_source: Some("startup".to_string()),
             resume_argv: Some(vec!["pi".to_string(), "--session".to_string()]),
+            agent_pid: Some(4242),
             liveness_misses: Some(2),
             liveness_misses_agent: Some("pi".to_string()),
         };
@@ -2144,24 +2101,6 @@ mod tests {
             );
             std::thread::sleep(std::time::Duration::from_millis(25));
         }
-    }
-
-    /// SEC-128: an OSC 7 host is local only when it is absent (the parser's
-    /// fold of empty/`localhost`) or matches this machine's name, full or
-    /// short form, in any case.
-    #[test]
-    fn osc7_host_is_local_matches_only_this_machine() {
-        assert!(osc7_host_is_local(None));
-        let local = local_hostname().expect("hostname");
-        let short = local.split('.').next().unwrap().to_string();
-        assert!(osc7_host_is_local(Some(&local)));
-        assert!(osc7_host_is_local(Some(&local.to_uppercase())));
-        assert!(osc7_host_is_local(Some(&short)));
-        assert!(osc7_host_is_local(Some(&format!(
-            "{short}.example.invalid"
-        ))));
-        assert!(!osc7_host_is_local(Some("remote.invalid")));
-        assert!(!osc7_host_is_local(Some(&format!("{short}x"))));
     }
 
     /// SEC-125: a held (remain-on-exit) pane keeps its frozen screen but

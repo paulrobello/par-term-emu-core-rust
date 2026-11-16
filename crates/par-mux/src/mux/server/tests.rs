@@ -1394,7 +1394,7 @@ fn mutating_dispatches_broadcast_lifecycle_notifications_to_other_clients() {
     let window_id = tree.lock().session(session_id).unwrap().windows[0];
     let first = tree.lock().window(window_id).unwrap().panes()[0];
     // A second, non-issuing client: everything it sees is a broadcast.
-    let (tx, rx) = sync_channel(CLIENT_QUEUE_DEPTH);
+    let (tx, rx) = sync_channel(CLIENT_QUEUE_MAX_ITEMS);
     clients.lock().push((
         u64::MAX,
         tx,
@@ -1506,7 +1506,7 @@ fn session_set_changes_broadcast_sessions_changed() {
     let (tree, clients) = quiet_harness();
 
     // An observer client: everything it sees is a broadcast.
-    let (tx, rx) = sync_channel(CLIENT_QUEUE_DEPTH);
+    let (tx, rx) = sync_channel(CLIENT_QUEUE_MAX_ITEMS);
     clients.lock().push((
         u64::MAX,
         tx,
@@ -1554,7 +1554,7 @@ fn session_set_changes_broadcast_sessions_changed() {
 #[test]
 fn show_notification_broadcasts_to_every_client() {
     let (tree, clients) = quiet_harness();
-    let (tx, rx) = sync_channel(CLIENT_QUEUE_DEPTH);
+    let (tx, rx) = sync_channel(CLIENT_QUEUE_MAX_ITEMS);
     clients.lock().push((
         u64::MAX,
         tx,
@@ -1587,7 +1587,7 @@ fn a_kill_pane_that_empties_the_session_broadcasts_sessions_changed() {
     let window_id = tree.lock().session(session_id).unwrap().windows[0];
     let pane_id = tree.lock().window(window_id).unwrap().panes()[0];
 
-    let (tx, rx) = sync_channel(CLIENT_QUEUE_DEPTH);
+    let (tx, rx) = sync_channel(CLIENT_QUEUE_MAX_ITEMS);
     clients.lock().push((
         u64::MAX,
         tx,
@@ -1629,7 +1629,7 @@ fn rename_and_kill_session_broadcast_their_notifications() {
 
     // An observer client registered before the mutations: everything it
     // sees is a broadcast.
-    let (tx, rx) = sync_channel(CLIENT_QUEUE_DEPTH);
+    let (tx, rx) = sync_channel(CLIENT_QUEUE_MAX_ITEMS);
     clients.lock().push((
         u64::MAX,
         tx,
@@ -1701,7 +1701,7 @@ fn new_session_broadcasts_window_add_and_notifies_the_issuer() {
     let (tree, clients) = harness();
     // The issuing client is NOT in the broadcast set: its channel receives
     // only what dispatch directs to it specifically.
-    let (issuer_tx, issuer_rx) = sync_channel(CLIENT_QUEUE_DEPTH);
+    let (issuer_tx, issuer_rx) = sync_channel(CLIENT_QUEUE_MAX_ITEMS);
     dispatch_issued(
         "new-session -s main",
         1,
@@ -1741,7 +1741,7 @@ fn split_window_dispatch_splits_and_broadcasts_a_layout_change() {
     let pane_id = tree.lock().window(window_id).unwrap().panes()[0];
 
     // A second client observes the broadcast.
-    let (tx, rx) = sync_channel(CLIENT_QUEUE_DEPTH);
+    let (tx, rx) = sync_channel(CLIENT_QUEUE_MAX_ITEMS);
     clients.lock().push((
         u64::MAX,
         tx,
@@ -1890,7 +1890,7 @@ fn resize_pane_absolute_dispatches_and_tracks_the_terminals() {
     let second = tree.lock().window(window_id).unwrap().panes()[1];
 
     // A second client observes the size-driven re-layout.
-    let (tx, rx) = sync_channel(CLIENT_QUEUE_DEPTH);
+    let (tx, rx) = sync_channel(CLIENT_QUEUE_MAX_ITEMS);
     clients.lock().push((
         u64::MAX,
         tx,
@@ -1947,7 +1947,7 @@ fn refresh_client_size_report_resizes_the_window_and_broadcasts() {
     let window_id = tree.lock().session(session_id).unwrap().windows[0];
     let pane_id = tree.lock().window(window_id).unwrap().panes()[0];
 
-    let (tx, rx) = sync_channel(CLIENT_QUEUE_DEPTH);
+    let (tx, rx) = sync_channel(CLIENT_QUEUE_MAX_ITEMS);
     clients.lock().push((
         u64::MAX,
         tx,
@@ -2503,15 +2503,17 @@ fn exit_when_empty_clock_does_not_run_under_a_stalled_read() {
     worker.join().expect("the loop exits within a tick");
 }
 
-/// ARC-011: a client whose queue fills (it stopped reading the socket)
-/// is evicted from the broadcast set, while a draining sibling still
-/// receives every line pushed past the eviction.
+/// ARC-011, byte-budgeted: a client whose queue exceeds the byte budget
+/// (it stopped reading the socket) is evicted from the broadcast set,
+/// while a draining sibling still receives every line pushed past the
+/// eviction.
 #[test]
 fn a_stalled_client_is_evicted_and_a_draining_sibling_keeps_every_line() {
     let clients: Clients = Arc::new(Mutex::new(Vec::new()));
 
-    // The stalled client: registered, never drained.
-    let (stalled_tx, _stalled_rx) = sync_channel::<String>(CLIENT_QUEUE_DEPTH);
+    // The stalled client: registered, never drained. ~8 KiB lines, so the
+    // byte budget crosses on the ~CLIENT_QUEUE_BYTES / 8 KiB-th push.
+    let (stalled_tx, _stalled_rx) = sync_channel::<String>(CLIENT_QUEUE_MAX_ITEMS);
     let stalled_flag = Arc::new(AtomicBool::new(false));
     clients.lock().push((
         1,
@@ -2522,8 +2524,9 @@ fn a_stalled_client_is_evicted_and_a_draining_sibling_keeps_every_line() {
     ));
     // The sibling: drains as lines arrive, like a healthy reader thread.
     // The counter here is the writer's half in production, so the drain
-    // decrements it the way spawn_writer would.
-    let (sibling_tx, sibling_rx) = sync_channel::<String>(CLIENT_QUEUE_DEPTH);
+    // subtracts the line's bytes the way spawn_writer would (clamped,
+    // since replies are uncounted).
+    let (sibling_tx, sibling_rx) = sync_channel::<String>(CLIENT_QUEUE_MAX_ITEMS);
     let sibling_queued = Arc::new(AtomicUsize::new(0));
     clients.lock().push((
         2,
@@ -2533,17 +2536,29 @@ fn a_stalled_client_is_evicted_and_a_draining_sibling_keeps_every_line() {
         ConnectionAbort::none(),
     ));
 
+    let mut pushed = 0usize;
     let mut received = Vec::new();
-    for n in 0..=CLIENT_QUEUE_DEPTH {
-        push_to_clients(&clients, format!("line-{n}"));
+    while clients.lock().iter().any(|(id, ..)| *id == 1) {
+        push_to_clients(&clients, format!("line-{pushed}-{}", "x".repeat(8 * 1024)));
+        pushed += 1;
         while let Ok(line) = sibling_rx.try_recv() {
+            let drained = line.len();
             received.push(line);
-            if sibling_queued.load(Ordering::Relaxed) > 0 {
-                sibling_queued.fetch_sub(1, Ordering::Relaxed);
+            let current = sibling_queued.load(Ordering::Relaxed);
+            if current > 0 {
+                if drained >= current {
+                    sibling_queued.store(0, Ordering::Relaxed);
+                } else {
+                    sibling_queued.fetch_sub(drained, Ordering::Relaxed);
+                }
             }
         }
     }
 
+    assert!(
+        pushed >= CLIENT_QUEUE_BYTES / (8 * 1024 + 16),
+        "{pushed} pushes of ~8 KiB lines crossed the budget"
+    );
     assert_eq!(
         clients.lock().len(),
         1,
@@ -2558,27 +2573,33 @@ fn a_stalled_client_is_evicted_and_a_draining_sibling_keeps_every_line() {
     }
     assert_eq!(
         received.len(),
-        CLIENT_QUEUE_DEPTH + 1,
+        pushed,
         "the sibling saw every line, including the one that evicted the stalled client"
     );
-    assert_eq!(received.first().map(String::as_str), Some("line-0"));
-    let last = format!("line-{CLIENT_QUEUE_DEPTH}");
-    assert_eq!(received.last().map(String::as_str), Some(last.as_str()));
+    assert!(
+        received.first().is_some_and(|l| l.starts_with("line-0-")),
+        "the first pushed line arrived first"
+    );
+    let last = format!("line-{}-", pushed - 1);
+    assert!(
+        received.last().is_some_and(|l| l.starts_with(&last)),
+        "the last received line is the evicting push"
+    );
 }
 
-/// Card 01a0d9b47dae7751a6c7e5a4a900be6e: eviction is by queue depth
+/// Card 01a0d9b47dae7751a6c7e5a4a900be6e: eviction is by queue budget
 /// only — intended (ARC-011's memory bound; see MUX.md's broadcast
 /// eviction paragraph), and deliberately unlike tmux, which evicts a
 /// control client by output age (300 s) while buffering without bound.
-/// This pins the consequence of the depth policy: a client draining
+/// This pins the consequence of the budget policy: a client draining
 /// continuously but slower than the producer — healthy, just slow — is
-/// evicted once its backlog passes the cap, losing the queued tail. An
-/// age-based policy replaces this test with a drains-slowly-survives
-/// one.
+/// evicted once its backlog's BYTES pass the budget, losing the queued
+/// tail. An age-based policy replaces this test with a
+/// drains-slowly-survives one.
 #[test]
 fn a_slow_draining_client_is_evicted_once_its_backlog_passes_the_cap() {
     let clients: Clients = Arc::new(Mutex::new(Vec::new()));
-    let (tx, rx) = sync_channel::<String>(CLIENT_QUEUE_DEPTH);
+    let (tx, rx) = sync_channel::<String>(CLIENT_QUEUE_MAX_ITEMS);
     let flag = Arc::new(AtomicBool::new(false));
     clients.lock().push((
         7,
@@ -2590,11 +2611,15 @@ fn a_slow_draining_client_is_evicted_once_its_backlog_passes_the_cap() {
 
     // Drains exactly one line per two pushes — continuously, but at
     // half the producer's rate, so the backlog grows ~0.5 lines per
-    // push and passes the cap mid-burst.
-    let burst = CLIENT_QUEUE_DEPTH * 3;
+    // push and its bytes pass the budget mid-burst. 1 KiB lines keep
+    // the push count sane: with half the pushes retained, the backlog
+    // grows ~512 B per push and crosses CLIENT_QUEUE_BYTES about two
+    // burst-thirds in.
+    let filler = "x".repeat(1024);
+    let burst = CLIENT_QUEUE_BYTES / 1024 * 4;
     let mut drained = 0;
     for n in 0..burst {
-        push_to_clients(&clients, format!("line-{n}"));
+        push_to_clients(&clients, format!("line-{n}-{filler}"));
         if n % 2 == 0 && rx.try_recv().is_ok() {
             drained += 1;
         }
@@ -2614,23 +2639,25 @@ fn a_slow_draining_client_is_evicted_once_its_backlog_passes_the_cap() {
         "the evicted client is no longer registered"
     );
     assert!(
-        drained > CLIENT_QUEUE_DEPTH && drained < burst,
+        drained > CLIENT_QUEUE_BYTES / 2048 && drained < burst,
         "drained {drained} of {burst} — continuous but half-rate, evicted mid-burst"
     );
 }
 
-/// ARC-008: once the summed queue counters cross the aggregate bound, the
-/// push evicts the client holding the deepest queue — the stalled one —
-/// while its live siblings keep every line, including the evicting push.
+/// ARC-008: once the summed queue byte counters cross the aggregate
+/// bound, the push evicts the client holding the deepest queue — the
+/// stalled one — while its live siblings keep every line, including the
+/// evicting push.
 #[test]
 fn the_aggregate_cap_evicts_the_deepest_queue() {
     let clients: Clients = Arc::new(Mutex::new(Vec::new()));
     let mut channels = Vec::new();
-    let counts = [(1u64, 4000usize), (2, 3500), (3, 1000)];
+    let mib = 1024 * 1024;
+    let counts = [(1u64, 7 * mib), (2, 6 * mib), (3, 4 * mib)];
     let mut flags = Vec::new();
     let mut counters = Vec::new();
     for (id, queued) in counts {
-        let (tx, rx) = sync_channel::<String>(CLIENT_QUEUE_DEPTH);
+        let (tx, rx) = sync_channel::<String>(CLIENT_QUEUE_MAX_ITEMS);
         let flag = Arc::new(AtomicBool::new(false));
         let counter = Arc::new(AtomicUsize::new(queued));
         clients.lock().push((
@@ -2645,7 +2672,8 @@ fn the_aggregate_cap_evicts_the_deepest_queue() {
         counters.push((id, counter));
     }
 
-    push_to_clients(&clients, "the-evicting-line".to_string());
+    let line = "the-evicting-line".to_string();
+    push_to_clients(&clients, line.clone());
 
     assert_eq!(
         clients.lock().len(),
@@ -2658,13 +2686,13 @@ fn the_aggregate_cap_evicts_the_deepest_queue() {
         "eviction raised the flag the connection threads tear down on"
     );
     for (id, rx) in &channels {
-        let line = rx.try_recv().ok();
+        let got = rx.try_recv().ok();
         if *id == 1 {
-            assert!(line.is_none(), "the evicted client got nothing more");
+            assert!(got.is_none(), "the evicted client got nothing more");
         } else {
             assert_eq!(
-                line.as_deref(),
-                Some("the-evicting-line"),
+                got.as_deref(),
+                Some(line.as_str()),
                 "client {id} received the evicting push"
             );
         }
@@ -2673,38 +2701,47 @@ fn the_aggregate_cap_evicts_the_deepest_queue() {
         if *id == 1 {
             continue;
         }
-        let expected = counts.iter().find(|(cid, _)| cid == id).unwrap().1 + 1;
+        let expected = counts.iter().find(|(cid, _)| cid == id).unwrap().1 + line.len();
         assert_eq!(
             counter.load(Ordering::Relaxed),
             expected,
-            "client {id}'s counter tracked the delivered push"
+            "client {id}'s counter tracked the delivered push's bytes"
         );
     }
 }
 
 /// ARC-008's spill rule: an aggregate above the cap composed of queues
-/// each under a quarter of the per-client depth is a healthy crowd, not
+/// each under a quarter of the per-client budget is a healthy crowd, not
 /// a stall — nobody is evicted and every client keeps its line.
 #[test]
 fn the_aggregate_cap_spares_shallow_queues() {
     let clients: Clients = Arc::new(Mutex::new(Vec::new()));
     let mut receivers = Vec::new();
+    // Ten shallow queues, each above a tenth of the aggregate cap (so the
+    // sum crosses it) but under the quarter-budget victim line.
+    let shallow = CLIENT_QUEUE_AGGREGATE_BYTES / 10 + 100_000;
+    const {
+        assert!(
+            (CLIENT_QUEUE_AGGREGATE_BYTES / 10 + 100_000) * 10 >= CLIENT_QUEUE_AGGREGATE_BYTES,
+            "the fixture's aggregate must cross the cap"
+        );
+    }
+    const {
+        assert!(
+            CLIENT_QUEUE_AGGREGATE_BYTES / 10 + 100_000 < CLIENT_QUEUE_BYTES / 4,
+            "the fixture's queues must stay under the victim line"
+        );
+    }
     for id in 0..10u64 {
-        let (tx, rx) = sync_channel::<String>(CLIENT_QUEUE_DEPTH);
+        let (tx, rx) = sync_channel::<String>(CLIENT_QUEUE_MAX_ITEMS);
         clients.lock().push((
             id,
             tx,
-            Arc::new(AtomicUsize::new(900)),
+            Arc::new(AtomicUsize::new(shallow)),
             Arc::new(AtomicBool::new(false)),
             ConnectionAbort::none(),
         ));
         receivers.push(rx);
-    }
-    const {
-        assert!(
-            10 * 900 >= CLIENT_QUEUE_AGGREGATE_DEPTH,
-            "the fixture's aggregate must cross the cap"
-        );
     }
 
     push_to_clients(&clients, "kept".to_string());
@@ -2778,8 +2815,8 @@ fn an_evicted_clients_connection_closes() {
         std::thread::sleep(Duration::from_millis(10));
     }
 
-    // Overflow the queue: the CLIENT_QUEUE_DEPTH-th push fills it, the
-    // next one evicts. Lines are ~1 KiB so the socket's own buffer
+    // Overflow the queue: pushes accumulate past the byte budget and the
+    // crossing push evicts. Lines are ~1 KiB so the socket's own buffer
     // absorbs only a handful on macOS (measured 8 KiB both directions)
     // — but a larger kernel socket buffer (ubuntu CI runners) lets the
     // connection's writer drain past any fixed headroom, so push UNTIL
@@ -2992,6 +3029,204 @@ fn a_pane_streams_exit_closes_the_connection_while_the_client_stays_silent() {
     drop(client);
 }
 
+/// Card 01a1a5c2's deterministic regression: the `%exit` teardown item can
+/// sit in the client's queue while the writer is slow (here: held by the
+/// test-only writer delay), and the connection's eviction flag must stay
+/// DOWN until the writer has flushed it — the old code raised the flag at
+/// queue time, so a load-delayed writer crossing a poll boundary abandoned
+/// the queue and dropped the `%exit` (EOF with no `%exit`, seen once under
+/// system load). Released, the writer must still deliver `%exit` before
+/// EOF.
+#[test]
+fn exit_flush_survives_scripted_writer_delay() {
+    use super::client::{test_writer_delay_arm, test_writer_delay_release};
+    use crate::mux::dispatch::{dispatch_command, Ctx};
+    use crate::mux::ipc::connect_local_stream;
+    use std::io::{BufRead, BufReader, Write};
+
+    // The delay releases itself if its holder panics; the guard covers the
+    // assertion paths in between.
+    struct ReleaseGuard;
+    impl Drop for ReleaseGuard {
+        fn drop(&mut self) {
+            test_writer_delay_release();
+        }
+    }
+
+    let dir = temp_dir();
+    let socket_path = dir.path().join("stream-exit-delay.sock");
+    let listener = bind_local_listener(&socket_path).expect("binds the test listener");
+
+    let tree = Arc::new(Mutex::new(MuxTree::new(Box::new(
+        crate::mux::dispatch::tests::DeadPaneFactory,
+    ))));
+    let clients: Clients = Arc::new(Mutex::new(Vec::new()));
+    let __output_epoch: crate::mux::server::OutputEpoch = std::sync::Arc::default();
+    let created = dispatch_command(
+        parse_command("new-session -s s").expect("parses"),
+        &Ctx {
+            layouts_dir: None,
+            output_epoch: &__output_epoch,
+            tree: &tree,
+            clients: &clients,
+            command_number: 1,
+            shutdown: None,
+            config: None,
+            client_id: None,
+        },
+        None,
+        None,
+    );
+    assert!(!reply_is_error(&created), "new-session failed: {created}");
+
+    let (server_tree, registry) = (Arc::clone(&tree), Arc::clone(&clients));
+    std::thread::spawn(
+        move || match crate::mux::ipc::accept_connection(&listener) {
+            Ok((stream, abort)) => handle_client(
+                stream,
+                server_tree,
+                registry,
+                None,
+                None,
+                abort,
+                None,
+                std::sync::Arc::default(),
+                None,
+            ),
+            Err(err) => panic!("accept_connection failed: {err}"),
+        },
+    );
+
+    let mut client = connect_local_stream(&socket_path).expect("connects");
+    let reader_half = client.try_clone().expect("clones the client stream");
+    client
+        .write_all(b"observe-pane -t %0\n")
+        .expect("sends observe-pane");
+
+    let (line_tx, line_rx) = channel::<Option<String>>();
+    std::thread::spawn(move || {
+        let mut reader = BufReader::new(reader_half);
+        loop {
+            let mut line = String::new();
+            match reader.read_line(&mut line) {
+                Ok(0) | Err(_) => {
+                    let _ = line_tx.send(None);
+                    return;
+                }
+                Ok(_) => {
+                    if line_tx.send(Some(line)).is_err() {
+                        return;
+                    }
+                }
+            }
+        }
+    });
+    let next = |what: &str| -> Option<String> {
+        match line_rx.recv_timeout(Duration::from_secs(30)) {
+            Ok(next) => next,
+            Err(_) => panic!("no {what} within 30 s"),
+        }
+    };
+    loop {
+        match next("observe-pane reply") {
+            Some(line) if line.starts_with("%end") => break,
+            Some(line) if line.starts_with("%error") => {
+                panic!("observe-pane refused: {line:?}")
+            }
+            Some(_) => {}
+            None => panic!("EOF before the observe-pane reply"),
+        }
+    }
+    let client_id = clients
+        .lock()
+        .first()
+        .map(|(id, ..)| *id)
+        .expect("the stream registered");
+    let entry_state = || -> (usize, bool) {
+        clients
+            .lock()
+            .iter()
+            .find(|(id, ..)| *id == client_id)
+            .map(|(_, _, queued, evicted, _)| {
+                (
+                    queued.load(std::sync::atomic::Ordering::Relaxed),
+                    evicted.load(std::sync::atomic::Ordering::Relaxed),
+                )
+            })
+            .expect("the connection stays registered until its teardown")
+    };
+    // The reply is written and the queue empty before the delay arms, so
+    // every later queue entry is teardown-related.
+    let drained_by = std::time::Instant::now() + Duration::from_secs(5);
+    while entry_state().0 != 0 {
+        assert!(
+            std::time::Instant::now() < drained_by,
+            "the observe-pane reply never drained from the queue"
+        );
+        std::thread::sleep(Duration::from_millis(5));
+    }
+
+    test_writer_delay_arm();
+    let _guard = ReleaseGuard;
+    let __output_epoch: crate::mux::server::OutputEpoch = std::sync::Arc::default();
+    let killed = dispatch_command(
+        parse_command("kill-pane -t %0").expect("parses"),
+        &Ctx {
+            layouts_dir: None,
+            output_epoch: &__output_epoch,
+            tree: &tree,
+            clients: &clients,
+            command_number: 2,
+            shutdown: None,
+            config: None,
+            client_id: None,
+        },
+        None,
+        None,
+    );
+    assert!(!reply_is_error(&killed), "kill-pane failed: {killed}");
+
+    // With the writer held, the queued teardown items wait. The fixed
+    // ordering keeps the eviction flag DOWN — and the connection
+    // registered — for the whole window: the writer alone may raise the
+    // flag, and it is parked. The old queue-time flag ended the connection
+    // through the reader's poll within one EVICTION_POLL of the queueing,
+    // so a window of a few poll periods discriminates the two behaviors
+    // (the entry vanishing or the flag rising here means the %exit would
+    // have been dropped at the writer's next poll boundary).
+    let window_end = std::time::Instant::now() + Duration::from_millis(1500);
+    while std::time::Instant::now() < window_end {
+        let (_, evicted_while_delayed) = entry_state();
+        assert!(
+            !evicted_while_delayed,
+            "the eviction flag rose while the writer was still held — the \
+             %exit would be dropped at the writer's next poll boundary"
+        );
+        std::thread::sleep(Duration::from_millis(10));
+    }
+
+    test_writer_delay_release();
+    let mut saw_exit = false;
+    loop {
+        match next("%exit and EOF") {
+            Some(line) if line == "%exit\n" => saw_exit = true,
+            Some(_) => {}
+            None => break,
+        }
+    }
+    assert!(saw_exit, "%exit arrives before EOF");
+
+    let deadline = std::time::Instant::now() + Duration::from_secs(30);
+    while clients.lock().iter().any(|(id, ..)| *id == client_id) {
+        assert!(
+            std::time::Instant::now() < deadline,
+            "the ended stream's connection never left the registry"
+        );
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    drop(client);
+}
+
 /// QA-113: a panicking dispatcher is contained — the issuer gets an
 /// error block, and the same "connection" answers the next command.
 #[test]
@@ -3081,7 +3316,7 @@ fn killing_a_windows_last_pane_broadcasts_window_close() {
                 return;
             }
             Ok(other) => seen.push(format!("{other:?}")),
-            Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {
+            Err(crossbeam_channel::RecvTimeoutError::Timeout) => {
                 assert!(
                     std::time::Instant::now() < deadline,
                     "%window-close never arrived after kill-pane emptied the window; \
@@ -3245,7 +3480,7 @@ fn an_over_long_pane_endpoint_path_fails_the_bind() {
 #[test]
 fn workspace_commands_dispatch_and_broadcast() {
     let (tree, clients) = quiet_harness();
-    let (tx, rx) = sync_channel(CLIENT_QUEUE_DEPTH);
+    let (tx, rx) = sync_channel(CLIENT_QUEUE_MAX_ITEMS);
     clients.lock().push((
         u64::MAX,
         tx,
@@ -3356,4 +3591,75 @@ fn workspace_commands_dispatch_and_broadcast() {
         assert!(guard.workspace(WorkspaceId(2)).is_none());
         assert_eq!(guard.workspaces().len(), 1, "'other' survives");
     }
+}
+
+/// Card 01a19ca4: the pane output sink emits `%output` and, when the chunk
+/// carries damage (non-empty ranges or an advanced generation), the
+/// `%pane-damage` line rides the SAME fan-out push - one queue entry, so
+/// every client queue and socket sees the pair atomically. A chunk with
+/// empty ranges and an unchanged generation emits `%output` alone.
+#[test]
+fn pane_output_sink_emits_the_damage_line_adjacent_and_suppresses_when_unchanged() {
+    let clients: Clients = Arc::new(Mutex::new(Vec::new()));
+    let epoch: OutputEpoch = Arc::new(std::sync::atomic::AtomicU64::new(0));
+    let sink = pane_output_sink(&clients, PaneId(3), &epoch);
+
+    let (tx, rx) = std::sync::mpsc::sync_channel(64);
+    let queued = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let evicted = Arc::new(std::sync::atomic::AtomicBool::new(false));
+    clients.lock().push((
+        7,
+        tx,
+        Arc::clone(&queued),
+        Arc::clone(&evicted),
+        ConnectionAbort::none(),
+    ));
+
+    // First chunk: generation advanced (never-forwarded sentinel), so the
+    // pair rides one push.
+    sink(b"hello", 5, &[(0, 0)]);
+    let line = rx
+        .recv_timeout(std::time::Duration::from_secs(2))
+        .expect("first push");
+    assert!(line.starts_with("%output %3 "), "output first: {line:?}");
+    assert!(
+        line.contains("\n%pane-damage %3 5 0-0\n"),
+        "damage line follows in the same push: {line:?}"
+    );
+    assert!(
+        line.ends_with('\n') && line.matches('\n').count() == 2,
+        "exactly two lines, both newline-terminated: {line:?}"
+    );
+
+    // Second chunk: empty ranges, SAME generation (nothing changed) ->
+    // suppressed.
+    sink(b"", 5, &[]);
+    let line = rx
+        .recv_timeout(std::time::Duration::from_secs(2))
+        .expect("second push");
+    assert!(
+        !line.contains("%pane-damage"),
+        "unchanged generation suppresses the damage line: {line:?}"
+    );
+
+    // Third chunk: empty ranges, advanced generation (a positional-only
+    // change, e.g. a cursor move) -> the generation-only form.
+    sink(b"", 6, &[]);
+    let line = rx
+        .recv_timeout(std::time::Duration::from_secs(2))
+        .expect("third push");
+    assert!(
+        line.contains("\n%pane-damage %3 6\n"),
+        "advanced generation with no rows emits the generation-only form: {line:?}"
+    );
+
+    // Fourth chunk: non-empty ranges within one generation -> emitted.
+    sink(b"x", 6, &[(2, 2)]);
+    let line = rx
+        .recv_timeout(std::time::Duration::from_secs(2))
+        .expect("fourth push");
+    assert!(
+        line.contains("\n%pane-damage %3 6 2-2\n"),
+        "non-empty ranges always emit: {line:?}"
+    );
 }

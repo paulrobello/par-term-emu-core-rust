@@ -326,7 +326,7 @@ impl WindowSession {
                 self.refresh_layouts();
             }
             b if typing && b >= 0x80 => {
-                if let Some(ch) = self.text_utf8.push_printable(b) {
+                if let Some(ch) = self.input_route.text_utf8.push_printable(b) {
                     if let Some(text) = self.layouts_text_mut() {
                         text.push(ch);
                     }

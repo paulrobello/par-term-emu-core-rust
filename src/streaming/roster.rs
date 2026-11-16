@@ -6,7 +6,7 @@ use std::collections::BTreeMap;
 
 /// Parses `list-agents` output into roster entries sorted by pane id.
 ///
-/// Each line is `%N agent state hook|scrape [key=value ...]`. Lines without four
+/// Each line is `%N agent state hook|scrape|self [key=value ...]`. Lines without four
 /// well-formed positional tokens are skipped. Only `reason=` (padded base64) is
 /// consumed; an undecodable reason becomes empty and unknown keys are ignored.
 pub fn parse_agents_output(raw: &str) -> Vec<AgentEntry> {
@@ -51,10 +51,14 @@ pub fn translate_notification(line: &str) -> Option<RosterDelta> {
     }
 }
 
-/// Parses the notification body `<pane_id> <agent> <state>[ source=<hook|scrape>]`.
+/// Parses the notification body `<pane_id> <agent> <state>[ key=value ...]`.
 ///
-/// The source rides as an optional `source=` tail token and is absent when the
-/// daemon has no provenance. Reasons are never carried on this notification.
+/// The source rides as an optional `source=` tail token (`hook`, `scrape`,
+/// or the control verb's `self`) and is absent when the daemon has no
+/// provenance. The blocked reason rides `msg=` as the standard padded
+/// base64 of the whitespace-collapsed text when the claim holds one; a
+/// notification without it means the reason is cleared or absent — the
+/// same set-or-cleared state the roster row's `reason=` token mirrors.
 fn parse_state_changed(rest: &str) -> Option<AgentEntry> {
     let mut tokens = rest.split_whitespace();
     let pane_id = tokens.next()?.trim_start_matches('%').parse::<u32>().ok()?;
@@ -62,16 +66,24 @@ fn parse_state_changed(rest: &str) -> Option<AgentEntry> {
     let state = tokens.next()?;
     let mut source = "";
     let mut workspace = "";
+    let mut reason = String::new();
     for token in tokens {
         if let Some((key, value)) = token.split_once('=') {
             match key {
                 "source" => {
-                    if value != "hook" && value != "scrape" {
+                    if value != "hook" && value != "scrape" && value != "self" {
                         return None;
                     }
                     source = value;
                 }
                 "ws" => workspace = value,
+                "msg" => {
+                    reason = STANDARD
+                        .decode(value)
+                        .ok()
+                        .and_then(|bytes| String::from_utf8(bytes).ok())
+                        .unwrap_or_default();
+                }
                 _ => {}
             }
         }
@@ -81,7 +93,7 @@ fn parse_state_changed(rest: &str) -> Option<AgentEntry> {
         agent: agent.to_owned(),
         state: state.to_owned(),
         source: source.to_owned(),
-        reason: String::new(),
+        reason,
         workspace: workspace.to_owned(),
         ..Default::default()
     })
@@ -93,7 +105,7 @@ fn parse_line(line: &str) -> Option<AgentEntry> {
     let agent = tokens.next()?;
     let state = tokens.next()?;
     let source = tokens.next()?;
-    if source != "hook" && source != "scrape" {
+    if source != "hook" && source != "scrape" && source != "self" {
         return None;
     }
     let mut reason = String::new();
@@ -351,6 +363,52 @@ mod tests {
                 .is_none()
         );
         assert!(translate_notification("%agent-state-changed %12 claude").is_none());
+    }
+
+    /// The control verb's `report-state` claim (`source=self`) rides the
+    /// same delta path as a hook claim, and its blocked reason rides the
+    /// `msg=` base64 token (the mux-xr report-state fault: the delta used
+    /// to be dropped wholesale, taking the reason with it).
+    #[test]
+    fn self_source_delta_upserts_and_carries_the_msg_reason() {
+        let line = "%agent-state-changed %0 claude blocked source=self msg=YXBwcm92ZQ==";
+        match translate_notification(line) {
+            Some(RosterDelta::Upsert(e)) => {
+                assert_eq!(e.pane_id, 0);
+                assert_eq!(e.agent, "claude");
+                assert_eq!(e.state, "blocked");
+                assert_eq!(e.source, "self");
+                assert_eq!(e.reason, "approve");
+            }
+            other => panic!("expected upsert, got {other:?}"),
+        }
+    }
+
+    /// A `report-state` without `-m` (and every state push of an
+    /// agent with no reason) emits no `msg=` token: the reason reads
+    /// empty, which is the set-or-cleared state the daemon holds.
+    #[test]
+    fn self_source_delta_without_msg_has_empty_reason() {
+        match translate_notification("%agent-state-changed %0 claude working source=self") {
+            Some(RosterDelta::Upsert(e)) => {
+                assert_eq!(e.state, "working");
+                assert_eq!(e.source, "self");
+                assert_eq!(e.reason, "");
+            }
+            other => panic!("expected upsert, got {other:?}"),
+        }
+    }
+
+    /// The full-fetch path carries `self` rows too: a report-state claim
+    /// made before the watcher's first connect rides `list-agents` into
+    /// the snapshot instead of being dropped as an unknown source.
+    #[test]
+    fn self_source_rows_parse_from_list_agents() {
+        let got = parse_agents_output("0 claude blocked self reason=SGVsbG8= ws=+1\n");
+        assert_eq!(got.len(), 1);
+        assert_eq!(got[0].source, "self");
+        assert_eq!(got[0].reason, "Hello");
+        assert_eq!(got[0].workspace, "+1");
     }
 
     #[test]

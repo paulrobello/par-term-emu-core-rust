@@ -233,6 +233,18 @@ pub enum TerminalEvent {
         /// What was dropped and why
         reason: String,
     },
+    /// Unified budget vocabulary (ENH-062): something untrusted output tried
+    /// to allocate (a graphics pixel buffer, an iTerm2 multipart chunk, a
+    /// file-transfer payload) was refused, evicted, or would have pushed the
+    /// aggregate untrusted-output memory budget past its total. Existing
+    /// per-store events (`InlineImageDropped`, `FileTransferFailed`) keep
+    /// firing alongside for compatibility.
+    OutputBudgetExceeded {
+        /// Which untrusted-output store hit the budget
+        store: crate::graphics::budget::BudgetStore,
+        /// Bytes the refused/evicted allocation accounted for
+        bytes: usize,
+    },
 }
 
 impl TerminalEvent {
@@ -266,6 +278,7 @@ impl TerminalEvent {
             TerminalEvent::UploadRequested { .. } => TerminalEventKind::UploadRequested,
             TerminalEvent::ScreenCleared { .. } => TerminalEventKind::ScreenCleared,
             TerminalEvent::InlineImageDropped { .. } => TerminalEventKind::InlineImageDropped,
+            TerminalEvent::OutputBudgetExceeded { .. } => TerminalEventKind::OutputBudgetExceeded,
         }
     }
 }
@@ -327,11 +340,13 @@ pub enum TerminalEventKind {
     ScreenCleared,
     /// Matches [`TerminalEvent::InlineImageDropped`].
     InlineImageDropped,
+    /// Matches [`TerminalEvent::OutputBudgetExceeded`].
+    OutputBudgetExceeded,
 }
 
 impl TerminalEventKind {
     /// Every event kind, in declaration order.
-    pub const ALL: [TerminalEventKind; 27] = [
+    pub const ALL: [TerminalEventKind; 28] = [
         Self::BellRang,
         Self::TitleChanged,
         Self::PointerShapeChanged,
@@ -359,6 +374,7 @@ impl TerminalEventKind {
         Self::UploadRequested,
         Self::ScreenCleared,
         Self::InlineImageDropped,
+        Self::OutputBudgetExceeded,
     ];
 
     /// The canonical event-type string for this kind: emitted as the `type`
@@ -393,6 +409,7 @@ impl TerminalEventKind {
             Self::UploadRequested => "upload_requested",
             Self::ScreenCleared => "screen_cleared",
             Self::InlineImageDropped => "inline_image_dropped",
+            Self::OutputBudgetExceeded => "output_budget_exceeded",
         }
     }
 }
@@ -447,7 +464,8 @@ mod tests {
                 | K::FileTransferFailed
                 | K::UploadRequested
                 | K::ScreenCleared
-                | K::InlineImageDropped => 1,
+                | K::InlineImageDropped
+                | K::OutputBudgetExceeded => 1,
             }
         }
 
@@ -456,7 +474,7 @@ mod tests {
             .map(|k| exhaustively(k) as usize)
             .sum();
         assert_eq!(total, TerminalEventKind::ALL.len());
-        assert_eq!(TerminalEventKind::ALL.len(), 27);
+        assert_eq!(TerminalEventKind::ALL.len(), 28);
     }
 
     #[test]

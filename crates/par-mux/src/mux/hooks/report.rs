@@ -110,6 +110,8 @@ pub(super) fn handle_state_report(
         }
         // Identity fields ride state reports too: the kimi script attaches
         // agent_session_id whenever it knows one, state report or not.
+        let prior_session_id = claim.session_id.clone();
+        let prior_session_path = claim.session_path.clone();
         if let Some(value) = params
             .get("agent_session_id")
             .and_then(serde_json::Value::as_str)
@@ -121,6 +123,15 @@ pub(super) fn handle_state_report(
             .and_then(serde_json::Value::as_str)
         {
             claim.session_path = Some(value.to_string());
+        }
+        // The identity stamp names the process that owns the CURRENT
+        // identity: a state report that re-keys the session invalidates
+        // it (the stamped pid belongs to the OLD session process), so it
+        // clears — the claim falls back to label liveness until the new
+        // owner sends its own session report. Same rule the resume argv
+        // follows on the session-report path.
+        if claim.session_id != prior_session_id || claim.session_path != prior_session_path {
+            claim.agent_pid = None;
         }
         // The blocked reason pi and omp attach to their reports (the
         // scannability field the roster exists for). Whitespace is collapsed
@@ -201,6 +212,16 @@ pub(super) fn handle_session_report(
             return (error_reply(id, &message), None);
         }
     }
+    // Hook v5's identity stamp: the reporting agent process's pid. Parsed
+    // leniently (an absent or malformed value reads as unstamped, never an
+    // error — v4 hooks and other agents simply do not send it) and
+    // validated against the pane's process tree below: a stamp naming a
+    // process outside the pane never lands.
+    let reported_pid = params
+        .get("agent_pid")
+        .and_then(serde_json::Value::as_i64)
+        .and_then(|pid| i32::try_from(pid).ok())
+        .filter(|pid| *pid > 0);
     let resume_argv = match parse_resume_argv(params) {
         Ok(argv) => argv,
         Err(message) => return (error_reply(id, &message), None),
@@ -307,6 +328,20 @@ pub(super) fn handle_session_report(
                 }
             }
         }
+        // The v5 identity stamp, REPLACED whole like the argv above: it
+        // lands only when the pane's process tree actually contains the
+        // reported pid (the hook's parent is the agent process in the
+        // direct-spawn case) — a stamp naming a process outside the pane
+        // never lands, so a wrapper-shaped ancestry cannot poison identity
+        // liveness. Absent, malformed, out-of-tree, or under an unwalkable
+        // tree (Windows) the stamp clears, and the save gate falls back to
+        // label liveness exactly as before v5.
+        claim.agent_pid = match (reported_pid, pane.child_pid()) {
+            (Some(pid), Some(child)) => crate::mux::foreground::ProcessTable::snapshot()
+                .and_then(|table| table.pid_in_tree(child, pid))
+                .and_then(|in_tree| in_tree.then_some(pid)),
+            _ => None,
+        };
         pane.set_agent_claim(&claim);
         record_seq(pane, header.source.as_deref(), header.seq);
         // Same activity stamp as a state report: identity refreshes are

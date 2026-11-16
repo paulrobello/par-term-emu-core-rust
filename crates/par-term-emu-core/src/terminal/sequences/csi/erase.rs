@@ -177,6 +177,31 @@ pub(crate) fn handle_decsera(grid: &mut Grid, bg: Color, params: &Params) {
         }
     }
 
+    // Pair edges: erasing an unprotected half of a wide pair orphans its
+    // partner just outside the rectangle; blank that partner when it is
+    // unprotected too (a protected half stays, selective-erase semantics).
+    let packed = PackedColor::pack(bg);
+    for row in top..=bottom {
+        if let Some(cells) = grid.row_mut(row) {
+            if left > 0
+                && cells[left - 1].flags.wide_char()
+                && !cells[left - 1].flags.guarded()
+                && !cells[left].flags.wide_char_spacer()
+            {
+                cells[left - 1].reset();
+                cells[left - 1].bg = packed;
+            }
+            if right + 1 < cols
+                && cells[right + 1].flags.wide_char_spacer()
+                && !cells[right + 1].flags.guarded()
+                && !cells[right].flags.wide_char()
+            {
+                cells[right + 1].reset();
+                cells[right + 1].bg = packed;
+            }
+        }
+    }
+
     crate::debug_log!(
         "DECSERA",
         "Selective erase rect ({},{}) to ({},{})",

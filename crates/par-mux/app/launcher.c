@@ -11,7 +11,10 @@
 
    Before exec it fires the TCC prompts pane children inherit from the bundle:
    Screen Recording (screencapture), Accessibility (keyboard/event control),
-   and Local Network. Screen Recording and Accessibility have no Info.plist
+   and Local Network — but only when a terminal-started start handed off
+   (the `--par-mux-in-app-wrapper` marker and a tty on stdin); supervised
+   shapes get attribution without prompting (see main). Screen Recording
+   and Accessibility have no Info.plist
    usage key — macOS only prompts when something calls the request API, so the
    launcher is that something. Microphone is read as status-only and never
    requested: the request aborts this process when the responsible bundle
@@ -127,7 +130,21 @@ int main(int argc, char **argv) {
         dup2(log, STDERR_FILENO);
     }
 
-    request_permissions();
+    /* Eager TCC prompts fire only for a terminal-started daemon start: the
+       hand-off marker means daemon.rs deliberately exec'd this launcher, and
+       a tty means someone can answer the dialog. The launchd autostart shape
+       runs this launcher directly (no marker), and a denied request cannot
+       stick (tccd cannot match an adhoc signature to its stored decision),
+       so supervised cycles — agent relaunches, scripted starts, client-proxy
+       calls — must not probe at all (the 2026-10-31 prompt storm). */
+    int wrapped = 0;
+    for (int i = 1; i < argc; i++) {
+        if (strcmp(argv[i], "--par-mux-in-app-wrapper") == 0) {
+            wrapped = 1;
+            break;
+        }
+    }
+    if (wrapped && isatty(0)) request_permissions();
 
     const char *bin = par_mux_bin();
     char *exec_args[255];

@@ -1,5 +1,6 @@
-//! The window's chrome rows: the status row, the tab strip, the status-bar
-//! toggle, and the transient flash cue drawn in the status row's head.
+//! The window's chrome rows: the status row, the session strip, the tab
+//! strip, the status-bar toggle, and the transient flash cue drawn in
+//! the status row's head.
 
 use super::FLASH_LIFETIME;
 use crate::mux::attach::status::StatusRow;
@@ -9,7 +10,13 @@ use std::time::Instant;
 pub(super) struct ChromeRows {
     /// The bottom row: paint/diff pair.
     pub(super) status_row: StatusRow,
-    /// The top row: the shown session's windows, clickable.
+    /// The topmost row when it shows: the workspace's sessions,
+    /// clickable. One TabStrip instance reused for the session list.
+    pub(super) session_strip: TabStrip,
+    /// Whether the session strip row shows (the `session-strip` setting
+    /// AND the workspace's session count).
+    pub(super) session_strip_on: bool,
+    /// The tab strip row: the shown session's windows, clickable.
     pub(super) tab_strip: TabStrip,
     /// The status bar's visibility (the `status_bar` chord toggles it;
     /// shown by default).
@@ -28,6 +35,8 @@ impl ChromeRows {
     pub(super) fn new(cols: u16) -> Self {
         Self {
             status_row: StatusRow::new(cols),
+            session_strip: TabStrip::new(cols),
+            session_strip_on: false,
             tab_strip: TabStrip::new(cols),
             status_bar_on: true,
             flash: None,

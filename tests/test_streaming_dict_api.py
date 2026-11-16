@@ -68,13 +68,20 @@ THEME = {
 # `type` is filled in from the id. These pin keys AND values, including the
 # encode defaults and the deliberately-preserved quirks.
 SERVER_CASES = [
-    # output ignores a `timestamp` kwarg (constructor sets None).
+    # output ignores a `timestamp` kwarg (constructor sets None). The
+    # damage fields are server-generated: no kwargs, and the decoded dict
+    # carries damage_generation None (unknown) with the damage key omitted
+    # while empty.
     (
         "output",
         {"data": "hello", "timestamp": 999},
-        {"data": "hello", "timestamp": None},
+        {"data": "hello", "timestamp": None, "damage_generation": None},
     ),
-    ("output", {"data": "esc\x1b[31m"}, {"data": "esc\x1b[31m", "timestamp": None}),
+    (
+        "output",
+        {"data": "esc\x1b[31m"},
+        {"data": "esc\x1b[31m", "timestamp": None, "damage_generation": None},
+    ),
     ("resize", {}, {"cols": 80, "rows": 24}),
     ("resize", {"cols": 132, "rows": 43}, {"cols": 132, "rows": 43}),
     ("title", {"title": "My Title"}, {"title": "My Title"}),
@@ -140,8 +147,9 @@ SERVER_CASES = [
             "session_id": "sess-1",
             "theme": THEME,
             # QUIRK: encode never reads badge/faint_text_alpha/cwd/
-            # modify_other_keys/client_id/readonly/pointer_shape kwargs — the
-            # Connected constructors hard-code them to None.
+            # modify_other_keys/client_id/readonly/pointer_shape/
+            # pane_create_allowed kwargs — the Connected constructors
+            # hard-code them to None.
             "badge": "main",
             "faint_text_alpha": 0.7,
             "cwd": "/tmp",
@@ -167,6 +175,9 @@ SERVER_CASES = [
             "client_id": None,
             "readonly": None,
             "pointer_shape": None,
+            "pane_create_allowed": None,
+            "cwd_hostname": None,
+            "cwd_is_local": None,
         },
     ),
     (
@@ -185,6 +196,9 @@ SERVER_CASES = [
             "client_id": None,
             "readonly": None,
             "pointer_shape": None,
+            "pane_create_allowed": None,
+            "cwd_hostname": None,
+            "cwd_is_local": None,
         },
     ),
     ("error", {"message": "boom", "code": "E42"}, {"message": "boom", "code": "E42"}),
@@ -315,6 +329,7 @@ SERVER_CASES = [
             "hostname": "h",
             "username": "u",
             "timestamp": 99,
+            "is_local": True,
         },
     ),
     # QUIRK: without a timestamp the plain constructor drops old_cwd /
@@ -328,6 +343,7 @@ SERVER_CASES = [
             "hostname": None,
             "username": None,
             "timestamp": None,
+            "is_local": None,
         },
     ),
     (
@@ -420,6 +436,28 @@ SERVER_CASES = [
     ("upload_finished", {}, {"upload_id": 0, "path": None, "error": None}),
     ("screen_cleared", {"include_scrollback": True}, {"include_scrollback": True}),
     ("screen_cleared", {}, {"include_scrollback": False}),
+    # Pane creation (opt-in server-side; the reply echoes the client's
+    # correlation id so a late reply can be matched).
+    (
+        "pane_created",
+        {
+            "correlation_id": "c1",
+            "session_id": "$0",
+            "window_id": "@3",
+            "pane_id": "%6",
+        },
+        {
+            "correlation_id": "c1",
+            "session_id": "$0",
+            "window_id": "@3",
+            "pane_id": "%6",
+        },
+    ),
+    (
+        "pane_created",
+        {},
+        {"correlation_id": "", "session_id": "", "window_id": "", "pane_id": ""},
+    ),
 ]
 
 CLIENT_CASES = [
@@ -512,6 +550,17 @@ CLIENT_CASES = [
     ("upload_chunk", {}, {"data": b""}),
     ("upload_commit", {}, {}),
     ("upload_abort", {}, {}),
+    (
+        "pane_create_request",
+        {"correlation_id": "c1", "session_id": "$0"},
+        {"correlation_id": "c1", "session_id": "$0", "name": None},
+    ),
+    (
+        "pane_create_request",
+        {"correlation_id": "c2", "session_id": "$0", "name": "agent-bench"},
+        {"correlation_id": "c2", "session_id": "$0", "name": "agent-bench"},
+    ),
+    ("pane_create_request", {}, {"correlation_id": "", "session_id": "", "name": None}),
 ]
 
 

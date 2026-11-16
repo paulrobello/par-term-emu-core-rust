@@ -1546,7 +1546,7 @@ fn help_rows_carry_effective_bindings_and_categories() {
         0x02,
         0x12,
         Management {
-            split_right: b's',
+            split_right: crate::mux::config::ChordKey::plain(b's'),
             ..Management::default()
         },
         2,
@@ -2239,12 +2239,12 @@ fn compose_help_panel_filters_scrolls_and_chromes() {
     );
 }
 
-/// The picker's rows: one accent header per session with its windows
-/// nested beneath, the current session and the shown window
-/// `>`-marked, the session's active window `*`-suffixed, and the
-/// parallel refs mapping each row to its selection target.
+/// The picker's rows: every session's windows as one flat list — no
+/// session rows, a session not being a landing target — with the shown
+/// window `>`-marked, its session's active window `*`-suffixed, and
+/// the parallel refs mapping each row to its window.
 #[test]
-fn picker_rows_nest_windows_and_mark_current() {
+fn picker_rows_list_windows_flat_and_mark_current() {
     let entries = vec![
         super::PickerEntry {
             session_id: "$0".to_string(),
@@ -2266,60 +2266,103 @@ fn picker_rows_nest_windows_and_mark_current() {
     ];
     let (rows, refs) = super::picker_rows(&entries, Some("@0"));
     let text: Vec<&str> = rows.iter().map(|r| r.text.as_str()).collect();
-    assert_eq!(text.len(), 5, "two headers + three windows: {text:?}");
-    assert_eq!(
-        text[0], " >$0: work",
-        "the current session's header is >-marked"
+    assert_eq!(text.len(), 3, "three windows, no session rows: {text:?}");
+    assert_eq!(text[0], " >  @0: main", "the shown window is >-marked");
+    assert_eq!(text[1], "    @1: vim *", "the active window carries *");
+    assert_eq!(text[2], "    @2: logs *");
+    assert!(
+        rows.iter().all(|r| !r.accent),
+        "no row is an accent (header) row"
     );
-    assert!(rows[0].accent, "session headers are accent rows");
-    assert_eq!(text[1], " >  @0: main", "the shown window is >-marked");
-    assert_eq!(text[2], "    @1: vim *", "the active window carries *");
-    assert_eq!(text[3], "  $1: build", "a non-current header is unmarked");
-    assert!(rows[3].accent, "every session header is an accent row");
-    assert!(!rows[1].accent, "window rows are not accent rows");
-    assert_eq!(refs[0], super::PickerRef::Session(0));
-    assert_eq!(refs[1], super::PickerRef::Window(0, 0));
-    assert_eq!(refs[2], super::PickerRef::Window(0, 1));
-    assert_eq!(refs[3], super::PickerRef::Session(1));
-    assert_eq!(refs[4], super::PickerRef::Window(1, 0));
+    assert_eq!(
+        refs,
+        vec![
+            super::PickerRef::Window(0, 0),
+            super::PickerRef::Window(0, 1),
+            super::PickerRef::Window(1, 0),
+        ]
+    );
 }
 
-/// The picker compose: the filter line, the filtered content with
-/// headers hiding when nothing beneath them matches, the `▸` cursor
-/// on the selected row, the footer, and the refs/start return that
-/// maps a click at composed row `i` to content row `start + i - 1`.
+/// A window NAME two sessions share is prefixed with its session's
+/// name (`session/name`) so the flat list stays unambiguous; a name
+/// one session owns stays bare.
 #[test]
-fn compose_picker_panel_filters_marks_and_maps_clicks() {
+fn picker_rows_prefix_a_session_shared_window_name() {
     let entries = vec![
         super::PickerEntry {
             session_id: "$0".to_string(),
             session_name: "work".to_string(),
-            windows: vec![("@0".to_string(), "main".to_string())],
+            windows: vec![
+                ("@0".to_string(), "main".to_string()),
+                ("@1".to_string(), "vim".to_string()),
+            ],
             active_window: Some("@0".to_string()),
             current: true,
         },
         super::PickerEntry {
             session_id: "$1".to_string(),
             session_name: "build".to_string(),
-            windows: vec![("@1".to_string(), "vim".to_string())],
+            windows: vec![
+                ("@2".to_string(), "main".to_string()),
+                ("@3".to_string(), "logs".to_string()),
+            ],
+            active_window: Some("@2".to_string()),
+            current: false,
+        },
+    ];
+    let (rows, _refs) = super::picker_rows(&entries, None);
+    let text: Vec<&str> = rows.iter().map(|r| r.text.as_str()).collect();
+    assert_eq!(
+        text,
+        [
+            "    @0: work/main *",
+            "    @1: vim",
+            "    @2: build/main *",
+            "    @3: logs",
+        ],
+        "shared names carry their session, owned names stay bare"
+    );
+}
+
+/// The picker compose: the filter line, the filtered content, the `▸`
+/// cursor on the selected row, the footer, and the refs/start return
+/// that maps a click at composed row `i` to content row `start + i -
+/// 1`.
+#[test]
+fn compose_picker_panel_filters_marks_and_maps_clicks() {
+    let entries = vec![
+        super::PickerEntry {
+            session_id: "$0".to_string(),
+            session_name: "work".to_string(),
+            windows: vec![
+                ("@0".to_string(), "main".to_string()),
+                ("@1".to_string(), "vim".to_string()),
+            ],
             active_window: Some("@1".to_string()),
+            current: true,
+        },
+        super::PickerEntry {
+            session_id: "$1".to_string(),
+            session_name: "build".to_string(),
+            windows: vec![("@2".to_string(), "logs".to_string())],
+            active_window: Some("@2".to_string()),
             current: false,
         },
     ];
     let (rows, refs) = super::picker_rows(&entries, Some("@0"));
-    // Full panel: 4 content rows + footer — no idle placeholder (the
+    // Full panel: 3 content rows + footer — no idle placeholder (the
     // footer already advertises `filter /`).
     let (panel, refs2, start) =
         super::compose_picker_panel(&rows, &refs, "", false, 0, 100, 0, super::PICKER_FOOTER);
-    assert_eq!(panel.len(), 5, "content + footer: {panel:?}");
+    assert_eq!(panel.len(), 4, "content + footer: {panel:?}");
     assert_eq!(start, 0);
-    assert_eq!(refs2.len(), 4);
+    assert_eq!(refs2, refs);
     assert_eq!(
         panel.last().map(|r| r.text.as_str()),
         Some(super::PICKER_FOOTER)
     );
-    // Filter "vim" keeps only that window row and its header; the
-    // other session's header hides with no matching children.
+    // Filter "vim" keeps only that window row.
     let (filtered, frefs, fstart) =
         super::compose_picker_panel(&rows, &refs, "vim", false, 0, 100, 0, super::PICKER_FOOTER);
     let ftext = filtered
@@ -2328,29 +2371,18 @@ fn compose_picker_panel_filters_marks_and_maps_clicks() {
         .collect::<Vec<_>>()
         .join("\n");
     assert!(ftext.contains("vim"), "the matching row survives: {ftext}");
-    assert!(
-        ftext.contains("build"),
-        "the matching row's header survives"
-    );
-    assert!(
-        !ftext.contains("work"),
-        "an emptied session's header hides: {ftext}"
-    );
-    assert_eq!(
-        frefs,
-        vec![super::PickerRef::Session(1), super::PickerRef::Window(1, 0)]
-    );
+    assert_eq!(frefs, vec![super::PickerRef::Window(0, 1)]);
     assert_eq!(fstart, 0);
-    // The selection cursor: selected=2 marks the third content row.
+    // The selection cursor: selected=1 marks the second content row.
     let (marked, _, _) =
-        super::compose_picker_panel(&rows, &refs, "", false, 2, 100, 0, super::PICKER_FOOTER);
+        super::compose_picker_panel(&rows, &refs, "", false, 1, 100, 0, super::PICKER_FOOTER);
     assert!(
-        marked[2].text.starts_with('▸'),
+        marked[1].text.starts_with('▸'),
         "the selected row carries the cursor glyph: {}",
-        marked[2].text
+        marked[1].text
     );
     assert!(
-        !marked[1].text.starts_with('▸'),
+        !marked[0].text.starts_with('▸'),
         "only the selected row carries it"
     );
     // Click mapping: composed row 1 (content row 1) maps to content
@@ -2361,9 +2393,9 @@ fn compose_picker_panel_filters_marks_and_maps_clicks() {
     assert_eq!(small_start, 0);
     // Panning: a selected row below the window moves `start`.
     let (_panned, _, panned_start) =
-        super::compose_picker_panel(&rows, &refs, "", false, 3, 2, 0, super::PICKER_FOOTER);
+        super::compose_picker_panel(&rows, &refs, "", false, 2, 2, 0, super::PICKER_FOOTER);
     assert_eq!(
-        panned_start, 2,
+        panned_start, 1,
         "the window pans to keep the cursor visible"
     );
 }
@@ -2397,7 +2429,7 @@ fn palette_action_chord_spells_the_live_binding() {
         Some("C-b d")
     );
     // A remapped chord shows the remapped key.
-    m.kill_pane = b'K';
+    m.kill_pane = crate::mux::config::ChordKey::plain(b'K');
     assert_eq!(
         palette_action_chord(9, 0x02, 0x12, &m).as_deref(),
         Some("C-b K")
@@ -2562,34 +2594,35 @@ fn reload_client_chords_errors_on_malformed_chords() {
             prefix: 0x02,
             reload: 0x12,
             management: crate::mux::config::Management {
-                split_right: b'&',
-                split_down: b'*',
-                kill_pane: b'X',
-                break_pane: b'!',
-                join_pane: b'J',
-                palette: b':',
-                new_window: b'C',
-                resize: b'R',
-                swap_prev: b'{',
-                swap_next: b'}',
-                move_window_left: b'<',
-                move_window_right: b'>',
-                tab_strip_left: b'H',
-                tab_strip_right: b'L',
-                workspace_next: b'N',
-                workspace_prev: b'P',
-                help: b'?',
-                picker: b'w',
-                zoom: b'z',
-                rename_window: b',',
-                rename_pane: b'$',
-                border_cycle: b'B',
-                label_toggle: b'l',
-                workspace_picker: b'g',
-                sidebar: b's',
-                status_bar: b'S',
-                respawn: b'r',
-                notify_jump: b'j',
+                split_right: crate::mux::config::ChordKey::plain(b'&'),
+                split_down: crate::mux::config::ChordKey::plain(b'*'),
+                kill_pane: crate::mux::config::ChordKey::plain(b'X'),
+                break_pane: crate::mux::config::ChordKey::plain(b'!'),
+                join_pane: crate::mux::config::ChordKey::plain(b'J'),
+                palette: crate::mux::config::ChordKey::plain(b':'),
+                new_window: crate::mux::config::ChordKey::plain(b'C'),
+                resize: crate::mux::config::ChordKey::plain(b'R'),
+                swap_prev: crate::mux::config::ChordKey::plain(b'{'),
+                swap_next: crate::mux::config::ChordKey::plain(b'}'),
+                move_window_left: crate::mux::config::ChordKey::plain(b'<'),
+                move_window_right: crate::mux::config::ChordKey::plain(b'>'),
+                tab_strip_left: crate::mux::config::ChordKey::plain(b'H'),
+                tab_strip_right: crate::mux::config::ChordKey::plain(b'L'),
+                workspace_next: crate::mux::config::ChordKey::plain(b'N'),
+                workspace_prev: crate::mux::config::ChordKey::plain(b'P'),
+                help: crate::mux::config::ChordKey::plain(b'?'),
+                picker: crate::mux::config::ChordKey::plain(b'w'),
+                zoom: crate::mux::config::ChordKey::plain(b'z'),
+                rename_window: crate::mux::config::ChordKey::plain(b','),
+                rename_pane: crate::mux::config::ChordKey::plain(b'$'),
+                border_cycle: crate::mux::config::ChordKey::plain(b'B'),
+                label_toggle: crate::mux::config::ChordKey::plain(b'l'),
+                workspace_picker: crate::mux::config::ChordKey::plain(b'g'),
+                sidebar: crate::mux::config::ChordKey::plain(b's'),
+                status_bar: crate::mux::config::ChordKey::plain(b'S'),
+                respawn: crate::mux::config::ChordKey::plain(b'r'),
+                notify_jump: crate::mux::config::ChordKey::plain(b'j'),
+                ..crate::mux::config::Management::default()
             },
             resize_step: 1,
             ..crate::mux::config::Chords::with_defaults()
@@ -2602,34 +2635,35 @@ fn reload_client_chords_errors_on_malformed_chords() {
             prefix: 0x02,
             reload: 0x12,
             management: crate::mux::config::Management {
-                split_right: b'&',
-                split_down: b'*',
-                kill_pane: b'X',
-                break_pane: b'!',
-                join_pane: b'J',
-                palette: b':',
-                new_window: b'C',
-                resize: b'R',
-                swap_prev: b'{',
-                swap_next: b'}',
-                move_window_left: b'<',
-                move_window_right: b'>',
-                tab_strip_left: b'H',
-                tab_strip_right: b'L',
-                workspace_next: b'N',
-                workspace_prev: b'P',
-                help: b'?',
-                picker: b'w',
-                zoom: b'z',
-                rename_window: b',',
-                rename_pane: b'$',
-                border_cycle: b'B',
-                label_toggle: b'l',
-                workspace_picker: b'g',
-                sidebar: b's',
-                status_bar: b'S',
-                respawn: b'r',
-                notify_jump: b'j',
+                split_right: crate::mux::config::ChordKey::plain(b'&'),
+                split_down: crate::mux::config::ChordKey::plain(b'*'),
+                kill_pane: crate::mux::config::ChordKey::plain(b'X'),
+                break_pane: crate::mux::config::ChordKey::plain(b'!'),
+                join_pane: crate::mux::config::ChordKey::plain(b'J'),
+                palette: crate::mux::config::ChordKey::plain(b':'),
+                new_window: crate::mux::config::ChordKey::plain(b'C'),
+                resize: crate::mux::config::ChordKey::plain(b'R'),
+                swap_prev: crate::mux::config::ChordKey::plain(b'{'),
+                swap_next: crate::mux::config::ChordKey::plain(b'}'),
+                move_window_left: crate::mux::config::ChordKey::plain(b'<'),
+                move_window_right: crate::mux::config::ChordKey::plain(b'>'),
+                tab_strip_left: crate::mux::config::ChordKey::plain(b'H'),
+                tab_strip_right: crate::mux::config::ChordKey::plain(b'L'),
+                workspace_next: crate::mux::config::ChordKey::plain(b'N'),
+                workspace_prev: crate::mux::config::ChordKey::plain(b'P'),
+                help: crate::mux::config::ChordKey::plain(b'?'),
+                picker: crate::mux::config::ChordKey::plain(b'w'),
+                zoom: crate::mux::config::ChordKey::plain(b'z'),
+                rename_window: crate::mux::config::ChordKey::plain(b','),
+                rename_pane: crate::mux::config::ChordKey::plain(b'$'),
+                border_cycle: crate::mux::config::ChordKey::plain(b'B'),
+                label_toggle: crate::mux::config::ChordKey::plain(b'l'),
+                workspace_picker: crate::mux::config::ChordKey::plain(b'g'),
+                sidebar: crate::mux::config::ChordKey::plain(b's'),
+                status_bar: crate::mux::config::ChordKey::plain(b'S'),
+                respawn: crate::mux::config::ChordKey::plain(b'r'),
+                notify_jump: crate::mux::config::ChordKey::plain(b'j'),
+                ..crate::mux::config::Management::default()
             },
             resize_step: 1,
             ..crate::mux::config::Chords::with_defaults()
@@ -3231,12 +3265,16 @@ fn resolve_client_cli_wins_over_the_file() {
     let from_file = resolve_client_with(&cli_options(None, None), file.clone()).expect("file");
     assert_eq!(from_file.chords.prefix, 0x01);
     assert_eq!(from_file.chords.reload, 0x13);
-    assert_eq!(from_file.chords.management.split_right, b'|');
+    assert_eq!(
+        from_file.chords.management.split_right,
+        crate::mux::config::ChordKey::plain(b'|')
+    );
     let cli = resolve_client_with(&cli_options(Some("C-x"), Some("C-x C-e")), file).expect("cli");
     assert_eq!(cli.chords.prefix, 0x18, "--prefix wins over the file");
     assert_eq!(cli.chords.reload, 0x05, "the CLI reload chord wins");
     assert_eq!(
-        cli.chords.management.split_right, b'|',
+        cli.chords.management.split_right,
+        crate::mux::config::ChordKey::plain(b'|'),
         "the file still fills the rest"
     );
 }
@@ -3362,7 +3400,7 @@ fn nonblocking_stdin_wouldblock_does_not_end_the_reader() {
         }
     }
 
-    let (tx, rx) = std::sync::mpsc::sync_channel::<StdinMsg>(64);
+    let (tx, rx) = crossbeam_channel::bounded::<StdinMsg>(64);
     Stdin::spawn_reader(FdReader(read_fd), tx);
 
     // Idle + nonblocking: nothing may arrive. Pre-fix this received
@@ -3684,6 +3722,7 @@ fn picked_target_hands_several_sessions_to_the_chooser() {
         &mut two_session_query(&mut asked),
         None,
         true,
+        false,
         &mut |rows| {
             seen = rows.to_vec();
             Some(1)
@@ -3709,9 +3748,13 @@ fn picked_target_hands_several_sessions_to_the_chooser() {
 #[test]
 fn picked_target_abort_is_the_refusal() {
     let mut asked = Vec::new();
-    let err = picked_target(&mut two_session_query(&mut asked), None, true, &mut |_| {
-        None
-    })
+    let err = picked_target(
+        &mut two_session_query(&mut asked),
+        None,
+        true,
+        false,
+        &mut |_| None,
+    )
     .expect_err("aborted");
     assert_eq!(
         err,
@@ -3732,7 +3775,13 @@ fn picked_target_stays_out_of_the_way() {
         |_: &[picker::PickerRow]| -> Option<usize> { panic!("the chooser must not run") };
     let mut asked = Vec::new();
     assert_eq!(
-        picked_target(&mut two_session_query(&mut asked), None, false, &mut never),
+        picked_target(
+            &mut two_session_query(&mut asked),
+            None,
+            false,
+            false,
+            &mut never
+        ),
         Ok(None)
     );
     assert_eq!(
@@ -3740,6 +3789,7 @@ fn picked_target_stays_out_of_the_way() {
             &mut two_session_query(&mut asked),
             Some("$0"),
             true,
+            false,
             &mut never
         ),
         Ok(Some("$0".to_string()))
@@ -3751,5 +3801,120 @@ fn picked_target_stays_out_of_the_way() {
             ok: true,
         })
     };
-    assert_eq!(picked_target(&mut single, None, true, &mut never), Ok(None));
+    assert_eq!(
+        picked_target(&mut single, None, true, false, &mut never),
+        Ok(None)
+    );
+}
+
+/// The workspace preference (card 01a1988e3): with several workspaces,
+/// the one named `default` resolves to its first session.
+#[test]
+fn prefer_default_workspace_picks_the_default_workspaces_session() {
+    let mut asked = Vec::new();
+    let picked = picked_target(
+        &mut |command: &str| {
+            asked.push(command.to_string());
+            let body = match command {
+                "list-workspaces" => "+4: default active\n+9: kanban".to_string(),
+                "list-sessions -t +4" => "+4: default: $10: default".to_string(),
+                _ => String::new(),
+            };
+            Ok(crate::mux::client::Reply {
+                body: body.lines().map(str::to_string).collect(),
+                ok: true,
+            })
+        },
+        None,
+        false,
+        true,
+        &mut |_| panic!("the chooser must not run"),
+    )
+    .expect("picked");
+    assert_eq!(picked.as_deref(), Some("$10"));
+    assert_eq!(
+        asked,
+        ["list-workspaces", "list-sessions -t +4"],
+        "reads only"
+    );
+}
+
+/// No `default` workspace: the first listed one resolves instead.
+#[test]
+fn prefer_default_workspace_falls_back_to_the_first_workspace() {
+    let picked = picked_target(
+        &mut |command: &str| {
+            let body = match command {
+                "list-workspaces" => "+9: kanban\n+22: par-rt-db".to_string(),
+                "list-sessions -t +9" => "+9: kanban: $21: kanban".to_string(),
+                _ => String::new(),
+            };
+            Ok(crate::mux::client::Reply {
+                body: body.lines().map(str::to_string).collect(),
+                ok: true,
+            })
+        },
+        None,
+        false,
+        true,
+        &mut |_| panic!("the chooser must not run"),
+    )
+    .expect("picked");
+    assert_eq!(picked.as_deref(), Some("$21"));
+}
+
+/// One workspace (or the option off) keeps the target-less rule: nothing
+/// resolves, the chooser never runs, and nothing is queried.
+#[test]
+fn prefer_default_workspace_keeps_the_single_workspace_rule() {
+    for on in [false, true] {
+        let mut asked = Vec::new();
+        let picked = picked_target(
+            &mut |command: &str| {
+                asked.push(command.to_string());
+                let body = match command {
+                    "list-workspaces" => "+4: default active".to_string(),
+                    _ => String::new(),
+                };
+                Ok(crate::mux::client::Reply {
+                    body: body.lines().map(str::to_string).collect(),
+                    ok: true,
+                })
+            },
+            None,
+            false,
+            on,
+            &mut |_| panic!("the chooser must not run"),
+        )
+        .expect("picked");
+        assert_eq!(picked, None);
+        assert_eq!(asked, if on { vec!["list-workspaces"] } else { vec![] });
+    }
+}
+
+/// prefix M-5 (ESC 5) sends `select-layout tiled -t <window>`; an unbound
+/// Alt chord is consumed without reaching the pane.
+#[test]
+fn passthrough_m5_sends_select_layout() {
+    let (rx, mut session) = management_session("m5-layout");
+    assert!(!session.route_bytes(&[0x02, 0x1b, b'5']));
+    assert_eq!(
+        wait_for_line(&rx, "select-layout"),
+        "select-layout tiled -t @0"
+    );
+    assert!(!session.route_bytes(&[0x02, 0x1b, b'7']));
+    match rx.recv_timeout(std::time::Duration::from_millis(300)) {
+        Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {}
+        other => panic!("unbound Alt chord must be consumed: {other:?}"),
+    }
+}
+
+#[test]
+fn passthrough_select_layout_refusal_flashes() {
+    let (_rx, mut session) = scripted_passthrough(
+        "pt-layout-refused",
+        &[("select-layout tiled -t @0", "!err")],
+    );
+    assert!(!session.route_bytes(&[0x02, 0x1b, b'5']));
+    assert_eq!(session.flash.as_deref(), Some("layout tiled: refused"));
 }

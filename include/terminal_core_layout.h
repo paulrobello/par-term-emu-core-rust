@@ -137,6 +137,7 @@
 #define TERM_EVENT_SCREEN_CLEARED 25
 #define TERM_EVENT_INLINE_IMAGE_DROPPED 26
 #define TERM_EVENT_POINTER_SHAPE_CHANGED 27
+#define TERM_EVENT_OUTPUT_BUDGET_EXCEEDED 28
 
 /* Scroll-aware damage (ENH-038) — TermScrollDelta.flags. Bit 0: the scroll
  * movement since the generation cannot be expressed (screen switch, resize,

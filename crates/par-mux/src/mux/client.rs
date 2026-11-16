@@ -39,7 +39,9 @@ const SPAWN_CONNECT_DEADLINE: Duration = Duration::from_secs(10);
 pub struct MuxClient {
     writer: LocalStream,
     reply_rx: Receiver<Reply>,
-    notifications_rx: Receiver<TmuxNotification>,
+    /// Crossbeam so the attach wait can select over it and the stdin
+    /// channel together (card 01a19d78).
+    notifications_rx: crossbeam_channel::Receiver<TmuxNotification>,
     /// Set by [`MuxClient::discard_notifications`]: the reader parses
     /// pushed lines but drops them instead of queueing them.
     discard_notifications: Arc<AtomicBool>,
@@ -239,7 +241,8 @@ impl MuxClient {
 
         let writer = stream.try_clone()?;
         let (reply_tx, reply_rx) = channel::<Reply>();
-        let (notification_tx, notifications_rx) = channel::<TmuxNotification>();
+        let (notification_tx, notifications_rx) =
+            crossbeam_channel::unbounded::<TmuxNotification>();
         let discard_notifications = Arc::new(AtomicBool::new(false));
         let discard = Arc::clone(&discard_notifications);
         // Best-effort: named pipes (Windows) reject I/O timeouts, so there
@@ -267,9 +270,28 @@ impl MuxClient {
     /// Run one command and return its reply block's body lines.
     ///
     /// A block closed by `%error` still returns its body (the error text) as
-    /// `Ok`; use [`Self::send_checked`] to tell the two closings apart.
+    /// `Ok` — the tmux-compatible shape. Use [`Self::send_ok`] as the
+    /// recommended path when a daemon rejection should be an `Err`, or
+    /// [`Self::send_checked`] to tell the two closings apart yourself.
     pub fn send(&mut self, command: &str) -> io::Result<Vec<String>> {
         self.send_checked(command).map(|reply| reply.body)
+    }
+
+    /// Run one command and return its reply block's body lines, with a
+    /// block the daemon closed with `%error` returned as an `Err` carrying
+    /// that block's error text — the recommended path over [`Self::send`]
+    /// for callers that act on rejection, so a daemon refusal can never
+    /// masquerade as an empty or textual success. Use
+    /// [`Self::send_checked`] when the raw [`Reply`] is wanted.
+    pub fn send_ok(&mut self, command: &str) -> io::Result<Vec<String>> {
+        let reply = self.send_checked(command)?;
+        if !reply.ok {
+            return Err(io::Error::other(format!(
+                "{command} rejected: {}",
+                reply.body.join("\n")
+            )));
+        }
+        Ok(reply.body)
     }
 
     /// Run one command and return its reply block, including whether the
@@ -359,7 +381,11 @@ impl MuxClient {
     }
 
     /// Pushed notifications (`%output` and friends), already parsed.
-    pub fn notifications(&self) -> &Receiver<TmuxNotification> {
+    ///
+    /// The receiver type is [`crate::mux::crossbeam_channel`] (re-exported
+    /// from the `mux` module so embedders need no crossbeam-channel
+    /// manifest entry).
+    pub fn notifications(&self) -> &crossbeam_channel::Receiver<TmuxNotification> {
         &self.notifications_rx
     }
 
@@ -430,7 +456,7 @@ impl Drop for MuxClient {
 fn reader_loop(
     stream: LocalStream,
     reply_tx: Sender<Reply>,
-    notification_tx: Sender<TmuxNotification>,
+    notification_tx: crossbeam_channel::Sender<TmuxNotification>,
     discard: &AtomicBool,
     closed: Arc<AtomicBool>,
 ) {
@@ -712,6 +738,16 @@ mod tests {
     /// binary cost the full `SPAWN_CONNECT_DEADLINE` (10s); anything near a
     /// second means the retry loop was entered anyway.
     const FAST_FAIL_BUDGET: Duration = Duration::from_millis(1000);
+
+    /// `notifications()` hands embedders a crossbeam receiver (card 01a19d78);
+    /// the re-export under `mux` is the only way they can handle that type
+    /// without declaring crossbeam-channel in their own manifests.
+    #[test]
+    fn crossbeam_channel_is_reexported_for_embedders() {
+        let (tx, rx) = crate::mux::crossbeam_channel::unbounded::<u8>();
+        tx.send(1).expect("send");
+        assert_eq!(rx.try_recv(), Ok(1));
+    }
 
     /// A socket path that no other test run can ever name, cleaned up even
     /// when the test panics.
@@ -1344,5 +1380,60 @@ mod tests {
             None,
             "a notification is not framing"
         );
+    }
+
+    /// `send_ok` is the recommended send (QA-006): a `%error` closing is an
+    /// `Err` naming the command and carrying the daemon's error text, while
+    /// the tmux-compatible `send` keeps returning the error body as `Ok` —
+    /// the sharp edge this variant exists to remove.
+    #[cfg(unix)]
+    #[test]
+    fn send_ok_turns_error_blocks_into_err_while_send_stays_ok() {
+        use std::io::{BufRead as _, Write as _};
+        let (dir, socket) = temp_socket("sendok.sock");
+        let listener = bind_local_listener(&socket).expect("bind");
+        let server = std::thread::spawn(move || {
+            let stream = listener.accept().expect("accept");
+            let mut writer = stream.try_clone().expect("clone");
+            let mut lines = std::io::BufReader::new(stream).lines();
+            assert_eq!(lines.next().unwrap().unwrap(), "list-panes");
+            writer
+                .write_all(b"%begin 1 1 1\n%0 shell\n%1 vim\n%end 1 1 1\n")
+                .unwrap();
+            assert_eq!(lines.next().unwrap().unwrap(), "kill-pane -t %9");
+            writer
+                .write_all(b"%begin 1 2 1\nno such pane: %9\n%error 1 2 1\n")
+                .unwrap();
+            assert_eq!(lines.next().unwrap().unwrap(), "kill-pane -t %9");
+            writer
+                .write_all(b"%begin 1 3 1\nno such pane: %9\n%error 1 3 1\n")
+                .unwrap();
+        });
+
+        let mut client = MuxClient::connect(&socket).expect("connect");
+        // Success path: the body lines come back exactly; a caller folding
+        // them into one string joins with "\n" so the line tokens stay
+        // separate.
+        let body = client.send_ok("list-panes").expect("%end reply is Ok");
+        assert_eq!(body, vec!["%0 shell".to_string(), "%1 vim".to_string()]);
+        assert_eq!(body.join("\n"), "%0 shell\n%1 vim");
+        // Error path: the %error closing is an Err.
+        let err = client
+            .send_ok("kill-pane -t %9")
+            .expect_err("%error reply is an Err");
+        assert!(
+            err.to_string().contains("no such pane: %9"),
+            "the daemon's error text rides the Err: {err}"
+        );
+        assert!(
+            err.to_string().contains("kill-pane"),
+            "the Err names the rejected command: {err}"
+        );
+        // The contrast, pinned: send keeps the tmux-compatible shape and
+        // hands the error body back as Ok.
+        let body = client.send("kill-pane -t %9").expect("send stays Ok");
+        assert_eq!(body, vec!["no such pane: %9".to_string()]);
+        server.join().expect("server thread");
+        drop(dir);
     }
 }

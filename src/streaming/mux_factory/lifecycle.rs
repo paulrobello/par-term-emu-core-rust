@@ -2,19 +2,21 @@
 //! (including the active-workspace query), and the [`SessionFactory`]
 //! create/setup/teardown of a mirror session.
 
-use super::control::{command, parse_pane_info, MuxLines};
+use super::control::{command, parse_cwd_token, parse_cwdhost_token, parse_pane_info, MuxLines};
 use super::mirror::{
-    ingest_graphics_seed, parse_viewer_status, seed_reply, split_graphics_seed, MirrorLink, Sink,
+    ingest_graphics_seed, parse_pane_exited_token, parse_viewer_status, seed_reply,
+    split_graphics_seed, MirrorLink, Sink,
 };
 use super::stream::{spawn_drain, SendKeysWriter};
-use super::upload::MuxUploadPipe;
+use super::upload::{quote_upload_word, MuxUploadPipe};
 use super::{MuxPaneSelector, MuxSessionFactory, ACTIVE_WORKSPACE_SESSION_ID, MUX_REPLY_TIMEOUT};
 use crate::mux::{connect_local_stream, LocalStream};
 use crate::streaming::error::StreamingError;
+use crate::streaming::protocol::ServerMessage;
 use crate::streaming::server::{
     SessionFactory, SessionFactoryResult, StreamingServer, UploadForwarder,
 };
-use crate::streaming::session::StreamSessionState;
+use crate::streaming::session::{OutputChunk, StreamSessionState};
 use crate::terminal::Terminal;
 use interprocess::TryClone as _;
 use parking_lot::{Mutex, RwLock};
@@ -150,6 +152,30 @@ pub(super) fn debug_log_active_workspace(session: &str, pane: u32) {
     )
 }
 
+/// Hand every attach-buffered chunk to the session's output channel.
+///
+/// `try_send` alone dropped the overflow past the channel's capacity
+/// (silently — a dropped attach-buffered chunk is the bare-ESC corruption
+/// par-term recorded), so a Full retry parks briefly and retries: the
+/// broadcaster loop is already running (sessions.rs spawns it before this
+/// call) and frees capacity as it drains. `Closed` means the session died
+/// mid-flush; the remaining chunks have no audience, so the flush stops.
+fn flush_buffered(sender: &tokio::sync::mpsc::Sender<OutputChunk>, chunks: Vec<OutputChunk>) {
+    for chunk in chunks {
+        let mut pending = Some(chunk);
+        while let Some(chunk) = pending.take() {
+            match sender.try_send(chunk) {
+                Ok(()) => break,
+                Err(tokio::sync::mpsc::error::TrySendError::Full(back)) => {
+                    pending = Some(back);
+                    std::thread::sleep(std::time::Duration::from_millis(1));
+                }
+                Err(tokio::sync::mpsc::error::TrySendError::Closed(_)) => return,
+            }
+        }
+    }
+}
+
 impl SessionFactory for MuxSessionFactory {
     fn create_session(
         &self,
@@ -217,10 +243,34 @@ impl SessionFactory for MuxSessionFactory {
             alive: AtomicBool::new(true),
             closed: AtomicBool::new(false),
             sink: Mutex::new(Sink::Buffering(Vec::new())),
+            pending_utf8: Mutex::new(Vec::new()),
             sent_images: Mutex::new(HashSet::new()),
             graphics_panes: Arc::clone(&graphics_panes),
             status: Mutex::new(info.first().and_then(|line| parse_viewer_status(line))),
+            // The pane-info row just fetched is the lifecycle evidence:
+            // the attached viewer reads the pane's current process state,
+            // including a state the pane reached before this attach.
+            process: Mutex::new({
+                let (exited, code) =
+                    parse_pane_exited_token(info.first().map(String::as_str).unwrap_or(""))
+                        .unwrap_or((false, None));
+                let state = ServerMessage::PaneProcessState {
+                    pane_id: format!("%{pane}"),
+                    state: if exited { "exited" } else { "running" }.to_string(),
+                    exit_code: exited.then_some(code).flatten(),
+                };
+                if exited {
+                    Some(state)
+                } else {
+                    None
+                }
+            }),
             session: RwLock::new(None),
+            cwd: Mutex::new(info.first().and_then(|line| {
+                let cwd = parse_cwd_token(line)?;
+                let host = parse_cwdhost_token(line);
+                Some((cwd, host))
+            })),
         });
         spawn_drain(
             Arc::clone(&link),
@@ -270,13 +320,28 @@ impl SessionFactory for MuxSessionFactory {
                 session.update_mux_status(size.clone(), viewers.clone());
             }
         }
+        if let Some(process) = link.process.lock().clone() {
+            session.update_pane_process(process);
+        }
+        // The pane's cwd as the daemon knows it: the `Connected.cwd`
+        // fallback for a pane whose mirror has not seen an OSC 7 (card
+        // 01a1ce6a criterion 1). Later cwd changes reach the session
+        // through `record_cwd`.
+        if let Some((cwd, host)) = link.cwd.lock().clone() {
+            session.update_mux_cwd(cwd, host);
+        }
         let sender = session.get_output_sender();
         {
             let mut sink = link.sink.lock();
-            if let Sink::Buffering(bytes) = &*sink {
-                if !bytes.is_empty() {
-                    let _ = sender.try_send(String::from_utf8_lossy(bytes).into_owned());
-                }
+            if let Sink::Buffering(chunks) = &mut *sink {
+                // Drain in order, each chunk with its own damage — the
+                // broadcaster merges per batch window. `try_send` alone
+                // dropped the overflow past the channel's capacity — a
+                // dropped attach-buffered chunk is the bare-ESC corruption
+                // par-term recorded — so retry on Full; the broadcaster
+                // loop is already running (spawned before this call) and
+                // frees capacity as it drains.
+                flush_buffered(&sender, std::mem::take(chunks));
             }
             *sink = Sink::Live(sender);
         }
@@ -340,6 +405,52 @@ impl SessionFactory for MuxSessionFactory {
             .map(|pipe| pipe as std::sync::Arc<dyn UploadForwarder>)
     }
 
+    fn pane_create(&self, mux_session: &str, name: Option<&str>) -> io::Result<(String, String)> {
+        // One verb on its own short-lived daemon control connection (the
+        // upload verbs' shape): a mirror link's connection is read solely
+        // by its drain thread, so a request/reply verb cannot share one.
+        // The window's single pane is resolved with `list-panes -t` right
+        // after the create, on the same connection.
+        let stream = connect_local_stream(&self.socket).inspect_err(|_| {
+            crate::streaming::metrics::Metrics::global().mux_socket_error("pane-create-connect");
+        })?;
+        let mut writer = stream.try_clone()?;
+        let reader = MuxLines::spawn(stream)?;
+        let name_part = name
+            .map(|n| format!(" -n {}", quote_upload_word(n)))
+            .unwrap_or_default();
+        let window = command(
+            &mut writer,
+            &reader,
+            &format!(
+                "new-window -t {}{}",
+                quote_upload_word(mux_session),
+                name_part
+            ),
+            self.reply_timeout,
+        )?;
+        let window_id = window
+            .first()
+            .map(|line| line.trim().to_string())
+            .filter(|id| id.starts_with('@'))
+            .ok_or_else(|| {
+                io::Error::other(format!("new-window reply carried no window id: {window:?}"))
+            })?;
+        let panes = command(
+            &mut writer,
+            &reader,
+            &format!("list-panes -t {window_id}"),
+            self.reply_timeout,
+        )?;
+        let pane_id = panes
+            .first()
+            .and_then(|line| line.split_whitespace().next())
+            .filter(|id| id.starts_with('%'))
+            .map(str::to_string)
+            .ok_or_else(|| io::Error::other(format!("the new window {window_id} has no panes")))?;
+        Ok((window_id, pane_id))
+    }
+
     fn is_session_alive(&self, session_id: &str) -> bool {
         self.sessions
             .read()
@@ -377,5 +488,43 @@ mod tests {
         );
         assert_eq!(active_pane_from_listing(&["%8 1 -".to_string()]), None);
         assert_eq!(active_pane_from_listing(&[]), None);
+    }
+}
+
+/// Regression for the dropped-ESC corruption at attach: the old
+/// `let _ = sender.try_send(chunk.clone())` in `setup_session` silently
+/// dropped buffered chunks past the channel's capacity, so a pane that
+/// produced more than the capacity while unattached delivered a hole to
+/// the first viewer. `flush_buffered` parks and retries on Full; with a
+/// capacity-2 channel, five chunks and a consumer that starts draining
+/// only after the flush has finished, every chunk must land, in order.
+#[cfg(test)]
+mod flush_tests {
+    use super::*;
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn flush_buffered_drops_nothing_when_the_output_channel_is_full() {
+        let (tx, mut rx) = tokio::sync::mpsc::channel(2);
+        const N: usize = 5;
+        let chunks: Vec<OutputChunk> = (0..N)
+            .map(|i| OutputChunk::plain(format!("chunk{i} ")))
+            .collect();
+
+        // Capacity 2, five chunks, the consumer starts draining only after
+        // a delay: the flusher must park on Full, not drop. Every receive
+        // is bounded, so the pre-fix behavior (overflow dropped) fails the
+        // test on a timeout instead of hanging it.
+        let flusher = tokio::task::spawn_blocking(move || flush_buffered(&tx, chunks));
+        let mut got = Vec::new();
+        for _ in 0..N {
+            let chunk = tokio::time::timeout(std::time::Duration::from_secs(5), rx.recv())
+                .await
+                .expect("every buffered chunk arrives within 5s (none dropped)")
+                .expect("channel stays open");
+            got.push(chunk);
+        }
+        flusher.await.expect("flusher thread");
+        let joined: String = got.iter().map(|c| c.data.as_str()).collect();
+        assert_eq!(joined, "chunk0 chunk1 chunk2 chunk3 chunk4 ");
     }
 }

@@ -19,6 +19,7 @@ This guide explains how to build and install the par-term-emu-core-rust library.
   - [Building with Streaming Feature](#building-with-streaming-feature)
   - [Building the Multiplexer Daemon](#building-the-multiplexer-daemon)
 - [Running Tests](#running-tests)
+  - [The root `tests/` directory mixes two runners](#the-root-tests-directory-mixes-two-runners)
   - [Rust Tests](#rust-tests)
   - [Python Tests](#python-tests)
   - [Code Quality Checks](#code-quality-checks)
@@ -241,6 +242,16 @@ The project includes comprehensive test coverage:
 - **Rust unit tests** covering all modules and features
 - **Python integration tests** covering VT sequences, grid operations, PTY sessions, screenshots, and Python bindings
 - Tests are organized into separate test files for different feature areas
+
+### The root `tests/` directory mixes two runners
+
+The root `tests/` directory holds **Python and Rust integration suites side by side** — `test_capability.py` and `conftest.py` sit beside `test_coprocess.rs`, `test_flag_emoji.rs`, `ffi_dirty_ranges_alloc.rs`, and `mux_feature_isolation.rs`. This is deliberate, not an accident of layout: both suites exercise the same built extension against the same public surface. Each runner filters by extension, so nothing collides:
+
+- **pytest** collects only `test_*.py` (plus `conftest.py` for fixtures); the `.rs` files are invisible to it.
+- **cargo** compiles only `*.rs` files as integration-test crates (each gets its own harness; `[[test]]` entries in `Cargo.toml` gate some behind features, e.g. `ffi_dirty_ranges_alloc` requires `ffi`); the `.py` files are invisible to it.
+- Rust *unit* tests live inline (`#[cfg(test)] mod tests`) next to the code under `src/` and `crates/*/src/`, and the par-mux integration suites live in `crates/par-mux/tests/` — the root `tests/*.rs` files are the root crate's cross-cutting integration tests.
+
+When adding a test: feature-area integration tests against the Python-facing surface go in `tests/test_*.py`; Rust-only integration tests that exercise the root crate's lib surface (FFI, feature isolation, cross-module arcs) go in `tests/*.rs` with a `[[test]]` entry only if they need a non-default feature.
 
 ### Rust Tests
 

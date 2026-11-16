@@ -1681,7 +1681,27 @@ fn switch_client_queries_and_moves_the_displayed_session() {
 
     // A window target selects the window too and lands on its session.
     let b_window = h.windows_of(b)[0];
-    assert_ok(&h.run(&format!("switch-client -t {b_window}")));
+    assert_eq!(
+        assert_ok(&h.run(&format!("switch-client -t {b_window}"))),
+        vec![b_window.to_string()],
+        "the targeted form replies the landed window (card 01a1995a6)"
+    );
+    assert_eq!(h.tree.lock().active_session(), Some(b));
+    h.drain();
+
+    // A pane target is the roster click's ONE round trip: the pane's
+    // window resolves, the displayed session moves if it must, and the
+    // reply names the landed window.
+    let pane = assert_ok(&h.run(&format!("list-panes -t {b_window}")))[0]
+        .split_whitespace()
+        .next()
+        .expect("the window's pane")
+        .to_string();
+    assert_eq!(
+        assert_ok(&h.run(&format!("switch-client -t {pane}"))),
+        vec![b_window.to_string()],
+        "a pane target replies the landed window too"
+    );
     assert_eq!(h.tree.lock().active_session(), Some(b));
     h.drain();
 
@@ -1701,7 +1721,11 @@ fn switch_client_queries_and_moves_the_displayed_session() {
         .trim()
         .to_string();
     h.drain();
-    assert_ok(&h.run(&format!("switch-client -t {second}")));
+    assert_eq!(
+        assert_ok(&h.run(&format!("switch-client -t {second}"))),
+        vec![second.to_string()],
+        "a same-session window target replies its window"
+    );
     let sent = h.drain();
     assert!(
         sent.iter()
@@ -1835,6 +1859,60 @@ fn client_snapshot_agent_rows_mirror_list_agents() {
         .collect();
     assert_eq!(agents, roster);
     assert_eq!(body.last(), Some(&format!("agent {}", roster[0])));
+}
+
+/// The roster row names the pane's owning session and window
+/// (`session=`/`win=` extras): the session strip's and the tabs' agent
+/// dots scope an entry's status to its own session and window. Additive
+/// tokens — a client that never reads them parses the row fine.
+#[test]
+fn roster_rows_carry_session_and_window_extras() {
+    let h = Harness::new();
+    assert_ok(&h.run("new-session -s main"));
+    let w = h.windows_of(h.session_named("main"))[0];
+    let p = h.panes_of(w)[0];
+    let sid = h.session_named("main");
+    {
+        let mut guard = h.tree.lock();
+        let pane = guard.pane_mut(p).unwrap();
+        pane.set_metadata("agent", "claude");
+        pane.set_metadata("agent_state", "working");
+    }
+    let roster = assert_ok(&h.run("list-agents"));
+    assert!(
+        roster[0].contains(&format!("session={sid}")) && roster[0].contains(&format!("win={w}")),
+        "{:?}",
+        roster[0]
+    );
+}
+
+/// The `restored` row rides a daemon whose tree came from a restart's
+/// restore (the client's "server was restarted" toast reads it), right
+/// after the session rows; a fresh daemon's snapshot carries none.
+#[test]
+fn client_snapshot_restored_row_rides_a_restored_tree() {
+    let h = Harness::new();
+    assert_ok(&h.run("new-session -s main"));
+    let w = h.windows_of(h.session_named("main"))[0];
+    let body = assert_ok(&h.run(&format!("client-snapshot -t {w}")));
+    assert!(
+        !body.iter().any(|l| l.starts_with("restored ")),
+        "a fresh daemon carries no marker: {body:?}"
+    );
+    {
+        let mut guard = h.tree.lock();
+        guard.restored_at_boot = Some(std::time::Instant::now());
+    }
+    let body = assert_ok(&h.run(&format!("client-snapshot -t {w}")));
+    let at = body
+        .iter()
+        .position(|l| l.starts_with("restored "))
+        .expect("the marker row");
+    assert!(
+        body[..at].iter().any(|l| l.starts_with("session "))
+            && body[at + 1..].iter().any(|l| l.starts_with("window ")),
+        "the marker sits between the session and window rows: {body:?}"
+    );
 }
 
 /// Whether the git binary runs — the repo tests skip (answer nothing)
@@ -2400,6 +2478,90 @@ fn list_format_flags_expand_variables() {
     assert_eq!(windows, vec!["@0 1".to_string()], "{windows:?}");
     let panes = assert_ok(&h.run("list-panes -t work -F '#{pane_id} #{unknown}'"));
     assert_eq!(panes, vec!["%0 ".to_string()], "{panes:?}");
+}
+
+/// The tree-snapshot tokens: `#{session_active}` marks each workspace's
+/// active session on `list-sessions -F`, and `#{window_layout}` carries
+/// the full layout string on both `list-windows -F` forms — the fields
+/// the streaming server's tree fetch binds.
+#[test]
+fn tree_snapshot_format_tokens_expand() {
+    let h = Harness::new();
+    assert_ok(&h.run("new-session -s work"));
+    // The newest session is its workspace's active one.
+    assert_ok(&h.run("new-session -s build"));
+    let sessions =
+        assert_ok(&h.run("list-sessions -F '#{workspace_id} #{session_active} #{session_id}'"));
+    assert_eq!(
+        sessions,
+        vec!["+0 0 $0".to_string(), "+0 1 $1".to_string()],
+        "{sessions:?}"
+    );
+    assert_ok(&h.run("switch-client -t $0"));
+    let sessions =
+        assert_ok(&h.run("list-sessions -F '#{workspace_id} #{session_active} #{session_id}'"));
+    assert_eq!(
+        sessions,
+        vec!["+0 1 $0".to_string(), "+0 0 $1".to_string()],
+        "{sessions:?}"
+    );
+    let layout = assert_ok(&h.run("list-windows -t $0 -F '#{window_id} #{window_layout}'"));
+    assert_eq!(layout.len(), 1, "{layout:?}");
+    let (id, layout) = layout[0].split_once(' ').expect("id and layout");
+    assert_eq!(id, "@0");
+    assert!(
+        layout.split(',').nth(1).expect("extent").contains("x"),
+        "the layout string carries the geometry: {layout:?}"
+    );
+    let all = assert_ok(&h.run("list-windows -a -F '#{session_id} #{window_layout}'"));
+    assert_eq!(all.len(), 2, "both sessions' windows ride the -a form");
+}
+
+/// `#{pane_dead}` / `#{pane_exit_code}` carry the held-pane process state
+/// on both `list-panes -F` forms: a held-dead pane reads `1` plus its
+/// captured status — `-` when the daemon had no code to read, the same
+/// spelling `pane-info`'s `exited=` token uses. The streaming tree
+/// fetch's pane query binds these two tokens.
+#[test]
+fn pane_lifecycle_format_tokens_expand() {
+    let h = Harness::new();
+    assert_ok(&h.run("new-session -s work"));
+    let fmt = "'#{pane_id} #{pane_dead} #{pane_exit_code}'";
+    let panes = assert_ok(&h.run(&format!("list-panes -F {fmt}")));
+    assert_eq!(panes, vec!["%0 1 0".to_string()], "{panes:?}");
+    let panes = assert_ok(&h.run(&format!("list-panes -t work -F {fmt}")));
+    assert_eq!(panes, vec!["%0 1 0".to_string()], "{panes:?}");
+
+    // A pane whose death the daemon observed without a readable status:
+    // the code token reads `-`.
+    struct UnknownCodeFactory;
+    impl PaneFactory for UnknownCodeFactory {
+        fn create_pane(
+            &self,
+            id: PaneId,
+            cols: u16,
+            rows: u16,
+            command: Option<&str>,
+            _context: &SpawnContext<'_>,
+        ) -> Result<MuxPane, MuxError> {
+            DeadPaneFactory.create_dead_pane(id, cols, rows, command, None)
+        }
+
+        fn create_dead_pane(
+            &self,
+            id: PaneId,
+            cols: u16,
+            rows: u16,
+            command: Option<&str>,
+            _exit_code: Option<i32>,
+        ) -> Result<MuxPane, MuxError> {
+            DeadPaneFactory.create_dead_pane(id, cols, rows, command, None)
+        }
+    }
+    let u = Harness::with_factory(Box::new(UnknownCodeFactory));
+    assert_ok(&u.run("new-session -s work"));
+    let panes = assert_ok(&u.run(&format!("list-panes -F {fmt}")));
+    assert_eq!(panes, vec!["%0 1 -".to_string()], "{panes:?}");
 }
 
 /// `#{pane_title}` rides the -F expansion on both the bare global form
@@ -3285,4 +3447,193 @@ fn pane_info_reports_viewer_count_and_last_viewed_at() {
         info.contains(" last_viewed_at="),
         "the stamp outlives the viewer: {info}"
     );
+}
+
+/// Window with `n` panes (right-splits off the first), plus its id.
+fn select_layout_window(h: &Harness, n: usize) -> crate::mux::ids::WindowId {
+    assert_ok(&h.run("new-session -s main"));
+    let w = h.windows_of(h.session_named("main"))[0];
+    for _ in 1..n {
+        let last = *h.panes_of(w).last().unwrap();
+        assert_ok(&h.run(&format!("split-window -h -t {last}")));
+    }
+    assert_eq!(h.panes_of(w).len(), n);
+    w
+}
+
+fn select_layout_rects(
+    h: &Harness,
+    w: crate::mux::ids::WindowId,
+) -> Vec<crate::mux::layout::PaneGeometry> {
+    let guard = h.tree.lock();
+    let window = guard.window(w).unwrap();
+    window
+        .layout
+        .geometry(0, 0, window.cols as usize, window.rows as usize)
+}
+
+#[test]
+fn select_layout_reshapes_the_window() {
+    let h = Harness::new();
+    let w = select_layout_window(&h, 3);
+    let (cols, rows) = {
+        let guard = h.tree.lock();
+        let window = guard.window(w).unwrap();
+        (window.cols as usize, window.rows as usize)
+    };
+    let before = select_layout_rects(&h, w);
+    assert!(
+        before.iter().all(|g| g.height == rows),
+        "right-splits are full height: {before:?}"
+    );
+    h.drain();
+
+    assert_ok(&h.run(&format!("select-layout -t {w} tiled")));
+    let sent = h.drain();
+    assert!(
+        sent.iter()
+            .any(|l| l.starts_with(&format!("%layout-change {w} "))),
+        "the window announces its new layout: {sent:?}"
+    );
+    let after = select_layout_rects(&h, w);
+    assert_eq!(after.len(), 3);
+    assert!(
+        after.iter().any(|g| g.width == cols),
+        "tiled puts the odd pane on a full-width row: {after:?}"
+    );
+    assert!(
+        after.iter().all(|g| g.height < rows),
+        "tiled has two rows: {after:?}"
+    );
+}
+
+#[test]
+fn select_layout_unzooms_and_reshapes() {
+    let h = Harness::new();
+    let w = select_layout_window(&h, 2);
+    let first = h.panes_of(w)[0];
+    assert_ok(&h.run(&format!("resize-pane -Z -t {first}")));
+    assert!(h.tree.lock().window(w).unwrap().zoomed.is_some());
+
+    assert_ok(&h.run(&format!("select-layout -t {w} even-vertical")));
+    assert!(
+        h.tree.lock().window(w).unwrap().zoomed.is_none(),
+        "select-layout unzooms"
+    );
+    let rects = select_layout_rects(&h, w);
+    assert_eq!(rects.len(), 2);
+    let cols = h.tree.lock().window(w).unwrap().cols as usize;
+    assert!(
+        rects.iter().all(|g| g.width == cols),
+        "even-vertical stacks full-width panes: {rects:?}"
+    );
+}
+
+#[test]
+fn select_layout_one_pane_is_noop() {
+    let h = Harness::new();
+    let w = select_layout_window(&h, 1);
+    let pane = h.panes_of(w)[0];
+    let before = select_layout_rects(&h, w);
+    assert_ok(&h.run(&format!("select-layout -t {w} main-vertical")));
+    assert_eq!(select_layout_rects(&h, w), before);
+    assert_eq!(h.panes_of(w), vec![pane]);
+}
+
+#[test]
+fn select_layout_rejects_unknown_preset() {
+    let err = parse_command("select-layout -t @0 grid").unwrap_err();
+    assert!(err.contains("unknown layout grid"), "{err}");
+    for name in [
+        "even-horizontal",
+        "even-vertical",
+        "main-horizontal",
+        "main-vertical",
+        "tiled",
+    ] {
+        assert!(err.contains(name), "{name} missing from: {err}");
+    }
+}
+
+#[test]
+fn select_layout_requires_target() {
+    let err = parse_command("select-layout tiled").unwrap_err();
+    assert!(err.contains("requires -t"), "{err}");
+}
+
+#[test]
+fn select_layout_saves_state() {
+    assert!(parse_command("select-layout -t @0 tiled")
+        .unwrap()
+        .mutates());
+}
+
+/// A session target narrows to the session's ACTIVE window, a pane
+/// target to the pane's OWNING window — each leaves the other windows
+/// of the tree untouched.
+#[test]
+fn select_layout_narrows_session_and_pane_targets_to_their_window() {
+    let h = Harness::new();
+    let w0 = select_layout_window(&h, 3);
+    let session = h.session_named("main");
+    assert_ok(&h.run(&format!("new-window -t {session}")));
+    let w1 = h.windows_of(session)[1];
+    assert_ok(&h.run(&format!("select-window -t {w1}")));
+    let last = *h.panes_of(w1).last().unwrap();
+    assert_ok(&h.run(&format!("split-window -h -t {last}")));
+    let (rows, cols) = {
+        let guard = h.tree.lock();
+        let window = guard.window(w1).unwrap();
+        (window.rows as usize, window.cols as usize)
+    };
+    let w0_before = select_layout_rects(&h, w0);
+    let before = select_layout_rects(&h, w1);
+    assert!(
+        before.iter().all(|g| g.height == rows),
+        "right-splits are full height: {before:?}"
+    );
+
+    // The session target: w1 is active, so tiled stacks w1 —
+    // and leaves w0 alone.
+    assert_ok(&h.run(&format!("select-layout -t {session} tiled")));
+    let after = select_layout_rects(&h, w1);
+    assert_eq!(after.len(), 2);
+    assert!(
+        after.iter().all(|g| g.height < rows && g.width == cols),
+        "tiled stacked w1's two panes: {after:?}"
+    );
+    assert_eq!(select_layout_rects(&h, w0), w0_before, "w0 untouched");
+
+    // The pane target: w0's first pane narrows to w0.
+    let pane0 = h.panes_of(w0)[0];
+    assert_ok(&h.run(&format!("select-layout -t {pane0} even-vertical")));
+    let stacked = select_layout_rects(&h, w0);
+    assert!(
+        stacked.iter().all(|g| g.width == cols && g.height < rows),
+        "even-vertical stacked w0's three panes: {stacked:?}"
+    );
+    assert_eq!(select_layout_rects(&h, w1), after, "w1 untouched");
+}
+
+/// Two positional preset names are a parse error (the exactly-one rule).
+#[test]
+fn select_layout_two_preset_names_is_a_parse_error() {
+    let err = parse_command("select-layout -t @0 tiled even-vertical").unwrap_err();
+    assert!(err.contains("exactly one layout name"), "{err}");
+}
+
+/// A repeated `-t` keeps the FIRST target (the flag parser's first-match
+/// rule).
+#[test]
+fn duplicate_target_takes_the_first() {
+    let cmd = parse_command("select-layout -t @0 -t @1 tiled").unwrap();
+    match cmd {
+        crate::mux::command::MuxCommand::SelectLayout { target, .. } => {
+            assert_eq!(
+                target,
+                crate::mux::ids::AnyTarget::Window(crate::mux::ids::WindowId(0))
+            );
+        }
+        other => panic!("select-layout parses: {other:?}"),
+    }
 }

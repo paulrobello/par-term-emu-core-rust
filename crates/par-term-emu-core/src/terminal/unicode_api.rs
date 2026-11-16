@@ -61,6 +61,38 @@ impl Terminal {
         crate::unicode_width_config::char_width(c, &self.unicode_state.width_config)
     }
 
+    /// Whether widths are counted per code point
+    /// ([`Terminal::set_codepoint_widths`]).
+    pub fn codepoint_widths(&self) -> bool {
+        self.unicode_state.codepoint_widths
+    }
+
+    /// Count the width of an emoji sequence per code point, as `wcwidth`
+    /// does, instead of per grapheme cluster.
+    ///
+    /// By default (`false`) a sequence is one cluster: a variation selector
+    /// 16 or a ZWJ continuation widens a narrow cell to two columns, and an
+    /// emoji after a ZWJ or a skin tone modifier joins the previous cell.
+    ///
+    /// With `true` every character keeps the width it has on its own. Only
+    /// zero-width characters (combining marks, variation selectors, ZWJ)
+    /// attach to the previous cell, and attaching never changes its width;
+    /// an emoji after a ZWJ and a skin tone modifier are written as
+    /// characters of their own. `❤️` is then 1 column and `👨‍💻` 4.
+    ///
+    /// That is what shells, readline, editors and ncurses count with
+    /// `wcwidth`, and what xterm, VTE and xterm.js with Unicode 11 widths
+    /// draw, so the cursor stays where the program writing the text puts
+    /// it. A terminal that counts clusters disagrees with those programs
+    /// about every following column unless both sides agree on it (mode
+    /// 2027). Use it for a host that mirrors one of those terminals.
+    ///
+    /// Regional indicator pairs are one two-column cell either way. The
+    /// setting applies to text written after it changes and survives RIS.
+    pub fn set_codepoint_widths(&mut self, on: bool) {
+        self.unicode_state.codepoint_widths = on;
+    }
+
     /// Get the current Unicode normalization form
     ///
     /// Returns the normalization form used for text stored in terminal cells.

@@ -1756,3 +1756,85 @@ fn the_spawn_command_names_the_agent_as_a_word() {
         );
     }
 }
+
+/// A session report's v5 identity stamp (`agent_pid`) lands on the claim
+/// only when the pid sits in the pane's real process tree — here the
+/// pane's own child, which the tree walk always contains.
+#[test]
+#[cfg(unix)]
+fn a_session_report_stamps_an_in_tree_agent_pid() {
+    let (tree, pane_id) = tree_with_pane();
+    let child = tree
+        .lock()
+        .pane(pane_id)
+        .unwrap()
+        .child_pid()
+        .expect("live pane child") as i32;
+    let report = format!(
+        r#"{{"id":"t-v5a","method":"pane.report_agent_session","params":{{"pane_id":"{pane_id}","agent":"pi","seq":3000,"source":"par-mux:test","agent_session_id":"s-v5","agent_pid":{child}}}}}"#
+    );
+    let (reply, _) = handle_report(&report, &tree);
+    assert!(reply.contains(r#""result":"ok""#), "accepted: {reply}");
+    let guard = tree.lock();
+    let claim = guard.pane(pane_id).unwrap().agent_claim().expect("claimed");
+    assert_eq!(claim.agent_pid, Some(child), "the in-tree stamp lands");
+}
+
+/// A stamp naming a process OUTSIDE the pane's tree never lands: the
+/// daemon drops it, so a wrapper-shaped or forged ancestry cannot poison
+/// identity liveness (the save gate falls back to label liveness).
+#[test]
+#[cfg(unix)]
+fn a_session_report_drops_an_out_of_tree_agent_pid() {
+    let (tree, pane_id) = tree_with_pane();
+    let report = format!(
+        r#"{{"id":"t-v5b","method":"pane.report_agent_session","params":{{"pane_id":"{pane_id}","agent":"pi","seq":3001,"source":"par-mux:test","agent_session_id":"s-v5","agent_pid":999999}}}}"#
+    );
+    let (reply, _) = handle_report(&report, &tree);
+    assert!(reply.contains(r#""result":"ok""#), "accepted: {reply}");
+    let guard = tree.lock();
+    let claim = guard.pane(pane_id).unwrap().agent_claim().expect("claimed");
+    assert_eq!(claim.agent_pid, None, "the out-of-tree stamp never lands");
+}
+
+/// The stamp names the process owning the CURRENT identity: a state
+/// report that re-keys the session id (the claude hook attaches it to
+/// every prompt/notify/stop) clears the stamp — the pid belongs to the
+/// old identity's process, and keeping it would mark the re-keyed claim
+/// dead at the next save (card 01a1a765, reviewer finding F2).
+#[test]
+#[cfg(unix)]
+fn a_state_report_that_rekeys_identity_clears_the_stamp() {
+    let (tree, pane_id) = tree_with_pane();
+    let child = tree
+        .lock()
+        .pane(pane_id)
+        .unwrap()
+        .child_pid()
+        .expect("live pane child") as i32;
+    let session_report = format!(
+        r#"{{"id":"t-v5c","method":"pane.report_agent_session","params":{{"pane_id":"{pane_id}","agent":"pi","seq":3002,"source":"par-mux:test","agent_session_id":"s-old","agent_pid":{child}}}}}"#
+    );
+    let (reply, _) = handle_report(&session_report, &tree);
+    assert!(reply.contains(r#""result":"ok""#), "accepted: {reply}");
+    {
+        let guard = tree.lock();
+        let claim = guard.pane(pane_id).unwrap().agent_claim().expect("claimed");
+        assert_eq!(claim.agent_pid, Some(child), "control: the stamp landed");
+    }
+    // The state report re-keys the session id the claude hook attaches to
+    // every state report.
+    let state_report = format!(
+        r#"{{"id":"t-v5d","method":"pane.report_agent","params":{{"pane_id":"{pane_id}","agent":"pi","seq":3003,"source":"par-mux:test","state":"working","agent_session_id":"s-new"}}}}"#
+    );
+    let (reply, _) = handle_report(&state_report, &tree);
+    assert!(reply.contains(r#""result":"ok""#), "accepted: {reply}");
+    let guard = tree.lock();
+    let pane = guard.pane(pane_id).unwrap();
+    let claim = pane.agent_claim().expect("claimed");
+    assert_eq!(claim.session_id.as_deref(), Some("s-new"));
+    assert_eq!(
+        claim.agent_pid, None,
+        "the stamp cleared with the identity it belonged to"
+    );
+}

@@ -3,6 +3,13 @@
 
 use super::*;
 
+/// The admission outcome shared by the four upload verbs: the session's
+/// pipe, or the refusal reply (read-only connection, or no mux backing).
+enum UploadAdmission {
+    Pipe(std::sync::Arc<dyn UploadForwarder>),
+    Refused(Box<ServerMessage>),
+}
+
 impl StreamingServer {
     /// Build a refresh message from the session's current visible terminal
     /// state. Pure (no side effects, no async) so the tungstenite and axum
@@ -75,7 +82,13 @@ impl StreamingServer {
     /// state, mutated in place. Returns the direct replies to send back to
     /// this client; messages that only write to the PTY or broadcast to the
     /// session produce no direct reply.
-    pub(super) fn handle_client_message(
+    ///
+    /// The function is async for exactly one reason: the four upload verbs
+    /// run their pipe ops on the blocking pool (`upload_op_off_runtime`)
+    /// so a wedged daemon stalls only that connection's loop, never a
+    /// tokio worker. Every other arm is synchronous work on terminal or
+    /// per-connection state.
+    pub(super) async fn handle_client_message(
         self: &Arc<Self>,
         session: &Arc<StreamSessionState>,
         ctx: ConnCtx<'_>,
@@ -218,37 +231,75 @@ impl StreamingServer {
                 filename,
                 total_bytes,
             } => {
-                self.handle_upload_begin(
-                    session,
-                    transport_label,
-                    client_id,
-                    read_only,
-                    &filename,
-                    total_bytes,
-                    &mut replies,
+                replies.extend(
+                    self.handle_upload_begin(
+                        session,
+                        transport_label,
+                        client_id,
+                        read_only,
+                        &filename,
+                        total_bytes,
+                    )
+                    .await,
                 );
             }
             crate::streaming::protocol::ClientMessage::UploadChunk { data } => {
-                self.handle_upload_chunk(
+                replies.extend(
+                    self.handle_upload_chunk(session, transport_label, client_id, read_only, &data)
+                        .await,
+                );
+            }
+            crate::streaming::protocol::ClientMessage::UploadCommit => {
+                replies.extend(
+                    self.handle_upload_commit(session, transport_label, client_id, read_only)
+                        .await,
+                );
+            }
+            crate::streaming::protocol::ClientMessage::UploadAbort => {
+                replies.extend(
+                    self.handle_upload_abort(session, transport_label, client_id, read_only)
+                        .await,
+                );
+            }
+            crate::streaming::protocol::ClientMessage::MuxTreeRequest => {
+                // Read-only by construction: the reply reads the tree
+                // watcher's cache — no daemon command, no selection or
+                // sizing touched. Without a watcher there is no tree
+                // source, and the requester is told so instead of waiting.
+                match self.tree_snapshot() {
+                    Some(tree) => replies.push(tree),
+                    None => replies.push(ServerMessage::Error {
+                        message: "mux tree unavailable (no daemon attached)".to_string(),
+                        code: Some("mux_tree_unavailable".to_string()),
+                    }),
+                }
+            }
+            crate::streaming::protocol::ClientMessage::PaneCreateRequest {
+                correlation_id,
+                session_id,
+                name,
+            } => {
+                self.handle_pane_create(
                     session,
                     transport_label,
                     client_id,
                     read_only,
-                    &data,
+                    &correlation_id,
+                    &session_id,
+                    name.as_deref(),
                     &mut replies,
                 );
-            }
-            crate::streaming::protocol::ClientMessage::UploadCommit => {
-                self.handle_upload_commit(session, read_only, &mut replies);
-            }
-            crate::streaming::protocol::ClientMessage::UploadAbort => {
-                self.handle_upload_abort(session, read_only, &mut replies);
             }
         }
         replies
     }
 
     // --- Client uploads (mux-backed sessions) ---------------------------
+    // Module rule (QA-001): every blocking interaction with the mux
+    // session factory — session creation, metadata resolution, upload
+    // pipe ops — runs on the blocking pool, never on a tokio worker. The
+    // pipe's op queue is a std mpsc bounded by the reply deadline, so a
+    // wedged daemon must stall only that one connection's loop.
 
     /// The sync upload refusal reply: nothing was staged, so the daemon
     /// id is 0 and the reason rides `error`.
@@ -260,13 +311,60 @@ impl StreamingServer {
         }
     }
 
+    /// The read-only upload refusal shared by all four verbs.
+    fn upload_read_only_refusal() -> ServerMessage {
+        Self::upload_refusal("read-only connections cannot upload".to_string())
+    }
+
+    /// The shared pipe admission for the four upload verbs (QA-007):
+    /// resolve the session's `upload_pipe`, refusing through the shared
+    /// error-report shape when the session has no mux backing.
+    fn upload_pipe_or_refusal(
+        self: &Arc<Self>,
+        session: &Arc<StreamSessionState>,
+        transport_label: &str,
+        client_id: uuid::Uuid,
+        verb: &'static str,
+    ) -> UploadAdmission {
+        match self
+            .session_factory
+            .as_ref()
+            .and_then(|factory| factory.upload_pipe(&session.id))
+        {
+            Some(pipe) => UploadAdmission::Pipe(pipe),
+            None => {
+                crate::debug_error!(
+                    "STREAMING",
+                    "Upload{verb} from {} {} refused: session {} has no mux upload pipe",
+                    transport_label,
+                    client_id,
+                    session.id
+                );
+                UploadAdmission::Refused(Box::new(Self::upload_refusal(
+                    "uploads require a mux-backed pane session".to_string(),
+                )))
+            }
+        }
+    }
+
+    /// Run one upload pipe op on the blocking pool (QA-001). `op` owns
+    /// the pipe plus the verb's arguments and builds the replies; a join
+    /// failure becomes the shared error-report shape.
+    async fn upload_op_off_runtime<F>(op: F) -> Vec<ServerMessage>
+    where
+        F: FnOnce() -> Vec<ServerMessage> + Send + 'static,
+    {
+        match tokio::task::spawn_blocking(op).await {
+            Ok(replies) => replies,
+            Err(join_err) => vec![Self::upload_refusal(format!(
+                "upload worker join failed: {join_err}"
+            ))],
+        }
+    }
+
     /// `UploadBegin`: open the session's daemon-side staging and reply
-    /// `upload_started` (or an `upload_finished` error). The verb blocks
-    /// on the pipe's op queue — bounded by the reply deadline — because a
-    /// client cannot act on a begin whose outcome is unknown; a wedged
-    /// daemon stalls this one connection's loop, never other sessions.
-    #[allow(clippy::too_many_arguments)]
-    fn handle_upload_begin(
+    /// `upload_started` (or an `upload_finished` error).
+    async fn handle_upload_begin(
         self: &Arc<Self>,
         session: &Arc<StreamSessionState>,
         transport_label: &str,
@@ -274,63 +372,46 @@ impl StreamingServer {
         read_only: bool,
         filename: &str,
         total_bytes: u64,
-        replies: &mut Vec<ServerMessage>,
-    ) {
+    ) -> Vec<ServerMessage> {
         if read_only {
-            replies.push(Self::upload_refusal(
-                "read-only connections cannot upload".to_string(),
-            ));
-            return;
+            return vec![Self::upload_read_only_refusal()];
         }
-        let Some(pipe) = self
-            .session_factory
-            .as_ref()
-            .and_then(|factory| factory.upload_pipe(&session.id))
-        else {
-            crate::debug_error!(
-                "STREAMING",
-                "UploadBegin from {} {} refused: session {} has no mux upload pipe",
-                transport_label,
-                client_id,
-                session.id
-            );
-            replies.push(Self::upload_refusal(
-                "uploads require a mux-backed pane session".to_string(),
-            ));
-            return;
+        let pipe = match self.upload_pipe_or_refusal(session, transport_label, client_id, "Begin") {
+            UploadAdmission::Pipe(pipe) => pipe,
+            UploadAdmission::Refused(refusal) => return vec![*refusal],
         };
-        match pipe.begin(filename, total_bytes) {
-            Ok(upload_id) => replies.push(ServerMessage::UploadStarted { upload_id }),
+        let label = transport_label.to_string();
+        let filename = filename.to_string();
+        Self::upload_op_off_runtime(move || match pipe.begin(&filename, total_bytes) {
+            Ok(upload_id) => vec![ServerMessage::UploadStarted { upload_id }],
             Err(err) => {
                 crate::debug_error!(
                     "STREAMING",
                     "UploadBegin from {} {} failed: {}",
-                    transport_label,
+                    label,
                     client_id,
                     err
                 );
-                replies.push(Self::upload_refusal(err.to_string()));
+                vec![Self::upload_refusal(err.to_string())]
             }
-        }
+        })
+        .await
     }
 
     /// `UploadChunk`: cap-check and forward one chunk. A rejected chunk
     /// (daemon cap or wire cap) aborts the upload daemon-side and reports
-    /// `upload_finished`; silence is progress.
-    fn handle_upload_chunk(
+    /// `upload_finished`; silence is progress. The wire cap fires before
+    /// the pipe lookup so the refusal never depends on daemon state.
+    async fn handle_upload_chunk(
         self: &Arc<Self>,
         session: &Arc<StreamSessionState>,
         transport_label: &str,
         client_id: uuid::Uuid,
         read_only: bool,
         data: &[u8],
-        replies: &mut Vec<ServerMessage>,
-    ) {
+    ) -> Vec<ServerMessage> {
         if read_only {
-            replies.push(Self::upload_refusal(
-                "read-only connections cannot upload".to_string(),
-            ));
-            return;
+            return vec![Self::upload_read_only_refusal()];
         }
         if data.len() > MAX_UPLOAD_CHUNK_BYTES {
             crate::debug_error!(
@@ -341,113 +422,99 @@ impl StreamingServer {
                 data.len(),
                 MAX_UPLOAD_CHUNK_BYTES
             );
-            replies.push(Self::upload_refusal(format!(
+            return vec![Self::upload_refusal(format!(
                 "chunk of {} bytes exceeds the {}-byte per-chunk cap",
                 data.len(),
                 MAX_UPLOAD_CHUNK_BYTES
-            )));
-            return;
+            ))];
         }
-        let Some(pipe) = self
-            .session_factory
-            .as_ref()
-            .and_then(|factory| factory.upload_pipe(&session.id))
-        else {
-            replies.push(Self::upload_refusal(
-                "uploads require a mux-backed pane session".to_string(),
-            ));
-            return;
+        let pipe = match self.upload_pipe_or_refusal(session, transport_label, client_id, "Chunk") {
+            UploadAdmission::Pipe(pipe) => pipe,
+            UploadAdmission::Refused(refusal) => return vec![*refusal],
         };
-        if let Err(err) = pipe.chunk(data) {
-            crate::debug_error!(
-                "STREAMING",
-                "UploadChunk from {} {} failed: {}",
-                transport_label,
-                client_id,
-                err
-            );
-            replies.push(ServerMessage::UploadFinished {
-                upload_id: pipe.upload_id().unwrap_or(0),
-                path: None,
-                error: Some(err.to_string()),
-            });
-        }
+        let label = transport_label.to_string();
+        let data = data.to_vec();
+        Self::upload_op_off_runtime(move || {
+            if let Err(err) = pipe.chunk(&data) {
+                crate::debug_error!(
+                    "STREAMING",
+                    "UploadChunk from {} {} failed: {}",
+                    label,
+                    client_id,
+                    err
+                );
+                return vec![ServerMessage::UploadFinished {
+                    upload_id: pipe.upload_id().unwrap_or(0),
+                    path: None,
+                    error: Some(err.to_string()),
+                }];
+            }
+            Vec::new()
+        })
+        .await
     }
 
     /// `UploadCommit`: seal the staged file and paste its path into the
     /// session's pane. The path (or the failure) rides `upload_finished`.
-    fn handle_upload_commit(
+    async fn handle_upload_commit(
         self: &Arc<Self>,
         session: &Arc<StreamSessionState>,
+        transport_label: &str,
+        client_id: uuid::Uuid,
         read_only: bool,
-        replies: &mut Vec<ServerMessage>,
-    ) {
+    ) -> Vec<ServerMessage> {
         if read_only {
-            replies.push(Self::upload_refusal(
-                "read-only connections cannot upload".to_string(),
-            ));
-            return;
+            return vec![Self::upload_read_only_refusal()];
         }
-        let Some(pipe) = self
-            .session_factory
-            .as_ref()
-            .and_then(|factory| factory.upload_pipe(&session.id))
-        else {
-            replies.push(Self::upload_refusal(
-                "uploads require a mux-backed pane session".to_string(),
-            ));
-            return;
+        let pipe = match self.upload_pipe_or_refusal(session, transport_label, client_id, "Commit")
+        {
+            UploadAdmission::Pipe(pipe) => pipe,
+            UploadAdmission::Refused(refusal) => return vec![*refusal],
         };
-        match pipe.commit() {
-            Ok(path) => replies.push(ServerMessage::UploadFinished {
+        Self::upload_op_off_runtime(move || match pipe.commit() {
+            Ok(path) => vec![ServerMessage::UploadFinished {
                 upload_id: pipe.upload_id().unwrap_or(0),
                 path: Some(path),
                 error: None,
-            }),
-            Err(err) => replies.push(ServerMessage::UploadFinished {
+            }],
+            Err(err) => vec![ServerMessage::UploadFinished {
                 upload_id: pipe.upload_id().unwrap_or(0),
                 path: None,
                 error: Some(err.to_string()),
-            }),
-        }
+            }],
+        })
+        .await
     }
 
     /// `UploadAbort`: drop the staging slot (its spool file is deleted
     /// daemon-side) and report the settlement.
-    fn handle_upload_abort(
+    async fn handle_upload_abort(
         self: &Arc<Self>,
         session: &Arc<StreamSessionState>,
+        transport_label: &str,
+        client_id: uuid::Uuid,
         read_only: bool,
-        replies: &mut Vec<ServerMessage>,
-    ) {
+    ) -> Vec<ServerMessage> {
         if read_only {
-            replies.push(Self::upload_refusal(
-                "read-only connections cannot upload".to_string(),
-            ));
-            return;
+            return vec![Self::upload_read_only_refusal()];
         }
-        let Some(pipe) = self
-            .session_factory
-            .as_ref()
-            .and_then(|factory| factory.upload_pipe(&session.id))
-        else {
-            replies.push(Self::upload_refusal(
-                "uploads require a mux-backed pane session".to_string(),
-            ));
-            return;
+        let pipe = match self.upload_pipe_or_refusal(session, transport_label, client_id, "Abort") {
+            UploadAdmission::Pipe(pipe) => pipe,
+            UploadAdmission::Refused(refusal) => return vec![*refusal],
         };
-        match pipe.abort() {
-            Ok(()) => replies.push(ServerMessage::UploadFinished {
+        Self::upload_op_off_runtime(move || match pipe.abort() {
+            Ok(()) => vec![ServerMessage::UploadFinished {
                 upload_id: pipe.upload_id().unwrap_or(0),
                 path: None,
                 error: Some("aborted".to_string()),
-            }),
-            Err(err) => replies.push(ServerMessage::UploadFinished {
+            }],
+            Err(err) => vec![ServerMessage::UploadFinished {
                 upload_id: pipe.upload_id().unwrap_or(0),
                 path: None,
                 error: Some(err.to_string()),
-            }),
-        }
+            }],
+        })
+        .await
     }
 
     /// True when a PTY writer is attached to the session. Input-bearing
@@ -456,6 +523,142 @@ impl StreamingServer {
     /// tracking) or counts bytes for a PTY nobody will read.
     pub(super) fn session_has_writer(session: &Arc<StreamSessionState>) -> bool {
         session.pty_writer.read().is_some()
+    }
+
+    /// The sync pane-create refusal reply: nothing was created, so the
+    /// named code carries the reason (`pane_create_disabled`,
+    /// `pane_create_read_only`, `pane_create_no_daemon`,
+    /// `pane_create_failed`).
+    fn pane_create_refusal(code: &str, reason: String) -> ServerMessage {
+        ServerMessage::Error {
+            message: reason,
+            code: Some(code.to_string()),
+        }
+    }
+
+    /// Longest window name a `PaneCreateRequest` may carry (card
+    /// 01a1d0d5), in bytes.
+    pub(crate) const MAX_PANE_CREATE_NAME_BYTES: usize = 64;
+
+    /// Validate an optional window name: bounded and free of control
+    /// characters (card 01a1d0d5 criterion 1), so it rides the daemon's
+    /// `new-window -n` grammar safely.
+    fn validate_pane_create_name(name: Option<&str>) -> std::result::Result<(), String> {
+        let Some(name) = name else {
+            return Ok(());
+        };
+        if name.len() > Self::MAX_PANE_CREATE_NAME_BYTES {
+            return Err(format!(
+                "exceeds the {}-byte bound",
+                Self::MAX_PANE_CREATE_NAME_BYTES
+            ));
+        }
+        if name.chars().any(char::is_control) {
+            return Err("contains control characters".to_string());
+        }
+        Ok(())
+    }
+
+    /// `PaneCreateRequest`: create one default-shell window (a single new
+    /// pane) on the session factory's mux daemon, gated by the opt-in
+    /// `allow_pane_create` config flag. Default-shell only — no command
+    /// passthrough, no split-window. The verb blocks on daemon I/O,
+    /// bounded by the reply deadline, stalling this one connection's loop
+    /// and never other sessions (the upload verbs' shape).
+    ///
+    /// The refusal ladder is ordered least-revealing first: a disabled
+    /// server always answers `pane_create_disabled` (even to read-only
+    /// connections), a read-only connection on an enabled server answers
+    /// `pane_create_read_only`, and only then is the daemon path probed.
+    ///
+    /// Uncertain-response rule: the daemon verb is not transactional with
+    /// the reply — a drop between `new-window` and the reply leaves the
+    /// pane existing. A client that sees neither `pane_created` nor an
+    /// error must re-query the topology (mux tree snapshot) rather than
+    /// retry blind; `correlation_id` exists so a late reply can still be
+    /// matched to its request.
+    #[allow(clippy::too_many_arguments)]
+    fn handle_pane_create(
+        self: &Arc<Self>,
+        session: &Arc<StreamSessionState>,
+        transport_label: &str,
+        client_id: uuid::Uuid,
+        read_only: bool,
+        correlation_id: &str,
+        mux_session: &str,
+        name: Option<&str>,
+        replies: &mut Vec<ServerMessage>,
+    ) {
+        if !self.config.allow_pane_create {
+            replies.push(Self::pane_create_refusal(
+                "pane_create_disabled",
+                "pane creation is disabled on this server".to_string(),
+            ));
+            return;
+        }
+        if read_only {
+            crate::debug_error!(
+                "STREAMING",
+                "PaneCreateRequest with name {name:?} from {} {} refused: read-only connection",
+                transport_label,
+                client_id
+            );
+            replies.push(Self::pane_create_refusal(
+                "pane_create_read_only",
+                "read-only connections cannot create panes".to_string(),
+            ));
+            return;
+        }
+        if let Err(reason) = Self::validate_pane_create_name(name) {
+            crate::debug_error!(
+                "STREAMING",
+                "PaneCreateRequest from {} {} refused: invalid name: {reason}",
+                transport_label,
+                client_id
+            );
+            replies.push(Self::pane_create_refusal(
+                "pane_create_failed",
+                format!("invalid pane name: {reason}"),
+            ));
+            return;
+        }
+        let Some(factory) = self.session_factory.as_ref() else {
+            crate::debug_error!(
+                "STREAMING",
+                "PaneCreateRequest from {} {} refused: session {} has no mux factory",
+                transport_label,
+                client_id,
+                session.id
+            );
+            replies.push(Self::pane_create_refusal(
+                "pane_create_no_daemon",
+                "pane creation requires a mux-backed session".to_string(),
+            ));
+            return;
+        };
+        match factory.pane_create(mux_session, name) {
+            Ok((window_id, pane_id)) => {
+                replies.push(ServerMessage::PaneCreated {
+                    correlation_id: correlation_id.to_string(),
+                    session_id: mux_session.to_string(),
+                    window_id,
+                    pane_id,
+                });
+            }
+            Err(err) => {
+                crate::debug_error!(
+                    "STREAMING",
+                    "PaneCreateRequest from {} {} failed: {}",
+                    transport_label,
+                    client_id,
+                    err
+                );
+                replies.push(Self::pane_create_refusal(
+                    "pane_create_failed",
+                    err.to_string(),
+                ));
+            }
+        }
     }
 
     /// The one client→PTY write path (QA-110), shared by every
@@ -604,6 +807,15 @@ impl StreamingServer {
                 let mods = if shift { 1u8 } else { 0 }
                     | if alt { 2 } else { 0 }
                     | if ctrl { 4 } else { 0 };
+                // `button` is raw SGR code space (see MouseInput docs), but a
+                // logical Move (button 0 left-held, 3 buttonless) is accepted
+                // too: bit 32 marks every motion report, and the OR is
+                // idempotent for clients that already send raw 32/35.
+                let button = if event_type == crate::streaming::protocol::MouseEventType::Move {
+                    button | 32
+                } else {
+                    button
+                };
                 let pressed = event_type != crate::streaming::protocol::MouseEventType::Release;
                 let mouse_event = crate::mouse::MouseEvent::new(
                     button,
@@ -661,8 +873,30 @@ impl StreamingServer {
         }
     }
 
+    /// Paste text with every ESC (U+001B) and C1 CSI (U+009B) character
+    /// removed. Inside bracketed paste the payload is supposed to be opaque
+    /// text, and either introducer can begin the `ESC[201~` end marker (or
+    /// any other CSI), so a payload carrying one could close the paste early
+    /// and deliver the rest as typed input — a trailing newline then executes
+    /// a command (card 01a1dfd8, mux-xr SEC-001). Stripping the characters
+    /// rather than the marker makes every end-marker spelling impossible and
+    /// cannot be defeated by a splice nesting (`ESC[20 ESC[201~ 1~`); it is
+    /// lossy for pastes that legitimately contain escape bytes, accepted by
+    /// the filer. Characters, not raw bytes: 0x9B is a legal UTF-8
+    /// continuation byte, so byte-level stripping would corrupt multibyte
+    /// text. The unbracketed branch keeps its payload raw — the application
+    /// declined paste framing there, so the bytes are typed input by design
+    /// and its escapes are parsed as the application's own input semantics.
+    fn strip_paste_controls(content: &str) -> String {
+        content
+            .chars()
+            .filter(|c| *c != '\u{1b}' && *c != '\u{9b}')
+            .collect()
+    }
+
     /// `Paste`: cap, rate-limit, then send the pasted text — wrapped in
-    /// bracketed-paste markers when enabled — as one frame through the
+    /// bracketed-paste markers when enabled, with the payload stripped of
+    /// paste-breakout controls in that case — as one frame through the
     /// shared input path.
     pub(super) fn handle_paste(
         session: &Arc<StreamSessionState>,
@@ -715,7 +949,7 @@ impl StreamingServer {
                     (
                         terminal.bracketed_paste_start().to_vec(),
                         terminal.bracketed_paste_end().to_vec(),
-                        content.into_bytes(),
+                        Self::strip_paste_controls(&content).into_bytes(),
                     )
                 } else {
                     (Vec::new(), Vec::new(), content.into_bytes())
@@ -853,7 +1087,7 @@ impl StreamingServer {
             }
         };
         if let Some(msg) = selection_msg {
-            self.broadcast_to_session(&session.id, msg);
+            self.send_to_session(&session.id, msg);
         }
     }
 
@@ -891,7 +1125,7 @@ impl StreamingServer {
                         );
                     } else {
                         terminal.set_clipboard(Some(text.clone()));
-                        self.broadcast_to_session(
+                        self.send_to_session(
                             &session.id,
                             ServerMessage::clipboard_sync("set".to_string(), text.clone(), target),
                         );

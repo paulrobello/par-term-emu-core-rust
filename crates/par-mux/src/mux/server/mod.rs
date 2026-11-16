@@ -12,7 +12,8 @@ use crate::mux::command::parse_command;
 use crate::mux::command::{parse_line, Line};
 use crate::mux::config::EffectiveConfig;
 use crate::mux::dispatch::{
-    dispatch_command, workspace_roster_changed, workspace_roster_fingerprint, Ctx,
+    dispatch_command, replay_reply_body, workspace_roster_changed, workspace_roster_fingerprint,
+    Ctx,
 };
 use crate::mux::emit::{emit, emit_block};
 use crate::mux::ids::{PaneId, WindowId};
@@ -78,26 +79,49 @@ const EXIT_EMPTY_GRACE: Duration = Duration::from_secs(5);
 #[cfg(test)]
 const EXIT_EMPTY_GRACE: Duration = Duration::from_millis(300);
 
-/// Per-client broadcast queue depth in lines (ARC-011). A `%output` line
-/// carries one PTY read (up to 16 KiB raw, roughly doubled by escape
-/// encoding), so a stalled client pins at most ~128 MiB before eviction;
-/// past that it is disconnected — and the disconnect frees the queue
-/// (ENH-012) — rather than growing the daemon without bound (tmux's own
-/// policy for a control client that stops draining).
-/// cap: Broadcast lines queued per control-socket client before the daemon evicts it.
-const CLIENT_QUEUE_DEPTH: usize = 4096;
+/// Per-client broadcast queue byte budget (ARC-011, byte-budgeted: the
+/// 4096-line cap it replaced pinned an amount of memory that swings with
+/// the line size — short PTY fragments (~40 B per line, the shape a
+/// loaded host's read fragmentation produces) crossed 4096 lines at only
+/// ~160 KiB and evicted a modestly lagging observer mid-flood, its
+/// payload tail never arriving; full-size lines pinned ~128 MiB at the
+/// same count). A `%output` line carries one PTY read (up to 16 KiB raw,
+/// roughly doubled by escape encoding), so a stalled client pins a known
+/// amount at most before eviction; past that it is disconnected — and
+/// the disconnect frees the queue (ENH-012) — rather than growing the
+/// daemon without bound (tmux's own policy for a control client that
+/// stops draining). A flood of short fragments stays under this budget
+/// by orders of magnitude (`flood_short_lines_do_not_evict_a_lagging_
+/// observer` in `tests/mux_attach.rs`).
+/// cap: Bytes of broadcast lines queued per control-socket client before the daemon evicts it.
+const CLIENT_QUEUE_BYTES: usize = 8 * 1024 * 1024;
 
-/// Aggregate bound across every connected client's broadcast queue
-/// (ARC-008): the per-client depth alone lets K stalled clients pin
-/// K x ~128 MiB in the worst case. When the summed queue counters cross
+/// Aggregate byte bound across every connected client's broadcast queue
+/// (ARC-008): the per-client budget alone lets K stalled clients pin
+/// K x CLIENT_QUEUE_BYTES. When the summed queue byte counters cross
 /// this line, the client holding the DEEPEST queue is evicted — the
 /// stalled one — while live clients keep draining. A counter only grows
 /// while pushes outpace a client's writer, so crossing the aggregate
 /// takes a genuine multi-client stall; and a client queued under
-/// `CLIENT_QUEUE_DEPTH / 4` is never the victim, so a healthy crowd of
+/// `CLIENT_QUEUE_BYTES / 4` is never the victim, so a healthy crowd of
 /// shallow queues cannot be murdered by the sum of their small shares.
-/// cap: Broadcast lines queued across all control-socket clients before the daemon evicts the deepest queue.
-const CLIENT_QUEUE_AGGREGATE_DEPTH: usize = CLIENT_QUEUE_DEPTH * 2;
+/// cap: Bytes of broadcast lines queued across all control-socket clients before the daemon evicts the deepest queue.
+const CLIENT_QUEUE_AGGREGATE_BYTES: usize = CLIENT_QUEUE_BYTES * 2;
+
+/// The smallest real broadcast line: a `%output` line's framing alone
+/// (`%output %N ` prefix, escape expansion, the `\n`) stays above this,
+/// so the item bound below never binds before the byte budget for a
+/// real line shape.
+const MIN_BROADCAST_LINE_BYTES: usize = 16;
+
+/// The per-client channel's item bound (the SyncSender needs a numeric
+/// bound): a pathological backstop derived from the byte budget at
+/// [`MIN_BROADCAST_LINE_BYTES`]. Real lines exceed the minimum, so the
+/// byte budget binds first for every real line shape and the item bound
+/// only fires for degenerate sub-minimum fragments — at a pinned total
+/// still at or under the byte budget.
+/// cap: Broadcast queue items per control-socket client before the daemon evicts it (backstop to the CLIENT_QUEUE_BYTES budget).
+const CLIENT_QUEUE_MAX_ITEMS: usize = CLIENT_QUEUE_BYTES / MIN_BROADCAST_LINE_BYTES;
 
 /// Per-line byte budget for the control-socket read loop (SEC-104). A line
 /// is accumulated until its newline, so without a budget a client streaming
@@ -143,7 +167,8 @@ mod reap;
 use broadcast::*;
 pub(crate) use broadcast::{
     broadcast_layout_change, broadcast_notification, capture_range, layout_change_notification,
-    pane_output_sink, record_and_broadcast, replay_pane_exited_lines, OutputEpoch,
+    pane_output_sink, record_and_broadcast, replay_pane_exited_lines, replay_window_add_lines,
+    window_add_notification, OutputEpoch,
 };
 use client::*;
 pub use endpoint::sweep_pane_endpoint_remnants;

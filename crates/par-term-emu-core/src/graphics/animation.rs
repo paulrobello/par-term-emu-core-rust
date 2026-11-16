@@ -54,6 +54,26 @@ impl AnimationFrame {
         }
     }
 
+    /// A frame over a buffer that is already shared (an image's root frame), so
+    /// it is retained once.
+    pub fn new_shared(
+        frame_number: u32,
+        pixels: Arc<Vec<u8>>,
+        width: usize,
+        height: usize,
+    ) -> Self {
+        Self {
+            frame_number,
+            pixels,
+            width,
+            height,
+            delay_ms: 0,
+            x_offset: 0,
+            y_offset: 0,
+            composition: CompositionMode::default(),
+        }
+    }
+
     /// Set frame delay
     pub fn with_delay(mut self, delay_ms: u32) -> Self {
         self.delay_ms = delay_ms;

@@ -2,22 +2,24 @@
 //! output wiring, layout/exit replays, and capture ranges.
 
 use super::*;
+use crate::mux::ids::SessionId;
 
 /// Push one line to every connected client, dropping the senders whose
 /// client has gone — the single fan-out every broadcast and sink shares.
 ///
-/// ARC-011: the queues are bounded at [`CLIENT_QUEUE_DEPTH`]; a client
-/// whose queue is full (it stopped reading the socket) is EVICTED here,
-/// tmux's policy for a control client that stops draining. Eviction also
-/// raises the client's flag so its own connection threads tear it down:
-/// dropping the queue sender alone cannot free a wedged client — its
-/// writer stays blocked in a full socket buffer and its reader parked on
-/// input, retaining the queued lines (ENH-012, measured live). The flagged
-/// threads exit, the queue drops, and the client observes a clean
-/// disconnect within about two [`EVICTION_POLL`]s. On Windows the flag
-/// alone is not enough — named pipes never wake a parked reader or writer
-/// on a timeout — so eviction also aborts the blocked I/O through the
-/// entry's [`ConnectionAbort`].
+/// ARC-011, byte-budgeted: the queues are bounded at
+/// [`CLIENT_QUEUE_BYTES`]; a client whose queue exceeds the budget (it
+/// stopped reading the socket) is EVICTED here, tmux's policy for a
+/// control client that stops draining. Eviction also raises the client's
+/// flag so its own connection threads tear it down: dropping the queue
+/// sender alone cannot free a wedged client — its writer stays blocked
+/// in a full socket buffer and its reader parked on input, retaining the
+/// queued lines (ENH-012, measured live). The flagged threads exit, the
+/// queue drops, and the client observes a clean disconnect within about
+/// two [`EVICTION_POLL`]s. On Windows the flag alone is not enough —
+/// named pipes never wake a parked reader or writer on a timeout — so
+/// eviction also aborts the blocked I/O through the entry's
+/// [`ConnectionAbort`].
 pub(crate) fn push_to_clients(clients: &Clients, line: String) {
     push_to_clients_skipping(clients, None, line);
 }
@@ -30,25 +32,26 @@ pub(super) fn push_to_clients_except(clients: &Clients, skip: u64, line: String)
 
 pub(super) fn push_to_clients_skipping(clients: &Clients, skip: Option<u64>, line: String) {
     let mut clients = clients.lock();
-    // Aggregate bound (ARC-008): the per-client depth alone lets K stalled
-    // clients pin K x CLIENT_QUEUE_DEPTH lines, so once the summed queue
-    // counters cross [`CLIENT_QUEUE_AGGREGATE_DEPTH`] the client holding
-    // the deepest queue is evicted on this push. Only a queue at a quarter
-    // of the per-client depth can be the victim: the sum crossing the cap
-    // through shallow queues is a healthy crowd, not a stall, and the
-    // per-client bound remains their correct bound. The counters are an
-    // approximation of the channel length (reply lines are uncounted, and
-    // a drain lags its push), which a stall bound can afford: a stalled
-    // client's counter climbs monotonically toward eviction.
+    // Aggregate byte bound (ARC-008): the per-client budget alone lets K
+    // stalled clients pin K x CLIENT_QUEUE_BYTES, so once the summed queue
+    // byte counters cross [`CLIENT_QUEUE_AGGREGATE_BYTES`] the client
+    // holding the deepest queue is evicted on this push. Only a queue at a
+    // quarter of the per-client budget can be the victim: the sum crossing
+    // the cap through shallow queues is a healthy crowd, not a stall, and
+    // the per-client bound remains their correct bound. The counters are an
+    // approximation of the channel's queued bytes (reply lines are
+    // uncounted, and a drain lags its push), which a stall bound can
+    // afford: a stalled client's counter climbs monotonically toward
+    // eviction.
     let aggregate: usize = clients
         .iter()
         .map(|(_, _, queued, _, _)| queued.load(Ordering::Relaxed))
         .sum();
-    let victim = if aggregate >= CLIENT_QUEUE_AGGREGATE_DEPTH {
+    let victim = if aggregate >= CLIENT_QUEUE_AGGREGATE_BYTES {
         clients
             .iter()
             .filter(|(id, _, queued, _, _)| {
-                skip != Some(*id) && queued.load(Ordering::Relaxed) >= CLIENT_QUEUE_DEPTH / 4
+                skip != Some(*id) && queued.load(Ordering::Relaxed) >= CLIENT_QUEUE_BYTES / 4
             })
             .max_by_key(|(_, _, queued, _, _)| queued.load(Ordering::Relaxed))
             .map(|(id, _, _, _, _)| *id)
@@ -61,8 +64,8 @@ pub(super) fn push_to_clients_skipping(clients: &Clients, skip: Option<u64>, lin
         }
         if victim == Some(*id) {
             log::warn!(
-                "par-mux: evicting client {id}: {aggregate} broadcast lines queued across \
-                 all clients exceeds the {CLIENT_QUEUE_AGGREGATE_DEPTH} aggregate bound \
+                "par-mux: evicting client {id}: {aggregate} broadcast bytes queued across \
+                 all clients exceeds the {CLIENT_QUEUE_AGGREGATE_BYTES} aggregate bound \
                  (deepest queue, stalled)"
             );
             evicted.store(true, Ordering::Relaxed);
@@ -71,13 +74,25 @@ pub(super) fn push_to_clients_skipping(clients: &Clients, skip: Option<u64>, lin
         }
         match tx.try_send(line.clone()) {
             Ok(()) => {
-                queued.fetch_add(1, Ordering::Relaxed);
-                true
+                let total = queued.fetch_add(line.len(), Ordering::Relaxed) + line.len();
+                if total >= CLIENT_QUEUE_BYTES {
+                    log::warn!(
+                        "par-mux: evicting client {id}: {total} broadcast bytes queued \
+                         exceeds the {CLIENT_QUEUE_BYTES} per-client byte budget \
+                         (stalled, or draining slower than the burst)"
+                    );
+                    evicted.store(true, Ordering::Relaxed);
+                    abort.cancel_blocked_io();
+                    false
+                } else {
+                    true
+                }
             }
             Err(std::sync::mpsc::TrySendError::Full(_)) => {
                 log::warn!(
-                    "par-mux: evicting client {id}: {CLIENT_QUEUE_DEPTH} broadcast lines \
-                     undelivered (queue full — stalled, or draining slower than the burst)"
+                    "par-mux: evicting client {id}: {CLIENT_QUEUE_MAX_ITEMS} broadcast queue \
+                     items undelivered (pathological item backstop — stalled, or draining \
+                     slower than the burst)"
                 );
                 evicted.store(true, Ordering::Relaxed);
                 abort.cancel_blocked_io();
@@ -160,7 +175,11 @@ pub(crate) fn record_and_broadcast(
 pub(crate) type OutputEpoch = std::sync::Arc<std::sync::atomic::AtomicU64>;
 
 /// The per-pane output sink: PTY bytes become `%output` lines pushed to every
-/// connected client as they are produced.
+/// connected client as they are produced, and — when the chunk carries damage
+/// (non-empty ranges, or the pane's damage generation advanced) — the adjacent
+/// `%pane-damage` line rides the SAME fan-out write, so a consumer never sees
+/// another pane's line between the pair (the adjacency contract,
+/// docs/MUX.md "Notifications").
 ///
 /// Shared by pane creation (`new-session`/`new-window`/`split-window` wiring)
 /// and the restore path — a restored pane pushes output exactly like a
@@ -169,16 +188,38 @@ pub(crate) fn pane_output_sink(
     clients: &Clients,
     pane_id: PaneId,
     epoch: &OutputEpoch,
-) -> impl Fn(&[u8]) + Send + Sync + 'static {
+) -> impl Fn(&[u8], u64, &[(u32, u32)]) + Send + Sync + 'static {
     let sinks = Arc::clone(clients);
     let epoch = Arc::clone(epoch);
-    move |bytes: &[u8]| {
+    // The last damage generation this sink forwarded. `u64::MAX` is the
+    // never-forwarded sentinel: the first chunk always counts as advanced,
+    // which keeps the chain conservative — a consumer that missed earlier
+    // chunks sees a present generation and scans nothing stale.
+    let last_generation = Arc::new(std::sync::atomic::AtomicU64::new(u64::MAX));
+    move |bytes: &[u8], generation: u64, ranges: &[(u32, u32)]| {
         epoch.fetch_add(1, std::sync::atomic::Ordering::Release);
+        let last = last_generation.swap(generation, std::sync::atomic::Ordering::AcqRel);
+        let advanced = generation != last;
+        let pane = pane_id.to_string();
         let line = emit(&TmuxNotification::Output {
-            pane_id: pane_id.to_string(),
+            pane_id: pane.clone(),
             data: bytes.to_vec(),
         });
-        push_to_clients(&sinks, line);
+        if !ranges.is_empty() || advanced {
+            let damage = emit(&TmuxNotification::OutputDamage {
+                pane_id: pane,
+                generation,
+                ranges: ranges.to_vec(),
+            });
+            // One push carries both lines: per-client queues and sockets see
+            // the pair atomically, which is the adjacency contract.
+            let mut combined = String::with_capacity(line.len() + damage.len());
+            combined.push_str(&line);
+            combined.push_str(&damage);
+            push_to_clients(&sinks, combined);
+        } else {
+            push_to_clients(&sinks, line);
+        }
     }
 }
 
@@ -231,6 +272,50 @@ pub(super) fn render_layout_change(tree: &MuxTree, window_id: WindowId) -> Optio
     layout_change_notification(tree, window_id).map(|n| emit(&n))
 }
 
+/// The `%window-add` notification for `window_id` against `tree`, its
+/// layout triple formatted exactly as [`broadcast_layout_change`] renders
+/// a `%layout-change` (card 01a0ef3b) — shared by the dispatch spawn
+/// sites and `window-add-replay` so the broadcast and replay forms cannot
+/// drift. `None` when the window is gone.
+pub(crate) fn window_add_notification(
+    tree: &MuxTree,
+    window_id: WindowId,
+) -> Option<TmuxNotification> {
+    let window = tree.window(window_id)?;
+    let layout = window
+        .layout
+        .render(0, 0, window.cols as usize, window.rows as usize);
+    let (visible_layout, raw_flags) = match window.zoomed {
+        Some(pane) => (
+            // The single-pane form render_node produces for a leaf.
+            format!("0000,{}x{},0,0,{}", window.cols, window.rows, pane.0),
+            "Z".to_string(),
+        ),
+        None => (layout.clone(), String::new()),
+    };
+    Some(TmuxNotification::WindowAdd {
+        window_id: window_id.to_string(),
+        window_layout: layout,
+        window_visible_layout: visible_layout,
+        window_raw_flags: raw_flags,
+    })
+}
+
+/// The `%window-add` wire lines for every live window of `session`, in
+/// window-id order — the replay form `window-add-replay` answers with.
+/// Called under the tree lock; each line carries its trailing newline.
+pub(crate) fn replay_window_add_lines(tree: &MuxTree, session: SessionId) -> Vec<String> {
+    let Some(session) = tree.session(session) else {
+        return Vec::new();
+    };
+    let mut windows: Vec<WindowId> = session.windows.clone();
+    windows.sort_unstable();
+    windows
+        .into_iter()
+        .filter_map(|id| window_add_notification(tree, id).map(|n| emit(&n)))
+        .collect()
+}
+
 /// The `%layout-change` notification for `window_id` against `tree` —
 /// the shared builder of the broadcast form and the issuer-only form a
 /// non-owner size report answers with: the reporting client still needs
@@ -259,6 +344,10 @@ pub(crate) fn layout_change_notification(
     })
 }
 
+/// Re-render `window_id`'s layout triple from the tree and push the
+/// layout-change notification to every client; a window that no longer
+/// renders produces no line. Called from the dispatch tail and the
+/// dead-pane reaper — every path that can reshape a window.
 pub(crate) fn broadcast_layout_change(
     tree: &Arc<Mutex<MuxTree>>,
     clients: &Clients,

@@ -155,6 +155,25 @@ fn test_hyperlinks() {
 }
 
 #[test]
+fn test_hyperlink_uri_keeps_its_semicolons() {
+    let mut term = Terminal::new(80, 24);
+
+    term.process(b"\x1b]8;id=x;https://h/p;a=1;b=2\x1b\\link\x1b]8;;\x1b\\");
+    let id = term
+        .active_grid()
+        .get(0, 0)
+        .unwrap()
+        .flags
+        .hyperlink_id
+        .expect("the text is a hyperlink");
+    assert_eq!(
+        term.get_hyperlink_url(id.get()).as_deref(),
+        Some("https://h/p;a=1;b=2")
+    );
+    assert!(term.hyperlink_state.current_hyperlink_id.is_none());
+}
+
+#[test]
 fn test_osc7_set_directory() {
     let mut term = Terminal::new(80, 24);
 
@@ -2148,6 +2167,41 @@ fn test_osc1337_filepart_without_multipartfile() {
         has_inline_image_dropped(&events),
         "FilePart without MultipartFile must produce an InlineImageDropped diagnostic"
     );
+}
+
+#[test]
+fn test_osc1337_multipart_restart_fails_superseded_transfer() {
+    let mut term = Terminal::new(80, 24);
+    // MultipartFile A (file transfer, not inline) with one chunk appended.
+    term.process(b"\x1b]1337;MultipartFile=size=100;name=YS50eHQ=\x07");
+    term.process(b"\x1b]1337;FilePart=aGVsbG8=\x07");
+    let active = term.get_active_transfers();
+    assert_eq!(active.len(), 1);
+    assert_eq!(active[0].filename, "a.txt");
+    let id_a = active[0].id;
+
+    // A second MultipartFile replaces the multipart buffer: A's manager
+    // entry is unreachable afterwards, so it must be failed into the
+    // bounded completed ring rather than left active forever.
+    term.process(b"\x1b]1337;MultipartFile=size=100;name=Yi50eHQ=\x07");
+
+    let active = term.get_active_transfers();
+    assert_eq!(
+        active.len(),
+        1,
+        "the restart must be the sole active transfer"
+    );
+    assert_eq!(active[0].filename, "b.txt");
+
+    let completed = term.get_completed_transfers();
+    let superseded = completed
+        .iter()
+        .find(|t| t.id == id_a)
+        .expect("superseded transfer must land in the completed ring");
+    assert!(matches!(
+        &superseded.status,
+        crate::terminal::TransferStatus::Failed(msg) if msg == "superseded by MultipartFile restart"
+    ));
 }
 
 #[test]

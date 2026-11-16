@@ -12,11 +12,15 @@
 //! The `GraphicsStore` handles storage, scrolling, and Kitty image ID reuse.
 
 pub mod animation;
+pub mod budget;
+mod frames;
 pub mod iterm;
 pub mod kitty;
 pub mod placeholder;
 pub mod serialization;
 pub mod snapshot;
+
+pub(crate) use frames::FrameEdit;
 
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -28,6 +32,7 @@ pub use animation::{
     Animation, AnimationControl, AnimationFrame, AnimationState, CompositionMode,
     MAX_ANIMATION_FRAMES,
 };
+pub use budget::{BudgetGuard, BudgetStore, OutputMemoryBudget, DEFAULT_OUTPUT_MEMORY_BUDGET};
 pub use iterm::ITermParser;
 pub use placeholder::{
     create_placeholder_with_diacritics, number_to_diacritic, PlaceholderInfo, PLACEHOLDER_CHAR,
@@ -214,6 +219,20 @@ impl ImageDimension {
     }
 }
 
+/// Which screen buffer a placement was made on. Stamped from the screen
+/// state when the placement enters the store, so an xterm-style resize can
+/// move it with its own buffer's reflow ([`Self::default`] matches snapshots
+/// taken before the marker existed: they owned the primary buffer, the only
+/// one placements followed).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+pub enum PlacementBuffer {
+    /// The primary (normal) screen buffer.
+    #[default]
+    Primary,
+    /// The alternate screen buffer.
+    Alternate,
+}
+
 /// Unified image placement metadata across protocols
 ///
 /// Abstracts placement info from Kitty and iTerm2 so the frontend can implement
@@ -250,6 +269,10 @@ pub struct ImagePlacement {
     /// Source crop height in pixels (Kitty h= parameter; 0 = to bottom edge)
     #[serde(default)]
     pub source_height: u32,
+    /// The screen buffer this placement belongs to, stamped at placement
+    /// time; a resize remaps it by that buffer's reflow.
+    #[serde(default)]
+    pub buffer: PlacementBuffer,
 }
 
 impl ImagePlacement {
@@ -698,6 +721,12 @@ pub struct GraphicsStore {
 
     /// Next insertion sequence handed out for `kitty_entries`
     kitty_seq: u64,
+
+    /// Shared aggregate untrusted-output budget (ENH-062). `None` keeps the
+    /// store-local caps as the only gates. When set, kitty admissions and
+    /// placement insertions additionally require the aggregate to fit, and
+    /// the store reconciles its slice to `retained_bytes()` after mutations.
+    shared_budget: Option<std::sync::Arc<OutputMemoryBudget>>,
 }
 
 /// Budget bookkeeping for one kitty image ID (SEC-001).
@@ -723,13 +752,67 @@ impl GraphicsStore {
         }
     }
 
+    /// Attach the shared aggregate untrusted-output budget (ENH-062).
+    ///
+    /// When set, kitty admissions and placement insertions additionally
+    /// require the aggregate to fit, and the store reconciles its slice of
+    /// the budget to [`retained_bytes`](Self::retained_bytes) after
+    /// mutations. Call (again) whenever the store is replaced wholesale,
+    /// e.g. after the RIS store swap.
+    pub fn set_shared_budget(&mut self, budget: std::sync::Arc<OutputMemoryBudget>) {
+        self.shared_budget = Some(budget);
+    }
+
+    /// Unique pixel bytes retained across shared kitty images, animation
+    /// frames, visible placements, and scrollback graphics. Buffers shared
+    /// between an image and its placements count once (SEC-001's dedup rule
+    /// extended store-wide). This is the store's slice of the shared
+    /// aggregate budget.
+    pub fn retained_bytes(&self) -> usize {
+        let mut seen = std::collections::HashSet::new();
+        let mut total = 0usize;
+        let mut count = |buf: &std::sync::Arc<Vec<u8>>| {
+            if seen.insert(std::sync::Arc::as_ptr(buf)) {
+                total = total.saturating_add(buf.len());
+            }
+        };
+        for (_, _, pixels) in self.shared_images.values() {
+            count(pixels);
+        }
+        for anim in self.animations.values() {
+            for frame in anim.frames.values() {
+                count(&frame.pixels);
+            }
+        }
+        for g in self.placements.iter().chain(self.scrollback.iter()) {
+            count(&g.pixels);
+        }
+        total
+    }
+
+    /// Reconcile the shared budget's graphics slice after a mutation.
+    /// Admission checks run before growth, so the reservation always fits;
+    /// the release direction saturates.
+    fn sync_shared_budget(&mut self) {
+        if let Some(budget) = self.shared_budget.clone() {
+            let after = self.retained_bytes();
+            let current = budget.graphics_bytes();
+            if after > current {
+                budget.try_reserve(BudgetStore::Graphics, after - current);
+            } else if after < current {
+                budget.release(BudgetStore::Graphics, current - after);
+            }
+        }
+    }
+
     /// Add a graphic placement.
     ///
     /// Kitty placements with explicit nonzero image and placement IDs are
     /// upserts: redisplaying the same pair replaces it in place. A zero
     /// placement ID is intentionally non-unique and always coexists.
     pub fn add_graphic(&mut self, graphic: TerminalGraphic) {
-        // Exact (image_id, placement_id) upsert.
+        // The upsert path swaps pixel buffers too, so the shared budget
+        // reconciles there as well (ENH-062).
         if let (Some(image_id), Some(placement_id)) =
             (graphic.kitty_image_id, graphic.kitty_placement_id)
         {
@@ -739,6 +822,7 @@ impl GraphicsStore {
                         && existing.kitty_placement_id == Some(placement_id)
                 }) {
                     *existing = graphic;
+                    self.sync_shared_budget();
                     return;
                 }
             }
@@ -752,6 +836,7 @@ impl GraphicsStore {
         }
         self.placements.push(graphic);
         self.enforce_placement_budget();
+        self.sync_shared_budget();
     }
 
     /// Pixel bytes held by visible and scrollback placements, counting a
@@ -781,11 +866,74 @@ impl GraphicsStore {
             }
             self.dropped_count += 1;
         }
+        // Aggregate gate (ENH-062): when other stores' bytes fill the shared
+        // total, shed oldest scrollback then placements until it fits.
+        if let Some(aggregate) = self.shared_budget.clone() {
+            while !aggregate.admits(0) && self.placements.len() + self.scrollback.len() > 0 {
+                if !self.scrollback.is_empty() {
+                    self.scrollback.remove(0);
+                } else if !self.placements.is_empty() {
+                    self.placements.remove(0);
+                }
+                self.dropped_count += 1;
+                self.sync_shared_budget();
+            }
+        }
     }
 
     /// Remove a graphic by ID
     pub fn remove_graphic(&mut self, id: u64) {
         self.placements.retain(|g| g.id != id);
+        self.sync_shared_budget();
+    }
+
+    /// Remove a graphic by ID from the placements and the scrollback, for
+    /// a host that enforces its own image storage limit and evicts the
+    /// oldest images wherever they are ([`Self::remove_graphic`] only
+    /// reaches the placements on screen).
+    pub fn remove_graphic_everywhere(&mut self, id: u64) {
+        self.placements.retain(|g| g.id != id);
+        self.scrollback.retain(|g| g.id != id);
+    }
+
+    /// Rebase scrollback graphics anchors after `excess` oldest scrollback
+    /// lines were dropped at once (a scrollback-capacity shrink): graphics
+    /// anchored on a dropped line are removed, survivors shift up by
+    /// `excess`. The normal scroll path rebases these anchors one line at a
+    /// time; this is its bulk counterpart.
+    pub fn rebase_scrollback_after_shrink(&mut self, excess: usize) {
+        if excess == 0 {
+            return;
+        }
+        self.scrollback
+            .retain(|g| g.scrollback_row.is_none_or(|row| row >= excess));
+        for graphic in self.scrollback.iter_mut() {
+            if let Some(row) = graphic.scrollback_row.as_mut() {
+                *row -= excess;
+            }
+        }
+    }
+
+    /// Move the on-screen placements with their lines after an xterm-style
+    /// resize moved each buffer's lines (`Grid::resize_xterm`). Each placement
+    /// follows its own buffer ([`ImagePlacement::buffer`]): `primary_row` maps
+    /// a primary placement's top edge, `alternate_row` an alternate
+    /// placement's — a screen row, negative while the image's top has
+    /// scrolled above the screen, to its row after the resize.
+    pub fn move_placements(
+        &mut self,
+        mut primary_row: impl FnMut(isize) -> isize,
+        mut alternate_row: impl FnMut(isize) -> isize,
+    ) {
+        for graphic in &mut self.placements {
+            let top = graphic.position.1 as isize - graphic.scroll_offset_rows as isize;
+            let moved = match graphic.placement.buffer {
+                PlacementBuffer::Primary => primary_row(top),
+                PlacementBuffer::Alternate => alternate_row(top),
+            };
+            graphic.position.1 = moved.max(0) as usize;
+            graphic.scroll_offset_rows = (-moved).max(0) as usize;
+        }
     }
 
     /// Get graphics at a specific row
@@ -842,6 +990,7 @@ impl GraphicsStore {
     /// Clear all graphics
     pub fn clear(&mut self) {
         self.placements.clear();
+        self.sync_shared_budget();
     }
 
     // --- Kitty image management ---
@@ -904,6 +1053,7 @@ impl GraphicsStore {
         }
         self.shared_images.insert(image_id, (width, height, pixels));
         self.resync_kitty_entry(image_id);
+        self.sync_shared_budget();
     }
 
     /// Get a stored Kitty image
@@ -915,6 +1065,7 @@ impl GraphicsStore {
     pub fn remove_kitty_image(&mut self, image_id: u32) {
         self.shared_images.remove(&image_id);
         self.resync_kitty_entry(image_id);
+        self.sync_shared_budget();
     }
 
     /// Pixel bytes currently retained by stored kitty images and animation
@@ -984,6 +1135,15 @@ impl GraphicsStore {
         if protected_bytes.saturating_add(incoming) > budget {
             return false;
         }
+        // Aggregate gate (ENH-062): the protected image plus the incoming
+        // bytes must fit under the shared total even after every other
+        // store releases, since other stores' bytes cannot be evicted here.
+        if let Some(aggregate) = self.shared_budget.clone() {
+            let foreign = aggregate.used() - aggregate.graphics_bytes();
+            if protected_bytes.saturating_add(incoming) + foreign > aggregate.total() {
+                return false;
+            }
+        }
         let is_new = !self.kitty_entries.contains_key(&protect);
         while self.kitty_bytes.saturating_add(incoming) > budget
             || (is_new && self.kitty_entries.len() >= MAX_KITTY_IMAGES)
@@ -998,6 +1158,26 @@ impl GraphicsStore {
                 break;
             };
             self.evict_kitty_id(oldest);
+        }
+        // Aggregate eviction loop: release kitty bytes until the incoming
+        // bytes fit the shared total (ENH-062).
+        if let Some(aggregate) = self.shared_budget.clone() {
+            while !aggregate.admits(incoming) {
+                let Some(oldest) = self
+                    .kitty_entries
+                    .iter()
+                    .filter(|(id, _)| **id != protect)
+                    .min_by_key(|(_, e)| e.seq)
+                    .map(|(id, _)| *id)
+                else {
+                    break;
+                };
+                self.evict_kitty_id(oldest);
+                self.sync_shared_budget();
+            }
+            if !aggregate.admits(incoming) {
+                return false;
+            }
         }
         true
     }
@@ -1029,6 +1209,44 @@ impl GraphicsStore {
             // Remove all virtual placements with this image_id
             self.virtual_placements
                 .retain(|(img_id, _), _| *img_id != iid);
+        }
+        self.sync_shared_budget();
+    }
+
+    /// Free the stored data of kitty image ids (shared image plus any
+    /// animation), with memory-accounting resync. Placements keep their own
+    /// pixel `Arc`s and stay visible until deleted or replaced, and
+    /// scrollback copies keep theirs — the spec's "the stored image data is
+    /// not deleted if it is still referenced, for example in the scrollback"
+    /// falls out of the shared `Arc`. Returns the ids that actually had
+    /// stored data.
+    pub fn free_kitty_data(&mut self, ids: impl IntoIterator<Item = u32>) -> Vec<u32> {
+        let mut freed = Vec::new();
+        for id in ids {
+            let had =
+                self.shared_images.remove(&id).is_some() || self.animations.remove(&id).is_some();
+            if had {
+                freed.push(id);
+                self.resync_kitty_entry(id);
+            }
+        }
+        if !freed.is_empty() {
+            self.sync_shared_budget();
+        }
+        freed
+    }
+
+    /// Drop an image's animation with all its frames, with memory-accounting
+    /// resync. The shared image entry (the static image itself) is kept, so
+    /// the image remains displayable — the lowercase `d=f` form. Returns
+    /// whether an animation existed.
+    pub fn remove_kitty_animation(&mut self, image_id: u32) -> bool {
+        if self.animations.remove(&image_id).is_some() {
+            self.resync_kitty_entry(image_id);
+            self.sync_shared_budget();
+            true
+        } else {
+            false
         }
     }
 
@@ -1125,7 +1343,8 @@ impl GraphicsStore {
             );
             return;
         }
-        let default_delay = frame.delay_ms.max(100); // Default to 100ms if not specified
+        // The protocol default frame gap is 40 ms.
+        let default_delay = frame.delay_ms.max(40);
         let anim = self.get_or_create_animation(image_id, default_delay);
         anim.add_frame(frame);
         debug_info!(
@@ -1306,6 +1525,7 @@ impl GraphicsStore {
     /// Clear scrollback graphics
     pub fn clear_scrollback_graphics(&mut self) {
         self.scrollback.clear();
+        self.sync_shared_budget();
     }
 
     /// Get scrollback graphics count
@@ -1331,8 +1551,34 @@ pub enum GraphicsError {
     ImageError(String),
     /// Kitty protocol error.
     KittyError(String),
+    /// Kitty protocol error: the command named an image/placement/frame id
+    /// that does not exist. Answers `ENOENT` in the graphics reply (the
+    /// plain [`GraphicsError::KittyError`] answers `EINVAL`).
+    KittyNotFound(String),
     /// iTerm2 inline image protocol error.
     ITermError(String),
+}
+
+impl GraphicsError {
+    /// The kitty graphics-protocol reply code for this error: `ENOENT` for
+    /// unknown/missing ids, `EINVAL` for malformed or invalid commands.
+    /// Other protocols' errors also carry `EINVAL` — the reply path is
+    /// kitty-only.
+    pub fn kitty_code(&self) -> &'static str {
+        match self {
+            GraphicsError::KittyNotFound(_) => "ENOENT",
+            _ => "EINVAL",
+        }
+    }
+
+    /// The message body for a kitty graphics reply, stripped of the Display
+    /// prefix — the spec's reply shape is `<code>:<detailed message>`.
+    pub fn kitty_message(&self) -> String {
+        match self {
+            GraphicsError::KittyNotFound(msg) | GraphicsError::KittyError(msg) => msg.clone(),
+            other => other.to_string(),
+        }
+    }
 }
 
 impl std::fmt::Display for GraphicsError {
@@ -1349,6 +1595,7 @@ impl std::fmt::Display for GraphicsError {
             GraphicsError::Base64Error(msg) => write!(f, "Invalid base64: {}", msg),
             GraphicsError::ImageError(msg) => write!(f, "Image decode failed: {}", msg),
             GraphicsError::KittyError(msg) => write!(f, "Kitty protocol error: {}", msg),
+            GraphicsError::KittyNotFound(msg) => write!(f, "Kitty image not found: {}", msg),
             GraphicsError::ITermError(msg) => write!(f, "iTerm protocol error: {}", msg),
         }
     }
@@ -1555,6 +1802,58 @@ mod tests {
                 .collect::<Vec<_>>(),
             vec![1, 2]
         );
+    }
+
+    /// `remove_graphic` reaches the placements on screen only;
+    /// `remove_graphic_everywhere` also takes the graphic out of the
+    /// scrollback, and leaves the others alone.
+    #[test]
+    fn remove_graphic_everywhere_reaches_the_scrollback() {
+        let mut store = GraphicsStore::new();
+        let on_screen =
+            TerminalGraphic::new(1, GraphicProtocol::Sixel, (0, 0), 10, 10, vec![255; 400]);
+        store.add_graphic(on_screen);
+        for id in [2, 3] {
+            let mut scrolled =
+                TerminalGraphic::new(id, GraphicProtocol::Sixel, (0, 0), 10, 10, vec![255; 400]);
+            scrolled.scrollback_row = Some(id as usize);
+            store.scrollback.push(scrolled);
+        }
+
+        // The on-screen removal does not see a scrollback graphic.
+        store.remove_graphic(2);
+        assert_eq!((store.graphics_count(), store.scrollback_count()), (1, 2));
+
+        store.remove_graphic_everywhere(2);
+        assert_eq!((store.graphics_count(), store.scrollback_count()), (1, 1));
+        assert_eq!(store.scrollback[0].id, 3);
+
+        store.remove_graphic_everywhere(1);
+        assert_eq!((store.graphics_count(), store.scrollback_count()), (0, 1));
+    }
+
+    /// A scrollback-capacity shrink that drops `excess` oldest lines removes
+    /// the graphics anchored on those lines and shifts the survivors up, so
+    /// anchors keep naming the line their image sits on.
+    #[test]
+    fn rebase_scrollback_after_shrink_drops_dropped_line_anchors_and_shifts() {
+        let mut store = GraphicsStore::new();
+        for id in [1u64, 2, 3] {
+            let mut scrolled =
+                TerminalGraphic::new(id, GraphicProtocol::Sixel, (0, 0), 10, 10, vec![255; 400]);
+            scrolled.scrollback_row = Some(id as usize); // anchors 1, 2, 3
+            store.scrollback.push(scrolled);
+        }
+
+        store.rebase_scrollback_after_shrink(2);
+        assert_eq!(store.scrollback.len(), 2, "anchor 1 sat on a dropped line");
+        assert_eq!(store.scrollback[0].id, 2);
+        assert_eq!(store.scrollback[0].scrollback_row, Some(0));
+        assert_eq!(store.scrollback[1].id, 3);
+        assert_eq!(store.scrollback[1].scrollback_row, Some(1));
+
+        store.rebase_scrollback_after_shrink(0);
+        assert_eq!(store.scrollback.len(), 2, "a zero shrink changes nothing");
     }
 
     /// Retransmitting an existing image ID must delete all its placements

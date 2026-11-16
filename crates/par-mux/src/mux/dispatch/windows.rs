@@ -147,7 +147,10 @@ pub(super) fn cmd_select_window(ctx: &Ctx<'_>, window: Target<WindowId>) -> Outc
             resized,
         )
     };
-    let mut result = Outcome::ok(ctx, "");
+    // The body names the landed window: the render client's roster-click
+    // landing reads it (one round trip replaces the pane-info + landing
+    // switch chain, card 01a1995a6). Body consumers beyond `.ok` are none.
+    let mut result = Outcome::ok(ctx, &window.to_string());
     if selection_moved {
         if let Some(session_id) = session_id {
             result = result.notifying(TmuxNotification::SessionWindowChanged {
@@ -174,17 +177,25 @@ pub(super) fn cmd_kill_window(ctx: &Ctx<'_>, window: Target<WindowId>) -> Outcom
         window,
         MuxTree::resolve_window_target,
         MuxTree::kill_window,
+        |tree, id| tree.agent_claims_for_windows(&[id]),
     ) {
         Ok(killed) => killed,
         Err(outcome) => return outcome,
     };
     let windows = [killed.id];
     if killed.removed.is_none() {
-        return notify_window_closes(Outcome::ok(ctx, ""), &windows);
+        return notify_window_closes(
+            notify_agent_releases(Outcome::ok(ctx, ""), &killed.claims),
+            &windows,
+        );
     }
     // The cascade reached the session — same argument-less cue
     // kill-pane's cascade sends, so one handler covers both.
-    notify_kill_cascade(Outcome::ok(ctx, ""), &windows, killed.workspaces_changed)
+    notify_kill_cascade(
+        notify_agent_releases(Outcome::ok(ctx, ""), &killed.claims),
+        &windows,
+        killed.workspaces_changed,
+    )
 }
 
 pub(super) fn cmd_rename_window(ctx: &Ctx<'_>, window: Target<WindowId>, name: String) -> Outcome {
@@ -279,6 +290,10 @@ pub(super) fn cmd_list_windows(
                                     "0"
                                 },
                             ),
+                            (
+                                "window_layout",
+                                &w.layout.render(0, 0, w.cols as usize, w.rows as usize),
+                            ),
                         ],
                     )),
                     None => lines.push(format!("{}: {}", w.id, w.name)),
@@ -335,6 +350,12 @@ fn session_window_lines(
                         (
                             "window_active",
                             if index == session.active { "1" } else { "0" },
+                        ),
+                        (
+                            "window_layout",
+                            &window
+                                .layout
+                                .render(0, 0, window.cols as usize, window.rows as usize),
                         ),
                     ],
                 ),

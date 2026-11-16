@@ -55,6 +55,25 @@ pub type ScrollbackCell = (
     crate::python_bindings::types::PyAttributes,
 );
 
+/// Emit a pyclass `__repr__` dunder from a body closure (QA-008: the six
+/// hand-written `fn __repr__(&self) -> String` impls differed only in the
+/// body). Generates its own `#[pymethods]` block — pyo3 rejects macro
+/// items inside an existing one — so invoke at module level, beside the
+/// pyclass's own block. The closure form is macro-hygiene: the body is
+/// written at the call site, so its receiver must be a closure parameter
+/// (`|s| ...s.field...`), not `self`. Bodies returning `PyResult`
+/// (PtyTerminal's live state read) stay hand-written.
+macro_rules! impl_repr {
+    ($ty:ty, |$slf:ident| $($body:tt)*) => {
+        #[pymethods]
+        impl $ty {
+            fn __repr__(&self) -> String {
+                (|$slf: &Self| $($body)*)(self)
+            }
+        }
+    };
+}
+
 /// Emit a small set of simple read-only getters for `$ty`, using
 /// [`TerminalAccess::term_ref`]. Validates the shared-method macro pattern
 /// (ARC-003/QA-001); the same shape scales to the full duplicated set.
@@ -2511,6 +2530,23 @@ macro_rules! impl_terminal_exports {
     };
 }
 
+/// Render one snapshot to encoded bytes with the GIL released (QA-003): the
+/// render can process an entire grid plus scrollback, and no Python object
+/// is touched during it — the same contract the PTY write paths hold
+/// (`write_pty_detached`). A free function, not a helper method: every fn
+/// in a `#[pymethods]` block is exported to Python.
+pub(crate) fn render_snapshot_detached(
+    py: pyo3::Python<'_>,
+    snap: &crate::screenshot::TerminalRenderSnapshot,
+    config: crate::screenshot::ScreenshotConfig,
+) -> pyo3::PyResult<Vec<u8>> {
+    py.detach(move || {
+        crate::screenshot::render_terminal_from_snapshot(snap, config).map_err(|e| {
+            pyo3::exceptions::PyRuntimeError::new_err(format!("Screenshot error: {}", e))
+        })
+    })
+}
+
 /// Emit the screenshot surface for `$ty` (QA-004).
 ///
 /// `screenshot`/`screenshot_to_file`/`screenshot_config`/
@@ -2576,6 +2612,7 @@ macro_rules! impl_terminal_screenshot_methods {
             )]
             fn screenshot(
                 &self,
+                py: pyo3::Python<'_>,
                 format: &str,
                 font_path: Option<String>,
                 font_size: f32,
@@ -2644,9 +2681,7 @@ macro_rules! impl_terminal_screenshot_methods {
                     ..Default::default()
                 };
 
-                $crate::screenshot::render_terminal_from_snapshot(&snap, config).map_err(|e| {
-                    pyo3::exceptions::PyRuntimeError::new_err(format!("Screenshot error: {}", e))
-                })
+                $crate::python_bindings::common::render_snapshot_detached(py, &snap, config)
             }
 
             /// Take a screenshot and save to file
@@ -2705,6 +2740,7 @@ macro_rules! impl_terminal_screenshot_methods {
             )]
             fn screenshot_to_file(
                 &self,
+                py: pyo3::Python<'_>,
                 path: &str,
                 format: Option<&str>,
                 font_path: Option<String>,
@@ -2732,6 +2768,7 @@ macro_rules! impl_terminal_screenshot_methods {
                     .unwrap_or("png");
 
                 let bytes = self.screenshot(
+                    py,
                     detected_format,
                     font_path,
                     font_size,
@@ -2771,6 +2808,7 @@ macro_rules! impl_terminal_screenshot_methods {
             #[pyo3(signature = (config, scrollback_offset=0))]
             fn screenshot_config(
                 &self,
+                py: pyo3::Python<'_>,
                 config: &$crate::python_bindings::screenshot_config::PyScreenshotConfig,
                 scrollback_offset: usize,
             ) -> pyo3::PyResult<Vec<u8>> {
@@ -2779,20 +2817,19 @@ macro_rules! impl_terminal_screenshot_methods {
                     let t = $crate::python_bindings::common::TerminalAccess::term_ref(self);
                     t.render_snapshot(scrollback_offset)
                 };
-                $crate::screenshot::render_terminal_from_snapshot(&snap, cfg).map_err(|e| {
-                    pyo3::exceptions::PyRuntimeError::new_err(format!("Screenshot error: {}", e))
-                })
+                $crate::python_bindings::common::render_snapshot_detached(py, &snap, cfg)
             }
 
             /// Take a screenshot to a file using a reusable `ScreenshotConfig` (QA-005).
             #[pyo3(signature = (path, config, scrollback_offset=0))]
             fn screenshot_to_file_config(
                 &self,
+                py: pyo3::Python<'_>,
                 path: &str,
                 config: &$crate::python_bindings::screenshot_config::PyScreenshotConfig,
                 scrollback_offset: usize,
             ) -> pyo3::PyResult<()> {
-                let bytes = self.screenshot_config(config, scrollback_offset)?;
+                let bytes = self.screenshot_config(py, config, scrollback_offset)?;
                 std::fs::write(path, bytes).map_err(|e| {
                     pyo3::exceptions::PyIOError::new_err(format!("Failed to write file: {}", e))
                 })
@@ -2850,9 +2887,9 @@ macro_rules! impl_terminal_resize_pixels {
 // pub(crate) items (`TerminalAccess`). Invoke them as
 // `crate::python_bindings::common::impl_terminal_X!(Ty)`.
 pub(crate) use {
-    impl_terminal_badge_session, impl_terminal_cell_line_queries, impl_terminal_color_setters,
-    impl_terminal_content_misc, impl_terminal_debug_snapshots, impl_terminal_exports,
-    impl_terminal_file_transfer, impl_terminal_kitty_file_media,
+    impl_repr, impl_terminal_badge_session, impl_terminal_cell_line_queries,
+    impl_terminal_color_setters, impl_terminal_content_misc, impl_terminal_debug_snapshots,
+    impl_terminal_exports, impl_terminal_file_transfer, impl_terminal_kitty_file_media,
     impl_terminal_progress_notifications, impl_terminal_query_getters, impl_terminal_recording,
     impl_terminal_resize_pixels, impl_terminal_screenshot_methods, impl_terminal_search_select,
     impl_terminal_simple_getters, impl_terminal_sixel_graphics, impl_terminal_state_setters,

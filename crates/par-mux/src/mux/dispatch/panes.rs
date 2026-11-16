@@ -2,6 +2,8 @@
 //! info, exited-replay, clear-history, resize, swap, break, join, respawn.
 
 use super::*;
+use crate::mux::ids::SessionId;
+use crate::mux::layout::LayoutPreset;
 
 /// The pane group's router; `route_command` sends only this group's
 /// variants here. `issuer` is for `pane-exited-replay`, which answers on
@@ -35,9 +37,11 @@ pub(super) fn route_pane_command(
         MuxCommand::PaneTitle { pane } => cmd_pane_title(ctx, pane),
         MuxCommand::PaneInfo { pane, mirror } => cmd_pane_info(ctx, pane, mirror),
         MuxCommand::PaneExitedReplay => cmd_pane_exited_replay(ctx, issuer),
+        MuxCommand::WindowAddReplay { session } => cmd_window_add_replay(ctx, session, issuer),
         MuxCommand::ClearHistory { pane } => cmd_clear_history(ctx, pane),
         MuxCommand::ResizePane { pane, adjustment } => cmd_resize_pane(ctx, pane, adjustment),
         MuxCommand::SwapPanes { target, source } => cmd_swap_panes(ctx, target, source),
+        MuxCommand::SelectLayout { target, preset } => cmd_select_layout(ctx, target, preset),
         MuxCommand::BreakPane { source, name } => cmd_break_pane(ctx, source, name),
         MuxCommand::JoinPane {
             source,
@@ -53,6 +57,32 @@ pub(super) fn route_pane_command(
         } => cmd_respawn_pane(ctx, pane, kill, start_dir.as_deref(), command),
         other => unreachable!("route_command sent a non-pane command: {other:?}"),
     }
+}
+
+/// The `list-panes -F` lifecycle tokens for one pane: `(pane_title,
+/// pane_dead, pane_exit_code)`. `pane_dead` is `1` while the pane's
+/// process is dead and the pane is held (remain-on-exit), `0` otherwise.
+/// `pane_exit_code` rides the stored exit status as digits only for a
+/// held-dead pane whose status was readable; every other pane reads `-`
+/// (alive, or the daemon had no status to read — the same `?`/absent rule
+/// `pane-info`'s `exited=` token follows).
+fn pane_lifecycle_vars(guard: &MuxTree, pane: PaneId) -> (String, String, String) {
+    let Some(target) = guard.pane(pane) else {
+        return (String::new(), "0".to_string(), "-".to_string());
+    };
+    let title = target.effective_title().replace(['\r', '\n'], " ");
+    let code = match target.dead() {
+        true => target
+            .exit_code()
+            .map(|c| c.to_string())
+            .unwrap_or_else(|| "-".to_string()),
+        false => "-".to_string(),
+    };
+    (
+        title,
+        if target.dead() { "1" } else { "0" }.to_string(),
+        code,
+    )
 }
 
 pub(super) fn cmd_list_panes(
@@ -90,10 +120,7 @@ pub(super) fn cmd_list_panes(
             {
                 let active = w.active;
                 for (leaf, pane) in w.panes().into_iter().enumerate() {
-                    let pane_title = guard
-                        .pane(pane)
-                        .map(|p| p.effective_title().replace(['\r', '\n'], " "))
-                        .unwrap_or_default();
+                    let (pane_title, pane_dead, pane_exit_code) = pane_lifecycle_vars(&guard, pane);
                     match &format {
                         Some(format) => lines.push(super::format_expansion(
                             format,
@@ -105,6 +132,8 @@ pub(super) fn cmd_list_panes(
                                 ("pane_id", pane.to_string().as_str()),
                                 ("pane_active", if pane == active { "1" } else { "0" }),
                                 ("pane_leaf", leaf.to_string().as_str()),
+                                ("pane_dead", pane_dead.as_str()),
+                                ("pane_exit_code", pane_exit_code.as_str()),
                                 ("pane_title", pane_title.as_str()),
                             ],
                         )),
@@ -143,10 +172,7 @@ pub(super) fn cmd_list_panes(
                     let window_id = window.id.to_string();
                     let pane_id = pane.to_string();
                     let pane_leaf = leaf.to_string();
-                    let pane_title = guard
-                        .pane(pane)
-                        .map(|p| p.effective_title().replace(['\r', '\n'], " "))
-                        .unwrap_or_default();
+                    let (pane_title, pane_dead, pane_exit_code) = pane_lifecycle_vars(&guard, pane);
                     let mut vars: Vec<(&str, &str)> = Vec::new();
                     if let Some((sid, sname)) = &session_vars {
                         vars.push(("session_id", sid.as_str()));
@@ -157,6 +183,8 @@ pub(super) fn cmd_list_panes(
                     vars.push(("pane_id", pane_id.as_str()));
                     vars.push(("pane_active", if pane == window.active { "1" } else { "0" }));
                     vars.push(("pane_leaf", pane_leaf.as_str()));
+                    vars.push(("pane_dead", pane_dead.as_str()));
+                    vars.push(("pane_exit_code", pane_exit_code.as_str()));
                     vars.push(("pane_title", pane_title.as_str()));
                     super::format_expansion(format, &vars)
                 }
@@ -211,12 +239,19 @@ pub(super) fn cmd_send_keys(
 }
 
 pub(super) fn cmd_kill_pane(ctx: &Ctx<'_>, pane: Target<PaneId>) -> Outcome {
-    let pane = {
+    // The agent claim reads BEFORE the kill: the pane (and its claim with
+    // it) is gone afterwards, and a claimed pane's removal must reach
+    // roster consumers as `%agent-released` — the reaper's own-death path
+    // answers through `%pane-exited`, but this explicit kill has no other
+    // notice, so its row ghosts in every later roster snapshot otherwise.
+    let (pane, claimed) = {
         let guard = ctx.tree.lock();
-        match guard.resolve_pane_target(pane) {
+        let id = match guard.resolve_pane_target(pane) {
             Ok(id) => id,
             Err(err) => return Outcome::err(ctx, &err.to_string()),
-        }
+        };
+        let claim = guard.pane(id).and_then(|p| p.agent_claim());
+        (id, claim)
     };
     // kill_pane resolves and returns the owning window: afterwards the
     // pane (and its window membership) is gone and cannot be looked up.
@@ -226,6 +261,14 @@ pub(super) fn cmd_kill_pane(ctx: &Ctx<'_>, pane: Target<PaneId>) -> Outcome {
     let outcome = ctx.tree.lock().kill_pane(pane);
     match outcome {
         Ok((window_id, removed_session)) => {
+            // The claim's removal notice queues first — the reaper's
+            // death-notice-before-removal-geometry order, through the
+            // same helper the window/session/workspace cascades use.
+            let claims: Vec<(String, String)> = claimed
+                .map(|claim| (pane.to_string(), claim.agent))
+                .into_iter()
+                .collect();
+            let mut outcome = notify_agent_releases(Outcome::ok(ctx, ""), &claims);
             // A window whose last pane was killed is REMOVED by
             // tree.kill_pane (an emptied session goes with it) — its
             // clients learn that through %window-close, the same
@@ -237,14 +280,14 @@ pub(super) fn cmd_kill_pane(ctx: &Ctx<'_>, pane: Target<PaneId>) -> Outcome {
             // if/else (parking_lot is not reentrant).
             let active = ctx.tree.lock().window(window_id).map(|w| w.active);
             if let Some(active) = active {
-                Outcome::ok(ctx, "").with_layout(window_id).notifying(
-                    TmuxNotification::WindowPaneChanged {
+                outcome
+                    .with_layout(window_id)
+                    .notifying(TmuxNotification::WindowPaneChanged {
                         window_id: window_id.to_string(),
                         pane_id: active.to_string(),
-                    },
-                )
+                    })
             } else {
-                let mut outcome = Outcome::ok(ctx, "").notifying(TmuxNotification::WindowClose {
+                outcome = outcome.notifying(TmuxNotification::WindowClose {
                     window_id: window_id.to_string(),
                 });
                 if removed_session.is_some() {
@@ -436,6 +479,7 @@ pub(super) fn cmd_pane_info(ctx: &Ctx<'_>, pane: Target<PaneId>, mirror: bool) -
         viewer_count,
         last_viewed,
         last_input,
+        parts,
     ) = {
         let mut guard = ctx.tree.lock();
         if mirror {
@@ -471,6 +515,7 @@ pub(super) fn cmd_pane_info(ctx: &Ctx<'_>, pane: Target<PaneId>, mirror: bool) -
             viewer_count,
             last_viewed,
             target.last_client_input_at(),
+            target.snapshot_capture_parts(),
         )
     };
     // The process table snapshots read the whole OS process list; taking
@@ -479,6 +524,21 @@ pub(super) fn cmd_pane_info(ctx: &Ctx<'_>, pane: Target<PaneId>, mirror: bool) -
         .and_then(|pid| ProcessTable::snapshot().and_then(|table| table.foreground_command(pid)))
         .map(|name| base64::engine::general_purpose::STANDARD.encode(name));
     let cpu_ms = child_pid.and_then(crate::mux::process_cpu::group_cpu_ms);
+    // The pane's logical cwd and its OSC 7 host, resolved the same way
+    // persistence resolves them (OSC 7 first, child kernel cwd, spawn
+    // floor) and carried as tail tokens so a streaming mirror can name
+    // the pane's directory without an OSC 7 report of its own (card
+    // 01a1ce6a). Kernel/spawn-floor cwds carry no host — local by
+    // construction; the token stays absent then.
+    let (cwd, cwdhost) = {
+        let cwd = parts
+            .cwd()
+            .map(|p| base64::engine::general_purpose::STANDARD.encode(p.display().to_string()));
+        let cwdhost = parts
+            .cwd_host()
+            .map(|h| base64::engine::general_purpose::STANDARD.encode(h));
+        (cwd, cwdhost)
+    };
     // The row's Display is the wire line, so the attach client's
     // `PaneInfoRow::parse` cannot drift from it (ARC-141).
     let row = crate::mux::ipc::PaneInfoRow {
@@ -487,6 +547,8 @@ pub(super) fn cmd_pane_info(ctx: &Ctx<'_>, pane: Target<PaneId>, mirror: bool) -
         size: (cols, rows),
         cmd,
         exited: dead.then_some(exit_code),
+        cwd,
+        cwdhost,
     };
     // The presence tail (D35): all whitespace-free key=value tokens, so
     // older clients keep parsing the fixed prefix, and a timestamp with
@@ -512,6 +574,33 @@ pub(super) fn cmd_pane_exited_replay(
     issuer: Option<&SyncSender<String>>,
 ) -> Outcome {
     let lines = replay_pane_exited_lines(&ctx.tree.lock());
+    if let Some(tx) = issuer {
+        for line in lines {
+            if tx.send(line).is_err() {
+                break;
+            }
+        }
+    }
+    Outcome::ok(ctx, "")
+}
+
+/// `window-add-replay -t <session>`: the session's live windows as
+/// `%window-add` lines on the issuing client's push stream (card
+/// 01a1981a — a ring eviction can permanently lose a created session's
+/// `%window-add`, so first-attach adoption must be recoverable from the
+/// tree, not the ring). Sorted by window id; the reply body is empty.
+pub(super) fn cmd_window_add_replay(
+    ctx: &Ctx<'_>,
+    session: Target<SessionId>,
+    issuer: Option<&SyncSender<String>>,
+) -> Outcome {
+    let lines = {
+        let guard = ctx.tree.lock();
+        match guard.resolve_session_target(session) {
+            Ok(id) => replay_window_add_lines(&guard, id),
+            Err(err) => return Outcome::err(ctx, &err.to_string()),
+        }
+    };
     if let Some(tx) = issuer {
         for line in lines {
             if tx.send(line).is_err() {
@@ -583,6 +672,18 @@ pub(super) fn cmd_swap_panes(
         }
     };
     match ctx.tree.lock().swap_panes(target, source) {
+        Ok(window_id) => Outcome::ok(ctx, "").with_layout(window_id),
+        Err(err) => Outcome::err(ctx, &err.to_string()),
+    }
+}
+
+pub(super) fn cmd_select_layout(ctx: &Ctx<'_>, target: AnyTarget, preset: LayoutPreset) -> Outcome {
+    let mut guard = ctx.tree.lock();
+    let outcome = guard
+        .resolve_pane_listing_target(target)
+        .and_then(|window| guard.apply_layout_preset(window, preset));
+    drop(guard);
+    match outcome {
         Ok(window_id) => Outcome::ok(ctx, "").with_layout(window_id),
         Err(err) => Outcome::err(ctx, &err.to_string()),
     }

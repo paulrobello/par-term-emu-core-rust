@@ -230,7 +230,7 @@ impl Terminal {
 
                 let row = if display_mode { 0 } else { self.cursor.row };
                 let image_id = graphic.id;
-                self.graphics.graphics_store.add_graphic(graphic);
+                self.add_placement(graphic);
                 self.events
                     .push(crate::terminal::TerminalEvent::GraphicsAdded { image_id, row });
 

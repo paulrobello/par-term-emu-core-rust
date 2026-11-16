@@ -72,15 +72,18 @@ def send_frame(
     """
     encoded = base64.standard_b64encode(png_data).decode("ascii")
 
-    # Action: a=f (frame)
     # Image ID: i=<id>
-    # Frame number: r=<frame>
     # Delay: z=<delay_ms>
     # Format: f=100 (PNG)
     # Transmission: t=d (direct)
-    # Always use 'f' for animation frames, not 'T'
-    payload = f"a=f,i={image_id},r={frame_number},z={delay_ms},f=100,t=d;{encoded}"
-    send_kitty_graphics(payload)
+    if frame_number == 1:
+        # Frame 1 is the image itself: transmit it (a=t), then set its gap
+        # with an animation control (a=a,r=1,z=<delay_ms>).
+        send_kitty_graphics(f"a=t,i={image_id},f=100,t=d;{encoded}")
+        send_kitty_graphics(f"a=a,i={image_id},r=1,z={delay_ms}")
+    else:
+        # Action: a=f (frame) without r= appends a frame to the image.
+        send_kitty_graphics(f"a=f,i={image_id},z={delay_ms},f=100,t=d;{encoded}")
 
     # Display the image after sending the first frame (if requested)
     if display and frame_number == 1:

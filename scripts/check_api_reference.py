@@ -57,8 +57,16 @@ CLASS_SECTIONS = {
     # A ### subsection that drifted under ## Enumerations but documents
     # Terminal methods; resolved explicitly so member-mode does not eat it.
     "Named Progress Bars (OSC 934)": "Terminal",
+    # The clipboard facade documents its own stub class (DOC-017 gave it a
+    # proper section); it is an H3 override that RESTORES the enclosing
+    # class scope at the next heading, unlike the entries above.
+    "TerminalClipboard": "TerminalClipboard",
 }
 MODULE_SECTIONS = {"Color Utilities", "Streaming Functions"}
+# ### sections that map to their own stub class but must restore the
+# enclosing class scope at the next heading (topic groupings after them
+# still belong to the surrounding class, not to the facade).
+H3_CLASS_SECTIONS = {"TerminalClipboard": "TerminalClipboard"}
 # Under these sections each ``### Name`` subsection is itself a class.
 MEMBER_SECTION_HEADINGS = {"Data Classes", "Enumerations"}
 # Documented Rust-only accessors; no Python counterpart exists in the stub.
@@ -68,6 +76,10 @@ RUST_ONLY_MARK = "(Rust API only)"
 METHOD_LINE = re.compile(r"^- `\**([A-Za-z_]\w*)\(([^)]*)\)")
 HEADING2 = re.compile(r"^## (.+)$")
 HEADING3 = re.compile(r"^### (.+)$")
+# A bold block intro for module-level functions inside a class section
+# (Character Width Configuration): bullets after it are module scope, not
+# class scope, even when the class has a method of the same name.
+BOLD_MODULE_FUNCS = re.compile(r"^\*\*Module-level width functions\*\*")
 # Constructor form inside a fenced ```python block: `Name(args)` on one
 # line, or `Name(` opening a parameter-per-line block closed by `)`.
 CTOR_LINE = re.compile(r"^([A-Za-z_]\w*)\((.*)$")
@@ -220,12 +232,16 @@ def iter_doc_lines(path: Path):
     scope: str | None = None  # class name, "module", or None (skip)
     member_mode = False
     in_fence = False
+    module_funcs = False
+    h3_class_restore = None
     for lineno, line in enumerate(path.read_text().splitlines(), start=1):
         if FENCE.match(line):
             in_fence = not in_fence
             continue
         h2 = HEADING2.match(line)
         if h2:
+            module_funcs = False
+            h3_class_restore = None
             section = h2.group(1).strip()
             member_mode = section in MEMBER_SECTION_HEADINGS
             if section in CLASS_SECTIONS:
@@ -238,13 +254,25 @@ def iter_doc_lines(path: Path):
             continue
         h3 = HEADING3.match(line)
         if h3:
+            module_funcs = False
             heading = h3.group(1).strip()
-            if heading in CLASS_SECTIONS:
-                scope = CLASS_SECTIONS[heading]
-            elif member_mode:
-                scope = heading
-            # Otherwise ### headings are topic groupings; keep the current scope.
+            if heading in H3_CLASS_SECTIONS:
+                if h3_class_restore is None:
+                    h3_class_restore = scope
+                scope = H3_CLASS_SECTIONS[heading]
+            else:
+                if h3_class_restore is not None:
+                    scope, h3_class_restore = h3_class_restore, None
+                if heading in CLASS_SECTIONS:
+                    scope = CLASS_SECTIONS[heading]
+                elif member_mode:
+                    scope = heading
+                # Otherwise ### headings are topic groupings; keep the current scope.
             yield lineno, scope, line, in_fence
+            continue
+        if module_funcs or BOLD_MODULE_FUNCS.match(line):
+            module_funcs = True
+            yield lineno, "module", line, in_fence
             continue
         yield lineno, scope, line, in_fence
 

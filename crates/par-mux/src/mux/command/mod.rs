@@ -3,7 +3,7 @@
 use std::ops::Deref;
 
 use crate::mux::ids::{AnyTarget, PaneId, SessionId, Target, WindowId, WorkspaceId};
-use crate::mux::layout::{ResizeDirection, SplitDirection};
+use crate::mux::layout::{LayoutPreset, ResizeDirection, SplitDirection};
 use par_term_emu_core::keyboard::{self, modifiers, TermKey, TermKeyEvent};
 use par_term_emu_core::terminal::Terminal;
 
@@ -388,6 +388,16 @@ pub enum MuxCommand {
     /// (ENH-042). The lines go to the issuing client only; the reply body
     /// is empty. Read-only.
     PaneExitedReplay,
+    /// Ask for the live windows of one session as `%window-add` lines on
+    /// demand (card 01a1981a: first-attach event loss — a ring eviction
+    /// can permanently lose a created session's `%window-add`, so a
+    /// client must be able to rebuild adoption from the tree, not the
+    /// ring). The lines go to the issuing client only; the reply body is
+    /// empty. Read-only.
+    WindowAddReplay {
+        /// The session whose live windows to replay.
+        session: Target<SessionId>,
+    },
     /// Clear a pane's scrollback and wipe its visible screen (tmux's
     /// `clear-history`). Structural: the cleared scrollback is what a
     /// restart-restore replays, so a content classification would
@@ -410,6 +420,14 @@ pub enum MuxCommand {
         target: Target<PaneId>,
         /// Pane swapped into the target's position (`-s`).
         source: Target<PaneId>,
+    },
+    /// Rearrange a window's panes into a preset tiling (`select-layout`).
+    SelectLayout {
+        /// Window to rearrange (`-t`); a session names its active window,
+        /// a pane its owning window.
+        target: AnyTarget,
+        /// The arrangement to apply.
+        preset: LayoutPreset,
     },
     /// Move a pane out of its window into a new window of the same
     /// session (`break-pane`).
@@ -514,6 +532,13 @@ pub enum MuxCommand {
         /// `-T MS`: the whole wait's deadline; `None` waits as long as the
         /// agent works.
         timeout_ms: Option<u64>,
+        /// `--mesh`: deliver via a par-mesh message instead of the pane
+        /// PTY — the prompt arrives as an agent turn and the input box is
+        /// never touched (card 01a192b57).
+        mesh: bool,
+        /// `--to ADDR`: the explicit mesh address (`name@host:project`);
+        /// without it the address resolves from the pane cwd's project.
+        mesh_to: Option<String>,
     },
     /// Report how a pane's agent state is detected: hook claim or scrape
     /// rule, with the rule's pattern file (herdr `agent explain`).
@@ -844,6 +869,7 @@ impl MuxCommand {
             | MuxCommand::SelectPane { .. }
             | MuxCommand::ResizePane { .. }
             | MuxCommand::SwapPanes { .. }
+            | MuxCommand::SelectLayout { .. }
             | MuxCommand::BreakPane { .. }
             | MuxCommand::JoinPane { .. }
             | MuxCommand::MoveWindow { .. }
@@ -894,6 +920,7 @@ impl MuxCommand {
             | MuxCommand::PaneTitle { .. }
             | MuxCommand::PaneInfo { .. }
             | MuxCommand::PaneExitedReplay
+            | MuxCommand::WindowAddReplay { .. }
             | MuxCommand::ShowBuffer
             | MuxCommand::PasteBuffer { .. }
             | MuxCommand::SetClientColors { .. }
@@ -1660,9 +1687,11 @@ const COMMANDS: &[(&str, CommandParser, &[&str])] = &[
     ("pane-title", parse_pane_title, &[]),
     ("pane-info", parse_pane_info, &["cmd", "viewer-status"]),
     ("pane-exited-replay", parse_pane_exited_replay, &[]),
+    ("window-add-replay", parse_window_add_replay, &[]),
     ("clear-history", parse_clear_history, &[]),
     ("resize-pane", parse_resize_pane, &["zoom", "absolute"]),
     ("swap-pane", parse_swap_pane, &[]),
+    ("select-layout", parse_select_layout, &[]),
     ("break-pane", parse_break_pane, &[]),
     ("join-pane", parse_join_pane, &[]),
     ("move-window", parse_move_window, &[]),
@@ -1729,7 +1758,7 @@ pub(crate) fn list_commands_body() -> String {
         })
         .collect();
     lines.sort();
-    lines.push("features replay-held-state".to_string());
+    lines.push("features replay-held-state window-add-replay".to_string());
     lines.join("\n")
 }
 

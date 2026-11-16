@@ -118,6 +118,7 @@ fn mirror(server: &Arc<StreamingServer>, pane: &str) -> Arc<StreamSessionState> 
         session_id: format!("pane-{}", pane.trim_start_matches('%')),
         readonly: false,
         preset: None,
+        metadata: false,
     };
     server.resolve_session(&params).expect("mux-backed session")
 }
@@ -189,6 +190,7 @@ fn mirror_session(server: &Arc<StreamingServer>, session_id: &str) -> Arc<Stream
         session_id: session_id.to_string(),
         readonly: false,
         preset: None,
+        metadata: false,
     };
     server.resolve_session(&params).expect("mux-backed session")
 }
@@ -318,7 +320,7 @@ fn a_workspace_active_handshake_names_the_resolved_pane() {
 
     // The handshake names the pane the mirror landed on, not the
     // sentinel the client dialed.
-    let connected = session.build_connect_message("dialer", false);
+    let connected = session.build_connect_message("dialer", false, false);
     let ServerMessage::Connected { session_id, .. } = connected else {
         panic!("expected a Connected message");
     };
@@ -330,7 +332,7 @@ fn a_workspace_active_handshake_names_the_resolved_pane() {
 
     // Any other id echoes verbatim (here: the first-pane fallback).
     let fallback = mirror_session(&server, "fallback");
-    let connected = fallback.build_connect_message("dialer", false);
+    let connected = fallback.build_connect_message("dialer", false, false);
     let ServerMessage::Connected { session_id, .. } = connected else {
         panic!("expected a Connected message");
     };
@@ -347,7 +349,7 @@ fn a_workspace_active_handshake_names_the_resolved_pane() {
     wait_pane(&mut control, &pane1, "WS2-MARKER");
     control.send("select-workspace -t second").expect("switch");
     wait_mirror(&session, "WS2-MARKER");
-    let connected = session.build_connect_message("late-joiner", false);
+    let connected = session.build_connect_message("late-joiner", false, false);
     let ServerMessage::Connected { session_id, .. } = connected else {
         panic!("expected a Connected message");
     };
@@ -391,7 +393,7 @@ fn a_workspace_reseed_tags_frames_with_the_new_pane() {
     // Pane 0 (the active workspace's pane) holds a graphic BEFORE the
     // mirror attaches, so its replayed frame carries the OLD pane's tag.
     let line =
-        b"printf '\\033_Ga=T,f=24,i=77,s=2,v=2;AAAAAAAAAAAAAAAA\\033\\\\'; echo GFX1-PLACED\r";
+        b"printf '\\033_Ga=T,f=24,i=77,q=2,s=2,v=2;AAAAAAAAAAAAAAAA\\033\\\\'; echo GFX1-PLACED\r";
     let hex: String = line
         .iter()
         .map(|b| format!("{b:02x} "))
@@ -411,7 +413,7 @@ fn a_workspace_reseed_tags_frames_with_the_new_pane() {
 
     let server = streaming(&socket);
     let session = mirror_session(&server, ACTIVE_WORKSPACE_SESSION_ID);
-    let connected = session.build_connect_message("late-joiner", false);
+    let connected = session.build_connect_message("late-joiner", false, false);
     let ServerMessage::Connected { graphics, .. } = connected else {
         panic!("expected a Connected message");
     };
@@ -429,7 +431,7 @@ fn a_workspace_reseed_tags_frames_with_the_new_pane() {
     // Pane 1 holds its own graphic; the desktop switches workspaces
     // and the mirror re-seeds IN PLACE.
     let line =
-        b"printf '\\033_Ga=T,f=24,i=88,s=2,v=2;BBBBBBBBBBBBBBBB\\033\\\\'; echo GFX2-PLACED\r";
+        b"printf '\\033_Ga=T,f=24,i=88,q=2,s=2,v=2;BBBBBBBBBBBBBBBB\\033\\\\'; echo GFX2-PLACED\r";
     let hex: String = line
         .iter()
         .map(|b| format!("{b:02x} "))
@@ -450,7 +452,7 @@ fn a_workspace_reseed_tags_frames_with_the_new_pane() {
     control.send("select-workspace -t second").expect("switch");
     wait_mirror(&session, "GFX2-PLACED");
 
-    let connected = session.build_connect_message("late-joiner", false);
+    let connected = session.build_connect_message("late-joiner", false, false);
     let ServerMessage::Connected { graphics, .. } = connected else {
         panic!("expected a Connected message");
     };
@@ -522,7 +524,7 @@ fn a_pane_graphic_streams_as_an_inline_image_frame() {
     // pane's shell runs (input queues in the pty until the shell reads
     // it, so one send executes exactly once whenever the shell is up).
     // RGB decodes to RGBA in the store: 4 pixels x 4 bytes.
-    let line = b"printf '\\033_Ga=T,f=24,i=77,s=2,v=2;AAAAAAAAAAAAAAAA\\033\\\\'\r";
+    let line = b"printf '\\033_Ga=T,f=24,i=77,q=2,s=2,v=2;AAAAAAAAAAAAAAAA\\033\\\\'\r";
     let hex: String = line
         .iter()
         .map(|b| format!("{b:02x} "))
@@ -631,7 +633,7 @@ fn a_graphic_placed_before_attach_replays_in_connected_graphics() {
     // the image bytes above it, so the mirror below attaches AFTER
     // the placement deterministically.
     let line =
-        b"printf '\\033_Ga=T,f=24,i=77,s=2,v=2;AAAAAAAAAAAAAAAA\\033\\\\'; echo GFX-PLACED\r";
+        b"printf '\\033_Ga=T,f=24,i=77,q=2,s=2,v=2;AAAAAAAAAAAAAAAA\\033\\\\'; echo GFX-PLACED\r";
     let hex: String = line
         .iter()
         .map(|b| format!("{b:02x} "))
@@ -651,7 +653,7 @@ fn a_graphic_placed_before_attach_replays_in_connected_graphics() {
 
     let server = streaming(&socket);
     let session = mirror(&server, &pane);
-    let connected = session.build_connect_message("late-joiner", false);
+    let connected = session.build_connect_message("late-joiner", false, false);
     let ServerMessage::Connected { graphics, .. } = connected else {
         panic!("expected a Connected message");
     };
@@ -694,7 +696,7 @@ fn a_graphic_placed_before_attach_replays_in_connected_graphics() {
     // The live leg is untouched: a placement after attach still
     // arrives as the pane-tagged InlineImage frame.
     let mut updates = session.broadcast_tx.subscribe();
-    let line = b"printf '\\033_Ga=T,f=24,i=88,s=2,v=2;BBBBBBBBBBBBBBBB\\033\\\\'\r";
+    let line = b"printf '\\033_Ga=T,f=24,i=88,q=2,s=2,v=2;BBBBBBBBBBBBBBBB\\033\\\\'\r";
     let hex: String = line
         .iter()
         .map(|b| format!("{b:02x} "))
@@ -1480,6 +1482,70 @@ fn dead_upstream_closes_the_mirror_off_the_runtime() {
     });
 }
 
+/// PaneCreateRequest's daemon leg: `pane_create` runs `new-window -t` on
+/// the daemon and resolves the new window's single pane. The window and
+/// pane exist in the target session afterwards, verified through a
+/// control client — the same surface a mux tree snapshot would show.
+#[test]
+fn pane_create_opens_a_default_shell_window_on_the_daemon() {
+    let (_dir, socket, _serving, mut control, _pane) = daemon();
+    let factory =
+        MuxSessionFactory::new(&socket, MuxPaneSelector::FromSessionId).with_reply_timeout(CEILING);
+
+    let (window, pane) = factory
+        .pane_create("stream", None)
+        .expect("pane_create must answer the new window and pane");
+    assert!(window.starts_with('@'), "window id {window:?}");
+    assert!(pane.starts_with('%'), "pane id {pane:?}");
+
+    // The new window is listed in the `stream` session.
+    let windows = control
+        .send("list-windows -t stream")
+        .expect("list-windows");
+    assert!(
+        windows
+            .iter()
+            .any(|line| line.split_whitespace().next() == Some(window.as_str())),
+        "window {window} must be listed in session `stream`: {windows:?}"
+    );
+
+    // The window holds exactly the one pane the reply named (the
+    // default-shell window carries no extra panes).
+    let panes = control
+        .send(&format!("list-panes -t {window}"))
+        .expect("list-panes");
+    let pane_ids: Vec<&str> = panes
+        .iter()
+        .map(|line| line.split_whitespace().next().unwrap_or(""))
+        .collect();
+    assert_eq!(
+        pane_ids,
+        vec![pane.as_str()],
+        "the new window must hold exactly its one pane"
+    );
+}
+
+/// Card 01a1d0d5 criterion 2: a validated name reaches the daemon's
+/// `new-window -n` and the created window carries it in `list-windows`.
+#[test]
+fn pane_create_carries_a_validated_name_to_the_daemon() {
+    let (_dir, socket, _serving, mut control, _pane) = daemon();
+    let factory =
+        MuxSessionFactory::new(&socket, MuxPaneSelector::FromSessionId).with_reply_timeout(CEILING);
+
+    factory
+        .pane_create("stream", Some("agent-bench"))
+        .expect("the named create must succeed");
+
+    let windows = control
+        .send("list-windows -t stream")
+        .expect("list-windows");
+    assert!(
+        windows.iter().any(|line| line.contains("agent-bench")),
+        "the named window must be listed: {windows:?}"
+    );
+}
+
 /// A daemon that accepts and never replies must fail `create_session`
 /// by its reply deadline instead of blocking the caller forever.
 #[test]
@@ -1517,4 +1583,733 @@ fn create_session_times_out_against_a_silent_daemon() {
         elapsed >= timeout && elapsed < timeout + Duration::from_secs(5),
         "create_session returned after {elapsed:?}, deadline {timeout:?}"
     );
+}
+
+// --- Held-pane process lifecycle (card 01a1957a) --------------------
+
+/// The next `pane_process_state` on the session broadcast, skipping the
+/// interleaved presence/status/tree broadcasts, or `None` at the ceiling.
+/// The ceiling is the hang detector, not a latency bound.
+fn recv_process_event(
+    rx: &mut tokio::sync::broadcast::Receiver<ServerMessage>,
+) -> Option<ServerMessage> {
+    let end = Instant::now() + CEILING;
+    loop {
+        match rx.try_recv() {
+            Ok(msg @ ServerMessage::PaneProcessState { .. }) => return Some(msg),
+            Ok(_) => {}
+            Err(tokio::sync::broadcast::error::TryRecvError::Empty) => {}
+            Err(tokio::sync::broadcast::error::TryRecvError::Lagged(_)) => {}
+            Err(tokio::sync::broadcast::error::TryRecvError::Closed) => return None,
+        }
+        if Instant::now() >= end {
+            return None;
+        }
+        std::thread::sleep(Duration::from_millis(25));
+    }
+}
+
+/// The daemon's verdict on the pane's held-dead state, read the way the
+/// mirror does: the `exited=` token of `pane-info -M`.
+fn daemon_exited(control: &mut MuxClient, pane: &str) -> Option<Option<i32>> {
+    let info = control
+        .send(&format!("pane-info -t {pane} -M"))
+        .expect("pane-info");
+    let line = info.first()?;
+    let token = line
+        .split_whitespace()
+        .find_map(|field| field.strip_prefix("exited="))?;
+    Some(token.parse::<i32>().ok())
+}
+
+/// Card 01a1957a criterion 1+3: a held pane's process exit reaches the
+/// pane's viewers as `pane_process_state` (pane id plus the exit status
+/// when the daemon read one) while the stream stays open, and
+/// `respawn-pane` clears the exited state on the SAME stream — no
+/// reconnect — re-seeding the fresh screen in place.
+#[test]
+fn held_pane_exit_and_respawn_keep_one_stream_open() {
+    let rt = runtime();
+    let _entered = rt.enter();
+    let (_dir, socket, _serving, mut control, pane) = daemon();
+    control
+        .send("set-option remain-on-exit on")
+        .expect("set-option");
+
+    let server = streaming(&socket);
+    let session_id = format!("pane-{}", pane.trim_start_matches('%'));
+    let session = mirror(&server, &pane);
+    let mut rx = session.broadcast_tx.subscribe();
+
+    // The process exits with a known status; remain-on-exit holds the
+    // pane, and the daemon's `%pane-exited %N 7` is the evidence.
+    type_line(&session, "exit 7");
+    let event = recv_process_event(&mut rx).expect("exited event within the ceiling");
+    assert!(
+        matches!(
+            &event,
+            ServerMessage::PaneProcessState { pane_id, state, exit_code }
+                if pane_id == &pane && state == "exited" && *exit_code == Some(7)
+        ),
+        "{event:?}"
+    );
+
+    // Criterion 1's preserved stream: the SAME session object, still
+    // registered — the exit was never a stream end.
+    let after_exit = server
+        .get_session(&session_id)
+        .expect("session survives the exit");
+    assert!(Arc::ptr_eq(&session, &after_exit));
+
+    // respawn-pane: same pane id, fresh terminal. The replacement echoes
+    // a marker so the re-seed's screen is observable, then stays up.
+    control
+        .send(&format!(
+            "respawn-pane -k -t {pane} sh -c 'echo RESPAWN-MARKER; exec sh'"
+        ))
+        .expect("respawn");
+    let event = recv_process_event(&mut rx).expect("running event within the ceiling");
+    assert!(
+        matches!(
+            &event,
+            ServerMessage::PaneProcessState { pane_id, state, exit_code }
+                if pane_id == &pane && state == "running" && exit_code.is_none()
+        ),
+        "{event:?}"
+    );
+    wait_mirror(&session, "RESPAWN-MARKER");
+    let after_respawn = server
+        .get_session(&session_id)
+        .expect("session survives the respawn");
+    assert!(Arc::ptr_eq(&session, &after_respawn));
+}
+
+/// Card 01a1957a criterion 2: a viewer joining after a transition reads
+/// the current state at connect — `exited` with the status after an
+/// exit, nothing stale after a respawn — because the attach's pane-info
+/// row is the evidence, never output silence.
+#[test]
+fn late_joiner_connects_with_the_current_process_state() {
+    let rt = runtime();
+    let _entered = rt.enter();
+    let (_dir, socket, _serving, mut control, pane) = daemon();
+    control
+        .send("set-option remain-on-exit on")
+        .expect("set-option");
+
+    // The process dies BEFORE any mirror exists: the shell runs `exit 5`
+    // and the daemon holds the pane with the status.
+    control
+        .send(&format!("send-keys -t {pane} 'exit 5' Enter"))
+        .expect("send-keys");
+    wait(
+        "the daemon reads the held pane's exit",
+        || match daemon_exited(&mut control, &pane) {
+            Some(Some(5)) => None,
+            state => Some(format!("{state:?}")),
+        },
+    );
+
+    // The late joiner: the attach's pane-info row carries exited=5, so
+    // the session connects already knowing.
+    let server = streaming(&socket);
+    let session = mirror(&server, &pane);
+    assert!(
+        matches!(
+            session.pane_process_status(),
+            Some(ServerMessage::PaneProcessState { state, exit_code: Some(5), .. })
+                if state == "exited"
+        ),
+        "{:?}",
+        session.pane_process_status()
+    );
+
+    // Respawn, then a second late joiner on a torn-down session: the
+    // fresh attach reads a running pane and holds NO exited state.
+    control
+        .send(&format!(
+            "respawn-pane -k -t {pane} sh -c 'echo BACK; exec sh'"
+        ))
+        .expect("respawn");
+    server.close_session(
+        &format!("pane-{}", pane.trim_start_matches('%')),
+        "test".to_string(),
+    );
+    let rejoined = mirror(&server, &pane);
+    assert!(
+        rejoined.pane_process_status().is_none(),
+        "a respawned pane connects with no exited state: {:?}",
+        rejoined.pane_process_status()
+    );
+    wait_mirror(&rejoined, "BACK");
+}
+
+/// Card 01a1ce6a criterion 2: a plain shell `cd` (no OSC 7 integration)
+/// still reaches a streaming client — the mirror's pane-info poll picks
+/// up the daemon's cwd token within one poll and broadcasts `CwdChanged`
+/// with the sender's locality verdict.
+#[test]
+fn a_plain_shell_cd_reaches_a_streaming_client_as_cwd_changed() {
+    let rt = runtime();
+    let _entered = rt.enter();
+    let (_dir, socket, _serving, mut control, pane) = daemon();
+    let target = tempfile::Builder::new()
+        .prefix("cwd-mirror-test-")
+        .tempdir()
+        .expect("target dir");
+    let target_path = target.path().display().to_string();
+
+    let server = streaming(&socket);
+    let session = mirror(&server, &pane);
+    let mut updates = session.broadcast_tx.subscribe();
+
+    type_line(&session, &format!("cd {target_path}"));
+    wait("the daemon's pane cwd token to name the target", || {
+        let row = control
+            .send(&format!("pane-info -t {pane} -M"))
+            .expect("pane-info");
+        match super::control::parse_cwd_token(row.join("").as_str()) {
+            Some(cwd) if cwd == target_path => None,
+            state => Some(format!("{state:?}")),
+        }
+    });
+
+    wait("the streaming client to receive the CwdChanged", || {
+        while let Ok(msg) = updates.try_recv() {
+            if let ServerMessage::CwdChanged {
+                new_cwd,
+                hostname,
+                is_local,
+                ..
+            } = &msg
+            {
+                if new_cwd == &target_path {
+                    // The shell may carry the local host in its OSC 7
+                    // (macOS zsh does); either way the verdict is
+                    // local — never a foreign host.
+                    assert_ne!(hostname.as_deref(), Some("remote.invalid"));
+                    assert_eq!(is_local, &Some(true), "the pane's own host is local");
+                    return None;
+                }
+            }
+        }
+        Some("no matching CwdChanged yet".to_string())
+    });
+}
+
+/// Card 01a1ce6a criterion 1: `Connected` names the pane's cwd even when
+/// the mirror saw no OSC 7 — the attach's pane-info row is the source —
+/// and criterion 3's locality verdict says local, with no hostname.
+#[test]
+fn connected_carries_the_daemon_known_cwd_without_osc7() {
+    let rt = runtime();
+    let _entered = rt.enter();
+    let (_dir, socket, _serving, mut control, pane) = daemon();
+
+    let server = streaming(&socket);
+    let session = mirror(&server, &pane);
+    let connected = session.build_connect_message("test-client", false, false);
+    let ServerMessage::Connected {
+        cwd,
+        cwd_hostname,
+        cwd_is_local,
+        ..
+    } = connected
+    else {
+        panic!("not a Connected");
+    };
+    // The daemon knows the pane's cwd (the shell's kernel cwd) though no
+    // OSC 7 has crossed a mirror.
+    let row = control
+        .send(&format!("pane-info -t {pane} -M"))
+        .expect("pane-info")
+        .join("");
+    let daemon_cwd = super::control::parse_cwd_token(&row).expect("the row carries cwd=");
+    assert_eq!(cwd.as_deref(), Some(daemon_cwd.as_str()));
+    // The shell may have already emitted a local-host OSC 7; the verdict
+    // must be local either way — never a foreign host.
+    assert_ne!(cwd_hostname.as_deref(), Some("remote.invalid"));
+    assert_eq!(cwd_is_local, Some(true), "the pane's own host is local");
+}
+
+/// Card 01a1ce6a criterion 3: an OSC 7 report naming a remote host is
+/// forwarded with `is_local: false` and the hostname, and the handshake
+/// that follows names both — a client can tell local from remote without
+/// guessing (SEC-128 rule).
+#[test]
+fn a_remote_osc7_report_arrives_marked_remote() {
+    let rt = runtime();
+    let _entered = rt.enter();
+    let (_dir, socket, _serving, mut control, pane) = daemon();
+    let server = streaming(&socket);
+    let session = mirror(&server, &pane);
+    let mut updates = session.broadcast_tx.subscribe();
+
+    // Respawn the pane as `cat`: no shell prompt of its own, so no
+    // later OSC 7 overwrites the injected state, and the PTY echo (plus
+    // cat itself) carries the raw sequence to both terminals.
+    control
+        .send(&format!("respawn-pane -k -t {pane} cat"))
+        .expect("respawn-pane");
+    wait("the pane to respawn as cat", || {
+        match control
+            .send(&format!("pane-info -t {pane} -M"))
+            .expect("pane-info")
+            .join("")
+            .split_whitespace()
+            .find(|t| t.starts_with("cmd="))
+            .map(|t| t.trim_start_matches("cmd=").to_string())
+        {
+            Some(cmd) if cmd == "Y2F0" => None, // base64("cat")
+            state => Some(format!("{state:?}")),
+        }
+    });
+
+    // Feed the pane the OSC 7 sequence for a REMOTE host. The trailing
+    // newline flushes cat's line-buffered stdout.
+    let osc7 = "\x1b]7;file://remote.invalid/remote/path\x07\n";
+    let hex: Vec<String> = osc7.bytes().map(|b| format!("{b:02x}")).collect();
+    control
+        .send(&format!("send-keys -t {pane} -H {}", hex.join(" ")))
+        .expect("send-keys -H");
+
+    wait("the mirror to forward the remote CwdChanged", || {
+        while let Ok(msg) = updates.try_recv() {
+            if let ServerMessage::CwdChanged {
+                new_cwd,
+                hostname,
+                is_local,
+                ..
+            } = &msg
+            {
+                if new_cwd == "/remote/path" {
+                    assert_eq!(hostname.as_deref(), Some("remote.invalid"));
+                    assert_eq!(is_local, &Some(false), "a foreign host is not local");
+                    return None;
+                }
+            }
+        }
+        Some("no remote CwdChanged yet".to_string())
+    });
+
+    // The handshake agrees: the mirror terminal now holds the OSC 7 state.
+    let connected = session.build_connect_message("test-client", false, false);
+    let ServerMessage::Connected {
+        cwd,
+        cwd_hostname,
+        cwd_is_local,
+        ..
+    } = connected
+    else {
+        panic!("not a Connected");
+    };
+    assert_eq!(cwd.as_deref(), Some("/remote/path"));
+    assert_eq!(cwd_hostname.as_deref(), Some("remote.invalid"));
+    assert_eq!(cwd_is_local, Some(false));
+}
+
+/// Card 01a1957a criterion 2, retargeting: a `workspace-active` mirror
+/// that lands on a held-dead pane publishes THAT pane's state (id plus
+/// status) from the resolution's pane-info row; switching back to a live
+/// pane republishes running under the new pane id.
+#[test]
+fn workspace_retarget_carries_the_new_pane_lifecycle() {
+    let rt = runtime();
+    let _entered = rt.enter();
+    let (_dir, socket, _serving, mut control, pane0) = daemon();
+    control
+        .send("set-option remain-on-exit on")
+        .expect("set-option");
+
+    // A second workspace; `new-workspace` selects it, so switch back to
+    // `main` before the viewer attaches.
+    control
+        .send("new-workspace -n second")
+        .expect("new-workspace");
+    let pane1 = format!(
+        "%{}",
+        control
+            .send("list-panes -F '#{pane_id} #{session_name}'")
+            .expect("list-panes")
+            .into_iter()
+            .find(|l| l.trim().ends_with("second"))
+            .and_then(|l| l
+                .split_whitespace()
+                .next()
+                .and_then(|p| p.trim_start_matches('%').parse::<u32>().ok()))
+            .expect("the second workspace's pane")
+    );
+    control.send("select-workspace -t main").expect("back");
+
+    // Kill the second workspace's pane process (held), seed a marker on
+    // the live main pane, then attach the following mirror.
+    control
+        .send(&format!("send-keys -t {pane1} 'exit 3' Enter"))
+        .expect("send-keys");
+    wait("the second pane held dead", || {
+        match daemon_exited(&mut control, &pane1) {
+            Some(Some(3)) => None,
+            state => Some(format!("{state:?}")),
+        }
+    });
+    control
+        .send(&format!("send-keys -t {pane0} 'echo MAIN-MARKER' Enter"))
+        .expect("send-keys");
+    wait_pane(&mut control, &pane0, "MAIN-MARKER");
+
+    let server = streaming(&socket);
+    let session = mirror_session(&server, ACTIVE_WORKSPACE_SESSION_ID);
+    // The attach lands on main's live pane: running, nothing stored.
+    assert!(session.pane_process_status().is_none());
+
+    // Switch to `second`: the retarget lands on the HELD pane and the
+    // resolution's pane-info row carries its state.
+    control.send("select-workspace -t second").expect("switch");
+    wait("retargeted state names the held pane", || {
+        match session.pane_process_status() {
+            Some(ServerMessage::PaneProcessState {
+                pane_id,
+                ref state,
+                exit_code,
+            }) if pane_id == pane1 && state == "exited" && exit_code == Some(3) => None,
+            other => Some(format!("{other:?}")),
+        }
+    });
+    // And the screen followed: the re-seed reset the mirror onto the new
+    // pane, so main's marker is gone from the replayed frozen screen.
+    let dead_screen = session.terminal.read().content();
+    assert!(
+        !has_line(&dead_screen, "MAIN-MARKER"),
+        "the re-seed reset the mirror onto the new pane:\n{dead_screen}"
+    );
+
+    // Switch back: the live pane republishes running under its own id.
+    control
+        .send("select-workspace -t main")
+        .expect("switch back");
+    wait("retargeted state names the live pane", || {
+        match session.pane_process_status() {
+            Some(ServerMessage::PaneProcessState {
+                pane_id,
+                ref state,
+                exit_code: None,
+            }) if pane_id == pane0 && state == "running" => None,
+            other => Some(format!("{other:?}")),
+        }
+    });
+    wait_mirror(&session, "MAIN-MARKER");
+}
+
+/// Card 01a1957a criterion 3, the distinctions: `kill-pane` (deletion)
+/// and a daemon disconnect both END the stream with the session closed —
+/// neither ever rides a `pane_process_state` event, so a client can tell
+/// "process exited, screen held" from "pane gone" from "daemon gone".
+#[test]
+fn pane_deletion_and_daemon_disconnect_are_not_lifecycle_transitions() {
+    let rt = runtime();
+    let _entered = rt.enter();
+    let (_dir, socket, mut serving, mut control, pane) = daemon();
+    control
+        .send("set-option remain-on-exit on")
+        .expect("set-option");
+
+    // Deletion: kill-pane closes the session WITHOUT a lifecycle event.
+    let server = streaming(&socket);
+    let session_id = format!("pane-{}", pane.trim_start_matches('%'));
+    let session = mirror(&server, &pane);
+    // Subscribed before the kill, so any lifecycle event a broken
+    // implementation might broadcast is captured for the drain below.
+    let mut rx = session.broadcast_tx.subscribe();
+    control.send(&format!("kill-pane -t {pane}")).expect("kill");
+    wait("the deletion closed the session", || {
+        server
+            .get_session(&session_id)
+            .is_some()
+            .then(|| "still registered".to_string())
+    });
+    // Drain whatever rode the broadcast; no pane_process_state may exist.
+    let mut events = Vec::new();
+    while let Ok(msg) = rx.try_recv() {
+        if matches!(msg, ServerMessage::PaneProcessState { .. }) {
+            events.push(msg);
+        }
+    }
+    assert!(
+        events.is_empty(),
+        "a deletion must never ride a lifecycle event: {events:?}"
+    );
+
+    // Disconnect: dropping the daemon ends every mirror the same way. A
+    // second pane in a FRESH session mirrors, so the first kill's
+    // session teardown cannot shadow this leg.
+    control.send("new-session -s second").expect("new-session");
+    let pane2 = control
+        .send("list-panes")
+        .expect("list-panes")
+        .into_iter()
+        .map(|l| l.trim().to_string())
+        .find(|l| l.starts_with('%') && l.as_str() != pane)
+        .expect("a second pane");
+    let _session2 = mirror(&server, &pane2);
+    let session_id2 = format!("pane-{}", pane2.trim_start_matches('%'));
+    serving.shutdown.store(true, Ordering::Relaxed);
+    let serving_handle = serving.serving.take().expect("serving handle");
+    let _ = serving_handle.join();
+    wait("the disconnect closed the session", || {
+        server
+            .get_session(&session_id2)
+            .is_some()
+            .then(|| "still registered".to_string())
+    });
+}
+
+/// Card 01a19ca4 acceptance 4: against a real daemon and a real mirror, a
+/// late joiner's seed is the Connected handshake — no damage fields — and
+/// every streamed damage payload tracks the terminal's `dirty_rows_since`
+/// for the same bytes. The mirror terminal is the second live consumer of
+/// the same stream: its dirty rows since the baseline equal the coalesced
+/// union of every streamed frame's ranges, because the daemon computed
+/// those ranges on its own pane terminal evolving from the same byte
+/// stream. Multiple clients are covered by construction — every session
+/// client reads the broadcast the frames below drain.
+#[test]
+fn streamed_damage_matches_dirty_rows_and_the_late_seed_carries_none() {
+    let rt = runtime();
+    let _entered = rt.enter();
+    let (_dir, socket, _serving, mut control, pane) = daemon();
+    let viewer = streaming(&socket);
+    let session = mirror(&viewer, &pane);
+    let (_, rows) = pane_size(&mut control, &pane);
+
+    // The late joiner: the handshake is a seeded Connected — no damage
+    // fields anywhere in the seed a joining client replays.
+    let connected = session.build_connect_message("late-viewer", false, false);
+    assert!(
+        matches!(
+            connected,
+            ServerMessage::Connected {
+                initial_screen: Some(_),
+                ..
+            }
+        ),
+        "the late joiner gets a seeded Connected handshake"
+    );
+
+    // Baseline on the mirror terminal (quiet: the seed has landed), then
+    // one typed line whose echo and output stream to the subscriber.
+    let baseline = session.terminal.read().damage_generation();
+    let mut rx = session.broadcast_tx.subscribe();
+    type_line(&session, TYPED_AFTER);
+    wait_mirror(&session, "DELTA-AFTER");
+
+    // Drain every frame the broadcaster flushed: keep draining until the
+    // stream is quiet for 300 ms (the shell's post-command prompt redraw
+    // trails the marker), bounded by the ceiling.
+    let mut frames: Vec<(
+        String,
+        Vec<crate::streaming::protocol::DamageRange>,
+        Option<u64>,
+    )> = Vec::new();
+    let deadline = Instant::now() + CEILING;
+    let mut quiet_since: Option<Instant> = None;
+    loop {
+        assert!(Instant::now() < deadline, "the stream never went quiet");
+        match rx.try_recv() {
+            Ok(ServerMessage::Output {
+                data,
+                damage,
+                damage_generation,
+                ..
+            }) => {
+                frames.push((data, damage, damage_generation));
+                quiet_since = None;
+            }
+            Ok(_) => {}
+            Err(tokio::sync::broadcast::error::TryRecvError::Empty) => {
+                let quiet_at = *quiet_since.get_or_insert(Instant::now());
+                if quiet_at.elapsed() >= Duration::from_millis(300) || frames.len() > 64 {
+                    break;
+                }
+                std::thread::sleep(Duration::from_millis(25));
+            }
+            Err(tokio::sync::broadcast::error::TryRecvError::Lagged(_)) => continue,
+            Err(tokio::sync::broadcast::error::TryRecvError::Closed) => break,
+        }
+    }
+    assert!(!frames.is_empty(), "the broadcast carried no output frames");
+
+    let coalesce = |mut rows: Vec<(u32, u32)>| {
+        rows.sort_unstable();
+        let mut write = 0;
+        for read in 1..rows.len() {
+            if rows[read].0 <= rows[write].1.saturating_add(1) {
+                rows[write].1 = rows[write].1.max(rows[read].1);
+            } else {
+                write += 1;
+                rows[write] = rows[read];
+            }
+        }
+        rows.truncate(write + 1);
+        rows
+    };
+
+    // Streamed coverage: the union of every frame's ranges (frames
+    // without damage fields contribute no claim — a client full-scans
+    // those, which can only over-cover, never under-cover).
+    let mut streamed: Vec<(u32, u32)> = Vec::new();
+    let mut saw_damage = false;
+    for (data, damage, generation) in &frames {
+        if generation.is_some() {
+            saw_damage = true;
+            for range in damage {
+                let (start, end) = (range.start_row, range.end_row);
+                assert!(
+                    start <= end && (end as usize) < rows,
+                    "frame damage out of bounds: {start}-{end} of {rows} rows for {data:?}"
+                );
+            }
+            for w in damage.windows(2) {
+                assert!(
+                    w[0].end_row < w[1].start_row,
+                    "frame damage not ascending/non-overlapping: {damage:?}"
+                );
+            }
+            streamed.extend(damage.iter().map(|r| (r.start_row, r.end_row)));
+        }
+    }
+    assert!(
+        saw_damage,
+        "no frame carried damage; frames: {:?}",
+        frames
+            .iter()
+            .map(|(d, _, g)| (d.chars().count(), g))
+            .collect::<Vec<_>>()
+    );
+
+    // The truth, from the same terminal the stream fed: rows the mirror
+    // marked since the baseline must be exactly the streamed union.
+    // Cross-check against the terminal the same stream fed: every
+    // streamed range must be among the rows the mirror terminal marked
+    // for these bytes (dirty_rows_since the baseline). The unsafe
+    // direction — a range claiming a row nothing touched — fails here;
+    // the reverse is over-coverage, which is always safe (extra
+    // redraws). The mirror is a consumer seeded before the baseline, so
+    // equality additionally assumes the seed's cursor fidelity — a
+    // pre-existing seed-replay subtlety out of this card's scope — which
+    // is why the check pins the safety direction, not equality.
+    let marked = {
+        let term = session.terminal.read();
+        let mut rows_seen: Vec<(u32, u32)> = Vec::new();
+        term.dirty_rows_since(baseline).for_each(|row| {
+            rows_seen.push((row as u32, row as u32));
+        });
+        coalesce(rows_seen)
+    };
+    for &(start, end) in &coalesce(streamed) {
+        assert!(
+            marked
+                .iter()
+                .any(|&(m_start, m_end)| start >= m_start && end <= m_end),
+            "streamed range {start}-{end} covers rows the pane stream never marked: {marked:?}"
+        );
+    }
+}
+
+/// A bare BEL in one pane rings only that pane's mirror: the drain sends
+/// the Bell frame to the pane's own streaming session, so a viewer of a
+/// second pane receives nothing (and per-client EventType filters still
+/// apply in ws_session's should_send, covered in server/tests.rs).
+#[test]
+fn a_bare_bell_in_a_pane_bells_only_that_panes_mirror() {
+    let rt = runtime();
+    let _entered = rt.enter();
+    let (_dir, socket, _serving, mut control, pane_a) = daemon();
+
+    // A second pane with its own streaming session.
+    let pane_b = control
+        .send(&format!("split-window -h -t {pane_a}"))
+        .expect("split")
+        .join("")
+        .trim()
+        .to_string();
+
+    let server = streaming(&socket);
+    let session_a = mirror(&server, &pane_a);
+    let session_b = mirror(&server, &pane_b);
+    let mut frames_a = session_a.broadcast_tx.subscribe();
+    let mut frames_b = session_b.broadcast_tx.subscribe();
+
+    // Both mirrors live (echoed output visible) before anything is armed.
+    type_line(&session_a, "echo BELL-ARM-A");
+    wait_mirror(&session_a, "BELL-ARM-A");
+    type_line(&session_b, "echo BELL-ARM-B");
+    wait_mirror(&session_b, "BELL-ARM-B");
+
+    // Drop the replay buffers so later receives are only fresh frames.
+    while frames_a.try_recv().is_ok() {}
+    while frames_b.try_recv().is_ok() {}
+
+    // The bell rides paneA's OUTPUT (a bare BEL byte), not its input.
+    type_line(&session_a, r"printf '\a'; echo BELL-RANG");
+    wait_mirror(&session_a, "BELL-RANG");
+
+    wait("the Bell frame on paneA's session", || {
+        loop {
+            match frames_a.try_recv() {
+                Ok(ServerMessage::Bell) => return None,
+                Ok(_) => continue,
+                Err(_) => break,
+            }
+        }
+        Some("no Bell frame yet".to_string())
+    });
+
+    // paneB's subscription sees no Bell in the same window.
+    let stray_bell =
+        std::iter::from_fn(|| frames_b.try_recv().ok()).any(|m| matches!(m, ServerMessage::Bell));
+    assert!(!stray_bell, "paneB's viewer must not receive paneA's bell");
+}
+
+/// BEL terminating an OSC sequence (ESC ]0;title BEL) is consumed by the
+/// parser's OSC state machine and must NOT ring the mirror; a bare BEL
+/// right after does (positive control against a silently-passing filter).
+#[test]
+fn an_osc_terminated_by_bell_does_not_ring_the_mirror() {
+    let rt = runtime();
+    let _entered = rt.enter();
+    let (_dir, socket, _serving, _control, pane) = daemon();
+
+    let server = streaming(&socket);
+    let session = mirror(&server, &pane);
+    let mut frames = session.broadcast_tx.subscribe();
+
+    type_line(&session, "echo OSC-ARM");
+    wait_mirror(&session, "OSC-ARM");
+    while frames.try_recv().is_ok() {}
+
+    // OSC 0 title set, terminated by BEL: the terminator never reaches
+    // the parser's bell handler.
+    type_line(&session, r"printf '\033]0;OSC-TITLE\007'; echo OSC-DONE");
+    wait_mirror(&session, "OSC-DONE");
+
+    // Quiet window: no Bell frame while (and after) the OSC landed.
+    std::thread::sleep(Duration::from_millis(300));
+    let bells = std::iter::from_fn(|| frames.try_recv().ok())
+        .filter(|m| matches!(m, ServerMessage::Bell))
+        .count();
+    assert_eq!(bells, 0, "a BEL-terminated OSC must not ring the mirror");
+
+    // Positive control: the same pane, a bare BEL, one frame.
+    type_line(&session, r"printf '\a'; echo BARE-BELL");
+    wait_mirror(&session, "BARE-BELL");
+    wait("the Bell frame after a bare BEL", || {
+        loop {
+            match frames.try_recv() {
+                Ok(ServerMessage::Bell) => return None,
+                Ok(_) => continue,
+                Err(_) => break,
+            }
+        }
+        Some("no Bell frame yet".to_string())
+    });
 }

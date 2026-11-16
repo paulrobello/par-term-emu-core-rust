@@ -91,6 +91,74 @@ impl Registration {
 /// use — never receives pushed notifications. On disconnect, only this
 /// client's broadcast sender is removed — the accept loop and the tree are
 /// untouched.
+/// Peer attribution captured at accept: what the transport can say about
+/// the process on the other end. `pid` arrives from ucred transports
+/// (Linux/FreeBSD/Windows); xucred transports (macOS) expose only the
+/// effective uid — the kernel holds the pid there (LOCAL_PEEREID returns
+/// it on an accepted socket) but interprocess 2.x neither queries it nor
+/// exposes the fd a hand-rolled getsockopt would need (card 01a1b228).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) struct PeerAttribution {
+    pub pid: Option<i32>,
+    pub euid: Option<u32>,
+}
+
+/// Read the peer attribution off a freshly accepted stream. `None` when
+/// the transport refuses creds — attribution is best-effort and never
+/// gates the connection.
+pub(super) fn peer_attribution(stream: &LocalStream) -> Option<PeerAttribution> {
+    use interprocess::local_socket::traits::StreamCommon as _;
+    let creds = stream.peer_creds().ok()?;
+    // Windows named-pipe transports expose only the pid, as u32; xucred
+    // transports (macOS) carry no pid at all — only the euid. ucred
+    // transports (Linux/FreeBSD) carry both as i32/u32.
+    #[cfg(windows)]
+    return Some(PeerAttribution {
+        pid: creds.pid().map(|p| p as i32),
+        euid: None,
+    });
+    #[cfg(not(windows))]
+    Some(PeerAttribution {
+        pid: creds.pid(),
+        euid: creds.euid(),
+    })
+}
+
+/// The rejected-command log suffix naming who is on the other end: the
+/// pid plus the image path where the platform gives a pid, the euid
+/// otherwise, nothing when even the creds refused.
+pub(super) fn describe_peer(peer: Option<PeerAttribution>, exe: Option<&str>) -> String {
+    let Some(peer) = peer else {
+        return String::new();
+    };
+    match peer.pid {
+        Some(pid) => match exe {
+            Some(exe) => format!(" (pid {pid}, exe {exe})"),
+            None => format!(" (pid {pid})"),
+        },
+        None => match peer.euid {
+            Some(euid) => format!(" (uid {euid})"),
+            None => String::new(),
+        },
+    }
+}
+
+/// The peer's executable path from its pid. Best-effort: an exited pid or
+/// a platform that hides the mapping yields `None`.
+pub(super) fn exe_of_pid(pid: i32) -> Option<String> {
+    #[cfg(target_os = "linux")]
+    {
+        std::fs::read_link(format!("/proc/{pid}/exe"))
+            .ok()
+            .map(|p| p.to_string_lossy().into_owned())
+    }
+    #[cfg(not(target_os = "linux"))]
+    {
+        let _ = pid;
+        None
+    }
+}
+
 #[allow(clippy::too_many_arguments)]
 pub(super) fn handle_client(
     stream: LocalStream,
@@ -106,11 +174,12 @@ pub(super) fn handle_client(
     use interprocess::local_socket::traits::Stream as _;
 
     let client_id = CLIENT_SEQ.fetch_add(1, Ordering::Relaxed);
+    let peer = peer_attribution(&stream);
     crate::mux::metrics::Metrics::global().client_connected();
     // Bounded per ARC-011: a client that stops draining is evicted by
     // [`push_to_clients`] once its queue fills, rather than buffering every
     // `%output` line forever.
-    let (tx, rx) = sync_channel::<String>(CLIENT_QUEUE_DEPTH);
+    let (tx, rx) = sync_channel::<String>(CLIENT_QUEUE_MAX_ITEMS);
     // Eviction's signal to this connection's threads (ENH-012). Both run
     // with send/recv timeouts where the transport supports them (Unix): a
     // wedged writer wakes every poll, sees the flag, and exits — dropping
@@ -165,6 +234,7 @@ pub(super) fn handle_client(
         command_number: 0,
         stream: None,
         output_epoch,
+        peer,
     };
     connection.serve(&mut reader);
     connection.teardown();
@@ -172,9 +242,10 @@ pub(super) fn handle_client(
 
 /// Start the connection's writer thread: it drains the client's queue to a
 /// clone of the socket until the queue closes, a write fails, eviction is
-/// flagged, or it has written a [`final_item`] — after which it aborts the
-/// connection's blocked I/O through its registry entry (`owner`), so a
-/// Windows reader parked in `ReadFile` wakes and the connection tears down
+/// flagged, or it has written a [`final_item`] — after which it raises the
+/// eviction flag and aborts the connection's blocked I/O through its
+/// registry entry (`owner`), so a Windows reader parked in `ReadFile` wakes
+/// (and the Unix reader's poll sees the flag) and the connection tears down
 /// without waiting for the client to hang up. Fails only when the socket
 /// cannot be cloned.
 fn spawn_writer(
@@ -194,13 +265,33 @@ fn spawn_writer(
     // filtered.
     let mut stream_pane: Option<String> = None;
     std::thread::spawn(move || loop {
+        // Test-only scripted writer delay (card 01a1a5c2's regression):
+        // while armed, the writer holds BEFORE dequeuing, so a test can
+        // land the %exit teardown item in the queue and observe the
+        // eviction flag still down. Released by the test or the deadline
+        // in test_writer_delay_wait, so a panicked test cannot wedge the
+        // suite's writers for longer than the deadline.
+        #[cfg(test)]
+        test_writer_delay_wait();
         match rx.recv_timeout(EVICTION_POLL) {
             Ok(line) => {
                 // Every line that leaves the queue passes here while the
-                // entry is live; a counter left above zero only delays the
-                // aggregate bound, never underflows (guard below).
-                if queued.load(Ordering::Relaxed) > 0 {
-                    queued.fetch_sub(1, Ordering::Relaxed);
+                // entry is live; the counter is the fan-out's queued-byte
+                // estimate (broadcast pushes add the line's bytes; replies
+                // and replays are uncounted), so a drain subtracts only
+                // what may have been counted — clamped at zero. The clamp
+                // biases the stall counter low for draining clients, the
+                // approximation the stall bound affords: a stalled client
+                // never drains, so its counter climbs monotonically
+                // toward eviction.
+                let drained = line.len();
+                let current = queued.load(Ordering::Relaxed);
+                if current > 0 {
+                    if drained >= current {
+                        queued.store(0, Ordering::Relaxed);
+                    } else {
+                        queued.fetch_sub(drained, Ordering::Relaxed);
+                    }
                 }
                 let (last, line) = take_final_marker(line);
                 let line = match take_stream_marker(line) {
@@ -220,8 +311,16 @@ fn spawn_writer(
                 };
                 // The cancel waits until the final line is written: it
                 // aborts every pending call on the pipe, the writer's own
-                // `WriteFile` included.
+                // `WriteFile` included. The eviction flag goes up HERE,
+                // after the bytes are on the wire — `end_connection_with`
+                // left it down while the line was only queued, so the
+                // writer's poll boundaries (the recv Timeout below,
+                // write_line's wake-abort on an earlier line) could not
+                // abandon the queue and drop the %exit (card 01a1a5c2: the
+                // flag going up at queue time lost the notification under
+                // load).
                 if last {
+                    evicted.store(true, Ordering::Relaxed);
                     cancel_connection_io(&owner.0, owner.1);
                     break;
                 }
@@ -323,18 +422,29 @@ pub(super) fn pane_stream_passes(line: &str, pane: &str) -> bool {
         || names_pane(line.strip_prefix("%pane-respawned "))
 }
 
-/// Queue `line` as `client_id`'s last item and flag the connection for
-/// teardown: its writer drains what is queued (this line included) and
-/// then aborts the connection's blocked I/O, so both connection threads
-/// exit — on Unix their poll sees the flag; on Windows the abort wakes the
-/// reader parked in `ReadFile` — and the socket closes.
+/// Queue `line` as `client_id`'s last item. Its writer drains what is
+/// queued (this line included), then aborts the connection's blocked I/O,
+/// so both connection threads exit — on Unix their poll sees the eviction
+/// flag the writer raises after the final write; on Windows the abort wakes
+/// the reader parked in `ReadFile` — and the socket closes.
+///
+/// The eviction flag stays DOWN while the final line is only queued (card
+/// 01a1a5c2): the writer's poll boundaries check it, and a writer delayed
+/// under load that crossed a boundary after the flag was raised abandoned
+/// the queue and dropped the `%exit` the queued line carries. Queuing it is
+/// the success case; the flag goes up when the writer has written the line
+/// ([`spawn_writer`]'s final-item branch). A queue that refused the line (a
+/// client stalled at its eviction bound) still flags immediately — there is
+/// nothing the writer can deliver anyway, and the entry must tear down.
 fn end_connection_with(clients: &Clients, client_id: u64, line: &str) {
     let guard = clients.lock();
     if let Some((_, tx, queued, evicted, _)) = guard.iter().find(|(id, ..)| *id == client_id) {
-        if tx.try_send(final_item(line)).is_ok() {
-            queued.fetch_add(1, Ordering::Relaxed);
+        let item = final_item(line);
+        if tx.try_send(item.clone()).is_ok() {
+            queued.fetch_add(item.len(), Ordering::Relaxed);
+        } else {
+            evicted.store(true, Ordering::Relaxed);
         }
-        evicted.store(true, Ordering::Relaxed);
     }
 }
 
@@ -371,6 +481,16 @@ fn spawn_pane_stream_watch(
             let deadline = std::time::Instant::now() + STREAM_END_GRACE;
             while clients.lock().iter().any(|(id, ..)| *id == client_id) {
                 if std::time::Instant::now() >= deadline {
+                    // The wedged-client bound (a client too slow to drain
+                    // the %exit keeps the writer parked in its write):
+                    // raise the flag — the Unix writer's poll abandons the
+                    // connection — and abort the blocked pipe I/O the
+                    // Windows reader needs woken.
+                    if let Some((_, _, _, evicted, _)) =
+                        clients.lock().iter().find(|(id, ..)| *id == client_id)
+                    {
+                        evicted.store(true, Ordering::Relaxed);
+                    }
                     cancel_connection_io(&clients, client_id);
                     return;
                 }
@@ -401,6 +521,8 @@ struct Connection {
     stream: Option<PaneStreamMode>,
     /// The daemon-wide output epoch — the seed export's race check.
     output_epoch: OutputEpoch,
+    /// What the transport said about the peer at accept (card 01a1b228).
+    peer: Option<PeerAttribution>,
 }
 
 impl Connection {
@@ -507,6 +629,22 @@ impl Connection {
         if let crate::mux::command::MuxCommand::PaneStream { pane, control } = command {
             return self.on_pane_stream(command_number, pane, control);
         }
+        // The seed replay form (`refresh-client -t %N` with no `-C`/`-p`)
+        // is ordered like the pane-stream seed above (card 01a19947): its
+        // reply is enqueued under the clients lock with the output-epoch
+        // re-check, so every `%output` enqueued before the reply is
+        // reflected in it and the attach client's replay-covered discard
+        // loses no raced byte. The size-report forms mutate the tree and
+        // broadcast `%layout-change`, so they keep the normal path.
+        if let crate::mux::command::MuxCommand::RefreshClient {
+            pane: Some(_),
+            size: None,
+            cell_pixels: None,
+            ..
+        } = &command
+        {
+            return self.on_ordered_replay(command_number, command, line);
+        }
         par_term_emu_core::debug_log!(
             "MUX",
             "received #{} from client {}: {}",
@@ -539,9 +677,10 @@ impl Connection {
             // both sides of the socket.
             par_term_emu_core::debug_error!(
                 "MUX",
-                "command #{} from client {} rejected: {}",
+                "command #{} from client {}{} rejected: {}",
                 command_number,
                 client_id,
+                self.peer_suffix(),
                 summarize_line(line)
             );
         }
@@ -655,13 +794,111 @@ impl Connection {
         Flow::Continue
     }
 
+    /// The seed replay (`refresh-client -t %N`, no `-C`/`-p`): the pane's
+    /// screen-restore reply is enqueued under the clients lock with the
+    /// output-epoch re-check — the observe-pane seed's shape — so every
+    /// `%output` enqueued before the reply is reflected in it and every
+    /// byte the pane produces during the seed arrives either in the reply
+    /// or after it. The attach client discards pre-reply output as
+    /// replay-covered (card 01a19947): without this ordering, a byte
+    /// racing the capture→enqueue gap is discarded uncovered and lost.
+    ///
+    /// Lock discipline: the tree lock resolves the pane handle and is
+    /// released BEFORE the clients lock is taken; the only nesting here is
+    /// clients → terminal-read, the same nesting the observe-pane seed
+    /// uses. The reply send is try_send (a blocking send under the lock
+    /// would stall every client's fan-out on a full queue); a full queue
+    /// falls back to the normal blocking send after the lock drops — the
+    /// client is being evicted anyway, and an evicted client's ordering
+    /// no longer matters.
+    fn on_ordered_replay(
+        &mut self,
+        command_number: u32,
+        command: crate::mux::command::MuxCommand,
+        line: &str,
+    ) -> Flow {
+        par_term_emu_core::debug_log!(
+            "MUX",
+            "received #{} from client {}: {}",
+            command_number,
+            self.client_id,
+            summarize_line(line)
+        );
+        // Destructured before the dispatch moves the command: the raced
+        // re-export needs the pane target and the `-G` flag.
+        let (pane_target, graphics) = match &command {
+            crate::mux::command::MuxCommand::RefreshClient { pane, graphics, .. } => {
+                (pane.clone(), *graphics)
+            }
+            _ => (None, false),
+        };
+
+        let ctx = Ctx {
+            tree: &self.tree,
+            clients: &self.clients,
+            command_number,
+            shutdown: self.shutdown.as_deref(),
+            config: self.config.as_deref(),
+            client_id: Some(self.client_id),
+            layouts_dir: self.layouts_dir.as_deref(),
+            output_epoch: &self.output_epoch,
+        };
+        // The epoch baseline is sampled BEFORE the export (the observe-pane
+        // seed's lesson: sampling after only covers the lock-acquisition
+        // gap — a load-slowed export loses markers that raced it while the
+        // check compared two equal post-export loads).
+        let before = self.output_epoch.load(std::sync::atomic::Ordering::Acquire);
+        let reply = dispatch_contained(command, &ctx, self.persist.as_ref(), Some(&self.tx));
+        // Resolve the re-export handle off the clients lock (tree lock
+        // released before the clients lock is taken). A pane that resolved
+        // for the dispatch but vanished since keeps the first reply — an
+        // error block, whose ordering is irrelevant.
+        let terminal = pane_target.and_then(|target| {
+            let id = self.tree.lock().resolve_pane_target(target).ok();
+            id.and_then(|id| self.tree.lock().pane(id).map(|pane| (id, pane.terminal())))
+        });
+        let _clients = self.clients.lock();
+        let raced = self.output_epoch.load(std::sync::atomic::Ordering::Acquire) != before;
+        let reply = if raced {
+            match terminal {
+                Some((_id, terminal)) => {
+                    let term = terminal.read();
+                    emit_block(command_number, &replay_reply_body(&term, graphics), true)
+                }
+                None => reply,
+            }
+        } else {
+            reply
+        };
+        match self.tx.try_send(reply) {
+            Ok(()) => Flow::Continue,
+            // Full queue under the clients lock: fall back to the normal
+            // blocking send after the lock drops (backpressure, the
+            // ordinary reply path's behavior). The client is at its
+            // eviction bound anyway, and an evicted client's wire order no
+            // longer matters.
+            Err(std::sync::mpsc::TrySendError::Full(item)) => Flow::after_send(self.tx.send(item)),
+            Err(std::sync::mpsc::TrySendError::Disconnected(_)) => Flow::Close,
+        }
+    }
+
+    /// The rejection-log suffix naming the peer (" (pid 123, exe …)" /
+    /// " (uid …)") — creds captured at accept, the exe resolved from the
+    /// pid at log time so a reconnect storm is attributable in one line
+    /// (card 01a1b228).
+    fn peer_suffix(&self) -> String {
+        let exe = self.peer.and_then(|p| p.pid).and_then(exe_of_pid);
+        describe_peer(self.peer, exe.as_deref())
+    }
+
     fn on_parse_error(&mut self, err: &str, line: &str) -> Flow {
         let command_number = self.next_command();
         par_term_emu_core::debug_error!(
             "MUX",
-            "unparseable command #{} from client {}: {} ({})",
+            "unparseable command #{} from client {}{}: {} ({})",
             command_number,
             self.client_id,
+            self.peer_suffix(),
             summarize_line(line),
             err
         );
@@ -775,6 +1012,78 @@ mod pane_stream_tests {
 }
 
 #[cfg(test)]
+mod peer_attribution_tests {
+    #[cfg(target_os = "linux")]
+    use super::exe_of_pid;
+    #[cfg(unix)]
+    use super::peer_attribution;
+    use super::{describe_peer, PeerAttribution};
+
+    #[test]
+    fn the_suffix_names_each_attribution_shape() {
+        let full = PeerAttribution {
+            pid: Some(1234),
+            euid: Some(501),
+        };
+        assert_eq!(
+            describe_peer(Some(full), Some("/usr/bin/foo")),
+            " (pid 1234, exe /usr/bin/foo)"
+        );
+        assert_eq!(describe_peer(Some(full), None), " (pid 1234)");
+        let uid_only = PeerAttribution {
+            pid: None,
+            euid: Some(501),
+        };
+        assert_eq!(describe_peer(Some(uid_only), None), " (uid 501)");
+        let bare = PeerAttribution {
+            pid: None,
+            euid: None,
+        };
+        assert_eq!(describe_peer(Some(bare), None), "");
+        assert_eq!(describe_peer(None, None), "");
+    }
+
+    /// The capture path works against a real socket: the creds the
+    /// transport reports name this process — pid on ucred platforms
+    /// (Linux), euid on every unix platform. The positive control for the
+    /// rejection log's attribution suffix.
+    #[cfg(unix)]
+    #[test]
+    fn a_fresh_connection_reports_this_process_creds() {
+        use crate::mux::ipc::{accept_connection, bind_local_listener, connect_local_stream};
+        let dir = tempfile::Builder::new()
+            .prefix("par-mux-peer-creds-")
+            .tempdir()
+            .expect("tempdir");
+        let path = dir.path().join("creds.sock");
+        let listener = bind_local_listener(&path).expect("bind");
+        let client = connect_local_stream(&path).expect("connect");
+        let (server, _abort) = accept_connection(&listener).expect("accept");
+        let creds = peer_attribution(&server).expect("creds readable");
+        #[cfg(target_os = "linux")]
+        assert_eq!(
+            creds.pid,
+            Some(std::process::id() as i32),
+            "ucred pid names the client process"
+        );
+        #[cfg(not(target_os = "linux"))]
+        let _ = creds.pid; // xucred transports (macOS) carry no pid
+                           // SAFETY: geteuid takes no arguments and cannot fail.
+        let euid = unsafe { libc::geteuid() };
+        assert_eq!(creds.euid, Some(euid), "the euid rides the creds");
+        drop(client);
+    }
+
+    /// The exe lookup resolves a live pid's image path (Linux).
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn exe_of_pid_resolves_this_process_image() {
+        let exe = exe_of_pid(std::process::id() as i32).expect("live pid resolves");
+        assert!(exe.contains("par_mux") || exe.contains("deps"), "got {exe}");
+    }
+}
+
+#[cfg(test)]
 mod flow_tests {
     use super::Flow;
 
@@ -783,4 +1092,37 @@ mod flow_tests {
         assert_eq!(Flow::after_send::<()>(Ok(())), Flow::Continue);
         assert_eq!(Flow::after_send(Err(())), Flow::Close);
     }
+}
+
+/// Test-only scripted writer delay (card 01a1a5c2): while armed, every
+/// client writer holds BEFORE dequeuing its next queue item, so a test can
+/// land the `%exit` teardown item in a client's queue and assert the
+/// connection's eviction flag is still down — the fixed ordering
+/// `end_connection_with` now enforces. Global while armed; the regression
+/// test releases it through a drop guard so even a panic cannot leave the
+/// whole suite's writers parked past the 10 s deadline.
+#[cfg(test)]
+static TEST_WRITER_DELAY: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+#[cfg(test)]
+fn test_writer_delay_wait() {
+    use std::time::{Duration, Instant};
+    if TEST_WRITER_DELAY.load(Ordering::Relaxed) {
+        let deadline = Instant::now() + Duration::from_secs(10);
+        while TEST_WRITER_DELAY.load(Ordering::Relaxed) && Instant::now() < deadline {
+            std::thread::sleep(Duration::from_millis(2));
+        }
+    }
+}
+
+/// Arm the test-only writer delay. See [`TEST_WRITER_DELAY`].
+#[cfg(test)]
+pub(super) fn test_writer_delay_arm() {
+    TEST_WRITER_DELAY.store(true, Ordering::Relaxed);
+}
+
+/// Release the test-only writer delay. See [`TEST_WRITER_DELAY`].
+#[cfg(test)]
+pub(super) fn test_writer_delay_release() {
+    TEST_WRITER_DELAY.store(false, Ordering::Relaxed);
 }

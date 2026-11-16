@@ -332,7 +332,11 @@ fn a_controller_writes_input_and_its_size_report_is_withdrawn_on_disconnect() {
     let sent = controller.command(&format!("send-keys -t {a} -H {}", hex.join(" ")));
     assert!(sent.last().is_some_and(|l| l.starts_with("%end")));
     let lines = controller.until(|l| l.contains("CTLMARK"), "the controller's echo");
-    assert!(lines.iter().all(|l| l.starts_with("%output ")));
+    // Pane streams carry the adjacent `%pane-damage` line too (docs/MUX.md
+    // "Notifications"); every other line must be pane output.
+    assert!(lines
+        .iter()
+        .all(|l| l.starts_with("%output ") || l.starts_with("%pane-damage ")));
 
     // A smaller size report shrinks the pane's window while connected.
     let resized = controller.command(&format!("refresh-client -t {a} -C 50x12"));
@@ -469,9 +473,21 @@ fn seed_export_racing_output_stays_ordered() {
         .expect("the seed block opens with %begin");
     let seed: String = reply[begin..].concat();
     let pre_seed: String = reply[..begin].concat();
-    let raced_markers: Vec<&str> = pre_seed
+    // A load-delayed pane delivers its echo in coalesced bursts: one
+    // `%output` payload can carry dozens of markers octal-escaped into a
+    // single whitespace-free word. Split each such word into its
+    // individual markers — a whole-burst `contains` check could never
+    // match the seed, which renders every marker with cursor escapes
+    // between its neighbors. A fragment cut mid-escape (a chunk boundary
+    // inside the separator) is dropped by the RACEH prefix filter rather
+    // than mis-checked.
+    let raced_markers: Vec<String> = pre_seed
         .split_whitespace()
         .filter(|w| w.starts_with("RACEH"))
+        .flat_map(|w| w.split("\\015\\012"))
+        .map(|w| w.split('\\').next().unwrap_or(w))
+        .filter(|w| w.starts_with("RACEH") && w.ends_with("MARKER"))
+        .map(str::to_string)
         .collect();
     // Positive control: the hammer ran before the stream opened, so the
     // export raced real output and its seed reflects it.
@@ -504,12 +520,251 @@ fn seed_export_racing_output_stays_ordered() {
         );
     }
 
-    // The stream stays live: the hammer's last marker streams through
-    // (the hammer joins only after its final reply).
+    // The stream stays live: a marker dispatched AFTER the seed block was
+    // read must arrive as pane output. The hammer's own last marker cannot
+    // anchor this: under load its final echo can land in the grid (and
+    // bash's command-not-found line for it can print) before the stream
+    // opens, so the seed already reflects it and no further %output ever
+    // arrives — the wait then sits silent to its read ceiling, which is
+    // exactly the load-run failures this suite saw.
+    let mut anchor = Conn::connect(fixture.socket());
+    // The same tty-backlog unjam as refresh_client_replay below: a send-keys
+    // write blocks while the pane's tty input queue holds the hammer's
+    // backlog, so the anchor can land typed-ahead behind ~300 un-executed
+    // markers and surface only after the shell consumes all of them. ^C
+    // flushes the pending queue, so the anchor executes within the drain's
+    // read ceiling under load. The flush drops only un-executed markers,
+    // which this test's stream-stays-live probe never checks.
+    anchor.command("send-keys -t %0 -H 03");
+    anchor.command("send-keys -t %0 ANCHORMARK STREAMS Enter");
     hammer.join().expect("hammer finished");
-    let tail = observer.until(|l| l.contains("RACEH299"), "the last racing marker");
+    let tail = observer.until(|l| l.contains("ANCHORMARK"), "the post-seed anchor marker");
     assert!(
         tail.iter().any(|l| l.starts_with("%output")),
         "the marker arrives as pane output: {tail:?}"
+    );
+}
+
+/// The refresh-client seed replay (card 01a19947): its reply is enqueued
+/// under the clients lock with the output-epoch re-check — the same shape
+/// the observe-pane seed has — so every `%output` that reaches a client
+/// BEFORE the reply is already reflected in it, and every byte the pane
+/// produced during the seed arrives either in the reply or as post-reply
+/// `%output` (the attach client discards pre-reply output as replay-
+/// covered, so a raced byte must never land in that discard window
+/// uncovered). A hammering connection whose send-keys the tty echoes
+/// continuously keeps the capture-to-enqueue gap hot.
+#[ignore = "load-sensitive: seed-race timing fails under host load (2/2 gate runs 2026-11-02 at load 32-58, 2/2 isolated passes; ~95 s first-run seed-reply wait expiries at load 14-20, now budgeted at 2x CEILING); run via make test-rust-sensitive or checkall-ci"]
+#[test]
+fn refresh_client_replay_stays_ordered_under_output() {
+    let fixture = MuxFixture::new("replay-race");
+    let _daemon = spawn_daemon(&fixture);
+    wait_listening(fixture.socket());
+    let mut ctl = Conn::connect(fixture.socket());
+    ctl.command("new-session -s race -x 200 -y 24");
+    // Deep scrollback: 8000 wide lines is a multi-megabyte restore export —
+    // a long capture-to-enqueue window for racing output to land in.
+    ctl.command(
+        "send-keys -t %0 -l 'for i in $(seq 1 20000); do printf \"SEED-%06d\\n\" $i; done'",
+    );
+    ctl.command("send-keys -t %0 Enter");
+    let deadline = Instant::now() + common::CEILING;
+    loop {
+        let screen = ctl.command("capture-pane -t %0 -S -5").join("");
+        if screen.contains("SEED-020000") {
+            break;
+        }
+        assert!(
+            Instant::now() < deadline,
+            "the scrollback fill never landed: {screen:?}"
+        );
+    }
+
+    // The racing writer: markers the tty echoes continuously while the
+    // seed's export runs. The volume is deliberately unpaced — the race
+    // window needs hot output — and the probe below sources its marker
+    // list from the daemon's own screen, so the canonical-buffer overflow
+    // an unpaced flood can cause (the line discipline silently DROPS the
+    // excess before the pane ever saw it) cannot false-positive here.
+    let hammer_path = fixture.socket().to_path_buf();
+    let hammer = std::thread::spawn(move || {
+        let mut hammer = Conn::connect(&hammer_path);
+        for i in 0..200 {
+            hammer.command(&format!("send-keys -t %0 RACEH{i:03} MARKER Enter"));
+        }
+    });
+    std::thread::sleep(Duration::from_millis(50));
+
+    // The seeding connection: the replay reply, with every `%output` line
+    // that slips in ahead of it recorded separately. A first command warms
+    // the connection into the broadcast registry (clients join broadcasts
+    // on their first control command, not at connect) — an unregistered
+    // connection receives no pre-reply %output at all, and the race this
+    // test exercises only exists for a registered one.
+    let mut seeder = Conn::connect(fixture.socket());
+    seeder.command("list-panes -t @0");
+    // Seed rounds while the hammer runs: the capture-to-enqueue gap is
+    // thin, so one round can sample it empty (raced_markers empty = no
+    // output slipped ahead of the reply this round — nothing to assert).
+    // The attach client re-seeds the same way, so repeated rounds mirror
+    // real use; the contract must hold on EVERY round that raced.
+    let mut seed = String::new();
+    let mut raced_markers: Vec<String> = Vec::new();
+    // The seed reply's wait budget is 2x CEILING rather than the shared
+    // ceiling: the daemon composes the reply through export #1 under the
+    // tree lock plus — with the hammer keeping the output epoch racing —
+    // a SECOND multi-megabyte re-export performed while HOLDING the
+    // clients lock (on_ordered_replay, server/client.rs), which stalls
+    // every pane's %output fan-out for its duration, then drains the
+    // multi-MB reply through the socket. Under a load storm that chain
+    // legitimately exceeds one 90 s ceiling (~95 s first-run failures at
+    // host load 14-20); the ordering contract itself is sound. 180 s
+    // stays under the ci profile's harness kill (slow-timeout 30 s x 8).
+    for _round in 0..4 {
+        seeder.send("refresh-client -t %0");
+        let mut reply = Vec::new();
+        let deadline = Instant::now() + common::CEILING + common::CEILING;
+        loop {
+            let mut buf = String::new();
+            // WouldBlock-tolerant read: under a full-gate load storm a
+            // single CEILING-length blocking read can time out before the
+            // (huge) reply is composed; poll until the deadline instead.
+            match seeder.1.read_line(&mut buf) {
+                Ok(0) => panic!("server closed during the seed reply: {reply:?}"),
+                Ok(_) => {}
+                Err(err) if err.kind() == std::io::ErrorKind::WouldBlock => {
+                    assert!(
+                        Instant::now() < deadline,
+                        "the seed reply never finished: {reply:?}"
+                    );
+                    continue;
+                }
+                Err(err) => panic!("read reply line: {err}"),
+            }
+            let done = buf.starts_with("%end");
+            reply.push(buf);
+            if done {
+                break;
+            }
+        }
+        let begin = reply
+            .iter()
+            .position(|l| l.starts_with("%begin"))
+            .expect("the seed reply opens with %begin");
+        seed = reply[begin..].concat();
+        let pre_reply: String = reply[..begin].concat();
+        raced_markers = pre_reply
+            .split_whitespace()
+            .filter(|w| w.starts_with("RACEH"))
+            .flat_map(|w| w.split("\\015\\012"))
+            .map(|w| w.split('\\').next().unwrap_or(w))
+            .filter(|w| w.starts_with("RACEH") && w.ends_with("MARKER"))
+            .map(str::to_string)
+            .collect();
+        if !raced_markers.is_empty() {
+            break;
+        }
+    }
+
+    // Positive control: the hammer ran before the replay, so the export
+    // raced real output and the reply reflects it.
+    assert!(
+        seed.contains("RACEH"),
+        "the seed reply does not reflect the hammering output at all"
+    );
+    // The ordering contract: a marker that reached this client before the
+    // reply must be IN the reply.
+    for marker in &raced_markers {
+        assert!(
+            seed.contains(marker),
+            "{marker} reached the client before the seed reply but the reply \
+             does not reflect it — the ordered-enqueue contract is broken \
+             [pre-reply markers: {}, first: {:?}, last: {:?}; reply bytes: {}]",
+            raced_markers.len(),
+            raced_markers.first(),
+            raced_markers.last(),
+            seed.len(),
+        );
+    }
+
+    // The loss probe: every marker the pane received arrives either in
+    // the reply or as post-reply %output. The attach client discards
+    // pre-reply output as replay-covered, so a marker in neither place is
+    // a byte the discard window dropped. The hammer joins BEFORE the
+    // anchor so the drain through ANCHORMARK covers every hammer marker
+    // (an anchor racing the hammer's tail would stop the drain early).
+    hammer.join().expect("hammer finished");
+    let mut anchor = Conn::connect(fixture.socket());
+    // A joined hammer is not a drained pane. A PTY master write blocks
+    // while the pane's tty input queue holds the backlog, so the joined
+    // hammer can still leave ~130 un-executed markers typed ahead in the
+    // kernel queue — gate 9 (2026-11-14, load 9-11) expired this 2x-CEILING
+    // drain with only markers 004-068 executed, its tail full of the tty's
+    // partially dropped echo of that backlog (the period-15 "RACE…" runs:
+    // surviving prefix bytes of 15-byte marker echoes past a stalled
+    // output drain). ^C is the terminal's own unjam: ISIG flushes the
+    // pending input queue (NOFLSH off) and interrupts ZLE's current line,
+    // so ANCHORMARK is the shell's next input whatever the backlog was.
+    // The flush cannot weaken the probe below: markers it discards never
+    // executed and never reached the screen, and the probe checks only
+    // markers the screen shows.
+    anchor.command("send-keys -t %0 -H 03");
+    anchor.command("send-keys -t %0 ANCHORMARK REPLAYS Enter");
+    let mut post_reply = Vec::new();
+    // The post-reply anchor drain gets the seed reply's 2x CEILING: the
+    // anchor echo sits behind the same load-stormed pane, and the 1x
+    // budget expired in the gate's first run at 94 s (2026-11-14 gate 7)
+    // with markers still streaming.
+    let deadline = Instant::now() + common::CEILING + common::CEILING;
+    loop {
+        let mut buf = String::new();
+        // Same WouldBlock-tolerant polling as the seed reply: the anchor
+        // echo can sit behind a load-stormed pane far past one blocking
+        // read's timeout.
+        match seeder.1.read_line(&mut buf) {
+            Ok(0) => panic!("server closed during the post-reply drain"),
+            Ok(_) => {}
+            Err(err) if err.kind() == std::io::ErrorKind::WouldBlock => {
+                assert!(
+                    Instant::now() < deadline,
+                    "never saw the post-reply anchor: {post_reply:?}"
+                );
+                continue;
+            }
+            Err(err) => panic!("read post-reply line: {err}"),
+        }
+        let hit = buf.contains("ANCHORMARK");
+        post_reply.push(buf);
+        if hit {
+            break;
+        }
+    }
+    let tail: String = post_reply.concat();
+    // The probe list comes from the daemon's own screen, so a marker the
+    // tty dropped before the pane ever saw it cannot false-positive here:
+    // every marker the PANE received must have reached the client either
+    // in the seed reply or as post-reply %output. Markers fully applied
+    // before the capture are in the seed whole; markers fully applied
+    // after it are in the tail whole; the single marker straddling the
+    // capture instant is the one exception: its echo prefix is grid
+    // content at capture (seed) and its suffix rides the post-reply
+    // stream (tail), so neither contains the whole marker.
+    let screen = ctl.command("capture-pane -t %0 -S -300").join("");
+    let mut missing: Vec<String> = Vec::new();
+    for i in 0..200 {
+        let marker = format!("RACEH{i:03}");
+        if !screen.contains(&marker) {
+            continue;
+        }
+        if !seed.contains(&marker) && !tail.contains(&marker) {
+            missing.push(marker);
+        }
+    }
+    assert!(
+        missing.len() <= 1,
+        "{} markers reached the pane but are in neither the seed reply nor \
+         the post-reply output — bytes raced the capture-to-enqueue gap and \
+         were lost to the attach client's discard window: {missing:?}",
+        missing.len()
     );
 }
