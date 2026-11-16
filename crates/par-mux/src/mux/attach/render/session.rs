@@ -4,7 +4,7 @@
 
 use super::{
     copy_mode, trace_input, DragState, FlushSink, Glyphs, Modal, PaneRect, RenderOptions,
-    SessionStripMode, WindowSession, RESTART_TOAST_WINDOW_SECS,
+    SessionStripMode, SnapshotFlight, WindowSession, RESTART_TOAST_WINDOW_SECS,
 };
 use crate::mux::attach::status::{Segment, StatusRow};
 use crate::mux::attach::tabs::TabStrip;
@@ -280,9 +280,9 @@ impl WindowSession {
         chords: &crate::mux::config::Chords,
         file: &crate::mux::config::ConfigFile,
     ) -> bool {
-        self.prefix = chords.prefix;
-        self.literal = chords.prefix;
-        self.reload_key = chords.reload;
+        self.input_route.prefix = chords.prefix;
+        self.input_route.literal = chords.prefix;
+        self.input_route.reload_key = chords.reload;
         self.management = chords.management;
         self.resize_step = chords.resize_step;
         if self.agent_rows != chords.agent_rows {
@@ -747,13 +747,13 @@ impl WindowSession {
         conn: &mut crate::mux::attach::conn::AttachConn,
         pending: Vec<u32>,
     ) {
-        if self.status_snapshot_inflight.is_some() {
-            self.status_dirty = true;
+        if self.status_inflight.flight.is_some() {
+            self.status_inflight.dirty = true;
             return;
         }
-        self.status_dirty = false;
-        self.status_snapshot_inflight = Some(std::time::Instant::now());
-        self.seed_snapshot_inflight = true;
+        self.status_inflight.begin(SnapshotFlight::Seed {
+            since: std::time::Instant::now(),
+        });
         let window = self.window.clone();
         self.send_then(
             conn,
@@ -777,9 +777,7 @@ impl WindowSession {
         window: String,
         pending: Vec<u32>,
     ) {
-        self.status_snapshot_inflight = None;
-        self.seed_snapshot_inflight = false;
-        let seed_raced = std::mem::take(&mut self.seed_raced_panes);
+        let seed_raced = self.status_inflight.complete();
         // A reply for a window the view already left is stale: the
         // switch's reseed re-queries (the nav_current rule).
         if self.window != window {
@@ -812,7 +810,7 @@ impl WindowSession {
             }
             Err(status::StatusError::SessionGone) => {
                 // The session died mid-seed: the landing contract runs on
-                // the pump tick, where `status_end` ends the view the
+                // the pump tick, where `status_inflight.end` ends the view the
                 // way the sync path's `Ok(false)` did.
                 self.land_gone_view(conn);
             }
@@ -860,19 +858,23 @@ impl WindowSession {
     /// While a snapshot is owed the re-seed leaves the bar to the
     /// machinery and marks the state dirty, so the owed reply's
     /// application re-issues for the new window on a later tick.
+    /// `landing` says the re-seed is the gone-view landing's: its
+    /// reply's `SessionGone` walks the interactive ladder directly.
     pub(super) fn reseed_status_snapshot(
         &mut self,
         conn: &mut crate::mux::attach::conn::AttachConn,
         window: &str,
+        landing: bool,
     ) {
-        if self.status_snapshot_inflight.is_some() {
-            self.status_dirty = true;
+        if self.status_inflight.flight.is_some() {
+            self.status_inflight.dirty = true;
             return;
         }
-        self.status_dirty = false;
-        self.status_snapshot_inflight = Some(std::time::Instant::now());
+        self.status_inflight.begin(SnapshotFlight::Reseed {
+            landing,
+            since: std::time::Instant::now(),
+        });
         let window = window.to_string();
-        let landing = self.landing_reseed;
         self.send_then(
             conn,
             &format!("client-snapshot -t {window}"),
@@ -900,7 +902,7 @@ impl WindowSession {
         window: String,
         landing: bool,
     ) {
-        self.status_snapshot_inflight = None;
+        self.status_inflight.complete();
         // A reply for a window the view already left is stale: the
         // next mark re-queries (the nav_current rule).
         if self.window != window {
@@ -1139,7 +1141,7 @@ impl WindowSession {
                 shaded: false,
             });
         }
-        if self.prefix_pending {
+        if self.input_route.prefix_pending {
             head.push(Segment {
                 text: " prefix |".to_string(),
                 bold: true,
@@ -1163,7 +1165,7 @@ impl WindowSession {
                 shaded: false,
             });
         }
-        let chip = status::help_chip(self.prefix, self.management.help);
+        let chip = status::help_chip(self.input_route.prefix, self.management.help);
         let reserved: usize = head
             .iter()
             .chain(std::iter::once(&chip))

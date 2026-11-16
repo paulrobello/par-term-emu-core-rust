@@ -873,8 +873,30 @@ impl StreamingServer {
         }
     }
 
+    /// Paste text with every ESC (U+001B) and C1 CSI (U+009B) character
+    /// removed. Inside bracketed paste the payload is supposed to be opaque
+    /// text, and either introducer can begin the `ESC[201~` end marker (or
+    /// any other CSI), so a payload carrying one could close the paste early
+    /// and deliver the rest as typed input — a trailing newline then executes
+    /// a command (card 01a1dfd8, mux-xr SEC-001). Stripping the characters
+    /// rather than the marker makes every end-marker spelling impossible and
+    /// cannot be defeated by a splice nesting (`ESC[20 ESC[201~ 1~`); it is
+    /// lossy for pastes that legitimately contain escape bytes, accepted by
+    /// the filer. Characters, not raw bytes: 0x9B is a legal UTF-8
+    /// continuation byte, so byte-level stripping would corrupt multibyte
+    /// text. The unbracketed branch keeps its payload raw — the application
+    /// declined paste framing there, so the bytes are typed input by design
+    /// and its escapes are parsed as the application's own input semantics.
+    fn strip_paste_controls(content: &str) -> String {
+        content
+            .chars()
+            .filter(|c| *c != '\u{1b}' && *c != '\u{9b}')
+            .collect()
+    }
+
     /// `Paste`: cap, rate-limit, then send the pasted text — wrapped in
-    /// bracketed-paste markers when enabled — as one frame through the
+    /// bracketed-paste markers when enabled, with the payload stripped of
+    /// paste-breakout controls in that case — as one frame through the
     /// shared input path.
     pub(super) fn handle_paste(
         session: &Arc<StreamSessionState>,
@@ -927,7 +949,7 @@ impl StreamingServer {
                     (
                         terminal.bracketed_paste_start().to_vec(),
                         terminal.bracketed_paste_end().to_vec(),
-                        content.into_bytes(),
+                        Self::strip_paste_controls(&content).into_bytes(),
                     )
                 } else {
                     (Vec::new(), Vec::new(), content.into_bytes())

@@ -3664,3 +3664,172 @@ fn select_layout_e2e_tiled_via_control_socket() {
     );
     client.send("kill-server").expect("kill-server");
 }
+
+/// The headless-fleet-bootstrap shape (the detached-start card): `par-mux
+/// start` DETACHED, over what plays the invoking ssh session, with
+/// --keep-alive. The `sh -c exec` spawner becomes the par-mux parent,
+/// which forks the detached daemon and exits after its "daemon running"
+/// report — the spawner is gone exactly like a closed ssh session, and
+/// the fresh state dir holds no sessions, so no client holds the daemon
+/// either. Under --keep-alive (exit-when-empty off) the daemon must still
+/// answer past the 5 s exit-when-empty grace — the window a start without
+/// the flag self-exits inside.
+#[cfg(unix)]
+#[ignore = "load-sensitive: PTY/timing suite; run via make test-rust-sensitive or checkall-ci"]
+#[test]
+fn a_detached_keep_alive_start_survives_its_spawner_and_the_empty_grace() {
+    use std::process::{Command, Stdio};
+
+    let fixture = MuxFixture::new("keep-alive");
+    let sock = fixture.socket().to_path_buf();
+    let bin = env!("CARGO_BIN_EXE_par-mux");
+    // A crashed earlier run of this test must not hold the state lock
+    // under this socket: a best-effort stop clears the path first.
+    let _ = Command::new(bin)
+        .arg("--stop")
+        .arg("--socket")
+        .arg(&sock)
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .output();
+    let script = format!(
+        "exec '{bin}' start --socket '{sock}' --state-dir '{state}' --no-attach --keep-alive",
+        sock = sock.display(),
+        bin = bin,
+        state = fixture.state_dir().display(),
+    );
+    let status = Command::new("/bin/sh")
+        .arg("-c")
+        .arg(&script)
+        .env("PAR_MUX_CONFIG", fixture.config_path())
+        .env("PAR_MUX_NO_APP_WRAPPER", "1")
+        .env_remove("PAR_MUX_ENV")
+        .env_remove("PAR_MUX_DIE_WITH_PARENT")
+        .env_remove("PAR_MUX_SOCKET")
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .status()
+        .expect("spawn the detached start");
+    assert!(status.success(), "the detached start exits 0: {status}");
+    wait_listening(&sock);
+
+    // An exit-when-empty daemon self-exits ~5 s after going empty; the
+    // keep-alive daemon must still accept across that whole window.
+    let deadline = Instant::now() + Duration::from_secs(6);
+    while Instant::now() < deadline {
+        assert!(
+            connect_local_stream(&sock).is_ok(),
+            "the keep-alive daemon died inside the exit-when-empty grace window"
+        );
+        std::thread::sleep(Duration::from_millis(100));
+    }
+    let out = Command::new(bin)
+        .arg("--socket")
+        .arg(&sock)
+        .arg("--cmd")
+        .arg("version")
+        .stdin(Stdio::null())
+        .output()
+        .expect("run the version probe");
+    assert!(out.status.success(), "--cmd version must exit 0: {out:?}");
+    assert!(
+        !out.stdout.is_empty(),
+        "the empty keep-alive daemon answered version: {:?}",
+        String::from_utf8_lossy(&out.stdout)
+    );
+
+    // Cleanup, the same shape as the recipe's later-session stop.
+    let stopped = Command::new(bin)
+        .arg("--stop")
+        .arg("--socket")
+        .arg(&sock)
+        .stdin(Stdio::null())
+        .output()
+        .expect("run the stop");
+    assert!(stopped.status.success(), "--stop must exit 0: {stopped:?}");
+    let deadline = Instant::now() + Duration::from_secs(10);
+    while connect_local_stream(&sock).is_ok() {
+        assert!(
+            Instant::now() < deadline,
+            "the daemon kept accepting after --stop"
+        );
+        std::thread::sleep(Duration::from_millis(50));
+    }
+}
+
+/// The default pinned: the SAME detached start without --keep-alive
+/// self-exits inside the exit-when-empty grace (a fresh state dir has no
+/// sessions and no client), and the daemon log records why. Default
+/// behavior must not change — this is the observed headless-start death,
+/// reproduced and asserted.
+#[cfg(unix)]
+#[ignore = "load-sensitive: PTY/timing suite; run via make test-rust-sensitive or checkall-ci"]
+#[test]
+fn a_detached_start_without_keep_alive_exits_on_the_empty_grace() {
+    use std::process::{Command, Stdio};
+
+    let fixture = MuxFixture::new("exit-empty");
+    let sock = fixture.socket().to_path_buf();
+    let bin = env!("CARGO_BIN_EXE_par-mux");
+    let _ = Command::new(bin)
+        .arg("--stop")
+        .arg("--socket")
+        .arg(&sock)
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .output();
+    let script = format!(
+        "exec '{bin}' start --socket '{sock}' --state-dir '{state}' --no-attach",
+        sock = sock.display(),
+        bin = bin,
+        state = fixture.state_dir().display(),
+    );
+    let status = Command::new("/bin/sh")
+        .arg("-c")
+        .arg(&script)
+        .env("PAR_MUX_CONFIG", fixture.config_path())
+        .env("PAR_MUX_NO_APP_WRAPPER", "1")
+        .env_remove("PAR_MUX_ENV")
+        .env_remove("PAR_MUX_DIE_WITH_PARENT")
+        .env_remove("PAR_MUX_SOCKET")
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .status()
+        .expect("spawn the detached start");
+    assert!(status.success(), "the detached start exits 0: {status}");
+    wait_listening(&sock);
+
+    // The grace is 5 s from the cadence's first empty observation; a
+    // generous bound keeps a loaded host honest without weakening the
+    // assertion: the daemon DOES go away on its own.
+    let deadline = Instant::now() + Duration::from_secs(15);
+    while connect_local_stream(&sock).is_ok() {
+        assert!(
+            Instant::now() < deadline,
+            "the unpinned daemon never exited; exit-when-empty must stay on by default"
+        );
+        std::thread::sleep(Duration::from_millis(100));
+    }
+    // The log beside the state file carries the verdict line.
+    let mut log = par_mux::mux::persist::state_file_in(&fixture.state_dir(), fixture.socket());
+    log.as_mut_os_string().push(".log");
+    let verdict_deadline = Instant::now() + Duration::from_secs(5);
+    let contents = loop {
+        match std::fs::read_to_string(&log) {
+            Ok(text) if text.contains("exit-when-empty") => break text,
+            _ if Instant::now() < verdict_deadline => {
+                std::thread::sleep(Duration::from_millis(100));
+            }
+            Ok(text) => panic!("the daemon log never recorded the exit: {text}"),
+            Err(err) => panic!("the daemon log {} is missing: {err}", log.display()),
+        }
+    };
+    assert!(
+        contents.contains("tree empty; daemon exiting (exit-when-empty)"),
+        "the log must name the exit-when-empty verdict: {contents}"
+    );
+}

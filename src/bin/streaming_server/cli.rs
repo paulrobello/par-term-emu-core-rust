@@ -201,6 +201,20 @@ pub struct Args {
     #[arg(long, env = "PAR_TERM_CSP_ALLOW_BLOB_CONNECT")]
     pub csp_allow_blob_connect: bool,
 
+    /// Opt-in HTTPS origins appended to the Content-Security-Policy's
+    /// connect-src so a custom web root can fetch public APIs directly.
+    /// Comma-separated (or repeat the flag); each value must be the strict
+    /// `https://host[:port]` form — anything else is rejected at startup
+    /// naming the value. Default off: the ENH-059 policy stays
+    /// byte-identical.
+    #[arg(
+        long,
+        value_name = "ORIGIN",
+        env = "PAR_TERM_CSP_CONNECT_ORIGINS",
+        value_delimiter = ','
+    )]
+    pub csp_connect_origins: Option<Vec<String>>,
+
     /// Acknowledge binding a non-loopback host with no authentication
     /// (SEC-002). Without this flag the server refuses to start in that
     /// configuration: anyone who can reach the port gets an interactive

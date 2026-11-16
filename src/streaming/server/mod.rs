@@ -75,6 +75,7 @@ mod sessions;
 mod ws_session;
 
 mod http;
+pub use http::validate_csp_connect_origin;
 use http::*;
 
 /// Request/response types for the tungstenite WS handshake header callback,

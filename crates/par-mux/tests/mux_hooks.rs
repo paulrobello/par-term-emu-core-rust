@@ -28,14 +28,16 @@ use std::os::unix::net::UnixStream;
 use std::time::{Duration, Instant};
 
 /// A control client: the writer half and a buffered reader half of one
-/// socket, with a long read timeout so replies always land.
+/// socket. The read timeout is a poll slice: on expiry the loops below
+/// treat WouldBlock as "retry until the deadline", the shared harness's
+/// positive-wait discipline.
 struct Control(UnixStream, BufReader<UnixStream>);
 
 impl Control {
     fn connect(path: &std::path::Path) -> Self {
         let stream = UnixStream::connect(path).expect("daemon accepts control client");
         stream
-            .set_read_timeout(Some(Duration::from_secs(5)))
+            .set_read_timeout(Some(Duration::from_millis(250)))
             .expect("timeout installs");
         let reader = BufReader::new(stream.try_clone().expect("clone"));
         Control(stream, reader)
@@ -46,30 +48,50 @@ impl Control {
     fn command(&mut self, line: &str) -> Vec<String> {
         writeln!(self.0, "{line}").expect("write command");
         self.0.flush().expect("flush");
+        let deadline = Instant::now() + common::CEILING;
         let mut out = Vec::new();
         loop {
             let mut buf = String::new();
-            let n = self.1.read_line(&mut buf).expect("read reply");
-            assert!(n > 0, "server closed while answering {line:?}");
-            let done = buf.starts_with("%end") || buf.starts_with("%error");
-            out.push(buf);
-            if done {
-                return out;
+            match self.1.read_line(&mut buf) {
+                Ok(0) => panic!("server closed while answering {line:?}"),
+                Ok(_) => {
+                    let done = buf.starts_with("%end") || buf.starts_with("%error");
+                    out.push(buf);
+                    if done {
+                        return out;
+                    }
+                }
+                Err(err) if timed_out(&err) => {}
+                Err(err) => panic!("read error: {err}"),
             }
+            assert!(
+                Instant::now() < deadline,
+                "{line:?} never completed within {deadline:?}: {out:?}"
+            );
         }
     }
 
     /// The next line satisfying `ready`, skipping `%output` noise.
     fn line_until(&mut self, ready: impl Fn(&str) -> bool, what: &str) -> String {
-        let deadline = Instant::now() + Duration::from_secs(10);
+        let deadline = Instant::now() + common::CEILING;
         loop {
             let mut buf = String::new();
-            let n = self.1.read_line(&mut buf).expect("read line");
-            assert!(n > 0, "server closed while waiting for {what}");
-            if ready(buf.trim_end()) {
-                return buf;
+            match self.1.read_line(&mut buf) {
+                Ok(0) => panic!("server closed while waiting for {what}"),
+                Ok(_) => {
+                    if ready(buf.trim_end()) {
+                        return buf;
+                    }
+                    assert!(Instant::now() < deadline, "never saw {what}: {buf}");
+                }
+                Err(err) if timed_out(&err) => {
+                    assert!(
+                        Instant::now() < deadline,
+                        "never saw {what} within {deadline:?}"
+                    );
+                }
+                Err(err) => panic!("read error: {err}"),
             }
-            assert!(Instant::now() < deadline, "never saw {what}: {buf}");
         }
     }
 
@@ -91,7 +113,7 @@ impl Control {
             }
         }
         self.0
-            .set_read_timeout(Some(Duration::from_secs(5)))
+            .set_read_timeout(Some(Duration::from_millis(250)))
             .expect("timeout restores");
         lines
     }
@@ -184,10 +206,13 @@ impl Drop for Stage {
 }
 
 /// Send one hook report line on a fresh connection and read the one reply.
+/// The reply read is bounded by the hang ceiling, not an idle-calibrated
+/// budget: dispatch latency under full-gate load regularly exceeded 5 s
+/// (the shared `send` helper documents the same measurement).
 fn hook_round_trip(path: &std::path::Path, report: &str) -> String {
     let stream = UnixStream::connect(path).expect("daemon accepts hook connection");
     stream
-        .set_read_timeout(Some(Duration::from_secs(5)))
+        .set_read_timeout(Some(common::CEILING))
         .expect("timeout installs");
     let mut writer = stream.try_clone().expect("clone");
     writeln!(writer, "{report}").expect("send report");
@@ -966,7 +991,7 @@ fn a_pane_endpoint_refuses_control_commands_and_leaves_the_daemon_unchanged() {
     ] {
         let stream = UnixStream::connect(&endpoint).expect("the endpoint accepts");
         stream
-            .set_read_timeout(Some(Duration::from_secs(5)))
+            .set_read_timeout(Some(common::CEILING))
             .expect("timeout installs");
         let mut writer = stream.try_clone().expect("clone");
         writeln!(writer, "{refused}").expect("send command");

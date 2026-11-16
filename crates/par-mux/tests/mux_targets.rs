@@ -425,14 +425,19 @@ fn typed_ids_win_over_names_shaped_like_ids() {
     command(&mut writer, &mut reader, "select-pane -t %0 -T '%2'");
 
     // The reply echoes the RESOLVED id: %2 the pane, never %0 the titled.
+    // Assert on the reply BLOCK's body only: %output/%pane-damage pushes
+    // that race the reply name other panes (%output %0 …), and on a fast
+    // runner they arrive inside the collected block, tripping the negative
+    // assertion (measured 3 of 4 runs on ubuntu CI).
     let info = ask(&mut writer, &mut reader, "pane-info -t %2");
+    let body = block_lines(&info).join("\n");
     assert!(
-        info.contains("%2 @"),
+        body.contains("%2 @"),
         "the id target must resolve to pane %2, not the pane titled %2: {info}"
     );
     assert!(
-        !info.contains("%0"),
-        "the titled pane must not capture the id target: {info}"
+        !body.contains("%0"),
+        "the titled pane must not capture the id target: {body}"
     );
 
     drop(writer);

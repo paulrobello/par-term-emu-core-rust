@@ -393,7 +393,7 @@ fn a_workspace_reseed_tags_frames_with_the_new_pane() {
     // Pane 0 (the active workspace's pane) holds a graphic BEFORE the
     // mirror attaches, so its replayed frame carries the OLD pane's tag.
     let line =
-        b"printf '\\033_Ga=T,f=24,i=77,s=2,v=2;AAAAAAAAAAAAAAAA\\033\\\\'; echo GFX1-PLACED\r";
+        b"printf '\\033_Ga=T,f=24,i=77,q=2,s=2,v=2;AAAAAAAAAAAAAAAA\\033\\\\'; echo GFX1-PLACED\r";
     let hex: String = line
         .iter()
         .map(|b| format!("{b:02x} "))
@@ -431,7 +431,7 @@ fn a_workspace_reseed_tags_frames_with_the_new_pane() {
     // Pane 1 holds its own graphic; the desktop switches workspaces
     // and the mirror re-seeds IN PLACE.
     let line =
-        b"printf '\\033_Ga=T,f=24,i=88,s=2,v=2;BBBBBBBBBBBBBBBB\\033\\\\'; echo GFX2-PLACED\r";
+        b"printf '\\033_Ga=T,f=24,i=88,q=2,s=2,v=2;BBBBBBBBBBBBBBBB\\033\\\\'; echo GFX2-PLACED\r";
     let hex: String = line
         .iter()
         .map(|b| format!("{b:02x} "))
@@ -524,7 +524,7 @@ fn a_pane_graphic_streams_as_an_inline_image_frame() {
     // pane's shell runs (input queues in the pty until the shell reads
     // it, so one send executes exactly once whenever the shell is up).
     // RGB decodes to RGBA in the store: 4 pixels x 4 bytes.
-    let line = b"printf '\\033_Ga=T,f=24,i=77,s=2,v=2;AAAAAAAAAAAAAAAA\\033\\\\'\r";
+    let line = b"printf '\\033_Ga=T,f=24,i=77,q=2,s=2,v=2;AAAAAAAAAAAAAAAA\\033\\\\'\r";
     let hex: String = line
         .iter()
         .map(|b| format!("{b:02x} "))
@@ -633,7 +633,7 @@ fn a_graphic_placed_before_attach_replays_in_connected_graphics() {
     // the image bytes above it, so the mirror below attaches AFTER
     // the placement deterministically.
     let line =
-        b"printf '\\033_Ga=T,f=24,i=77,s=2,v=2;AAAAAAAAAAAAAAAA\\033\\\\'; echo GFX-PLACED\r";
+        b"printf '\\033_Ga=T,f=24,i=77,q=2,s=2,v=2;AAAAAAAAAAAAAAAA\\033\\\\'; echo GFX-PLACED\r";
     let hex: String = line
         .iter()
         .map(|b| format!("{b:02x} "))
@@ -696,7 +696,7 @@ fn a_graphic_placed_before_attach_replays_in_connected_graphics() {
     // The live leg is untouched: a placement after attach still
     // arrives as the pane-tagged InlineImage frame.
     let mut updates = session.broadcast_tx.subscribe();
-    let line = b"printf '\\033_Ga=T,f=24,i=88,s=2,v=2;BBBBBBBBBBBBBBBB\\033\\\\'\r";
+    let line = b"printf '\\033_Ga=T,f=24,i=88,q=2,s=2,v=2;BBBBBBBBBBBBBBBB\\033\\\\'\r";
     let hex: String = line
         .iter()
         .map(|b| format!("{b:02x} "))

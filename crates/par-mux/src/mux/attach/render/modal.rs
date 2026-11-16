@@ -7,7 +7,37 @@ use super::{copy_mode, Modal, WindowSession};
 use par_term_emu_core::keyboard::TermKey;
 use par_term_emu_core::keyboard::TermKeyEvent;
 
+use crate::mux::attach::input::lookup;
 use copy_mode::{CopyModeState, SearchDirection, VisualMode};
+
+/// A plain cursor motion: mutates copy mode's state, no line text.
+type CopyMotion = fn(&mut CopyModeState);
+
+/// A line-text motion: also receives the cursor line's text.
+type CopyLineMotion = fn(&mut CopyModeState, &str);
+
+/// Single-character plain cursor motions (`h j k l $`) → state mutators.
+/// `0` is deliberately absent: bare `0` moves only when no count is
+/// pending, which `copy_mode_count` decides.
+const COPY_MOTIONS: &[(char, CopyMotion)] = &[
+    ('h', CopyModeState::move_left),
+    ('j', CopyModeState::move_down),
+    ('k', CopyModeState::move_up),
+    ('l', CopyModeState::move_right),
+    ('$', CopyModeState::move_to_line_end),
+];
+
+/// Line-text motions (`^` and the word family) → state mutators; each
+/// receives the cursor line's text.
+const COPY_LINE_MOTIONS: &[(char, CopyLineMotion)] = &[
+    ('^', CopyModeState::move_to_first_non_blank),
+    ('w', CopyModeState::move_word_forward),
+    ('b', CopyModeState::move_word_backward),
+    ('e', CopyModeState::move_word_end),
+    ('W', CopyModeState::move_big_word_forward),
+    ('B', CopyModeState::move_big_word_backward),
+    ('E', CopyModeState::move_big_word_end),
+];
 
 impl WindowSession {
     /// Run `f` over copy mode's state, restoring it whatever `f` does.
@@ -32,7 +62,7 @@ impl WindowSession {
             self.exit_copy_state();
         }
         self.modal = modal;
-        self.text_utf8 = Default::default();
+        self.input_route.text_utf8 = Default::default();
     }
 
     /// Enter the sticky resize mode (the `resize` chord): arrows adjust
@@ -322,7 +352,7 @@ impl WindowSession {
                 self.draw_status_row();
             }
             b if b >= 0x80 => {
-                if let Some(ch) = self.text_utf8.push_printable(b) {
+                if let Some(ch) = self.input_route.text_utf8.push_printable(b) {
                     self.with_copy_state(|s| s.search_query.push(ch));
                     let query = self
                         .with_copy_state(|s| s.search_query.clone())
@@ -337,8 +367,30 @@ impl WindowSession {
     }
 
     /// The pending two-key sequences first (`gg`, `m{a-z}`, `'{a-z}`),
-    /// then the character key table. Mirrors par-term's handler.
+    /// then the motion tables, the count prefix, and the remaining
+    /// commands. Mirrors par-term's handler.
     fn copy_mode_char(&mut self, ch: char) {
+        if self.copy_mode_pending(ch) {
+            return;
+        }
+        if let Some(motion) = lookup(COPY_MOTIONS, ch) {
+            self.copy_motion(motion);
+            return;
+        }
+        if let Some(motion) = lookup(COPY_LINE_MOTIONS, ch) {
+            self.copy_line_motion(motion);
+            return;
+        }
+        if self.copy_mode_count(ch) {
+            return;
+        }
+        self.copy_mode_command(ch);
+    }
+
+    /// The pending two-key sequences (`gg`, `m{a-z}`, `'{a-z}`): true
+    /// when `ch` was consumed by one. Each pending flag clears whether
+    /// or not `ch` completes its sequence.
+    fn copy_mode_pending(&mut self, ch: char) -> bool {
         if self.with_copy_state(|s| s.pending_mark_set) == Some(true) {
             self.with_copy_state(|s| {
                 s.pending_mark_set = false;
@@ -346,7 +398,7 @@ impl WindowSession {
                     s.set_mark(ch);
                 }
             });
-            return;
+            return true;
         }
         if self.with_copy_state(|s| s.pending_mark_goto) == Some(true) {
             self.with_copy_state(|s| s.pending_mark_goto = false);
@@ -356,7 +408,7 @@ impl WindowSession {
                     self.after_copy_motion();
                 }
             }
-            return;
+            return true;
         }
         if self.with_copy_state(|s| s.pending_g) == Some(true) {
             self.with_copy_state(|s| {
@@ -365,13 +417,16 @@ impl WindowSession {
             if ch == 'g' {
                 self.copy_motion(CopyModeState::goto_top);
             }
-            return;
+            return true;
         }
+        false
+    }
+
+    /// The count prefix: digits push onto the count (`0` only when a
+    /// count is already pending — bare `0` is move-to-line-start), and
+    /// `G` consumes the count as a line number (no count: bottom).
+    fn copy_mode_count(&mut self, ch: char) -> bool {
         match ch {
-            'h' => self.copy_motion(CopyModeState::move_left),
-            'j' => self.copy_motion(CopyModeState::move_down),
-            'k' => self.copy_motion(CopyModeState::move_up),
-            'l' => self.copy_motion(CopyModeState::move_right),
             '0' => {
                 let counted = self.with_copy_state(|s| s.count.is_some()) == Some(true);
                 if counted {
@@ -385,14 +440,6 @@ impl WindowSession {
                     self.with_copy_state(|s| s.push_count_digit(d as u8));
                 }
             }
-            '$' => self.copy_motion(CopyModeState::move_to_line_end),
-            '^' => self.copy_line_motion(CopyModeState::move_to_first_non_blank),
-            'w' => self.copy_line_motion(CopyModeState::move_word_forward),
-            'b' => self.copy_line_motion(CopyModeState::move_word_backward),
-            'e' => self.copy_line_motion(CopyModeState::move_word_end),
-            'W' => self.copy_line_motion(CopyModeState::move_big_word_forward),
-            'B' => self.copy_line_motion(CopyModeState::move_big_word_backward),
-            'E' => self.copy_line_motion(CopyModeState::move_big_word_end),
             'G' => {
                 let count = self.with_copy_state(|s| s.count.take()).flatten();
                 match count {
@@ -402,6 +449,16 @@ impl WindowSession {
                     None => self.copy_motion(CopyModeState::goto_bottom),
                 }
             }
+            _ => return false,
+        }
+        true
+    }
+
+    /// Everything else the mode understands: visual toggles, yank,
+    /// search, the mark sequences' entry points, the viewport jumps,
+    /// and quit. Unrecognized characters are ignored.
+    fn copy_mode_command(&mut self, ch: char) {
+        match ch {
             'g' => {
                 self.with_copy_state(|s| s.pending_g = true);
             }

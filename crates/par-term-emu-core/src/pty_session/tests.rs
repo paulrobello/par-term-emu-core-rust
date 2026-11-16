@@ -2205,3 +2205,77 @@ fn damage_callback_takes_precedence_over_the_plain_one() {
         "the plain callback must not fire when the damage one is set"
     );
 }
+
+/// Card 01a1dd15: a failed `master.resize` (the ioctl half) must leave the
+/// grid untouched — PTY-first ordering means nothing moves on failure, so
+/// the grid can never run ahead of the child's kernel winsize.
+#[cfg(unix)]
+#[test]
+fn resize_ioctl_failure_leaves_grid_at_old_size() {
+    let mut session = new_test_session(80, 24, 1000);
+    session
+        .spawn("/bin/sh", &["-c", "sleep 30"])
+        .expect("spawn");
+    session.fail_next_resize_step.store(1, Ordering::Relaxed);
+    let err = session
+        .resize(100, 30)
+        .expect_err("injected master.resize failure must surface");
+    assert!(
+        err.to_string().contains("injected"),
+        "unexpected error: {err}"
+    );
+    assert_eq!(session.size(), (80, 24), "grid stays at the old size");
+    {
+        let term = session.terminal();
+        assert_eq!(term.read().size(), (80, 24), "terminal grid untouched");
+    }
+    session.kill().expect("kill");
+}
+
+/// Card 01a1dd15: a SIGWINCH delivery failure after a successful ioctl
+/// must surface as Err and skip the reflow, so the grid does not run
+/// ahead of a child that was never notified. No delivery is attempted
+/// while the injection is armed.
+#[cfg(unix)]
+#[test]
+fn resize_sigwinch_failure_surfaces_and_skips_reflow() {
+    let mut session = new_test_session(80, 24, 1000);
+    session
+        .spawn("/bin/sh", &["-c", "sleep 30"])
+        .expect("spawn");
+    let before = session.signals_sent.load(Ordering::SeqCst);
+    session.fail_next_resize_step.store(2, Ordering::Relaxed);
+    let err = session
+        .resize(100, 30)
+        .expect_err("injected SIGWINCH failure must surface");
+    assert!(
+        err.to_string().contains("SIGWINCH"),
+        "unexpected error: {err}"
+    );
+    assert_eq!(
+        session.size(),
+        (80, 24),
+        "reflow skipped on SIGWINCH failure"
+    );
+    assert_eq!(
+        session.signals_sent.load(Ordering::SeqCst),
+        before,
+        "the injected failure fires before any delivery attempt"
+    );
+    session.fail_next_resize_step.store(0, Ordering::Relaxed);
+    session.kill().expect("kill");
+}
+
+/// Sessions without a PTY (mirrors) resize the grid and skip the PTY half
+/// silently — the PTY-first ordering must not turn a missing master into
+/// an error.
+#[test]
+fn resize_without_a_pty_resizes_the_grid() {
+    let mut session = new_test_session(80, 24, 1000);
+    session.resize(120, 40).expect("resize");
+    assert_eq!(session.size(), (120, 40));
+    {
+        let term = session.terminal();
+        assert_eq!(term.read().size(), (120, 40));
+    }
+}

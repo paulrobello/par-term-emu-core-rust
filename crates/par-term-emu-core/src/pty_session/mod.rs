@@ -207,6 +207,11 @@ pub struct PtySession {
     /// Test seam: SIGWINCH deliveries this session attempted.
     #[cfg(all(test, unix))]
     signals_sent: Arc<std::sync::atomic::AtomicUsize>,
+    /// Test seam: `1` fails the next `master.resize` (the ioctl half), `2`
+    /// fails the next SIGWINCH delivery, so the resize-ordering contract
+    /// (card 01a1dd15) is testable without a real failing master.
+    #[cfg(all(test, unix))]
+    fail_next_resize_step: Arc<std::sync::atomic::AtomicUsize>,
 }
 
 /// Exclusive terminal access that republishes the session's wait-free
@@ -285,6 +290,8 @@ impl PtySession {
             parent_env_override: None,
             #[cfg(all(test, unix))]
             signals_sent: Arc::new(std::sync::atomic::AtomicUsize::new(0)),
+            #[cfg(all(test, unix))]
+            fail_next_resize_step: Arc::new(std::sync::atomic::AtomicUsize::new(0)),
         };
         session.geometry.publish(&session.terminal.read());
         session

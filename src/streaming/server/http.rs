@@ -488,6 +488,93 @@ pub(super) const CONTENT_SECURITY_POLICY_BLOB_CONNECT: &str = "default-src 'self
     object-src 'none'; base-uri 'self'; form-action 'self'; \
     frame-ancestors 'none'";
 
+/// Validate one opt-in `connect-src` origin for the CSP allowlist
+/// (`--csp-connect-origins`). Only the strict `https://host[:port]`
+/// source-expression form is accepted: path, query, fragment, userinfo
+/// (credentials), backslash/percent escapes, whitespace and control
+/// characters, and non-HTTPS schemes are rejected, so the composed policy
+/// stays a valid, injection-free header value and the allowlist cannot
+/// grow broader than a host-source. The error text names the rejected
+/// value.
+pub fn validate_csp_connect_origin(origin: &str) -> std::result::Result<(), String> {
+    let invalid = |why: &str| format!("invalid CSP connect-src origin '{origin}': {why}");
+    let Some(rest) = origin.strip_prefix("https://") else {
+        return Err(invalid("expected the form https://host[:port]"));
+    };
+    if rest.is_empty() {
+        return Err(invalid("empty host"));
+    }
+    if rest.chars().any(|c| {
+        matches!(c, '/' | '?' | '#' | '@' | '\\' | '%') || c.is_whitespace() || c.is_ascii_control()
+    }) {
+        return Err(invalid(
+            "only host[:port] is allowed (no path, query, fragment, or userinfo)",
+        ));
+    }
+    // Bracketed IPv6 literals keep their colons; otherwise the last colon
+    // starts the port.
+    let (host, port) = if rest.starts_with('[') {
+        let Some(end) = rest.find(']') else {
+            return Err(invalid("unterminated IPv6 literal"));
+        };
+        let (host, after) = rest.split_at(end + 1);
+        (host, after.strip_prefix(':'))
+    } else {
+        match rest.rsplit_once(':') {
+            Some((h, p)) => (h, Some(p)),
+            None => (rest, None),
+        }
+    };
+    if let Some(port) = port {
+        let ok = !port.is_empty()
+            && port.bytes().all(|b| b.is_ascii_digit())
+            && matches!(port.parse::<u16>(), Ok(1..=65535));
+        if !ok {
+            return Err(invalid("port must be a number between 1 and 65535"));
+        }
+    }
+    if host.starts_with('[') {
+        let inner = &host[1..host.len() - 1];
+        let ok = host.ends_with(']')
+            && !inner.is_empty()
+            && inner.chars().all(|c| c == ':' || c.is_ascii_hexdigit());
+        if !ok {
+            return Err(invalid("malformed IPv6 literal"));
+        }
+    }
+    Ok(())
+}
+
+/// The Content-Security-Policy header value for a configuration. Without
+/// configured origins this is the pinned constant unchanged
+/// (byte-identical baseline); with origins configured they are appended to
+/// `connect-src` after the existing tokens, so the served policy permits
+/// exactly `'self'`, the `ws:`/`wss:` tokens, `blob:` when opted in, and
+/// nothing beyond the supplied HTTPS origins. Origins must have passed
+/// [`validate_csp_connect_origin`] — the streamer CLI and the Python
+/// binding both enforce it — or header composition panics rather than
+/// serving a weakened policy.
+pub(super) fn csp_header_value(
+    allow_blob_connect_src: bool,
+    csp_connect_origins: Option<&[String]>,
+) -> String {
+    let baseline = if allow_blob_connect_src {
+        CONTENT_SECURITY_POLICY_BLOB_CONNECT
+    } else {
+        CONTENT_SECURITY_POLICY
+    };
+    let Some(origins) = csp_connect_origins.filter(|o| !o.is_empty()) else {
+        return baseline.to_string();
+    };
+    let (head, tail) = baseline
+        .split_once("connect-src ")
+        .expect("connect-src directive in the CSP constant");
+    let (connect, rest) = tail
+        .split_once(';')
+        .expect("connect-src terminator in the CSP constant");
+    format!("{head}connect-src {connect} {};{rest}", origins.join(" "))
+}
+
 /// Anti-framing headers on every response (SEC-010), with the full CSP
 /// (ENH-059). The served web frontend drives a live shell; without
 /// `X-Frame-Options: DENY` and a `frame-ancestors 'none'` CSP, a
@@ -497,7 +584,7 @@ pub(super) const CONTENT_SECURITY_POLICY_BLOB_CONNECT: &str = "default-src 'self
 pub(super) async fn add_security_headers(
     req: axum::http::Request<axum::body::Body>,
     next: axum::middleware::Next,
-    allow_blob_connect_src: bool,
+    csp: &str,
 ) -> axum::response::Response {
     use axum::http::{HeaderName, HeaderValue};
     let mut res = next.run(req).await;
@@ -506,15 +593,9 @@ pub(super) async fn add_security_headers(
         HeaderName::from_static("x-frame-options"),
         HeaderValue::from_static("DENY"),
     );
-    let csp = if allow_blob_connect_src {
-        CONTENT_SECURITY_POLICY_BLOB_CONNECT
-    } else {
-        CONTENT_SECURITY_POLICY
-    };
-    headers.insert(
-        HeaderName::from_static("content-security-policy"),
-        HeaderValue::from_static(csp),
-    );
+    let csp = HeaderValue::from_str(csp)
+        .expect("validated CSP origins keep the policy a valid header value");
+    headers.insert(HeaderName::from_static("content-security-policy"), csp);
     res
 }
 

@@ -51,11 +51,27 @@ mod tests {
     use super::group_cpu_ms;
 
     /// The test process is in the OS table, and by the time a test runs
-    /// the binary's runtime init has burned measurable CPU.
+    /// the binary's runtime init has burned measurable CPU. Bounded poll:
+    /// a fresh nextest process can legitimately hold fewer than one
+    /// scheduler tick (10 ms at 100 Hz) of CPU when the body runs, reading
+    /// accumulated_cpu_time as 0 (measured on ubuntu CI); a few ms of the
+    /// poll loop's own syscalls flip it positive.
     #[test]
     fn own_process_reports_cumulative_cpu() {
-        let ms = group_cpu_ms(std::process::id()).expect("the test process is in the table");
-        assert!(ms > 0, "a running test binary has burned CPU: {ms}");
+        let mut saw = None;
+        for _ in 0..100 {
+            if let Some(ms) = group_cpu_ms(std::process::id()) {
+                if ms > 0 {
+                    saw = Some(ms);
+                    break;
+                }
+            }
+            std::thread::sleep(std::time::Duration::from_millis(50));
+        }
+        assert!(
+            saw.is_some(),
+            "a running test binary accumulates CPU within the poll window"
+        );
     }
 
     /// A pid absent from the process table reads as unknown — no token,

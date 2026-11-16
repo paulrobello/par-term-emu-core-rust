@@ -528,6 +528,14 @@ fn seed_export_racing_output_stays_ordered() {
     // arrives — the wait then sits silent to its read ceiling, which is
     // exactly the load-run failures this suite saw.
     let mut anchor = Conn::connect(fixture.socket());
+    // The same tty-backlog unjam as refresh_client_replay below: a send-keys
+    // write blocks while the pane's tty input queue holds the hammer's
+    // backlog, so the anchor can land typed-ahead behind ~300 un-executed
+    // markers and surface only after the shell consumes all of them. ^C
+    // flushes the pending queue, so the anchor executes within the drain's
+    // read ceiling under load. The flush drops only un-executed markers,
+    // which this test's stream-stays-live probe never checks.
+    anchor.command("send-keys -t %0 -H 03");
     anchor.command("send-keys -t %0 ANCHORMARK STREAMS Enter");
     hammer.join().expect("hammer finished");
     let tail = observer.until(|l| l.contains("ANCHORMARK"), "the post-seed anchor marker");
@@ -546,7 +554,7 @@ fn seed_export_racing_output_stays_ordered() {
 /// covered, so a raced byte must never land in that discard window
 /// uncovered). A hammering connection whose send-keys the tty echoes
 /// continuously keeps the capture-to-enqueue gap hot.
-#[ignore = "load-sensitive: seed-race timing fails under host load (2/2 gate runs 2026-11-02 at load 32-58, 2/2 isolated passes); run via make test-rust-sensitive or checkall-ci"]
+#[ignore = "load-sensitive: seed-race timing fails under host load (2/2 gate runs 2026-11-02 at load 32-58, 2/2 isolated passes; ~95 s first-run seed-reply wait expiries at load 14-20, now budgeted at 2x CEILING); run via make test-rust-sensitive or checkall-ci"]
 #[test]
 fn refresh_client_replay_stays_ordered_under_output() {
     let fixture = MuxFixture::new("replay-race");
@@ -602,10 +610,20 @@ fn refresh_client_replay_stays_ordered_under_output() {
     // real use; the contract must hold on EVERY round that raced.
     let mut seed = String::new();
     let mut raced_markers: Vec<String> = Vec::new();
+    // The seed reply's wait budget is 2x CEILING rather than the shared
+    // ceiling: the daemon composes the reply through export #1 under the
+    // tree lock plus — with the hammer keeping the output epoch racing —
+    // a SECOND multi-megabyte re-export performed while HOLDING the
+    // clients lock (on_ordered_replay, server/client.rs), which stalls
+    // every pane's %output fan-out for its duration, then drains the
+    // multi-MB reply through the socket. Under a load storm that chain
+    // legitimately exceeds one 90 s ceiling (~95 s first-run failures at
+    // host load 14-20); the ordering contract itself is sound. 180 s
+    // stays under the ci profile's harness kill (slow-timeout 30 s x 8).
     for _round in 0..4 {
         seeder.send("refresh-client -t %0");
         let mut reply = Vec::new();
-        let deadline = Instant::now() + common::CEILING;
+        let deadline = Instant::now() + common::CEILING + common::CEILING;
         loop {
             let mut buf = String::new();
             // WouldBlock-tolerant read: under a full-gate load storm a
@@ -677,9 +695,27 @@ fn refresh_client_replay_stays_ordered_under_output() {
     // (an anchor racing the hammer's tail would stop the drain early).
     hammer.join().expect("hammer finished");
     let mut anchor = Conn::connect(fixture.socket());
+    // A joined hammer is not a drained pane. A PTY master write blocks
+    // while the pane's tty input queue holds the backlog, so the joined
+    // hammer can still leave ~130 un-executed markers typed ahead in the
+    // kernel queue — gate 9 (2026-11-14, load 9-11) expired this 2x-CEILING
+    // drain with only markers 004-068 executed, its tail full of the tty's
+    // partially dropped echo of that backlog (the period-15 "RACE…" runs:
+    // surviving prefix bytes of 15-byte marker echoes past a stalled
+    // output drain). ^C is the terminal's own unjam: ISIG flushes the
+    // pending input queue (NOFLSH off) and interrupts ZLE's current line,
+    // so ANCHORMARK is the shell's next input whatever the backlog was.
+    // The flush cannot weaken the probe below: markers it discards never
+    // executed and never reached the screen, and the probe checks only
+    // markers the screen shows.
+    anchor.command("send-keys -t %0 -H 03");
     anchor.command("send-keys -t %0 ANCHORMARK REPLAYS Enter");
     let mut post_reply = Vec::new();
-    let deadline = Instant::now() + common::CEILING;
+    // The post-reply anchor drain gets the seed reply's 2x CEILING: the
+    // anchor echo sits behind the same load-stormed pane, and the 1x
+    // budget expired in the gate's first run at 94 s (2026-11-14 gate 7)
+    // with markers still streaming.
+    let deadline = Instant::now() + common::CEILING + common::CEILING;
     loop {
         let mut buf = String::new();
         // Same WouldBlock-tolerant polling as the seed reply: the anchor

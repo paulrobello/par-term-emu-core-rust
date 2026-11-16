@@ -272,13 +272,22 @@ impl DaemonLaunch {
             par_mux::mux::persist::StatePeek::Populated => {}
             par_mux::mux::persist::StatePeek::Empty => eprintln!(
                 "par-mux: previous daemon saved an empty tree at {} — the fresh daemon will \
-                 restore nothing and exit (exit-when-empty)",
-                self.state_path.display()
+                 restore nothing{}",
+                self.state_path.display(),
+                if self.eff.exit_empty {
+                    " and exit (exit-when-empty)"
+                } else {
+                    " and wait (--keep-alive)"
+                }
             ),
             par_mux::mux::persist::StatePeek::Missing => eprintln!(
-                "par-mux: no saved state at {} — the fresh daemon will start empty and exit \
-                 (exit-when-empty)",
-                self.state_path.display()
+                "par-mux: no saved state at {} — the fresh daemon will start empty{}",
+                self.state_path.display(),
+                if self.eff.exit_empty {
+                    " and exit (exit-when-empty)"
+                } else {
+                    " and wait (--keep-alive)"
+                }
             ),
             par_mux::mux::persist::StatePeek::Unreadable => eprintln!(
                 "par-mux: saved state {} is unreadable — the fresh daemon will quarantine it \
@@ -483,7 +492,7 @@ impl DaemonLaunch {
         // reported the save side on the terminal; this records the restore
         // side — including a populated save that failed to rebuild — in the
         // daemon log the fork points stderr at.
-        if cli.restart && tree.sessions().is_empty() {
+        if cli.restart && eff.exit_empty && tree.sessions().is_empty() {
             log::warn!("par-mux: restored tree is empty; daemon exiting (exit-when-empty)");
         }
         // Committed upload files persist for pane apps by design, so spool
@@ -932,4 +941,41 @@ fn install_signal_handlers() -> std::io::Result<()> {
         unsafe { signal::sigaction(terminal_signal, &ignore) }.map_err(std::io::Error::other)?;
     }
     Ok(())
+}
+
+#[cfg(all(test, unix))]
+mod signal_tests {
+    use super::install_signal_handlers;
+
+    /// The detached daemon must survive the invoking terminal hanging up:
+    /// after [`install_signal_handlers`] every terminal-generated signal
+    /// is discarded (SIG_IGN) — execution simply continues past the
+    /// raise — while SIGTERM reaches the clean-shutdown handler (which,
+    /// with the shutdown handle unset in tests, stores nothing and
+    /// returns). This is the SIGHUP half of the detached-start contract:
+    /// closing the ssh session that started the daemon must not kill it.
+    #[test]
+    fn terminal_generated_signals_are_ignored_and_sigterm_shuts_down() {
+        use nix::sys::signal;
+        install_signal_handlers().expect("install the daemon dispositions");
+        for signum in [
+            signal::SIGHUP,
+            signal::SIGINT,
+            signal::SIGQUIT,
+            signal::SIGPIPE,
+            signal::SIGTSTP,
+        ] {
+            // SAFETY: raise takes only the signal number and cannot fail
+            // for a delivered, ignored signal.
+            let raised = unsafe { libc::raise(signum as i32) };
+            assert_eq!(
+                raised, 0,
+                "signal {signum} must be ignored after install (raise returned {raised})"
+            );
+        }
+        // SAFETY: raise takes only the signal number; the handler is the
+        // async-signal-safe store-or-return of on_sigterm.
+        let term = unsafe { libc::raise(signal::SIGTERM as i32) };
+        assert_eq!(term, 0, "SIGTERM must reach its handler and return");
+    }
 }

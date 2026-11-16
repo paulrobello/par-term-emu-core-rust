@@ -283,7 +283,7 @@ impl Session {
 
     pub(super) fn pump_loop(&mut self) -> PumpOutcome {
         let mut stdin = Stdin::new();
-        let mut status_dirty = true;
+        let mut status_dirty = StatusDirty::dirty();
         // The flash cue's lifetime in loop polls (~1 s at POLL = 16 ms).
         const FLASH_POLLS: u32 = 60;
         let mut flash_polls = 0u32;
@@ -324,7 +324,7 @@ impl Session {
                 return PumpOutcome::Detached;
             }
             if self.prefix_pending != prefix_before {
-                status_dirty = true;
+                status_dirty.mark();
             }
 
             // 3. Status line redraw when something marked it dirty — or
@@ -333,7 +333,7 @@ impl Session {
             //    rides this path (route_bytes set it) and clears after
             //    about a second of polls, so the next normal redraw
             //    restores the plain status line.
-            if status_dirty || self.size_changed() || self.flash.is_some() {
+            if status_dirty.needs_redraw() || self.size_changed() || self.flash.is_some() {
                 if self.flash.is_some() {
                     flash_polls += 1;
                     if flash_polls > FLASH_POLLS {
@@ -341,7 +341,7 @@ impl Session {
                         flash_polls = 0;
                     }
                 }
-                status_dirty = false;
+                status_dirty.clear();
                 status_polls = 0;
                 self.refresh_status();
                 self.draw_status();

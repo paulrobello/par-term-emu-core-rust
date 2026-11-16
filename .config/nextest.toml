@@ -23,6 +23,17 @@ slow-timeout = { period = "30s", terminate-after = 8 }
 # tolerate.
 test-threads = 8
 
+# Measurement harnesses self-label "(not a gate)" and CI's mux-test leg
+# runs the ci profile WITHOUT --run-ignored, so the local gate's
+# --run-ignored all was pulling a harness in that CI never runs; the
+# 2026-11-13 gate run timed one out at the 240 s harness kill. Exclude
+# them from every ci-profile run; manual measurement runs
+# (cargo test … --ignored --nocapture) don't read this file and are
+# unaffected.
+# (exact full-name form: `test()` regex forms `=~`/`/…/` matched nothing
+# on nextest 0.9.151 — measured 2026-11-13)
+default-filter = 'not (test(render_latency::click_latency_harness_records_click_to_action_ms_at_load_shapes))'
+
 # The chords test is legitimately long, not wedged: ~123s in isolation
 # (several waits consume most of their 10s deadline), which straddles the
 # old 30s x4 kill. Give it 30s x12 (above the 8x default) instead of
@@ -37,4 +48,14 @@ slow-timeout = { period = "30s", terminate-after = 12 }
 # 01a13c1464c374489bd71fd69b0e3aa9). Same rationale as the chords test.
 [[profile.ci.overrides]]
 filter = "test(resize_storm_post_reply_output_matches_daemon_ground_truth)"
+slow-timeout = { period = "30s", terminate-after = 12 }
+
+# The short-line flood regression (byte-budgeted eviction) is paced by
+# 5000 shell sleeps, which stretch under host load: the 2026-11-13 gate
+# run expired the test's original 90 s flood budget on the retry leg.
+# The flood budget now sits at 150 s and this override lifts the harness
+# kill to 30s x12 (360 s) so a loaded-host pacing stretch cannot look
+# wedged. Same rationale as the chords and resize-storm tests.
+[[profile.ci.overrides]]
+filter = "test(flood_short_lines_do_not_evict_a_lagging_observer)"
 slow-timeout = { period = "30s", terminate-after = 12 }

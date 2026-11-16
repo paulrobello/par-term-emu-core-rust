@@ -35,7 +35,7 @@ impl Clone for PyStreamingConfig {
 #[pymethods]
 impl PyStreamingConfig {
     #[new]
-    #[pyo3(signature = (max_clients=1000, send_initial_screen=true, keepalive_interval=30, default_read_only=false, initial_cols=0, initial_rows=0, enable_http=false, web_root="./web_term", max_clients_per_session=0, input_rate_limit_bytes_per_sec=0, enable_system_stats=false, system_stats_interval_secs=5, api_key=None, allow_api_key_in_query=false, allowed_origins=None, kitty_file_media="temp_only", allow_pane_create=false, allow_blob_connect_src=false))]
+    #[pyo3(signature = (max_clients=1000, send_initial_screen=true, keepalive_interval=30, default_read_only=false, initial_cols=0, initial_rows=0, enable_http=false, web_root="./web_term", max_clients_per_session=0, input_rate_limit_bytes_per_sec=0, enable_system_stats=false, system_stats_interval_secs=5, api_key=None, allow_api_key_in_query=false, allowed_origins=None, kitty_file_media="temp_only", allow_pane_create=false, allow_blob_connect_src=false, csp_connect_origins=None))]
     #[allow(
         clippy::too_many_arguments,
         reason = "Python keyword arguments, one per StreamingConfig field; a struct would change the Python API"
@@ -59,6 +59,7 @@ impl PyStreamingConfig {
         kitty_file_media: &str,
         allow_pane_create: bool,
         allow_blob_connect_src: bool,
+        csp_connect_origins: Option<Vec<String>>,
     ) -> PyResult<Self> {
         let kitty_file_media = crate::graphics::kitty::FileMediaMode::from_name(kitty_file_media)
             .ok_or_else(|| {
@@ -67,6 +68,13 @@ impl PyStreamingConfig {
                 kitty_file_media
             ))
         })?;
+        if let Some(origins) = &csp_connect_origins {
+            for origin in origins {
+                if let Err(why) = crate::streaming::server::validate_csp_connect_origin(origin) {
+                    return Err(pyo3::exceptions::PyValueError::new_err(why));
+                }
+            }
+        }
         Ok(Self {
             inner: StreamingConfig {
                 max_clients,
@@ -92,6 +100,7 @@ impl PyStreamingConfig {
                 kitty_file_media,
                 allow_pane_create,
                 allow_blob_connect_src,
+                csp_connect_origins,
             },
         })
     }
@@ -229,6 +238,48 @@ impl PyStreamingConfig {
     #[setter]
     fn set_allow_blob_connect_src(&mut self, allow_blob_connect_src: bool) {
         self.inner.allow_blob_connect_src = allow_blob_connect_src;
+    }
+
+    /// Get the opt-in HTTPS origins appended to the CSP's connect-src
+    ///
+    /// For custom web roots that fetch public APIs directly. Values use the
+    /// strict https://host[:port] form and are validated at config time.
+    ///
+    /// Returns:
+    ///     list[str] | None: Origins appended to connect-src (default None)
+    ///
+    /// Example:
+    ///     >>> config = StreamingConfig()
+    ///     >>> config.csp_connect_origins is None
+    ///     True
+    ///     >>> config.csp_connect_origins = ["https://api.zippopotam.us", "https://api.weather.gov"]
+    ///     >>> config.csp_connect_origins
+    ///     ['https://api.zippopotam.us', 'https://api.weather.gov']
+    #[getter]
+    fn csp_connect_origins(&self) -> Option<Vec<String>> {
+        self.inner.csp_connect_origins.clone()
+    }
+
+    /// Set the opt-in HTTPS origins appended to the CSP's connect-src
+    ///
+    /// Args:
+    ///     csp_connect_origins (list[str] | None): HTTPS origins in the
+    ///         strict https://host[:port] form; None clears the allowlist.
+    ///         Raises ValueError naming any invalid origin.
+    #[setter]
+    fn set_csp_connect_origins(
+        &mut self,
+        csp_connect_origins: Option<Vec<String>>,
+    ) -> PyResult<()> {
+        if let Some(origins) = &csp_connect_origins {
+            for origin in origins {
+                if let Err(why) = crate::streaming::server::validate_csp_connect_origin(origin) {
+                    return Err(pyo3::exceptions::PyValueError::new_err(why));
+                }
+            }
+        }
+        self.inner.csp_connect_origins = csp_connect_origins;
+        Ok(())
     }
 
     /// Get default read-only mode

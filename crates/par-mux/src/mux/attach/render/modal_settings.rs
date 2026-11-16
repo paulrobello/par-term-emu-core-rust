@@ -970,8 +970,8 @@ impl WindowSession {
             notify_delivery: self.notify.delivery.name().to_string(),
             notify_states: self.notify.states.clone(),
             sound: self.notify.sound.clone(),
-            prefix: self.prefix,
-            reload: self.reload_key,
+            prefix: self.input_route.prefix,
+            reload: self.input_route.reload_key,
             management: self.management,
         }
     }

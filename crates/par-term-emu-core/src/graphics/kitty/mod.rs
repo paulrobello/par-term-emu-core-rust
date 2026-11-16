@@ -52,6 +52,11 @@ pub enum KittyAction {
     Frame, // f - animation frame
     /// Animation control (`a`).
     AnimationControl, // a - animation control
+    /// Compose a new image from existing ones (`c`, kitty 0.22). Parsed
+    /// distinctly so it is rejected instead of falling through to the
+    /// default and being processed as a transmission, which would replace
+    /// the image under the id and drop its placements.
+    Compose, // c - compose images
 }
 
 impl KittyAction {
@@ -65,6 +70,7 @@ impl KittyAction {
             'd' => Some(KittyAction::Delete),
             'f' => Some(KittyAction::Frame),
             'a' => Some(KittyAction::AnimationControl),
+            'c' => Some(KittyAction::Compose),
             _ => None,
         }
     }
@@ -179,25 +185,35 @@ impl KittyCompression {
     }
 }
 
-/// Kitty delete target
+/// Kitty delete target (the `a=d,d=…` grammar). Per the spec's deleting
+/// section, lowercase letters delete only the matching placements so the
+/// stored data can be re-displayed with `a=p` without retransmitting, while
+/// the uppercase form "will delete the image data as well", provided the
+/// image is not still referenced (scrollback copies keep their own pixel
+/// `Arc`s, so the data survives there naturally).
+/// Reference: <https://sw.kovidgoyal.net/kitty/graphics-protocol/#deleting-images>
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum KittyDeleteTarget {
-    /// All images (`a`).
-    All, // a - all images
-    /// By image id (`i`).
-    ById(u32), // i - by image id
-    /// By image id and optional placement id.
-    ByPlacement(u32, Option<u32>), // (image_id, placement_id)
-    /// Images at the cursor position (`c`).
-    AtCursor, // c - at cursor position
-    /// Images at a specific cell (`p`).
-    InCell, // p - at specific cell
-    /// Images visible on screen (`z`).
-    OnScreen, // z - visible on screen
-    /// Images in a column (`x`).
-    ByColumn(u32), // x - in column
-    /// Images in a row (`y`).
-    ByRow(u32), // y - in row
+    /// All placements on screen (`a`/`A`).
+    All,
+    /// Placements intersecting the current cursor cell (`c`/`C`).
+    AtCursor,
+    /// The animation frames of the image `i=` names (`f`/`F`).
+    Frames,
+    /// The image `i=` names; with `p=` only that image's placement (`i`/`I`).
+    ById(u32, Option<u32>),
+    /// Placements intersecting the cell at `x=`, `y=` (`p`/`P`).
+    ByCell(u32, u32),
+    /// Placements intersecting the cell at `x=`, `y=` with z-index `z=` (`q`/`Q`).
+    ByCellZ(u32, u32, i32),
+    /// Images with ids between `x=` and `y=` inclusive (`r`/`R`, kitty 0.33+).
+    ByIdRange(u32, u32),
+    /// Placements intersecting column `x=` (`x`/`X`).
+    ByColumn(u32),
+    /// Placements intersecting row `y=` (`y`/`Y`).
+    ByRow(u32),
+    /// Placements with z-index `z=` (`z`/`Z`).
+    ByZIndex(i32),
 }
 
 /// Result of building a Kitty graphic
@@ -267,6 +283,9 @@ pub struct KittyParser {
     data_bytes: usize,
     /// Delete target
     pub delete_target: Option<KittyDeleteTarget>,
+    /// Whether the delete frees the stored image data too (the uppercase
+    /// `d=` letters). Meaningless unless [`Self::delete_target`] is set.
+    pub delete_frees_data: bool,
     /// Virtual placement (U=1)
     pub is_virtual: bool,
     /// Parent image ID for relative positioning (P= key)
@@ -279,8 +298,11 @@ pub struct KittyParser {
     pub relative_y_offset: Option<i32>,
     /// Frame number for animation: the frame `a=f` edits, or whose gap `a=a` sets (`r=`)
     pub frame_number: Option<u32>,
-    /// Frame delay in milliseconds
-    pub frame_delay_ms: Option<u32>,
+    /// Frame gap in milliseconds (`z=` on `a=f`/`a=a`). Signed per the
+    /// spec's animation section: a positive value sets the gap, "a value of
+    /// `z=0` is ignored (acts as though `z` was unspecified)", and negative
+    /// values create a *gapless* frame (a 0 ms gap).
+    pub frame_gap_ms: Option<i32>,
     /// Frame composition mode (`X=` on `a=f`)
     pub frame_composition: Option<CompositionMode>,
     /// The frame a new frame starts from (`c=` on `a=f`)
@@ -317,6 +339,37 @@ pub struct KittyParser {
     pub allow_file_media: FileMediaMode,
     /// Raw parameters for debugging
     params: HashMap<String, String>,
+}
+
+impl KittyParser {
+    /// The `i=/p=` echo prefix for a graphics-protocol response. Per the
+    /// spec's "Requesting support" section, "the `i` value will be the same
+    /// as was sent by the client in the original request"; placement ids
+    /// ride along as `i=<id>,p=<pid>`. A command that named neither sends a
+    /// bare `_G` response.
+    pub fn response_id_prefix(&self) -> String {
+        match (self.image_id, self.placement_id) {
+            (Some(id), Some(pid)) => format!("i={},p={}", id, pid),
+            (Some(id), None) => format!("i={}", id),
+            _ => String::new(),
+        }
+    }
+
+    /// The OK response line for this command (`q=0` only): `ESC _ G i=<id>[,p=<pid>] ; OK ST`.
+    pub fn ok_response(&self) -> String {
+        format!("\x1b_G{};OK\x1b\\", self.response_id_prefix())
+    }
+
+    /// The error response line for this command: `ESC _ G i=<id>[,p=<pid>] ; <code>:<message> ST`,
+    /// the format the spec shows for ENOENT (`_Gi=<id>;ENOENT:<some detailed error msg>`).
+    pub fn error_response(&self, code: &str, message: &str) -> String {
+        format!(
+            "\x1b_G{};{}:{}\x1b\\",
+            self.response_id_prefix(),
+            code,
+            message
+        )
+    }
 }
 
 /// Temp roots a `t=t` payload may name (SEC-101): kitty's spec restricts

@@ -458,6 +458,37 @@ impl PasteTracker {
     }
 }
 
+/// The passthrough pump's status-row freshness flag, typed (QA-003
+/// remainder): set means the row's facts — pane title, exit state,
+/// geometry, roster names — may be stale, so the next pass must redraw
+/// the reserved bottom row before it is trusted again. Cleared only
+/// immediately after that draw; the bare `&mut bool` this replaces let a
+/// stray write happen without the redraw that justifies it.
+struct StatusDirty(bool);
+
+impl StatusDirty {
+    /// The loop opens flagged: pass one paints the row once.
+    fn dirty() -> Self {
+        Self(true)
+    }
+
+    /// The status facts may have changed: a push that moves the title,
+    /// exit state, geometry, or roster names, or the prefix cue flipping.
+    fn mark(&mut self) {
+        self.0 = true;
+    }
+
+    /// Whether this pass owes the row a redraw.
+    fn needs_redraw(&self) -> bool {
+        self.0
+    }
+
+    /// Clear right after the draw that refreshed the row's facts.
+    fn clear(&mut self) {
+        self.0 = false;
+    }
+}
+
 impl Session {
     /// Resolve the target, resync its screen to stdout, and seed the
     /// status state.
@@ -511,7 +542,7 @@ impl Session {
     }
 
     /// One daemon push. Returns false only on `%exit`.
-    fn handle_event(&mut self, event: &TmuxNotification, status_dirty: &mut bool) -> bool {
+    fn handle_event(&mut self, event: &TmuxNotification, status_dirty: &mut StatusDirty) -> bool {
         match event {
             TmuxNotification::Output { pane_id, data } if *pane_id == self.pane => {
                 self.emulator.feed(data);
@@ -525,21 +556,21 @@ impl Session {
                 // has passed — mark the settle redraw.
                 if self.settling {
                     self.settling = false;
-                    *status_dirty = true;
+                    status_dirty.mark();
                 }
             }
             TmuxNotification::Exit => return false,
             TmuxNotification::PaneExited { pane_id, exit_code } if *pane_id == self.pane => {
                 self.exited = Some(*exit_code);
-                *status_dirty = true;
+                status_dirty.mark();
             }
             TmuxNotification::PaneRespawned { pane_id } if *pane_id == self.pane => {
                 self.exited = None;
-                *status_dirty = true;
+                status_dirty.mark();
             }
             TmuxNotification::PaneTitleChanged { pane_id, title } if *pane_id == self.pane => {
                 self.pane_title = title.clone();
-                *status_dirty = true;
+                status_dirty.mark();
             }
             TmuxNotification::LayoutChange { .. }
             | TmuxNotification::WindowAdd { .. }
@@ -556,7 +587,7 @@ impl Session {
             | TmuxNotification::ClientLeft { .. } => {
                 // Geometry/roster/name changes can move the status facts;
                 // re-query before the next redraw.
-                *status_dirty = true;
+                status_dirty.mark();
             }
             // Everything else (output for other panes, lifecycle elsewhere)
             // is not this single-pane view's concern in Phase A.

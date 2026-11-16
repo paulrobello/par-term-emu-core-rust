@@ -683,29 +683,54 @@ impl Terminal {
         let mut alternate =
             positions_of(&alternate_cursor, !primary_active, self.pending_wrap, false);
         let scrollback = self.grid.scrollback_len();
+        let alt_scrollback = self.alt_grid.scrollback_len();
         primary.viewport_top = viewport_top.unwrap_or(scrollback);
 
         self.grid.resize_xterm(cols, rows, true, &mut primary);
         self.alt_grid
             .resize_xterm(cols, rows, false, &mut alternate);
-        // Nothing follows the alternate screen's lines.
-        let _ = self.alt_grid.take_buffer_reflow();
-
-        // The images on the primary screen keep their lines.
-        if primary_active {
-            if let Some(reflow) = self.grid.buffer_reflow() {
-                let new_base = self.grid.scrollback_len() as isize;
+        // Placements follow their own buffer's reflow: primary-owned ones even
+        // while the alternate screen is shown, alt-owned ones with the
+        // alternate screen's lines. The alternate reflow is kept for them now;
+        // nothing else follows the alternate screen.
+        let primary_reflow = self.grid.buffer_reflow();
+        let alternate_reflow = self.alt_grid.take_buffer_reflow();
+        if primary_reflow.is_some() || alternate_reflow.is_some() {
+            let new_base = self.grid.scrollback_len() as isize;
+            let alternate_base = self.alt_grid.scrollback_len() as isize;
+            let old_scrollback = scrollback as isize;
+            let old_alternate_scrollback = alt_scrollback as isize;
+            // Where the reflow moved a top edge: the nearest surviving line at
+            // or above it, or for a line trimmed off the top, its old line
+            // number less the trimmed count.
+            let follow = |reflow: Option<&crate::grid::BufferReflow>,
+                          old_scrollback: isize,
+                          new_base: isize,
+                          top: isize|
+             -> isize {
+                let Some(reflow) = reflow else {
+                    return top;
+                };
+                let old = old_scrollback + top;
                 let last = reflow.lines.len() as isize - 1;
-                self.graphics.graphics_store.move_placements(|top| {
-                    let old = scrollback as isize + top;
-                    let line = if (0..=last).contains(&old) {
-                        reflow.follow(old as usize).map(|line| line as isize)
-                    } else {
-                        None
-                    };
-                    line.unwrap_or(old - reflow.trimmed as isize) - new_base
-                });
-            }
+                let line = if (0..=last).contains(&old) {
+                    reflow.follow(old as usize).map(|line| line as isize)
+                } else {
+                    None
+                };
+                line.unwrap_or(old - reflow.trimmed as isize) - new_base
+            };
+            self.graphics.graphics_store.move_placements(
+                |top| follow(primary_reflow, old_scrollback, new_base, top),
+                |top| {
+                    follow(
+                        alternate_reflow.as_ref(),
+                        old_alternate_scrollback,
+                        alternate_base,
+                        top,
+                    )
+                },
+            );
         }
 
         let place = |cursor: &mut Cursor, positions: &BufferPositions| {
@@ -876,8 +901,10 @@ impl Terminal {
                         }
                         self.kitty_parser.reset();
                     } else {
-                        // Errors here are non-fatal.
+                        // Errors here are non-fatal: they become graphics
+                        // replies per the spec's q= matrix below.
                         let position = (self.cursor.col, self.cursor.row);
+                        let mut failure: Option<crate::graphics::GraphicsError> = None;
                         let dropped_before = self.graphics.graphics_store.dropped_count();
                         match self
                             .kitty_parser
@@ -890,7 +917,7 @@ impl Terminal {
                                 graphic.set_cell_dimensions(cell_width, cell_height);
                                 let span_rows = graphic.cell_span(cell_width, cell_height).1;
                                 let image_id = graphic.id;
-                                self.graphics.graphics_store.add_graphic(graphic);
+                                self.add_placement(graphic);
                                 // Graphic landed on screen: notify like the Sixel
                                 // (DCS) and iTerm2 inline paths do, so observers
                                 // and streaming graphics subscribers hear kitty
@@ -921,7 +948,7 @@ impl Terminal {
                                 }
                                 | crate::graphics::kitty::KittyGraphicResult::None,
                             ) => {}
-                            Err(crate::graphics::GraphicsError::ImageTooLarge(pixels, _)) => {
+                            Err(crate::graphics::GraphicsError::ImageTooLarge(pixels, max)) => {
                                 // A size/budget refusal: publish the unified
                                 // budget event (ENH-062) so an oversized
                                 // payload is visible alongside the per-store
@@ -933,8 +960,14 @@ impl Terminal {
                                     crate::graphics::budget::BudgetStore::Graphics,
                                     bytes,
                                 );
+                                failure = Some(crate::graphics::GraphicsError::ImageTooLarge(
+                                    pixels, max,
+                                ));
                             }
-                            Err(_) => {}
+                            Err(err) => {
+                                crate::debug_log!("KITTY", "kitty command failed: {}", err);
+                                failure = Some(err);
+                            }
                         }
                         let dropped_after = self.graphics.graphics_store.dropped_count();
                         if dropped_after > dropped_before {
@@ -944,11 +977,42 @@ impl Terminal {
                                 0,
                             );
                         }
+                        // Reply on the graphics channel per the spec's
+                        // quietness matrix: q=0 sends OK responses for
+                        // successful commands and error responses for
+                        // failures, q=1 suppresses the OK responses only,
+                        // q=2 suppresses all replies. Error codes are
+                        // ENOENT for unknown ids and EINVAL for malformed
+                        // commands; the response echoes the command's
+                        // i=/p= keys (see KittyParser::response_id_prefix).
+                        let quietness = self.kitty_parser.quietness;
+                        let reply = if quietness < 2 {
+                            match failure {
+                                Some(err) => Some(
+                                    self.kitty_parser
+                                        .error_response(err.kitty_code(), &err.kitty_message()),
+                                ),
+                                None if quietness == 0 => Some(self.kitty_parser.ok_response()),
+                                None => None,
+                            }
+                        } else {
+                            None
+                        };
+                        if let Some(reply) = reply {
+                            self.response_buffer.extend_from_slice(reply.as_bytes());
+                        }
                         self.kitty_parser.reset();
                     }
                 }
-                Err(_) => {
-                    // Malformed chunk — reset and continue.
+                Err(err) => {
+                    // Malformed chunk: EINVAL reply per the q= matrix (q=2
+                    // suppresses), then reset and continue.
+                    if self.kitty_parser.quietness < 2 {
+                        let response = self
+                            .kitty_parser
+                            .error_response(err.kitty_code(), &err.kitty_message());
+                        self.response_buffer.extend_from_slice(response.as_bytes());
+                    }
                     self.kitty_parser.reset();
                 }
             }

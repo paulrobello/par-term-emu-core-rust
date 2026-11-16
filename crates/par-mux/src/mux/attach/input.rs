@@ -534,6 +534,86 @@ fn split_params(params: &[u8]) -> (u32, u32) {
     (first, modifier)
 }
 
+/// First entry in `table` whose key equals `key` — the lookup shared by
+/// the attach input dispatch tables.
+pub(crate) fn lookup<K: PartialEq, V: Copy>(table: &[(K, V)], key: K) -> Option<V> {
+    table.iter().find(|(k, _)| *k == key).map(|(_, v)| *v)
+}
+
+/// CSI-u functional-key codepoints (`ESC [ <code> u`) → keys. The codes
+/// match `TermKey`'s discriminants (Tab 9, Enter 13, Escape 27,
+/// Backspace 127, F1..F12 57376..57387, Insert..End 57426..57435); any
+/// other codepoint decodes as a text key via `char::from_u32`.
+const CSI_U_FUNCTIONAL: &[(u32, TermKey)] = &[
+    (9, TermKey::Tab),
+    (13, TermKey::Enter),
+    (27, TermKey::Escape),
+    (127, TermKey::Backspace),
+    (57376, TermKey::F1),
+    (57377, TermKey::F2),
+    (57378, TermKey::F3),
+    (57379, TermKey::F4),
+    (57380, TermKey::F5),
+    (57381, TermKey::F6),
+    (57382, TermKey::F7),
+    (57383, TermKey::F8),
+    (57384, TermKey::F9),
+    (57385, TermKey::F10),
+    (57386, TermKey::F11),
+    (57387, TermKey::F12),
+    (57426, TermKey::Insert),
+    (57427, TermKey::Delete),
+    (57428, TermKey::Left),
+    (57429, TermKey::Right),
+    (57430, TermKey::Up),
+    (57431, TermKey::Down),
+    (57432, TermKey::PageUp),
+    (57433, TermKey::PageDown),
+    (57434, TermKey::Home),
+    (57435, TermKey::End),
+];
+
+/// Legacy `CSI n ~` first parameter → key. 1 and 7 are both Home, 4 and
+/// 8 are both End; 16 and 22 are absent (xterm spells no key with them),
+/// and an unlisted parameter decodes to nothing.
+const CSI_TILDE: &[(u32, TermKey)] = &[
+    (1, TermKey::Home),
+    (2, TermKey::Insert),
+    (3, TermKey::Delete),
+    (4, TermKey::End),
+    (5, TermKey::PageUp),
+    (6, TermKey::PageDown),
+    (7, TermKey::Home),
+    (8, TermKey::End),
+    (11, TermKey::F1),
+    (12, TermKey::F2),
+    (13, TermKey::F3),
+    (14, TermKey::F4),
+    (15, TermKey::F5),
+    (17, TermKey::F6),
+    (18, TermKey::F7),
+    (19, TermKey::F8),
+    (20, TermKey::F9),
+    (21, TermKey::F10),
+    (23, TermKey::F11),
+    (24, TermKey::F12),
+];
+
+/// Legacy single-letter CSI final bytes → keys (arrows, Home/End, F1..F4).
+const CSI_LETTER: &[(u8, TermKey)] = &[
+    (b'A', TermKey::Up),
+    (b'B', TermKey::Down),
+    (b'C', TermKey::Right),
+    (b'D', TermKey::Left),
+    (b'H', TermKey::Home),
+    (b'F', TermKey::End),
+    (b'E', TermKey::End), // xterm's numpad-5-as-End spelling
+    (b'P', TermKey::F1),
+    (b'Q', TermKey::F2),
+    (b'R', TermKey::F3),
+    (b'S', TermKey::F4),
+];
+
 /// Map a CSI final byte (plus params) to a key event. The xterm modifier
 /// parameter (`1;{m}`) uses the same numeric order as the crate's
 /// [`modifiers`] (shift 1, alt 2, ctrl 4), and 1 (or absent) means none.
@@ -549,77 +629,15 @@ fn csi_key(final_byte: u8, first: u32, modifier: u32) -> Option<TermKeyEvent> {
     // re-encodes against the pane's tracked input state, so a legacy pane
     // gets the form it speaks instead of a sequence it never asked for.
     if final_byte == b'u' {
-        let key = match first {
-            9 => TermKey::Tab,
-            13 => TermKey::Enter,
-            27 => TermKey::Escape,
-            127 => TermKey::Backspace,
-            57376..=57387 => match first {
-                57376 => TermKey::F1,
-                57377 => TermKey::F2,
-                57378 => TermKey::F3,
-                57379 => TermKey::F4,
-                57380 => TermKey::F5,
-                57381 => TermKey::F6,
-                57382 => TermKey::F7,
-                57383 => TermKey::F8,
-                57384 => TermKey::F9,
-                57385 => TermKey::F10,
-                57386 => TermKey::F11,
-                _ => TermKey::F12,
-            },
-            57426..=57435 => match first {
-                57426 => TermKey::Insert,
-                57427 => TermKey::Delete,
-                57428 => TermKey::Left,
-                57429 => TermKey::Right,
-                57430 => TermKey::Up,
-                57431 => TermKey::Down,
-                57432 => TermKey::PageUp,
-                57433 => TermKey::PageDown,
-                57434 => TermKey::Home,
-                _ => TermKey::End,
-            },
-            _ => {
-                return char::from_u32(first).map(|c| TermKeyEvent::char_(c, mods));
-            }
+        return match lookup(CSI_U_FUNCTIONAL, first) {
+            Some(key) => Some(TermKeyEvent::functional(key, mods)),
+            None => char::from_u32(first).map(|c| TermKeyEvent::char_(c, mods)),
         };
-        return Some(TermKeyEvent::functional(key, mods));
     }
-    let key = match (final_byte, first) {
-        (b'A', _) => TermKey::Up,
-        (b'B', _) => TermKey::Down,
-        (b'C', _) => TermKey::Right,
-        (b'D', _) => TermKey::Left,
-        (b'H', _) => TermKey::Home,
-        (b'F', _) => TermKey::End,
-        (b'E', _) => TermKey::End, // xterm's numpad-5-as-End spelling
-        (b'P', _) => TermKey::F1,
-        (b'Q', _) => TermKey::F2,
-        (b'R', _) => TermKey::F3,
-        (b'S', _) => TermKey::F4,
-        (b'~', n) => match n {
-            1 | 7 => TermKey::Home,
-            2 => TermKey::Insert,
-            3 => TermKey::Delete,
-            4 | 8 => TermKey::End,
-            5 => TermKey::PageUp,
-            6 => TermKey::PageDown,
-            11 => TermKey::F1,
-            12 => TermKey::F2,
-            13 => TermKey::F3,
-            14 => TermKey::F4,
-            15 => TermKey::F5,
-            17 => TermKey::F6,
-            18 => TermKey::F7,
-            19 => TermKey::F8,
-            20 => TermKey::F9,
-            21 => TermKey::F10,
-            23 => TermKey::F11,
-            24 => TermKey::F12,
-            _ => return None,
-        },
-        _ => return None,
+    let key = if final_byte == b'~' {
+        lookup(CSI_TILDE, first)?
+    } else {
+        lookup(CSI_LETTER, final_byte)?
     };
     Some(TermKeyEvent::functional(key, mods))
 }

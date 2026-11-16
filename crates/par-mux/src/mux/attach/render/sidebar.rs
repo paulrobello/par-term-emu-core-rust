@@ -750,7 +750,7 @@ impl WindowSession {
             return;
         }
         if self.status.workspaces().is_empty() {
-            self.status_dirty = true;
+            self.status_inflight.dirty = true;
             return;
         }
         let active = self.status.chrome_workspace();

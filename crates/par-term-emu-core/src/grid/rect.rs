@@ -1,6 +1,7 @@
 //! Rectangular operations for the terminal grid
 
-use crate::cell::Cell;
+use crate::cell::{Cell, PackedColor};
+use crate::color::{Color, NamedColor};
 use crate::grid::Grid;
 
 impl Grid {
@@ -23,6 +24,9 @@ impl Grid {
         }
 
         for row in top..=bottom {
+            // The rectangle's edges orphan the pair halves just outside it
+            // when the inside half is overwritten; blank them first.
+            self.split_wide_chars_at(row, left, right + 1, fill_cell.bg);
             for col in left..=right {
                 if let Some(cell) = self.get_mut(col, row) {
                     *cell = fill_cell.clone();
@@ -78,6 +82,43 @@ impl Grid {
                     buffer_idx += 1;
                 }
             }
+            // A source edge that cut a wide pair copies one lone half; blank
+            // it, and blank the outside halves the copy orphaned.
+            self.fix_copy_pair_edges(row, dst_left, dst_right);
+        }
+    }
+
+    /// After a rectangle copy into `[left, right]` on `row`, blank the pair
+    /// halves the copy left without their partners: a lone half at either
+    /// edge of the copied span, and the outside halves whose partner the
+    /// copy overwrote.
+    fn fix_copy_pair_edges(&mut self, row: usize, left: usize, right: usize) {
+        if row >= self.rows || left > right || right >= self.cols {
+            return;
+        }
+        let cells = &mut self.screen[row];
+        // Left edge: a copied spacer with no base beside it is lone; a copied
+        // non-spacer orphans the base just outside the span.
+        if cells[left].flags.wide_char_spacer() && (left == 0 || !cells[left - 1].flags.wide_char())
+        {
+            cells[left].reset();
+        } else if !cells[left].flags.wide_char_spacer()
+            && left > 0
+            && cells[left - 1].flags.wide_char()
+        {
+            cells[left - 1].reset();
+        }
+        // Right edge: a copied base with no spacer beside it is lone; a
+        // copied non-spacer orphans the spacer just outside the span.
+        if cells[right].flags.wide_char()
+            && (right + 1 >= self.cols || !cells[right + 1].flags.wide_char_spacer())
+        {
+            cells[right].reset();
+        } else if !cells[right].flags.wide_char()
+            && right + 1 < self.cols
+            && cells[right + 1].flags.wide_char_spacer()
+        {
+            cells[right + 1].reset();
         }
     }
 
@@ -99,6 +140,14 @@ impl Grid {
         }
 
         for row in top..=bottom {
+            // Same edge rule as the fill: halves just outside the rectangle
+            // lose their overwritten partners.
+            self.split_wide_chars_at(
+                row,
+                left,
+                right + 1,
+                PackedColor::pack(Color::Named(NamedColor::Black)),
+            );
             for col in left..=right {
                 if let Some(cell) = self.get_mut(col, row) {
                     cell.reset();

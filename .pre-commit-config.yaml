@@ -83,6 +83,13 @@ repos:
         language: system
         types: [rust]
         pass_filenames: false
+      - id: cargo-test-streaming-mux
+        name: cargo test (streaming,mux)
+        description: Compile and run the streaming,mux feature-gated lib tests so mux_factory is visible per-commit (card 01a1d73371)
+        entry: cargo test --lib --no-default-features --features rust-only,streaming,mux,serde
+        language: system
+        types: [rust]
+        pass_filenames: false
 
   # Python formatting with ruff
   - repo: https://github.com/astral-sh/ruff-pre-commit
