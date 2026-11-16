@@ -1554,12 +1554,13 @@ mod tests {
 
     #[test]
     fn ffi_codepoint_widths_opt_in_counts_the_zwj_family_per_codepoint() {
-        // The cursor is the width observable (emoji cell readback has a
-        // separate open issue). Feed `ab`, `☺️b`, `👨‍💻b` in both modes:
-        // cluster mode counts ☺️ as one column and the family as two, so
-        // the cursor ends at column 7; codepoint mode counts the family
-        // per code point (👨 2 + ZWJ 0 + 💻 2), so it ends at 9 — the
-        // documented `👨‍💻` is 4 columns.
+        // The cursor is the width observable. Feed `ab`, `☺️b`, `👨‍💻b`
+        // in both modes: cluster mode counts ☺️ as its xterm-correct two
+        // columns (VS16 widening leaves the cursor past the spacer) and
+        // the family as two, so the cursor ends at column 8; codepoint
+        // mode counts the family per code point (👨 2 + ZWJ 0 + 💻 2) with
+        // ☺️ at one column, so it ends at 9 — the documented `👨‍💻` is 4
+        // columns.
         let feed = |term: *mut Terminal| {
             let seq = "ab".as_bytes();
             unsafe { ptec_terminal_feed(term, seq.as_ptr(), seq.len() as u32) };
@@ -1575,7 +1576,10 @@ mod tests {
         };
         let cluster = unsafe { ptec_terminal_create(12, 4, 10) };
         feed(cluster);
-        assert_eq!(cursor_col(cluster), 7);
+        assert_eq!(cursor_col(cluster), 8);
+        // The widened pair survives the readback (the bug made this cell
+        // read blank): the base keeps its VS16 through the C grapheme read.
+        assert_eq!(cell_text(cluster, 0, 2), "\u{263A}\u{FE0F}");
         unsafe { ptec_terminal_free(cluster) };
 
         let term = unsafe { ptec_terminal_create(12, 4, 10) };

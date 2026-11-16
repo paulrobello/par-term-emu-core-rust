@@ -570,6 +570,14 @@ impl Terminal {
                     };
                     self.active_grid_mut()
                         .set(target_col + 1, target_row, spacer);
+                    // The cursor still sits ON the just-planted spacer (the
+                    // base's write advanced past the base only). A wide
+                    // character's own write leaves the cursor past both of
+                    // its cells; the widened pair must leave it the same
+                    // way, or the next write lands on the spacer and the
+                    // half-overwrite algebra blanks the emoji base — the
+                    // emoji vanished under "ab<U+263A><U+FE0F>b".
+                    self.cursor.col += 1;
                 }
 
                 self.triggers.mark_written(target_row);
@@ -838,6 +846,7 @@ mod tests {
     }
 
     #[test]
+
     fn test_vs16_in_last_column_defers_widening() {
         let mut term = Terminal::new(4, 3);
         // x lands in the last column with wrap pending; VS16 must attach but
@@ -858,6 +867,29 @@ mod tests {
         assert!(cell.flags.wide_char());
         let spacer = term.active_grid().get(1, 0).unwrap();
         assert!(spacer.flags.wide_char_spacer());
+    }
+
+    #[test]
+    fn test_vs16_widening_leaves_the_cursor_past_the_spacer() {
+        // The widening plants the spacer and must advance the cursor past
+        // it: with the cursor left ON the spacer, the next write trips the
+        // half-overwrite algebra and blanks the emoji base ("ab<U+263A>
+        // <U+FE0F>b" lost the emoji entirely).
+        let mut term = Terminal::new(12, 4);
+        term.process("ab".as_bytes());
+        term.process("\u{263A}\u{FE0F}b".as_bytes());
+        let grid = term.active_grid();
+        let base = grid.get(2, 0).unwrap();
+        assert_eq!(base.c, '\u{263A}');
+        assert!(base.combining_has('\u{FE0F}'));
+        assert_eq!(base.width(), 2);
+        assert!(base.flags.wide_char());
+        assert!(grid.get(3, 0).unwrap().flags.wide_char_spacer());
+        assert_eq!(grid.get(4, 0).unwrap().c, 'b');
+        assert_eq!(term.cursor.col, 5);
+        // The widened pair survives a re-read through the same grid path
+        // the FFI readback takes (base keeps its combining VS16).
+        assert!(grid.get(2, 0).unwrap().combining_has('\u{FE0F}'));
     }
 
     #[test]
