@@ -163,7 +163,7 @@ When extending the `Connected` message, add one method on `ConnectedBuilder` plu
 - Use [Conventional Commits](https://www.conventionalcommits.org/) messages (for example `feat:`, `fix:`, `docs:`, `chore:`, `refactor:`).
 - Keep changes surgical: touch only what the task requires and match the surrounding style.
 - Run `make checkall` before pushing. Fix all lint, type, and test failures.
-- Do not push or open a PR unless the maintainer requests it.
+- AI-assisted contributions are welcome; the maintainer reviews AI-authored PRs the same as any other, on the substance of the diff.
 - Keep the Python and Rust sides in sync (see the sync rules above).
 - Keep sister projects (`par-term-emu-tui-rust`, `par-term`) in mind when changing shared CLI options, features, or config.
 
