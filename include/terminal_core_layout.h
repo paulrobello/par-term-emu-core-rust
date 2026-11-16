@@ -28,8 +28,11 @@
  * ptec_terminal_read_cell_grapheme, the on_event_v2 slot + TermEvent, and
  * ptec_terminal_scrollback_total_scrolled. Version 5 (additive, ENH-038):
  * scroll-aware damage — TermScrollDelta, ptec_terminal_scroll_delta_since,
- * ptec_terminal_content_dirty_ranges_since, TERM_SCROLL_FULL_REDRAW. */
-#define TERM_CORE_ABI_VERSION 5
+ * ptec_terminal_content_dirty_ranges_since, TERM_SCROLL_FULL_REDRAW. Version 6
+ * (additive): the v0.82.0 feature opt-ins — ptec_terminal_set_xterm_resize,
+ * ptec_terminal_set_codepoint_widths, ptec_terminal_set_max_scrollback, and
+ * ptec_terminal_remove_graphic_everywhere. */
+#define TERM_CORE_ABI_VERSION 6
 
 /* Cell attribute bits — SharedCell.attrs (mirrors CellBitflags in cell.rs). */
 #define TERM_CELL_BOLD 1u             /* bit 0 */

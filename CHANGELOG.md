@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- **ffi: the v0.82.0 feature opt-ins reach the C embedding surface (ABI v6)** (cards 01a1e524-family): four additive exports — `ptec_terminal_set_xterm_resize` (switch later resizes to the xterm.js-style reflow where the cursor follows its line and scrollback lines return on grow), `ptec_terminal_set_codepoint_widths` (per-code-point emoji widths so wcwidth-counting hosts agree with the grid), `ptec_terminal_set_max_scrollback` (live scrollback capacity change that drops like a scroll and rebases graphics anchors), and `ptec_terminal_remove_graphic_everywhere` (evict one graphic from the screen placements and the scrollback; idempotent for unknown ids). `TERM_CORE_ABI_VERSION` is 6; FFI tests pin each export's observable (reflow returns scrollback lines on grow, the ZWJ family counts 4 columns in codepoint mode, capacity grows/shrinks live, unknown-id removal is a no-op). Listed in `docs/FFI_GUIDE.md` with the v6 ABI row.
+
+## [0.82.0] - 2026-11-16
 ## [0.82.0] - 2026-11-16
 
 ### Security

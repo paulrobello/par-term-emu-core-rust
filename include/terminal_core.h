@@ -492,6 +492,32 @@ void ptec_terminal_feed(Terminal *term, const uint8_t *bytes, uint32_t len);
 void ptec_terminal_resize(Terminal *term, uint32_t cols, uint32_t rows);
 
 /**
+ * Enable the opt-in xterm.js-style reflow resize (`Terminal::set_xterm_resize`):
+ * later `ptec_terminal_resize` calls reflow the primary screen and its
+ * scrollback as one buffer — the cursor follows its line, lines come back
+ * from the scrollback on a taller screen — instead of the default
+ * truncate/pad. Off by default; survives RIS. Embedders that pin the
+ * mode at creation call this right after `ptec_terminal_create`.
+ *
+ * # Safety
+ * `term` must be a valid pointer to a `Terminal`.
+ */
+void ptec_terminal_set_xterm_resize(Terminal *term, bool on);
+
+/**
+ * Enable the opt-in per-code-point emoji width mode
+ * (`Terminal::set_codepoint_widths`): ZWJ sequences and VS16 emoji take
+ * one cell per code point instead of one wide cell per cluster, so a
+ * host that measures emoji with per-code-point widths (e.g. wcwidth on
+ * decomposed sequences) agrees with the grid. Regional-indicator pairs
+ * are unaffected either way. Off by default; survives RIS.
+ *
+ * # Safety
+ * `term` must be a valid pointer to a `Terminal`.
+ */
+void ptec_terminal_set_codepoint_widths(Terminal *term, bool on);
+
+/**
  * Coalesce the dirty-row generations into inclusive row ranges.
  *
  * Writes up to `cap` ranges into `out` (caller-owned) and returns the
@@ -656,6 +682,29 @@ uint32_t ptec_terminal_scrollback_count(const Terminal *term);
  * `term` must be a valid pointer to a `Terminal`.
  */
 uint64_t ptec_terminal_scrollback_total_scrolled(const Terminal *term);
+
+/**
+ * Change the scrollback capacity while the terminal runs
+ * (`Terminal::set_max_scrollback`): a smaller capacity drops the oldest
+ * lines like a scroll at capacity, rebases the scrollback graphics
+ * anchors with it, and drops the images whose lines left. The alternate
+ * screen keeps none.
+ *
+ * # Safety
+ * `term` must be a valid pointer to a `Terminal`.
+ */
+void ptec_terminal_set_max_scrollback(Terminal *term, uint64_t max);
+
+/**
+ * Remove a graphic by ID from the screen placements and the scrollback
+ * (`GraphicsStore::remove_graphic_everywhere`): a host enforcing its own
+ * image storage limit evicts one image wherever it is. Idempotent — an
+ * unknown id is a no-op.
+ *
+ * # Safety
+ * `term` must be a valid pointer to a `Terminal`.
+ */
+void ptec_terminal_remove_graphic_everywhere(Terminal *term, uint64_t id);
 
 /**
  * Read cursor position/style.

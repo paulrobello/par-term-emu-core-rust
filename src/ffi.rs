@@ -739,8 +739,11 @@ unsafe fn dirty_ranges_export(
 /// constant still read 3. Version 5 (additive, ENH-038):
 /// scroll-aware damage — `TermScrollDelta`,
 /// `ptec_terminal_scroll_delta_since`, `ptec_terminal_content_dirty_ranges_since`,
-/// and `TERM_SCROLL_FULL_REDRAW`.
-pub const TERM_CORE_ABI_VERSION: u32 = 5;
+/// and `TERM_SCROLL_FULL_REDRAW`. Version 6 (additive): the v0.82.0
+/// feature opt-ins — `ptec_terminal_set_xterm_resize`,
+/// `ptec_terminal_set_codepoint_widths`, `ptec_terminal_set_max_scrollback`,
+/// and `ptec_terminal_remove_graphic_everywhere`.
+pub const TERM_CORE_ABI_VERSION: u32 = 6;
 
 /// The ABI version this library implements. A binary detects a mismatch
 /// by comparing this call's return against its compiled-in header macro.
@@ -823,6 +826,46 @@ pub unsafe extern "C" fn ptec_terminal_resize(term: *mut Terminal, cols: u32, ro
     // contract, points to a live `Terminal` with no other live borrow.
     let term_ref = unsafe { &mut *term };
     term_ref.resize(cols as usize, rows as usize);
+}
+
+/// Enable the opt-in xterm.js-style reflow resize (`Terminal::set_xterm_resize`):
+/// later `ptec_terminal_resize` calls reflow the primary screen and its
+/// scrollback as one buffer — the cursor follows its line, lines come back
+/// from the scrollback on a taller screen — instead of the default
+/// truncate/pad. Off by default; survives RIS. Embedders that pin the
+/// mode at creation call this right after `ptec_terminal_create`.
+///
+/// # Safety
+/// `term` must be a valid pointer to a `Terminal`.
+#[no_mangle]
+pub unsafe extern "C" fn ptec_terminal_set_xterm_resize(term: *mut Terminal, on: bool) {
+    if term.is_null() {
+        return;
+    }
+    // SAFETY: `term` is non-null (checked above) and, per this fn's
+    // contract, points to a live `Terminal` with no other live borrow.
+    let term_ref = unsafe { &mut *term };
+    term_ref.set_xterm_resize(on);
+}
+
+/// Enable the opt-in per-code-point emoji width mode
+/// (`Terminal::set_codepoint_widths`): ZWJ sequences and VS16 emoji take
+/// one cell per code point instead of one wide cell per cluster, so a
+/// host that measures emoji with per-code-point widths (e.g. wcwidth on
+/// decomposed sequences) agrees with the grid. Regional-indicator pairs
+/// are unaffected either way. Off by default; survives RIS.
+///
+/// # Safety
+/// `term` must be a valid pointer to a `Terminal`.
+#[no_mangle]
+pub unsafe extern "C" fn ptec_terminal_set_codepoint_widths(term: *mut Terminal, on: bool) {
+    if term.is_null() {
+        return;
+    }
+    // SAFETY: `term` is non-null (checked above) and, per this fn's
+    // contract, points to a live `Terminal` with no other live borrow.
+    let term_ref = unsafe { &mut *term };
+    term_ref.set_codepoint_widths(on);
 }
 
 /// Coalesce ascending row numbers into inclusive ranges.
@@ -1152,6 +1195,43 @@ pub unsafe extern "C" fn ptec_terminal_scrollback_total_scrolled(term: *const Te
     unsafe { &*term }.active_grid().total_lines_scrolled() as u64
 }
 
+/// Change the scrollback capacity while the terminal runs
+/// (`Terminal::set_max_scrollback`): a smaller capacity drops the oldest
+/// lines like a scroll at capacity, rebases the scrollback graphics
+/// anchors with it, and drops the images whose lines left. The alternate
+/// screen keeps none.
+///
+/// # Safety
+/// `term` must be a valid pointer to a `Terminal`.
+#[no_mangle]
+pub unsafe extern "C" fn ptec_terminal_set_max_scrollback(term: *mut Terminal, max: u64) {
+    if term.is_null() {
+        return;
+    }
+    // SAFETY: `term` is non-null (checked above) and, per this fn's
+    // contract, points to a live `Terminal` with no other live borrow.
+    let term_ref = unsafe { &mut *term };
+    term_ref.set_max_scrollback(max as usize);
+}
+
+/// Remove a graphic by ID from the screen placements and the scrollback
+/// (`GraphicsStore::remove_graphic_everywhere`): a host enforcing its own
+/// image storage limit evicts one image wherever it is. Idempotent — an
+/// unknown id is a no-op.
+///
+/// # Safety
+/// `term` must be a valid pointer to a `Terminal`.
+#[no_mangle]
+pub unsafe extern "C" fn ptec_terminal_remove_graphic_everywhere(term: *mut Terminal, id: u64) {
+    if term.is_null() {
+        return;
+    }
+    // SAFETY: `term` is non-null (checked above) and, per this fn's
+    // contract, points to a live `Terminal` with no other live borrow.
+    let term_ref = unsafe { &mut *term };
+    term_ref.graphics_store_mut().remove_graphic_everywhere(id);
+}
+
 /// Read cursor position/style.
 ///
 /// # Safety
@@ -1441,6 +1521,118 @@ mod tests {
             .chain(std::iter::repeat(SharedCell::padding(term)))
             .take(RT_COLS)
             .collect()
+    }
+
+    // ------------------------------------------------------------------
+    // The v0.82.0 feature opt-ins (ABI v6): the C surface reaches
+    // set_xterm_resize, set_codepoint_widths, set_max_scrollback, and
+    // remove_graphic_everywhere.
+    // ------------------------------------------------------------------
+
+    /// Reads one cell's grapheme as lossy UTF-8 through the C surface.
+    fn cell_text(term: *const Terminal, row: u32, col: u32) -> String {
+        let mut buf = [0u8; 16];
+        let n = unsafe { ptec_terminal_read_cell_grapheme(term, row, col, buf.as_mut_ptr(), 16) };
+        String::from_utf8_lossy(&buf[..n as usize]).into_owned()
+    }
+
+    #[test]
+    fn ffi_xterm_resize_opt_in_returns_scrollback_lines_on_grow() {
+        let term = unsafe { ptec_terminal_create(12, 4, 50) };
+        for line in ["A\r\n", "B\r\n", "C\r\n", "D\r\n", "E\r\n", "F\r\n"] {
+            unsafe { ptec_terminal_feed(term, line.as_ptr(), line.len() as u32) };
+        }
+        // The screen holds C..F and the scrollback holds A,B; growing under
+        // the xterm.js rules pulls them back to the top.
+        unsafe { ptec_terminal_set_xterm_resize(term, true) };
+        unsafe { ptec_terminal_resize(term, 12, 8) };
+        assert_eq!(cell_text(term, 0, 0), "A");
+        assert_eq!(cell_text(term, 1, 0), "B");
+        assert_eq!(cell_text(term, 2, 0), "C");
+        unsafe { ptec_terminal_free(term) };
+    }
+
+    #[test]
+    fn ffi_codepoint_widths_opt_in_counts_the_zwj_family_per_codepoint() {
+        // The cursor is the width observable (emoji cell readback has a
+        // separate open issue). Feed `ab`, `☺️b`, `👨‍💻b` in both modes:
+        // cluster mode counts ☺️ as one column and the family as two, so
+        // the cursor ends at column 7; codepoint mode counts the family
+        // per code point (👨 2 + ZWJ 0 + 💻 2), so it ends at 9 — the
+        // documented `👨‍💻` is 4 columns.
+        let feed = |term: *mut Terminal| {
+            let seq = "ab".as_bytes();
+            unsafe { ptec_terminal_feed(term, seq.as_ptr(), seq.len() as u32) };
+            let emoji = "\u{263A}\u{FE0F}b".as_bytes();
+            unsafe { ptec_terminal_feed(term, emoji.as_ptr(), emoji.len() as u32) };
+            let family = "\u{1F468}\u{200D}\u{1F4BB}b".as_bytes();
+            unsafe { ptec_terminal_feed(term, family.as_ptr(), family.len() as u32) };
+        };
+        let cursor_col = |term: *const Terminal| -> u32 {
+            let mut cur: TermCursorState = unsafe { std::mem::zeroed() };
+            unsafe { ptec_terminal_get_cursor(term, &mut cur) };
+            cur.col
+        };
+        let cluster = unsafe { ptec_terminal_create(12, 4, 10) };
+        feed(cluster);
+        assert_eq!(cursor_col(cluster), 7);
+        unsafe { ptec_terminal_free(cluster) };
+
+        let term = unsafe { ptec_terminal_create(12, 4, 10) };
+        unsafe { ptec_terminal_set_codepoint_widths(term, true) };
+        feed(term);
+        assert_eq!(cursor_col(term), 9);
+        unsafe { ptec_terminal_free(term) };
+
+        // A ZWJ family with a skin-tone modifier, on fresh terminals so
+        // the cursor math cannot wrap: cluster mode joins it into one
+        // wide cluster (👨🏽+💻 as 2 columns, then 'b' → cursor 3);
+        // codepoint mode writes the modifier as a character of its own
+        // (👨 2 + tone 2 + ZWJ 0 + 💻 2 + 'b' → cursor 7).
+        let toned = "\u{1F468}\u{1F3FD}\u{200D}\u{1F4BB}b".as_bytes();
+        let toned_cluster = unsafe { ptec_terminal_create(12, 4, 10) };
+        unsafe { ptec_terminal_feed(toned_cluster, toned.as_ptr(), toned.len() as u32) };
+        let toned_cluster_col = cursor_col(toned_cluster);
+        unsafe { ptec_terminal_free(toned_cluster) };
+        let toned_codepoint = unsafe { ptec_terminal_create(12, 4, 10) };
+        unsafe { ptec_terminal_set_codepoint_widths(toned_codepoint, true) };
+        unsafe { ptec_terminal_feed(toned_codepoint, toned.as_ptr(), toned.len() as u32) };
+        let toned_codepoint_col = cursor_col(toned_codepoint);
+        unsafe { ptec_terminal_free(toned_codepoint) };
+        assert_eq!(toned_cluster_col, 3);
+        assert_eq!(toned_codepoint_col, 7);
+    }
+
+    #[test]
+    fn ffi_max_scrollback_grows_and_shrinks_like_a_scroll() {
+        let term = unsafe { ptec_terminal_create(12, 4, 2) };
+        for i in 0..10 {
+            let line = format!("L{i}\n");
+            unsafe { ptec_terminal_feed(term, line.as_ptr(), line.len() as u32) };
+        }
+        let capped = unsafe { ptec_terminal_scrollback_count(term) };
+        assert!(capped <= 2, "capacity pinned at create: {capped}");
+        unsafe { ptec_terminal_set_max_scrollback(term, 20) };
+        let more = "x\ny\nz\n".as_bytes();
+        unsafe {
+            ptec_terminal_feed(term, more.as_ptr(), more.len() as u32);
+        }
+        let grown = unsafe { ptec_terminal_scrollback_count(term) };
+        assert!(grown > capped, "grown capacity holds more: {grown}");
+        unsafe { ptec_terminal_set_max_scrollback(term, 1) };
+        let shrunk = unsafe { ptec_terminal_scrollback_count(term) };
+        assert!(shrunk <= 1, "shrink drops like a scroll: {shrunk}");
+        unsafe { ptec_terminal_free(term) };
+    }
+
+    #[test]
+    fn ffi_remove_graphic_everywhere_unknown_id_is_a_noop() {
+        let term = unsafe { ptec_terminal_create(12, 4, 10) };
+        // The C surface has no graphic-creation export, so this pins the
+        // export wiring only: an unknown id must be an idempotent no-op.
+        unsafe { ptec_terminal_remove_graphic_everywhere(term, 4242) };
+        assert_eq!(unsafe { ptec_terminal_scrollback_count(term) }, 0);
+        unsafe { ptec_terminal_free(term) };
     }
 
     #[test]
@@ -1829,14 +2021,14 @@ mod tests {
     /// comparing the two. Bumping one side without the other fails here.
     #[test]
     fn abi_version_matches_header_macro() {
-        assert_eq!(ptec_terminal_abi_version(), 5);
+        assert_eq!(ptec_terminal_abi_version(), 6);
         let header = std::fs::read_to_string(concat!(
             env!("CARGO_MANIFEST_DIR"),
             "/include/terminal_core_layout.h"
         ))
         .expect("header readable");
         assert!(
-            header.contains("#define TERM_CORE_ABI_VERSION 5"),
+            header.contains("#define TERM_CORE_ABI_VERSION 6"),
             "header TERM_CORE_ABI_VERSION drifted from ptec_terminal_abi_version()"
         );
     }
