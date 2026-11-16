@@ -578,6 +578,17 @@ impl Terminal {
                     // half-overwrite algebra blanks the emoji base — the
                     // emoji vanished under "ab<U+263A><U+FE0F>b".
                     self.cursor.col += 1;
+                    // The bump can land the cursor at `cols` when the pair
+                    // ends exactly at the row end; apply the same delayed-
+                    // wrap clamp the normal write path uses, or the next
+                    // character writes out of bounds and is silently
+                    // dropped ("ab☺︎FE0Fb" on a 4-column grid).
+                    if self.cursor.col >= cols {
+                        self.cursor.col = cols - 1;
+                        if self.modes.auto_wrap {
+                            self.pending_wrap = true;
+                        }
+                    }
                 }
 
                 self.triggers.mark_written(target_row);
@@ -890,6 +901,44 @@ mod tests {
         // The widened pair survives a re-read through the same grid path
         // the FFI readback takes (base keeps its combining VS16).
         assert!(grid.get(2, 0).unwrap().combining_has('\u{FE0F}'));
+    }
+
+    #[test]
+    fn test_vs16_widen_at_row_end_defers_the_next_char_to_the_next_row() {
+        // The widen's cursor bump can land at `cols` when the pair ends
+        // exactly at the row end; without the delayed-wrap clamp the next
+        // character writes out of bounds and is silently dropped.
+        let mut term = Terminal::new(4, 3);
+        term.process("ab".as_bytes());
+        term.process("\u{263A}\u{FE0F}b".as_bytes());
+        let grid = term.active_grid();
+        // The pair fills columns 2-3; 'b' must wrap to row 1 column 0,
+        // not vanish into an out-of-bounds write.
+        assert_eq!(grid.get(2, 0).unwrap().c, '\u{263A}');
+        assert!(grid.get(3, 0).unwrap().flags.wide_char_spacer());
+        assert_eq!(grid.get(0, 1).unwrap().c, 'b');
+        assert_eq!(term.cursor.col, 1);
+        assert_eq!(term.cursor.row, 1);
+    }
+
+    #[test]
+    fn test_decaln_then_erase_blanks_every_column() {
+        // DECALN fills the screen with a non-default cell; erase_span's
+        // default-bg fast path trusts `row_used`, so a fill that forgets
+        // to raise it makes EL a silent no-op on most columns.
+        let mut term = Terminal::new(8, 3);
+        term.process("\x1b#8".as_bytes());
+        term.process("\x1b[2;1H\x1b[K".as_bytes());
+        for col in 0..8 {
+            assert_eq!(
+                term.active_grid().get(col, 1).unwrap().c,
+                ' ',
+                "column {col} of row 1 still holds the DECALN 'E' after EL"
+            );
+        }
+        // Rows outside the erased one keep their 'E's.
+        assert_eq!(term.active_grid().get(0, 0).unwrap().c, 'E');
+        assert_eq!(term.active_grid().get(0, 2).unwrap().c, 'E');
     }
 
     #[test]

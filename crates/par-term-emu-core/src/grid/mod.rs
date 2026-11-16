@@ -402,11 +402,15 @@ impl Grid {
     }
 
     /// Fill every screen cell with `cell` and clear the screen rows' wrap
-    /// flags (DECALN).
+    /// flags (DECALN). Every mutable write must raise `row_used` — DECALN
+    /// fills with a non-default cell, and a stale short `row_used` makes
+    /// `erase_span`/`rotate_region` treat the row tail as already-default
+    /// blank, so later erases and region scrolls would leave `E` ghosts.
     pub(crate) fn fill_screen(&mut self, cell: &Cell) {
         for row in self.screen.iter_mut() {
             row.fill(cell.clone());
         }
+        self.row_used.fill(self.cols);
         self.wrapped.fill(false);
         self.mark_rows_content(0, self.rows.saturating_sub(1));
     }

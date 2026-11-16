@@ -894,6 +894,7 @@ impl GraphicsStore {
     pub fn remove_graphic_everywhere(&mut self, id: u64) {
         self.placements.retain(|g| g.id != id);
         self.scrollback.retain(|g| g.id != id);
+        self.sync_shared_budget();
     }
 
     /// Rebase scrollback graphics anchors after `excess` oldest scrollback
@@ -912,6 +913,7 @@ impl GraphicsStore {
                 *row -= excess;
             }
         }
+        self.sync_shared_budget();
     }
 
     /// Move the on-screen placements with their lines after an xterm-style
@@ -1606,6 +1608,31 @@ impl std::error::Error for GraphicsError {}
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The shared-budget slice must track removals: without the
+    /// reconciliation the stale reservation sheds scrollback graphics that
+    /// actually fit on the next admission check.
+    #[test]
+    fn test_remove_graphic_everywhere_releases_shared_budget_bytes() {
+        let budget = std::sync::Arc::new(OutputMemoryBudget::new(50_000));
+        let mut store = GraphicsStore::with_limits(GraphicsLimits::default());
+        store.set_shared_budget(budget.clone());
+        let graphic =
+            TerminalGraphic::new(1, GraphicProtocol::Sixel, (0, 0), 10, 1, vec![255u8; 40]);
+        store.add_graphic(graphic.clone());
+        let mut sb = graphic;
+        sb.scrollback_row = Some(3);
+        store.scrollback.push(sb);
+        store.sync_shared_budget();
+        let before = budget.graphics_bytes();
+        assert!(before > 0, "the budget carries both copies before removal");
+        store.remove_graphic_everywhere(1);
+        assert_eq!(
+            budget.graphics_bytes(),
+            0,
+            "the removal must release its budget slice, not strand it"
+        );
+    }
 
     #[test]
     fn test_graphic_protocol_as_str() {

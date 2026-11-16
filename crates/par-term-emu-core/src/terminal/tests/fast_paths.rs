@@ -57,6 +57,7 @@ fn chunk() -> impl Strategy<Value = Vec<u8>> {
         b"\x1b[2J",
         b"\x1b[K",
         b"\x1b[1K",
+        b"\x1b#8",
         b"\x1b[3X",
         b"\x1b[2@",
         b"\x1b[2P",
