@@ -727,7 +727,7 @@ pub(super) async fn sessions_handler(
         .sessions
         .list_sessions()
         .into_iter()
-        .filter(|s| s.id != "metadata")
+        .filter(|s| s.id != SessionRegistry::METADATA_SESSION_ID)
         .collect();
     let max = server.config.max_sessions;
     let available = max.saturating_sub(sessions.len());

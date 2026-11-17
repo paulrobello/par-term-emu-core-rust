@@ -84,7 +84,7 @@ impl StreamingServer {
         let this = Arc::clone(self);
         tokio::task::spawn_blocking(move || {
             let _lifecycle = this.session_lifecycle.lock();
-            let session = match this.sessions.get("metadata") {
+            let session = match this.sessions.get(SessionRegistry::METADATA_SESSION_ID) {
                 Some(session) => session,
                 None => {
                     // A fresh in-memory terminal: nothing mirrors a pane,
@@ -92,14 +92,15 @@ impl StreamingServer {
                     // treat the state like any other client-less session.
                     let terminal = Arc::new(RwLock::new(Terminal::new(80, 24)));
                     let session = Arc::new(StreamSessionState::new(
-                        "metadata".to_string(),
+                        SessionRegistry::METADATA_SESSION_ID.to_string(),
                         terminal,
                         None,
                         false,
                     ));
-                    let _ = this
-                        .sessions
-                        .insert("metadata".to_string(), Arc::clone(&session));
+                    let _ = this.sessions.insert(
+                        SessionRegistry::METADATA_SESSION_ID.to_string(),
+                        Arc::clone(&session),
+                    );
                     session
                 }
             };

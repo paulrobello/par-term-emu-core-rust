@@ -1195,6 +1195,12 @@ pub struct SessionRegistry {
 }
 
 impl SessionRegistry {
+    /// The reserved id of the metadata query session (`ws_session.rs`). It is
+    /// infrastructure, not a viewer seat: `/sessions` reporting already
+    /// excludes it (http.rs), so the max_sessions cap must not count it
+    /// either, or a connected metadata listener displaces a real session.
+    pub const METADATA_SESSION_ID: &'static str = "metadata";
+
     /// Create a new session registry
     pub fn new(max_sessions: usize) -> Self {
         Self {
@@ -1209,9 +1215,17 @@ impl SessionRegistry {
     }
 
     /// Insert a session. Returns error if max_sessions would be exceeded.
+    /// The reserved metadata query session is cap-exempt AND its presence
+    /// does not consume a viewer seat — real sessions always get the full
+    /// `max_sessions` seats.
     pub fn insert(&self, id: String, session: Arc<StreamSessionState>) -> Result<()> {
         let mut sessions = self.sessions.write();
-        if sessions.len() >= self.max_sessions && !sessions.contains_key(&id) {
+        let cap_exempt = id == Self::METADATA_SESSION_ID;
+        let real_count = sessions
+            .keys()
+            .filter(|existing| existing.as_str() != Self::METADATA_SESSION_ID)
+            .count();
+        if !cap_exempt && real_count >= self.max_sessions && !sessions.contains_key(&id) {
             return Err(StreamingError::MaxSessionsReached);
         }
         sessions.insert(id, session);
@@ -1926,6 +1940,46 @@ mod tests {
             result.unwrap_err(),
             StreamingError::MaxSessionsReached
         ));
+    }
+
+    /// The reserved metadata query session is infrastructure, not a viewer
+    /// seat (card 01a1eba6): it must insert even when the registry is full,
+    /// and its presence must not shrink the seat count for real sessions.
+    #[tokio::test]
+    async fn test_session_registry_metadata_session_is_cap_exempt() {
+        let registry = SessionRegistry::new(2);
+        let mk = |id: &str| {
+            Arc::new(StreamSessionState::new(
+                id.to_string(),
+                Arc::new(RwLock::new(Terminal::new(80, 24))),
+                None,
+                true,
+            ))
+        };
+        registry
+            .insert(
+                SessionRegistry::METADATA_SESSION_ID.to_string(),
+                mk("metadata"),
+            )
+            .expect("metadata inserts into an empty registry");
+        registry.insert("a".to_string(), mk("a")).expect("a");
+        registry.insert("b".to_string(), mk("b")).expect("b");
+        assert!(registry.session_count() == 3);
+        // The registry is full of real sessions; the metadata id still
+        // re-inserts (it is a lookup shell, re-created per listener).
+        registry
+            .insert(
+                SessionRegistry::METADATA_SESSION_ID.to_string(),
+                mk("metadata"),
+            )
+            .expect("metadata re-inserts at full cap");
+        // Real sessions remain capped at max_sessions.
+        assert!(matches!(
+            registry.insert("c".to_string(), mk("c")),
+            Err(StreamingError::MaxSessionsReached)
+        ));
+        // Registry holds: metadata + the two real sessions ("c" was refused).
+        assert!(registry.session_count() == 3);
     }
     #[tokio::test]
     async fn test_session_registry_list_sessions() {
