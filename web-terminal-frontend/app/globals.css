@@ -51,6 +51,26 @@
     background: color-mix(in srgb, var(--terminal-surface) 80%, transparent);
     backdrop-filter: blur(12px);
     border: 1px solid var(--terminal-border);
+    padding: 0.5rem;
+  }
+
+  @media (min-width: 640px) {
+    .glass {
+      padding: 0.75rem;
+    }
+  }
+
+  /* Terminal viewport frame: insets the terminal canvas inside its rounded
+     container so content never sits flush against the clipped edge. The
+     full-bleed mode (controls hidden) omits this class. */
+  .terminal-frame {
+    padding: 0.5rem;
+  }
+
+  @media (min-width: 640px) {
+    .terminal-frame {
+      padding: 0.75rem;
+    }
   }
 
   /* Status indicator */
@@ -128,11 +148,6 @@
 }
 
 @layer utilities {
-  /* Text gradient */
-  .text-gradient {
-    @apply bg-gradient-to-r from-blue-400 via-purple-400 to-pink-400 bg-clip-text text-transparent;
-  }
-
   /* Primary link color using CSS variable */
   .text-primary {
     color: var(--terminal-primary, #ff9500);

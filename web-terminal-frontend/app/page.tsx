@@ -189,7 +189,7 @@ export default function Home() {
     <main className="flex h-[100dvh] flex-col overflow-hidden">
       {/* Header - Hideable */}
       {showControls && (
-        <div className="glass px-2 pt-2 pb-0 sm:px-3 sm:pt-3 sm:pb-0 shadow-2xl flex-shrink-0 rounded-xl sm:rounded-2xl border-0">
+        <div className="glass shadow-2xl flex-shrink-0 rounded-xl sm:rounded-2xl border-0">
           <div className="flex items-center gap-2">
             {/* URL Input with inline status */}
             <div className="flex-1 relative">
@@ -265,12 +265,12 @@ export default function Home() {
 
       {/* Terminal Container */}
       <div
-        className={`flex-1 shadow-2xl overflow-hidden flex flex-col ${showControls ? 'm-2 sm:m-3 mt-2 rounded-lg' : ''}`}
+        className={`flex-1 shadow-2xl overflow-hidden flex flex-col ${showControls ? 'm-2 sm:m-3 mt-2 rounded-lg terminal-frame' : ''}`}
         style={{
           backgroundColor: terminalBgColor,
           minHeight: '200px',
           // Add padding for onscreen keyboard when visible
-          paddingBottom: showKeyboard ? '180px' : '0',
+          paddingBottom: showKeyboard ? '180px' : showControls ? undefined : 0,
           transition: 'padding-bottom 0.3s ease-out',
         }}
       >
