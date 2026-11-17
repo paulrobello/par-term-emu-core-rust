@@ -13,49 +13,13 @@
         "reason": "2026-10-11 doc-sync session: demo/fixture page for the streamer (dark terminal UI is intentional); finding is pre-existing styling, the session's edit only changed a JS comment. Suppressed at file scope as the narrowest available option."
       },
       {
-        "rule": "gradient-text",
-        "value": "*",
-        "files": [
-          "web_term/index.html"
-        ],
-        "createdAt": "2026-11-16T23:13:41.621Z",
-        "reason": "generated Next.js export of web-terminal-frontend (make web-build-static); hand edits break the web_term/ drift gate; findings documented on kanban card 01a1e536491e76b5b7eb31c02f1722ff pending Paul keep-vs-restyle decision"
-      },
-      {
-        "rule": "gradient-text",
-        "value": "*",
-        "files": [
-          "web_term/_not-found.html"
-        ],
-        "createdAt": "2026-11-16T23:13:41.637Z",
-        "reason": "generated Next.js export of web-terminal-frontend (make web-build-static); hand edits break the web_term/ drift gate; findings documented on kanban card 01a1e536491e76b5b7eb31c02f1722ff pending Paul keep-vs-restyle decision"
-      },
-      {
-        "rule": "gradient-text",
-        "value": "*",
-        "files": [
-          "web_term/404.html"
-        ],
-        "createdAt": "2026-11-16T23:13:41.653Z",
-        "reason": "generated Next.js export of web-terminal-frontend (make web-build-static); hand edits break the web_term/ drift gate; findings documented on kanban card 01a1e536491e76b5b7eb31c02f1722ff pending Paul keep-vs-restyle decision"
-      },
-      {
-        "rule": "gradient-text",
-        "value": "*",
-        "files": [
-          "web_term/_next/static/chunks/1d1hnz0451uv3.css"
-        ],
-        "createdAt": "2026-11-16T23:13:41.668Z",
-        "reason": "generated Next.js export of web-terminal-frontend (make web-build-static); hand edits break the web_term/ drift gate; findings documented on kanban card 01a1e536491e76b5b7eb31c02f1722ff pending Paul keep-vs-restyle decision"
-      },
-      {
         "rule": "gray-on-color",
         "value": "*",
         "files": [
-          "web_term/_next/static/chunks/1d1hnz0451uv3.css"
+          "web_term/_next/static/chunks/*.css"
         ],
-        "createdAt": "2026-11-16T23:13:41.683Z",
-        "reason": "generated Next.js export of web-terminal-frontend (make web-build-static); hand edits break the web_term/ drift gate; findings documented on kanban card 01a1e536491e76b5b7eb31c02f1722ff pending Paul keep-vs-restyle decision"
+        "createdAt": "2026-11-17T22:09:52.221Z",
+        "reason": "2026-11-17 /dbl session: built Tailwind chunks co-locate all utility definitions, so the file scanner pairs classes no element uses (text-neutral-200/300 vs bg-amber-600 — DOM scan of web_term/index.html has zero such pairings; source uses neutral text only on neutral surfaces). Generated-output suppression per efeef05f precedent; fixes belong in source, and no source pairing exists. Superseded the 2026-11-16 chunk-hash-scoped ignore that rebuilds invalidate."
       }
     ]
   }
