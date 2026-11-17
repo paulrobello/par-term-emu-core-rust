@@ -2100,10 +2100,13 @@ fn test_build_graphic_base_frame_out_of_range_is_an_error() {
     let mut store = GraphicsStore::new();
     let b64 = rgba_b64(&[[1, 2, 3, 255]]);
     kitty_command(&mut store, &format!("a=t,f=32,s=1,v=1,i=6;{b64}")).unwrap();
-    // c= referencing a nonexistent frame errors (kitty replies ENOENT)
-    // instead of silently filling from the background color.
+    // c= referencing a nonexistent frame errors (kitty replies EINVAL —
+    // its ENOENTs are reserved for missing image ids and a=c compose
+    // frames) instead of silently filling from the background color.
     let result = kitty_command(&mut store, &format!("a=f,f=32,s=1,v=1,x=1,i=6,c=5;{b64}"));
-    assert!(result.unwrap_err().to_string().contains("does not exist"));
+    let err = result.unwrap_err();
+    assert!(err.to_string().contains("does not exist"));
+    assert_eq!(err.kitty_code(), "EINVAL");
     assert!(store.get_animation(6).is_none());
 }
 

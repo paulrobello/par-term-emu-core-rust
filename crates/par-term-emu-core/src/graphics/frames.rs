@@ -65,15 +65,16 @@ impl GraphicsStore {
             edit.pixels
         } else {
             // An explicit c= that references no existing frame is an error
-            // (kitty replies ENOENT); without c= a new frame starts from the
-            // background-color canvas.
+            // (kitty replies EINVAL — its ENOENTs are reserved for missing
+            // image ids and a=c compose frames); without c= a new frame
+            // starts from the background-color canvas.
             let start = if number <= count {
                 self.kitty_frame_pixels(image_id, number, &root)
             } else {
                 match edit.base.filter(|base| *base >= 1 && *base <= count) {
                     Some(base) => self.kitty_frame_pixels(image_id, base, &root),
                     None if edit.base.is_some() => {
-                        return Err(GraphicsError::KittyNotFound(format!(
+                        return Err(GraphicsError::KittyError(format!(
                             "Base frame {:?} does not exist",
                             edit.base
                         )))
