@@ -12,7 +12,9 @@ use std::sync::atomic::{AtomicBool, Ordering};
 
 // --- Against a real in-process daemon -------------------------------
 
-use crate::mux::{MuxClient, MuxServer};
+use crate::mux::ids::PaneId;
+use crate::mux::pane::SpawnContext;
+use crate::mux::{MuxClient, MuxServer, PaneFactory, ShellPaneFactory};
 use crate::streaming::{ConnectionParams, StreamingConfig};
 use std::time::{Duration, Instant};
 
@@ -83,6 +85,53 @@ fn daemon() -> (tempfile::TempDir, PathBuf, ServingGuard, MuxClient, String) {
         .find(|l| l.starts_with('%'))
         .expect("a pane");
     (dir, socket, guard, control, pane)
+}
+
+/// Exercise the daemon's kernel-cwd reader without OSC 7 or the snapshot's
+/// spawn-cwd fallback. A quiet child in a known directory distinguishes
+/// unavailable cross-process introspection from a streaming regression.
+fn test_daemon_reads_a_child_cwd() -> bool {
+    let dir = tempfile::Builder::new()
+        .prefix("cwd-capability-")
+        .tempdir()
+        .expect("probe dir");
+    let factory = ShellPaneFactory {
+        cwd: Some(dir.path().to_path_buf()),
+        ..Default::default()
+    };
+    let mut pane = factory
+        .create_pane(
+            PaneId(0),
+            80,
+            24,
+            Some("sleep 30"),
+            &SpawnContext::default(),
+        )
+        .expect("probe pane spawns");
+    // The kernel reports the RESOLVED vnode path (/private/var/... where
+    // tempfile says /var/...); compare canonical forms or macOS never
+    // matches and the probe false-negatives there.
+    let expected = dir.path().canonicalize().expect("canonical probe dir");
+    let deadline = Instant::now() + Duration::from_secs(5);
+    let capable = loop {
+        if pane.persistence_cwd().as_deref() == Some(expected.as_path()) {
+            break true;
+        }
+        if Instant::now() >= deadline {
+            break false;
+        }
+        std::thread::sleep(Duration::from_millis(50));
+    };
+    let _ = pane.kill();
+    if !capable {
+        eprintln!(
+            "SKIPPED: child cwd introspection unavailable or restricted on this host \
+             (macOS proc_pidinfo(PROC_PIDVNODEPATHINFO), Linux /proc/<pid>/cwd). \
+             The controlled child-cwd capability probe failed; kernel-cwd streaming \
+             assertions cannot run here."
+        );
+    }
+    capable
 }
 
 /// The session machinery spawns tasks (`resolve_session` starts the
@@ -1750,6 +1799,9 @@ fn late_joiner_connects_with_the_current_process_state() {
 /// with the sender's locality verdict.
 #[test]
 fn a_plain_shell_cd_reaches_a_streaming_client_as_cwd_changed() {
+    if !test_daemon_reads_a_child_cwd() {
+        return;
+    }
     let rt = runtime();
     let _entered = rt.enter();
     let (_dir, socket, _serving, mut control, pane) = daemon();
@@ -1802,6 +1854,9 @@ fn a_plain_shell_cd_reaches_a_streaming_client_as_cwd_changed() {
 /// and criterion 3's locality verdict says local, with no hostname.
 #[test]
 fn connected_carries_the_daemon_known_cwd_without_osc7() {
+    if !test_daemon_reads_a_child_cwd() {
+        return;
+    }
     let rt = runtime();
     let _entered = rt.enter();
     let (_dir, socket, _serving, mut control, pane) = daemon();
