@@ -182,13 +182,15 @@ impl Terminal {
             1049 => {
                 // xterm treats 1049 as "save cursor as in DECSC" before
                 // switching to the alternate screen and "restore cursor as in
-                // DECRC" after switching back, sharing the saved-cursor slot
-                // with ESC 7 / ESC 8: a DECSC inside the alternate screen
-                // overwrites the 1049 entry save, and the exit restore is
-                // unconditional like xterm's CursorRestore. The screen swap
-                // keeps the position; the SGR pen comes back too, so a program
-                // that exits with colors set does not paint them over the
-                // primary screen with the next erase (BCE).
+                // DECRC" after switching back. Our single saved-cursor slot is
+                // shared with ESC 7 / ESC 8, so a DECSC (or a duplicate 1049h)
+                // inside the alternate screen overwrites the 1049 entry save —
+                // an accepted divergence: xterm keeps one saved cursor per
+                // buffer (sc[whichBuf]), so its exit restore still reads the
+                // primary's own slot. The screen swap keeps the position; the
+                // SGR pen comes back too, so a program that exits with colors
+                // set does not paint them over the primary screen with the
+                // next erase (BCE).
                 if enabled {
                     self.save_cursor();
                     self.use_alt_screen();

@@ -891,6 +891,12 @@ impl GraphicsStore {
     /// a host that enforces its own image storage limit and evicts the
     /// oldest images wherever they are ([`Self::remove_graphic`] only
     /// reaches the placements on screen).
+    ///
+    /// Kitty state keyed by that image id survives the removal: the shared
+    /// image and any animation keep their pixels in the store (still
+    /// counted against the budget) until the kitty delete path
+    /// ([`Self::free_kitty_data`], the `a=d,d=I` handler) or budget
+    /// eviction drops the id.
     pub fn remove_graphic_everywhere(&mut self, id: u64) {
         self.placements.retain(|g| g.id != id);
         self.scrollback.retain(|g| g.id != id);

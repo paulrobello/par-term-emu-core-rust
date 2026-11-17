@@ -952,6 +952,9 @@ impl XtermBuffer {
             for (_, lines) in inserts {
                 merged.extend(lines);
             }
+            // Overflow drops the oldest scrollback lines from the top. This is an
+            // intentional divergence from xterm.js's reflow, which drops the newly
+            // inserted bottom rows instead; preserving history wins here.
             let excess = merged.len().saturating_sub(self.max_length);
             merged.drain(..excess);
             self.trimmed += excess;

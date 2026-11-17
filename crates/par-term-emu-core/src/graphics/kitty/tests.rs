@@ -3030,6 +3030,20 @@ fn negative_z_makes_a_frame_gapless_and_zero_is_ignored() {
         "z=0 must not change the gap"
     );
 
+    // A frame number that has not been appended yet is silently ignored, like
+    // kitty's animation-control handler — no ENOENT reply (its ENOENTs are
+    // for missing image ids and a=c compose frames, not the a=a gap target).
+    // The lazy animation materializes with the root frame only; the named
+    // frame is neither created nor gapped.
+    transmit_and_add(&mut store, 3, None, (0, 0));
+    kitty_command(&mut store, "a=a,i=3,r=5,z=100;").unwrap();
+    let animation = store.get_animation(3).unwrap();
+    assert!(
+        animation.get_frame(5).is_none(),
+        "the gap must not create frame 5"
+    );
+    assert_eq!(animation.frame_count(), 1, "only the root frame exists");
+
     // Negative z on a=f rides along with frame data: the appended frame 3
     // is gapless. Positive z sets the gap.
     let b64 = rgba_b64(&[[0, 255, 0, 255]]);

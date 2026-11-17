@@ -153,6 +153,11 @@ impl GraphicsStore {
     /// when no animation entry exists yet, it is created here (root frame
     /// sharing the image's buffer, already budget-counted) so the gap is
     /// not silently dropped.
+    ///
+    /// A frame number that has not been appended yet is silently ignored —
+    /// kitty does the same in its animation-control handler (its ENOENT
+    /// replies there are for missing image ids and `a=c` compose frames,
+    /// not the `a=a` gap target).
     pub(crate) fn set_kitty_frame_gap(&mut self, image_id: u32, number: u32, gap_ms: u32) {
         if !self.animations.contains_key(&image_id) {
             let Some((width, height, root)) = self.shared_images.get(&image_id).cloned() else {

@@ -24,10 +24,10 @@ fn test_alt_screen() {
     assert!(content.contains("Primary"));
 }
 
-/// Leaving the alternate screen with DECRST 1049 runs the DECRC restore
-/// against the shared saved-cursor slot (xterm): the entry DECSC save, any
-/// later ESC 7 overwrite, cursor and SGR pen together. 1047 does not save;
-/// the 1049 restore is unconditional, like xterm's CursorRestore. A program
+/// Leaving the alternate screen with DECRST 1049 runs the DECRC-style
+/// restore against the shared saved-cursor slot: the entry save, any later
+/// ESC 7 overwrite, cursor and SGR pen together. 1047 does not save; the
+/// 1049 restore is unconditional, like xterm's CursorRestore. A program
 /// that exits with a background color set must not leave it for the shell's
 /// next erase.
 #[test]
@@ -48,9 +48,10 @@ fn test_alt_screen_1049_restores_the_pen() {
         "1047 keeps the pen, as in xterm"
     );
 
-    // A DECSC inside the alternate screen overwrites the 1049 entry save, and
-    // the exit restores that latest save including its pen (xterm mixed-
-    // sequence parity).
+    // Our shared-slot model: a DECSC inside the alternate screen overwrites
+    // the 1049 entry save, and the exit restores that latest save. (xterm
+    // keeps one saved cursor per buffer, so its exit still restores the
+    // primary's own save — an accepted divergence, see the 1049 handler.)
     term.process(b"\x1b[0m\x1b[44m\x1b[?1049h\x1b7\x1b[41;101minside");
     term.process(b"\x1b[?1049l");
     assert_eq!(
@@ -63,6 +64,36 @@ fn test_alt_screen_1049_restores_the_pen() {
     // restores the slot again.
     term.process(b"\x1b[?1049l");
     assert_eq!(term.attrs.bg, Color::Named(crate::color::NamedColor::Blue));
+}
+
+/// REP's pending character must not survive an alt-screen switch. A
+/// parser-driven ?1049h/?1049l clears it as any dispatch does; the
+/// programmatic API path (`use_alt_screen`/`use_primary_screen`) skips the
+/// parser, so `exit_alt_screen` resets the pending char itself — after a
+/// screen switch, CSI b repeats nothing, xterm's net behavior.
+#[test]
+fn test_alt_screen_exit_clears_pending_rep() {
+    let mut term = Terminal::new(80, 24);
+    term.process(b"ab");
+    assert_eq!(term.cursor.col, 2);
+    term.use_alt_screen();
+    term.use_primary_screen();
+    term.process(b"\x1b[b");
+    assert_eq!(
+        term.cursor.col, 2,
+        "REP after the switch must not repeat 'b'"
+    );
+
+    // Symmetric: a REP pending on the primary must not fire on the
+    // alternate screen either. Entering the alt screen restores its own
+    // cursor (col 0), so a fired REP would advance it to col 1.
+    term.process(b"cd");
+    term.use_alt_screen();
+    term.process(b"\x1b[b");
+    assert_eq!(
+        term.cursor.col, 0,
+        "the primary's pending REP must not fire on the alternate screen"
+    );
 }
 
 #[test]

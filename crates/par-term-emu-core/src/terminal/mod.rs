@@ -1444,6 +1444,11 @@ impl Terminal {
     /// default cells, so a scrolled line costs time and memory in
     /// proportion to its text instead of the screen width (see
     /// [`Grid::set_compact_scrollback`]). Off by default; survives RIS.
+    ///
+    /// Deliberately dormant on the Python side: no binding, no
+    /// `API_REFERENCE.md` entry. ARC-001 freezes the flat `Terminal`
+    /// surface, so this stays a Rust-host/test-only setting until a real
+    /// configuration path needs to expose it.
     pub fn set_compact_scrollback(&mut self, compact: bool) {
         self.host.compact_scrollback = compact;
         self.grid.set_compact_scrollback(compact);

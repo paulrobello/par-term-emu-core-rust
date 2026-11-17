@@ -39,6 +39,10 @@ impl Terminal {
             // Pending trigger rows index the primary grid; scan them before
             // the visible grid swaps underneath (ARC-064).
             self.flush_pending_trigger_rows();
+            // Symmetric with exit: a REP pending on the primary's last
+            // printed character must not fire on the alternate screen.
+            // Parser-driven switches clear it per dispatch (xterm).
+            self.charset_state.rep_char = None;
             debug::log_screen_switch(true, "use_alt_screen");
             // Save current (primary) cursor position before switching
             let primary_cursor = self.cursor;
@@ -69,6 +73,11 @@ impl Terminal {
             // Pending trigger rows index the alternate grid; scan them
             // before the visible grid swaps back (ARC-064).
             self.flush_pending_trigger_rows();
+            // A REP pending from the alternate screen's last printed
+            // character must not fire on the primary screen. Parser-driven
+            // switches already clear it (every csi/esc dispatch does); this
+            // covers the programmatic API path, which skips the parser.
+            self.charset_state.rep_char = None;
             debug::log_screen_switch(false, "use_primary_screen");
             if clear_alt {
                 self.alt_grid.clear();
