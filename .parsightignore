@@ -1,2 +1,6 @@
 # Generated Next.js static export — not source, pollutes analytics
 web_term/
+
+# clap-generated shell completions (make completions) — not authored source;
+# par-mux.bash ranked as the repo's top god-object (complexity 379)
+crates/par-mux/completions/
