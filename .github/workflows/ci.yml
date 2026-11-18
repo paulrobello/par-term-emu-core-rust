@@ -242,23 +242,38 @@ jobs:
       # daemon-spawning leg (Makefile test-mux-ci retry_once, card
       # 01a1d67a82807290bcb85e9ab6bf2f79) — a first run lost to host-load
       # flake re-runs the failing test once before the leg goes red.
+      # ulimit is a bash builtin: the self-hosted macOS LaunchAgent needs the
+      # nofile raise (launchd caps at 256), but windows-latest defaults to
+      # pwsh where the bare line is a command-not-found failure (run
+      # 44262618398) and shell: bash would shadow MSVC's link.exe. On
+      # windows the conditional emits a plain comment instead.
       run: |
-        ulimit -n 10240
+        ${{ runner.os == 'Windows' && '# ulimit guard is for the self-hosted macOS runner only (hosted runners need no raise)' || 'ulimit -n 10240' }}
         cargo nextest run --profile ci --locked -p par-mux --features attach --test-threads 4 --retries 1
 
     - name: Run root tests with the mux re-export on
       # mux_feature_isolation + the root lib compiled against par-mux.
       # --retries 1: same daemon-spawn load-flake retry as the mux leg
       # above and the local gate's retry_once wrapper.
+      # ulimit is a bash builtin: the self-hosted macOS LaunchAgent needs the
+      # nofile raise (launchd caps at 256), but windows-latest defaults to
+      # pwsh where the bare line is a command-not-found failure (run
+      # 44262618398) and shell: bash would shadow MSVC's link.exe. On
+      # windows the conditional emits a plain comment instead.
       run: |
-        ulimit -n 10240
+        ${{ runner.os == 'Windows' && '# ulimit guard is for the self-hosted macOS runner only (hosted runners need no raise)' || 'ulimit -n 10240' }}
         cargo nextest run --profile ci --locked --no-default-features --features rust-only,mux-bin,serde,attach --retries 1
 
     - name: Run par-term-emu-core member tests with the mux feature set
       # ARC-007 O2: the core (incl. PtySession) unit tests moved to the
       # member; this is the run the mux nextest above covered pre-split.
+      # ulimit is a bash builtin: the self-hosted macOS LaunchAgent needs the
+      # nofile raise (launchd caps at 256), but windows-latest defaults to
+      # pwsh where the bare line is a command-not-found failure (run
+      # 44262618398) and shell: bash would shadow MSVC's link.exe. On
+      # windows the conditional emits a plain comment instead.
       run: |
-        ulimit -n 10240
+        ${{ runner.os == 'Windows' && '# ulimit guard is for the self-hosted macOS runner only (hosted runners need no raise)' || 'ulimit -n 10240' }}
         cargo nextest run --profile ci --locked -p par-term-emu-core --features mux,serde
 
     - name: Run mux-backed streaming tests (MuxSessionFactory)
