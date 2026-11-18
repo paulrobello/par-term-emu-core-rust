@@ -250,6 +250,11 @@ fn ambiguous_window_target_errors_and_acts_on_nothing() {
 /// `list-panes -t <window>` returns a window's panes in layout leaf order
 /// with the active one marked and a deterministic leaf index. The bare
 /// forms keep their exact pre-existing shapes.
+/// Unix only: windows real-daemon E2E reads the raw cmd.exe ConPTY
+/// banner flood into the tree rows (run 44320117598) — the row
+/// expectations are unix-shell-shaped; windows-shaped E2E is follow-up
+/// work. The leg never ran on windows before 2026-11-18.
+#[cfg(unix)]
 #[test]
 fn targeted_list_windows_and_list_panes_reconstruct_the_tree() {
     let fixture = MuxFixture::new("treeq");
