@@ -2110,6 +2110,26 @@ print(f"After resize to 120: {term.scrollback_len()} lines")
 # History lines carry their original 80-col width; the visible screen reflows
 ```
 
+### Opt-In Resize and Storage Modes (Rust)
+
+Three Rust-only `Terminal` settings change the behavior above. They have no Python bindings (the flat `Terminal` class is frozen) and are all off by default. Usage and a code sample are in [RUST_USAGE.md](RUST_USAGE.md#resize-and-scrollback-modes).
+
+| Mode | Enable with | Resize and storage behavior |
+|------|-------------|-----------------------------|
+| Default | (nothing) | Only the visible screen reflows. Stored scrollback lines keep the width they scrolled off at. Each stored line keeps its full width. |
+| xterm.js reflow | `set_xterm_resize(true)` | The primary screen and its scrollback reflow as one buffer. The cursor, saved cursor, and viewport follow their lines. A taller screen pulls lines back from the scrollback. `take_buffer_reflow()` reports where each line went. |
+| Compact storage | `set_compact_scrollback(true)` | Lines enter the scrollback without their trailing default cells. Reads, snapshots, and resize behavior are unchanged. |
+
+The modes combine freely. Compact storage is orthogonal to the resize mode, and the xterm.js reflow test suite runs with both on.
+
+**When to choose each:**
+
+- **Default** for a host that renders history at each line's stored width and wants resize cost bounded by the viewport rows.
+- **xterm.js reflow** for a host that mirrors xterm.js behavior or needs history to rewrap to the new width. Resize cost grows with scrollback depth, because every logical line except the cursor's is rewrapped across the scrollback and the screen.
+- **Compact storage** for deep scrollback of mostly short lines, where full-width rows waste memory and copy time. It costs nothing on the read side because a short line reads like one padded with default cells. Wrapped lines keep their full width.
+
+Two further settings are independent of the resize mode. `set_max_scrollback(n)` changes the scrollback capacity of a running terminal and drops the oldest lines like a scroll at capacity when it shrinks. `set_codepoint_widths(true)` counts emoji sequences per code point (`wcwidth`-style) instead of per grapheme cluster, so the grid agrees with hosts that measure text with `wcwidth`.
+
 ### Technical Details
 
 - Storage is `Vec<Box<[Cell]>>` (one allocation per line at its own width)

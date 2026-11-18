@@ -9,6 +9,7 @@ A comprehensive guide for using the par-term-emu-core-rust library in pure Rust 
   - [Feature Combinations](#feature-combinations)
   - [Build Commands](#build-commands)
 - [Basic Terminal Usage](#basic-terminal-usage)
+- [Resize and Scrollback Modes](#resize-and-scrollback-modes)
 - [PTY Session](#pty-session-shell-interaction)
 - [Macro Recording and Playback](#macro-recording-and-playback)
 - [WebSocket Streaming Server](#websocket-streaming-server)
@@ -179,14 +180,88 @@ fn main() {
     let cursor = terminal.cursor();
     println!("Cursor at column {}, row {}", cursor.col, cursor.row);
 
-    // Resize terminal (scrollback is automatically reflowed when width changes)
+    // Resize terminal (the visible screen reflows when width changes)
     terminal.resize(100, 30);
 }
 ```
 
 > **Note:** The `process()` method is thread-safe for reading but requires `&mut self` for modifications. For concurrent access, wrap `Terminal` in `Arc<Mutex<Terminal>>`.
 
-> **Resize Behavior:** When terminal width changes, scrollback content is automatically reflowed--wrapped lines are unwrapped (width increase) or re-wrapped (width decrease). All cell attributes are preserved. Height-only changes do not trigger reflow.
+> **Resize Behavior:** When terminal width changes, the visible screen is reflowed--wrapped lines are unwrapped (width increase) or re-wrapped (width decrease). Stored scrollback lines keep the width they scrolled off at and are not rebuilt. All cell attributes are preserved. Height-only changes do not trigger reflow. To reflow the scrollback together with the screen, see [Resize and Scrollback Modes](#resize-and-scrollback-modes).
+
+## Resize and Scrollback Modes
+
+Four opt-in settings change how a `Terminal` resizes, stores scrollback, and counts emoji widths. All are plain Rust methods on `Terminal`: the flat Python `Terminal` class is frozen, so there are no Python bindings for them. The C embedding surface exposes every setting except compact scrollback through `ptec_terminal_set_*` exports (see [FFI_GUIDE.md](FFI_GUIDE.md)).
+
+| Method | Default | Survives RIS | Effect |
+|--------|---------|--------------|--------|
+| `set_xterm_resize(bool)` | `false` | Yes | Resize like xterm.js: the primary screen and its scrollback reflow as one buffer |
+| `set_compact_scrollback(bool)` | `false` | Yes | Store scrolled lines without their trailing default cells |
+| `set_max_scrollback(usize)` | Constructor value (10000 for `Terminal::new`) | Yes (RIS keeps the current capacity) | Change the scrollback capacity of a running terminal |
+| `set_codepoint_widths(bool)` | `false` | Yes | Count emoji sequences per code point (`wcwidth`-style) instead of per grapheme cluster |
+
+```rust
+use par_term_emu_core_rust::terminal::Terminal;
+
+fn main() {
+    let mut terminal = Terminal::with_scrollback(80, 24, 10_000);
+
+    // Resize like xterm.js: the cursor follows its line, and scrollback
+    // lines return to the screen when it grows taller.
+    terminal.set_xterm_resize(true);
+
+    // Store scrolled lines in proportion to their text, not the screen width.
+    terminal.set_compact_scrollback(true);
+
+    // Agree with hosts that count with wcwidth: the heart emoji with a
+    // variation selector is 1 column, a ZWJ sequence counts per code point.
+    terminal.set_codepoint_widths(true);
+
+    for i in 0..100 {
+        terminal.process(format!("line {i}\r\n").as_bytes());
+    }
+
+    // Shrink the history while the terminal runs. The oldest lines drop
+    // like a scroll at capacity.
+    terminal.set_max_scrollback(2_000);
+
+    // Track where the resize moved each buffer line.
+    terminal.resize(100, 30);
+    if let Some(reflow) = terminal.take_buffer_reflow() {
+        // Old buffer line 5 (scrollback first) -> its line after the resize,
+        // or the nearest surviving line above it.
+        let new_line = reflow.follow(5);
+        println!("line 5 is now line {new_line:?}, {} trimmed off the top", reflow.trimmed);
+    }
+}
+```
+
+### Xterm-style resize
+
+By default a resize reflows only the visible screen and leaves stored scrollback lines at the width they scrolled off with (see the Resize Behavior note under [Basic Terminal Usage](#basic-terminal-usage)). With `set_xterm_resize(true)`:
+
+- The primary screen and its scrollback are one list of lines. A taller screen pulls lines back from the scrollback, and a shorter one drops blank rows below the cursor before it pushes rows into the scrollback.
+- On a width change every logical line except the cursor's is rewrapped across the scrollback and the screen.
+- The cursor, the saved cursor, and the viewport follow their lines. A pending wrap ends on resize.
+- Images on the primary screen keep their lines. The alternate screen has no scrollback and resizes without reflow.
+
+`resize_with_viewport(cols, rows, viewport_top)` is `resize` for a host whose viewport is scrolled to buffer line `viewport_top` (scrollback first). It returns the viewport's new top line.
+
+`take_buffer_reflow()` returns a `BufferReflow` once after an xterm-style resize that changed the size, and `None` otherwise, including when `set_xterm_resize` is off. `BufferReflow::lines` maps every old buffer line (scrollback first, then the screen) to `Some(new_line)` or `None` when the line was joined into another, dropped below the cursor, or trimmed off the top. `BufferReflow::trimmed` counts lines trimmed off the top. `BufferReflow::follow(old)` returns the new line for `old`, or the nearest surviving line above it. Use these to keep a host's own line-number bookkeeping (selections, search hits, bookmarks) valid across a resize.
+
+### Compact scrollback
+
+Without `set_compact_scrollback(true)` each stored line keeps the full width it had on screen. With it, trailing default cells (never written, or erased with the default background) are dropped as a line enters the scrollback, so memory and copy cost follow the text length. A short line reads exactly like one padded with default cells, so readers that pad short lines see no difference. Wrapped lines keep their full width, and lines already stored are left as they are. Snapshots are byte-compatible with the default mode. `compact_scrollback()` reads the setting back.
+
+### Live scrollback capacity
+
+`set_max_scrollback(n)` changes the capacity of the primary screen's scrollback. A larger value keeps every stored line and lets more in. A smaller value drops the oldest lines exactly as a scroll at capacity would: absolute line numbering, zones, and the scroll log stay valid, and graphics anchored to dropped lines leave the store while survivors rebase. The alternate screen keeps no scrollback.
+
+### Per-code-point widths
+
+By default an emoji sequence is one grapheme cluster: a variation selector 16 or a ZWJ continuation widens a narrow cell to two columns. With `set_codepoint_widths(true)` every character keeps the width it has on its own, and only zero-width characters (combining marks, variation selectors, ZWJ) attach to the previous cell without changing its width. A heart with VS16 is then 1 column and a ZWJ family sequence counts per code point (the technologist sequence is 4 columns). Regional-indicator pairs stay one two-column cell either way. The setting applies to text written after it changes.
+
+Enable it when the host measures text with `wcwidth` (shells, readline, editors, ncurses) or mirrors xterm, VTE, or xterm.js with Unicode 11 widths, so the cursor stays where the writing program expects. Leave it off for programs that negotiate grapheme clustering through mode 2027. `codepoint_widths()` reads the setting back.
 
 ## PTY Session (Shell Interaction)
 
@@ -555,7 +630,7 @@ cargo doc --all-features --open
 - **VT Compatibility**: VT100/VT220/VT320/VT420/VT520 compatible
 - **Color Support**: ANSI 16-color, 256-color palette, and 24-bit RGB (true color)
 - **Unicode Support**: Full Unicode with wide character support, grapheme cluster preservation, combining characters, variation selectors, Zero-Width Joiners (ZWJ), and emoji sequences
-- **Scrollback Buffer**: Configurable scrollback with automatic reflow on width changes
+- **Scrollback Buffer**: Configurable scrollback (capacity changeable at runtime); the visible screen reflows on width changes, and an opt-in xterm.js-style mode reflows the scrollback with it
 - **Mouse Support**: X10, Normal, Button, and Any modes with multiple encodings (Default, UTF-8, SGR, URXVT)
 - **Graphics Support**: Sixel, iTerm2 inline images, and Kitty Graphics Protocol
 - **Shell Integration**: OSC 133 support for command tracking and navigation
