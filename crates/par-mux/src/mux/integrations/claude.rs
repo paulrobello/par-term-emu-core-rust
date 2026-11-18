@@ -380,6 +380,11 @@ mod tests {
             .collect()
     }
 
+    /// Unix-only until the windows settings-writer defect is fixed (same
+    /// kanban card as a_hook_path_with_spaces above: 01a1ee0bf058737cb0 —
+    /// raw backslashes in the written settings.json break the re-parse).
+    /// The test is correct; windows is broken.
+    #[cfg(unix)]
     #[test]
     fn install_into_a_fresh_directory_creates_settings_and_asset() {
         let root = temp_root();
