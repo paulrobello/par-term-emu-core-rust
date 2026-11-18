@@ -25,7 +25,21 @@ mod kitty;
 mod popup;
 mod replay_retry;
 mod scrollback_edit;
-mod session;
+mod session_display_options;
+mod session_dividers;
+mod session_focus_pane;
+mod session_frame_tabs;
+mod session_layouts;
+mod session_menus;
+mod session_notifications;
+mod session_paste_options;
+mod session_resize_replay;
+mod session_roster_sidebar;
+mod session_seed_push;
+mod session_seed_teardown;
+mod session_settings;
+mod session_sidebar_borders;
+mod session_status_snapshot;
 mod session_strip;
 
 /// The daemon's actual render output for a 50/50 vertical split of an
@@ -2272,4 +2286,150 @@ fn render_screen_guard_drops_on_early_error() {
         before + 2,
         "dropped on Ok"
     );
+}
+
+/// ARC-122: the ring colors read off the focused pane's right ring
+/// edge (`active`) and the unfocused pane's (`plain`) after the session
+/// re-laid a `{cols/2 | cols/2}` split; `x0` is the panes' left offset
+/// (the side panel's width).
+fn assert_ring_colors(
+    session: &mut WindowSession,
+    x0: u16,
+    cols: u16,
+    active: RtColor,
+    plain: RtColor,
+) {
+    session.renderer.focus(1);
+    session.renderer.render_frame();
+    let half = cols / 2;
+    assert_eq!(
+        session.renderer.cell(x0 + half - 1, 5).expect("c").fg,
+        active,
+        "the focused ring keeps border-active-color"
+    );
+    assert_eq!(
+        session.renderer.cell(x0 + cols - 1, 5).expect("c").fg,
+        plain,
+        "the unfocused ring keeps border-color"
+    );
+}
+
+/// The `%layout-change` a size report of `cols`x`rows` against `%1`
+/// queues: an even two-pane split of `@0`.
+fn two_pane_notify(cols: u16, rows: u16) -> std::collections::HashMap<String, String> {
+    let half = cols / 2;
+    let layout = format!("0000,{cols}x{rows},0,0{{{half}x{rows},0,0,1,{half}x{rows},{half},0,2}}");
+    let mut notify = std::collections::HashMap::new();
+    notify.insert(
+        format!("refresh-client -t %1 -C {cols}x{rows}"),
+        format!("%layout-change @0 {layout} {layout} *"),
+    );
+    notify
+}
+
+/// The pane replays (`refresh-client -t %N` WITHOUT a `-C` size report)
+/// among recorded wire lines.
+fn replay_lines(lines: &[String]) -> Vec<String> {
+    lines
+        .iter()
+        .filter(|l| l.starts_with("refresh-client -t %") && !l.contains(" -C "))
+        .cloned()
+        .collect()
+}
+
+/// A `%layout-change @0` line splitting `cols`x`rows` evenly between
+/// `%1` and `%2`.
+fn two_pane_layout_line(cols: u16, rows: u16) -> String {
+    let half = cols / 2;
+    let layout = format!("0000,{cols}x{rows},0,0{{{half}x{rows},0,0,1,{half}x{rows},{half},0,2}}");
+    format!("%layout-change @0 {layout} {layout} *")
+}
+
+/// Four side-by-side panes (%1..%4) over an 80-col window.
+const FOUR_PANE: &str = "0000,80x24,0,0{20x24,0,0,1,20x24,20,0,2,20x24,40,0,3,20x24,60,0,4}";
+
+/// A fake daemon advertising `list-windows all`, scripted with five
+/// sessions whose `-a` rows put `@0` in `$4`.
+fn five_session_script() -> FakeScript {
+    let mut replies = std::collections::HashMap::new();
+    replies.insert(
+        "list-commands".to_string(),
+        "list-windows targeted all\nfeatures replay-held-state".to_string(),
+    );
+    replies.insert(
+        "list-sessions".to_string(),
+        (0..5)
+            .map(|n| format!("+0: main: ${n}: s{n}"))
+            .collect::<Vec<_>>()
+            .join("\n"),
+    );
+    replies.insert("list-workspaces".to_string(), "+0: main active".to_string());
+    replies.insert(
+        "list-windows -a".to_string(),
+        (0..5)
+            .map(|n| format!("${n} @{} * w{n}", (n + 1) % 5))
+            .collect::<Vec<_>>()
+            .join("\n"),
+    );
+    replies.insert("pane-title -t %1".to_string(), "one".to_string());
+    FakeScript {
+        replies,
+        ..FakeScript::default()
+    }
+}
+
+const THREE_PANE: &str = "0000,90x24,0,0{30x24,0,0,1,30x24,30,0,2,30x24,60,0,3}";
+
+/// A fake daemon advertising `client-snapshot v1` (ENH-043), scripted
+/// with one snapshot of `@0`: 2 workspaces, 3 sessions, 2 windows, 3
+/// panes, 2 agents.
+fn snapshot_script() -> FakeScript {
+    let mut replies = std::collections::HashMap::new();
+    replies.insert(
+        "list-commands".to_string(),
+        "client-snapshot v1\nlist-commands\nfeatures replay-held-state\n".to_string(),
+    );
+    replies.insert(
+        "client-snapshot -t @0".to_string(),
+        [
+            "snapshot 1",
+            "workspace +0 * main",
+            "workspace +1 - side",
+            "session $0 - +0 one",
+            "session $1 * +0 two",
+            "session $2 - +1 three",
+            "window @0 * edit",
+            "window @1 - logs",
+            "pane %1 build output",
+            "pane %2 tests",
+            "pane %3",
+            "agent %1 claude working hook",
+            "agent %3 kimi blocked hook",
+        ]
+        .join("\n"),
+    );
+    FakeScript {
+        replies,
+        ..FakeScript::default()
+    }
+}
+
+fn snapshot_session() -> WindowSession {
+    let mut session = WindowSession::new(90, 26);
+    session
+        .renderer
+        .apply_layout(parse_layout(THREE_PANE).expect("parses"));
+    session.window = "@0".to_string();
+    session.sidebar.set(true);
+    session.renderer.focus(1);
+    session
+}
+
+/// Every line the fake daemon receives within 300 ms.
+fn received_within_300ms(rx: &std::sync::mpsc::Receiver<(String, String)>) -> Vec<String> {
+    let mut lines = Vec::new();
+    while let Ok((_, line)) = rx.recv_timeout(std::time::Duration::from_millis(300)) {
+        lines.push(line);
+    }
+    lines
 }
