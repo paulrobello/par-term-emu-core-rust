@@ -178,7 +178,7 @@ It is a Cargo workspace (ARC-007 O2): the terminal core (`Terminal`, grid, seque
 | `ffi` | The C ABI (`src/ffi.rs`, `ptec_terminal_*` exports). Off by default so Python wheels export no C symbols; `make xcframework` builds `rust-only,ffi` (ARC-112) |
 | `rust-only` | No Python bindings (empty convenience feature) |
 | `sim` | Headless profile: grid + terminal only (no PTY/python/streaming/screenshot — screenshot is opt-in since 0.54.0). For pure-Rust embedders, e.g. a server-side screen model |
-| `full` | `python` + `streaming` + `streaming-bin` |
+| `full` | `python` + `streaming` + `streaming-bin`; deliberately excludes `mux`/`attach` (add them explicitly) |
 | `regenerate-proto` | Rebuild protobuf from `proto/terminal.proto` |
 | `jemalloc` | Better server performance (non-Windows) |
 

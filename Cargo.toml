@@ -319,6 +319,9 @@ rust-only = []
 # Since 0.54.0 it no longer implies `screenshot` (ENH-024): embedders that
 # render images opt in with `features = ["sim", "screenshot"]`.
 sim = []
+# `full` = python + streaming + streaming-bin. It deliberately excludes `mux`
+# and `attach` (the multiplexer and its attach client), so "full" is not
+# "everything": add `mux`/`mux-bin`/`attach` explicitly (ARC-007).
 full = ["python", "streaming", "streaming-bin"]
 
 # cargo-fuzz builds the library with `--cfg fuzzing` (the ENH-020 apc_filter
