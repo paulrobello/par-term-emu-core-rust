@@ -343,7 +343,7 @@ test-rust:
 			echo "$$name: passed"; \
 		fi; \
 	}; \
-	retry_once "mux-backed streaming suite" cargo test --lib --no-default-features --features rust-only,streaming,mux,serde streaming::mux_factory -- --test-threads=1
+	retry_once "mux-backed streaming suite" cargo test --lib --no-default-features --features rust-only,streaming,mux,serde streaming::mux_factory -- --test-threads=1 --nocapture
 	@echo "Running the par-term-emu-core member suites (ARC-007 O2: each mirrors the root run above that compiled the same core features before the split)..."
 	cargo test -p par-term-emu-core --features ffi
 	cargo test -p par-term-emu-core --lib --features python,pty_session,screenshot,macro-yaml
@@ -837,7 +837,7 @@ test-mux-ci:
 	}; \
 	retry_once "mux integration suites" env PAR_MUX_NO_APP_WRAPPER=1 cargo nextest run --profile ci --locked -p par-mux --features attach --run-ignored all; \
 	retry_once "root mux re-export suites" cargo nextest run --profile ci --locked --no-default-features --features rust-only,mux-bin,serde,attach --run-ignored all; \
-	retry_once "streaming mux_factory suite" cargo nextest run --profile ci --locked --lib --no-default-features --features rust-only,streaming,mux,serde streaming::mux_factory; \
+	retry_once "streaming mux_factory suite" cargo nextest run --profile ci --locked --lib --no-default-features --features rust-only,streaming,mux,serde --success-output=immediate streaming::mux_factory; \
 	cargo nextest run --profile ci --locked -p par-term-emu-core --features mux,serde --run-ignored all
 
 # Windows MSVC cross-target checks: a misplaced #[cfg(unix)] broke the Windows

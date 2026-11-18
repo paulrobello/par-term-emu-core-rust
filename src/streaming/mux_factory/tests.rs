@@ -91,6 +91,33 @@ fn daemon() -> (tempfile::TempDir, PathBuf, ServingGuard, MuxClient, String) {
 /// spawn-cwd fallback. A quiet child in a known directory distinguishes
 /// unavailable cross-process introspection from a streaming regression.
 fn test_daemon_reads_a_child_cwd() -> bool {
+    // Test-only override: drives the not-capable branch on demand so the
+    // loud-skip path stays demonstrable on capable hosts (libtest and
+    // nextest swallow passing tests' output otherwise).
+    let forced_skip = std::env::var("PAR_TERM_MUX_FACTORY_FORCE_CWD_SKIP").as_deref() == Ok("1");
+    let capable = if forced_skip {
+        false
+    } else {
+        probe_child_cwd()
+    };
+    if capable {
+        return true;
+    }
+    eprintln!(
+        "SKIPPED: child cwd introspection unavailable or restricted on this host \
+         (macOS proc_pidinfo(PROC_PIDVNODEPATHINFO), Linux /proc/<pid>/cwd). \
+         The controlled child-cwd capability probe failed; kernel-cwd streaming \
+         assertions cannot run here.{}",
+        if forced_skip {
+            " [forced via PAR_TERM_MUX_FACTORY_FORCE_CWD_SKIP]"
+        } else {
+            ""
+        }
+    );
+    false
+}
+
+fn probe_child_cwd() -> bool {
     let dir = tempfile::Builder::new()
         .prefix("cwd-capability-")
         .tempdir()
@@ -123,14 +150,6 @@ fn test_daemon_reads_a_child_cwd() -> bool {
         std::thread::sleep(Duration::from_millis(50));
     };
     let _ = pane.kill();
-    if !capable {
-        eprintln!(
-            "SKIPPED: child cwd introspection unavailable or restricted on this host \
-             (macOS proc_pidinfo(PROC_PIDVNODEPATHINFO), Linux /proc/<pid>/cwd). \
-             The controlled child-cwd capability probe failed; kernel-cwd streaming \
-             assertions cannot run here."
-        );
-    }
     capable
 }
 
