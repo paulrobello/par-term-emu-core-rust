@@ -2403,8 +2403,17 @@ fn streamed_damage_matches_dirty_rows_and_the_late_seed_carries_none() {
 /// the Bell frame to the pane's own streaming session, so a viewer of a
 /// second pane receives nothing (and per-client EventType filters still
 /// apply in ws_session's should_send, covered in server/tests.rs).
+///
+/// Kanban 01a1eedb (the ubuntu "doubling" flake): the old typed line
+/// "echo BELL-ARM-A" plus the runner's 25-char prompt exactly filled the
+/// 40-col split pane, and bash readline's " \r" force-wrap at the
+/// exactly-full row plus its ESC[A/ESC[C*/ESC[K redraw left the grid wrap
+/// flag set, so content()'s logical-line join merged the echoed line and
+/// the command output into "echo BELL-ARM-ABELL-ARM-A" — reproduced from
+/// the captured raw bash byte stream through a plain 40-col Terminal with
+/// no streaming layer involved. The marker lines below stay strictly
+/// inside the row, so the merge cannot fire.
 #[test]
-#[ignore = "load-sensitive: the mirror's input echo needs a quiet host — flaked/deterministic on 2-vCPU ubuntu-latest (runs 44289702845, 44310823397, 44314713629, 3/3 tries through retries 2); green on macdaddy/minimac/VM. Torn-mirror-frame investigation on kanban 01a1eedb — unignore when it closes."]
 fn a_bare_bell_in_a_pane_bells_only_that_panes_mirror() {
     let rt = runtime();
     let _entered = rt.enter();
@@ -2425,10 +2434,20 @@ fn a_bare_bell_in_a_pane_bells_only_that_panes_mirror() {
     let mut frames_b = session_b.broadcast_tx.subscribe();
 
     // Both mirrors live (echoed output visible) before anything is armed.
-    type_line(&session_a, "echo BELL-ARM-A");
-    wait_mirror(&session_a, "BELL-ARM-A");
-    type_line(&session_b, "echo BELL-ARM-B");
-    wait_mirror(&session_b, "BELL-ARM-B");
+    // The markers are deliberately shorter than the pane row can fill:
+    // `split-window -h` halves the window, so each pane is 40 cols, and a
+    // line that lands the cursor exactly on the last column makes bash's
+    // readline emit its " \r" force-wrap hack plus an ESC[A/ESC[C*/ESC[K
+    // redraw — the grid's wrap flag then joins the echoed line and the
+    // command output into one logical line in content(), and the standalone
+    // marker never appears (kanban 01a1eedb: the "doubling" is that join,
+    // not duplicated bytes). The typed length must leave the cursor
+    // strictly inside the row; keep it <= 12 chars against a worst-case
+    // 25-char runner prompt ("runner@ip-10-0-130-60:~$ ").
+    type_line(&session_a, "echo BELLA");
+    wait_mirror(&session_a, "BELLA");
+    type_line(&session_b, "echo BELLB");
+    wait_mirror(&session_b, "BELLB");
 
     // Drop the replay buffers so later receives are only fresh frames.
     while frames_a.try_recv().is_ok() {}
@@ -2453,6 +2472,42 @@ fn a_bare_bell_in_a_pane_bells_only_that_panes_mirror() {
     let stray_bell =
         std::iter::from_fn(|| frames_b.try_recv().ok()).any(|m| matches!(m, ServerMessage::Bell));
     assert!(!stray_bell, "paneB's viewer must not receive paneA's bell");
+}
+
+/// Kanban 01a1eedb's repro, minus the daemon: the raw byte stream bash
+/// 5.x readline emits at an exactly-full row (captured on a real PTY,
+/// ubuntu bash 5.2 and macOS bash 5.3 alike) forces the wrap with a
+/// trailing " \r", then redraws with ESC[A / ESC[C* / ESC[K before
+/// accepting the line. The redraw never clears the grid's wrap flag, so
+/// content()'s logical-line join merges the echoed line with the command
+/// output — the exact "echo BELL-ARM-ABELL-ARM-A" doubling the failing
+/// ubuntu runs dumped. The mirror was faithful; the merge lives in the
+/// grid semantics, so the bell test types shorter lines instead.
+#[test]
+fn readline_force_wrap_at_an_exactly_full_row_merges_logical_lines() {
+    let mut term = crate::terminal::Terminal::new(40, 24);
+    term.process(b"runner@ip-10-0-130-60:~$ ");
+
+    let mut seq: Vec<u8> = Vec::new();
+    seq.extend_from_slice(b"echo BELL-ARM-A \r\x1b[A");
+    for _ in 0..40 {
+        seq.extend_from_slice(b"\x1b[C");
+    }
+    seq.extend_from_slice(
+        b"\x1b[KA\r\n\x1b[?2004l\rBELL-ARM-A\r\n\x1b[?2004hrunner@ip-10-0-130-60:~$ ",
+    );
+    term.process(&seq);
+
+    assert!(
+        term.active_grid().is_line_wrapped(0),
+        "the force-wrap space must leave row 0 marked wrapped"
+    );
+    let merged = term.content();
+    assert_eq!(
+        merged.lines().next(),
+        Some("runner@ip-10-0-130-60:~$ echo BELL-ARM-ABELL-ARM-A"),
+        "the wrap join must reproduce the CI dump's doubling string; content:\n{merged}"
+    );
 }
 
 /// BEL terminating an OSC sequence (ESC ]0;title BEL) is consumed by the
