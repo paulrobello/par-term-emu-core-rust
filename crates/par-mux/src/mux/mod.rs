@@ -19,6 +19,7 @@ pub mod emit;
 pub mod events;
 pub(crate) mod foreground;
 pub(crate) mod git_status;
+pub mod handshake;
 pub mod hooks;
 pub(crate) mod host_probe;
 pub mod ids;

@@ -8,6 +8,10 @@
 
 use crate::mux::build_stamp;
 use crate::mux::client::{MuxClient, Reply};
+#[cfg(test)]
+pub(crate) use crate::mux::handshake::stamp_mismatch_is_quiet;
+use crate::mux::handshake::{assess_linked, served_stamp, skew_note};
+pub(crate) use crate::mux::handshake::{parse_command_features, parse_feature_tokens};
 use crossbeam_channel::{Receiver, RecvTimeoutError, TryRecvError};
 use par_term_emu_core::tmux_control::TmuxNotification;
 use std::io;
@@ -92,19 +96,17 @@ impl AttachConn {
         // 1. Version stamp. Both sides read crate::mux::build_stamp() — the
         //    daemon serves its own compile's value.
         let served = match self.client.send_checked("version") {
-            Ok(reply) if reply.ok => Some(reply.body.first().cloned().unwrap_or_default()),
-            // A daemon that refuses `version` is broken in a way the rest
-            // of the handshake surfaces; proceed and let it answer.
-            _ => None,
+            Ok(reply) => served_stamp(reply.ok, &reply.body),
+            // A daemon that never answers `version` is broken in a way the
+            // rest of the handshake surfaces; proceed and let it answer.
+            Err(_) => None,
         };
-        if let Some(served) = &served {
-            if !stamp_mismatch_is_quiet(build_stamp(), served) {
-                self.warnings.stamp_mismatch = Some(format!(
-                    "par-mux: daemon stamp {served} differs from client {}",
-                    build_stamp()
-                ));
-            }
-        }
+        // An `%error` (or silent) `version` is a legacy daemon, version
+        // unknown: degrade to compatibility mode with one note, never fail.
+        // The caller prints the note on stderr (the attach client caps the
+        // `log` facade at Error, so a log line would never show).
+        let skew = assess_linked(served.as_deref());
+        self.warnings.stamp_mismatch = skew_note(build_stamp(), &skew);
         self.daemon_stamp = served;
 
         // 2. Capability discovery.
@@ -256,50 +258,6 @@ impl AttachConn {
     pub fn recv(&self) -> Option<AttachEvent> {
         self.client.notifications().recv().ok()
     }
-}
-
-/// The version-stamp warn/quiet rule (docs/MUX.md `version` bullet): quiet
-/// when the stamps are equal, and quiet when the version prefixes match and
-/// either side is `+unknown` — a same-version mismatch is then unprovable,
-/// so clients stay quiet rather than cry wolf. Any other difference warns.
-pub(crate) fn stamp_mismatch_is_quiet(mine: &str, served: &str) -> bool {
-    if mine == served {
-        return true;
-    }
-    let my_version = mine.split('+').next().unwrap_or_default();
-    let served_version = served.split('+').next().unwrap_or_default();
-    my_version == served_version && (mine.ends_with("+unknown") || served.ends_with("+unknown"))
-}
-
-/// `list-commands` reply -> the daemon-level feature tokens: each
-/// `features <token> …` line's tokens. Unknown line shapes are ignored per
-/// the contract ("a client must ignore unknown tokens and lines"). A
-/// pre-feature daemon never reaches this — its reply is an `%error` — and
-/// an empty feature list is a legitimate outcome.
-pub(crate) fn parse_feature_tokens(body: &[String]) -> Vec<String> {
-    let mut out = Vec::new();
-    for line in body {
-        if let Some(rest) = line.strip_prefix("features ") {
-            out.extend(rest.split_whitespace().map(str::to_owned));
-        }
-    }
-    out
-}
-
-/// `list-commands` reply -> the per-command feature tokens: each
-/// `name [feature …]` row's `(name, feature)` pairs (the daemon-level
-/// `features` line is [`parse_feature_tokens`]'s, not a command row).
-pub(crate) fn parse_command_features(body: &[String]) -> Vec<(String, String)> {
-    let mut out = Vec::new();
-    for line in body {
-        let mut words = line.split_whitespace();
-        let Some(name) = words.next() else { continue };
-        if name == "features" {
-            continue;
-        }
-        out.extend(words.map(|token| (name.to_owned(), token.to_owned())));
-    }
-    out
 }
 
 /// The host terminal theme as `(fg, bg)` six-hex-digit strings, dark

@@ -210,7 +210,8 @@ pub(super) fn spawn_drain(
                         in_reply = false;
                         crate::debug_error!(
                             "STREAMING",
-                            "mux daemon rejected a command for pane %{}: {}",
+                            "mux daemon {} rejected a command for pane %{}: {}",
+                            link.daemon_stamp,
                             link.pane(),
                             reply_body.join(" | ")
                         );
@@ -618,6 +619,7 @@ mod tests {
             pane: Arc::new(Mutex::new(1)),
             window: Mutex::new("@0".to_string()),
             follows_active: false,
+            daemon_stamp: "test".to_string(),
             terminal: Arc::new(RwLock::new(Terminal::with_scrollback(80, 24, 100))),
             writer: Arc::new(Mutex::new(None)),
             pending_utf8: Mutex::new(Vec::new()),
@@ -705,6 +707,7 @@ mod tests {
             pane: Arc::new(Mutex::new(3)),
             window: Mutex::new("@0".to_string()),
             follows_active: false,
+            daemon_stamp: "test".to_string(),
             terminal: Arc::new(RwLock::new(Terminal::with_scrollback(80, 24, 100))),
             writer: Arc::new(Mutex::new(None)),
             alive: AtomicBool::new(true),

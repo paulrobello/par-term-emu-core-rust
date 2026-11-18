@@ -104,6 +104,22 @@ pub(super) fn command(
     }
 }
 
+/// The connect-time version exchange (ARC-001): ask the daemon's `version`.
+/// `Ok(None)` is a legacy daemon that answered with its unknown-command
+/// `%error`: grammar skew is a supported state, so the caller continues in
+/// compatibility mode. A timeout or a closed connection is a real failure.
+pub(super) fn negotiate_version(
+    writer: &mut LocalStream,
+    reader: &MuxLines,
+    timeout: Duration,
+) -> io::Result<Option<String>> {
+    match command(writer, reader, "version", timeout) {
+        Ok(body) => Ok(Some(body.into_iter().next().unwrap_or_default())),
+        Err(err) if err.kind() == io::ErrorKind::Other => Ok(None),
+        Err(err) => Err(err),
+    }
+}
+
 /// Parse `%N @W COLSxROWS` (the `pane-info` reply) into window and size.
 pub(super) fn parse_pane_info(line: &str) -> Option<(String, usize, usize)> {
     let mut fields = line.split_whitespace().skip(1);
@@ -141,6 +157,71 @@ fn decode_b64(value: &str) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// One scripted daemon connection: answers `version` with `reply`
+    /// (`ok` picks `%end` vs the `%error` an old daemon gives an unknown
+    /// verb) and returns the streamer-side halves.
+    fn scripted_daemon(tag: &str, reply: &'static str, ok: bool) -> (LocalStream, MuxLines) {
+        use interprocess::local_socket::traits::Listener as _;
+        let dir = tempfile::Builder::new()
+            .prefix(tag)
+            .tempdir()
+            .expect("temp dir");
+        let socket = dir.path().join("s");
+        let listener = crate::mux::ipc::bind_local_listener(&socket).expect("bind");
+        std::thread::spawn(move || {
+            use std::io::BufRead as _;
+            let stream = listener.accept().expect("accept");
+            let mut out = stream.try_clone().expect("clone");
+            let mut lines = BufReader::new(stream).lines();
+            let _keep_dir = dir;
+            while let Some(Ok(line)) = lines.next() {
+                if line == "version" {
+                    let block = crate::mux::emit_block(1, reply, ok);
+                    let _ = out.write_all(block.as_bytes());
+                    let _ = out.flush();
+                }
+            }
+        });
+        let stream = crate::mux::connect_local_stream(&socket).expect("connect");
+        let writer = stream.try_clone().expect("clone");
+        (writer, MuxLines::spawn(stream).expect("reader"))
+    }
+
+    #[test]
+    fn a_current_daemon_serves_its_stamp() {
+        let (mut writer, reader) = scripted_daemon("par-mux-ver-", "0.82.0+abc", true);
+        let stamp = negotiate_version(&mut writer, &reader, Duration::from_secs(5))
+            .expect("the exchange succeeds");
+        assert_eq!(stamp.as_deref(), Some("0.82.0+abc"));
+    }
+
+    /// ARC-001 legacy fallback: an unknown-command `%error` is a legacy
+    /// daemon (version unknown), not a connect failure.
+    #[test]
+    fn a_legacy_daemon_refusing_version_is_unknown_not_an_error() {
+        let (mut writer, reader) =
+            scripted_daemon("par-mux-leg-", "unknown command: version", false);
+        let stamp = negotiate_version(&mut writer, &reader, Duration::from_secs(5))
+            .expect("grammar skew must not fail the session");
+        assert_eq!(stamp, None);
+    }
+
+    /// A silent daemon is a real failure (the reply deadline), not a
+    /// legacy one: it must surface as TimedOut.
+    #[test]
+    fn a_silent_daemon_is_a_timeout_not_a_legacy_daemon() {
+        let (mut writer, reader) = scripted_daemon("par-mux-sil-", "", true);
+        // Ask the scripted daemon for something it never answers.
+        let err = command(
+            &mut writer,
+            &reader,
+            "list-panes",
+            Duration::from_millis(200),
+        )
+        .expect_err("no reply");
+        assert_eq!(err.kind(), io::ErrorKind::TimedOut);
+    }
 
     #[test]
     fn pane_info_parses() {

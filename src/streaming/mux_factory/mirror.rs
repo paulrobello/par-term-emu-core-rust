@@ -33,6 +33,10 @@ pub(super) struct MirrorLink {
     /// Set at creation: only [`ACTIVE_WORKSPACE_SESSION_ID`](super::ACTIVE_WORKSPACE_SESSION_ID) mirrors
     /// re-resolve on `%workspaces-changed`; `pane-N` mirrors stay pinned.
     pub(super) follows_active: bool,
+    /// The daemon's build stamp from the connect-time version exchange, or
+    /// `unknown` for a legacy daemon: carried on this session's log lines
+    /// so version skew is diagnosable from the streamer log.
+    pub(super) daemon_stamp: String,
     pub(super) terminal: Arc<RwLock<Terminal>>,
     pub(super) writer: Arc<Mutex<Option<LocalStream>>>,
     /// False once the daemon connection closed or the pane went away.

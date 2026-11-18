@@ -2,7 +2,9 @@
 //! (including the active-workspace query), and the [`SessionFactory`]
 //! create/setup/teardown of a mirror session.
 
-use super::control::{command, parse_cwd_token, parse_cwdhost_token, parse_pane_info, MuxLines};
+use super::control::{
+    command, negotiate_version, parse_cwd_token, parse_cwdhost_token, parse_pane_info, MuxLines,
+};
 use super::mirror::{
     ingest_graphics_seed, parse_pane_exited_token, parse_viewer_status, seed_reply,
     split_graphics_seed, MirrorLink, Sink,
@@ -152,6 +154,22 @@ pub(super) fn debug_log_active_workspace(session: &str, pane: u32) {
     )
 }
 
+/// Record the daemon's version for this session and warn once when it skews
+/// from this build (or predates the `version` verb entirely).
+fn log_daemon_skew(session_id: &str, served: Option<&str>) {
+    use crate::mux::build_stamp;
+    use crate::mux::handshake::{assess_linked, skew_note, stamp_field};
+    crate::debug_info!(
+        "STREAMING",
+        "session {session_id} daemon {} streamer {}",
+        stamp_field(served),
+        build_stamp()
+    );
+    if let Some(note) = skew_note(build_stamp(), &assess_linked(served)) {
+        log::warn!("{note} (streaming session {session_id})");
+    }
+}
+
 /// Hand every attach-buffered chunk to the session's output channel.
 ///
 /// `try_send` alone dropped the overflow past the channel's capacity
@@ -198,6 +216,12 @@ impl SessionFactory for MuxSessionFactory {
         let reader = MuxLines::spawn(stream).map_err(|e| fail("cannot start reader", e))?;
         let timeout = self.reply_timeout;
 
+        // Version exchange first: skew with an older daemon is a supported
+        // state, so it degrades to a logged note, never a refusal.
+        let daemon_stamp =
+            negotiate_version(&mut writer, &reader, timeout).map_err(|e| fail("version", e))?;
+        log_daemon_skew(session_id, daemon_stamp.as_deref());
+
         // Any %output these queries race is superseded by the seed below.
         let pane = self
             .pane_for(session_id, &mut writer, &reader)
@@ -236,6 +260,7 @@ impl SessionFactory for MuxSessionFactory {
         }
         let link = Arc::new(MirrorLink {
             follows_active: session_id == ACTIVE_WORKSPACE_SESSION_ID,
+            daemon_stamp: crate::mux::handshake::stamp_field(daemon_stamp.as_deref()).to_owned(),
             pane: Arc::new(Mutex::new(pane)),
             window: Mutex::new(window),
             terminal: Arc::clone(&terminal),

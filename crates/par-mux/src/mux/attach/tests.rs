@@ -3918,3 +3918,74 @@ fn passthrough_select_layout_refusal_flashes() {
     assert!(!session.route_bytes(&[0x02, 0x1b, b'5']));
     assert_eq!(session.flash.as_deref(), Some("layout tiled: refused"));
 }
+
+/// ARC-001: a daemon older than the `version` verb answers it with the
+/// unknown-command `%error`. The handshake must continue in compatibility
+/// mode (no daemon stamp, no features, one skew note), never fail the
+/// connect, and still send the later steps.
+#[test]
+fn legacy_daemon_without_version_degrades_instead_of_failing() {
+    let path = test_socket("legacyversion");
+    let _ = std::fs::remove_file(&path);
+    let listener = crate::mux::bind_local_listener(&path).expect("bind");
+    let (tx, rx) = channel();
+    std::thread::spawn(move || {
+        if let Ok(stream) = listener.accept() {
+            serve_legacy(stream, tx);
+        }
+    });
+    let conn = conn::AttachConn::connect(&path).expect("a legacy daemon is still attachable");
+    assert_eq!(conn.daemon_stamp(), None, "no stamp from a legacy daemon");
+    assert!(conn.daemon_features().is_empty());
+    assert!(conn.warnings().pre_feature_daemon);
+    let note = conn
+        .warnings()
+        .stamp_mismatch
+        .as_deref()
+        .expect("the skew is reported once");
+    assert!(note.contains("compatibility mode"), "got: {note}");
+    let lines = recorded(&rx, 4);
+    let names: Vec<&str> = lines.iter().map(|(n, _)| n.as_str()).collect();
+    assert_eq!(
+        names,
+        vec![
+            "version",
+            "list-commands",
+            "set-client-colors",
+            "refresh-client"
+        ],
+        "the handshake continues past the refused verbs: {lines:?}"
+    );
+}
+
+/// A daemon predating both `version` and `list-commands`: `%error` on
+/// each, everything else answered.
+fn serve_legacy(stream: crate::mux::LocalStream, tx: std::sync::mpsc::Sender<(String, String)>) {
+    use interprocess::TryClone as _;
+    let mut writer = stream.try_clone().expect("clone stream");
+    let mut reader = BufReader::new(stream);
+    let mut number = 0u32;
+    let mut line = String::new();
+    loop {
+        line.clear();
+        match reader.read_line(&mut line) {
+            Ok(0) | Err(_) => break,
+            Ok(_) => {}
+        }
+        let trimmed = line.trim_end();
+        if trimmed.is_empty() {
+            continue;
+        }
+        let name = trimmed.split_whitespace().next().unwrap_or("").to_owned();
+        number += 1;
+        tx.send((name.clone(), trimmed.to_owned())).ok();
+        let (reply, ok) = match name.as_str() {
+            "version" | "list-commands" => (format!("unknown command: {name}"), false),
+            _ => (String::new(), true),
+        };
+        writer
+            .write_all(emit_block(number, &reply, ok).as_bytes())
+            .ok();
+        writer.flush().ok();
+    }
+}
