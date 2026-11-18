@@ -3,3 +3,7 @@
 crates/par-mux/schema/*.json text eol=lf
 # Compared byte-for-byte against the clap generator (committed_completion_scripts_match_the_clap_surface).
 crates/par-mux/completions/* text eol=lf
+# Embedded via include_str! (skill_installer's PAR_MUX_SKILL_MD and the
+# integration hook assets): a CRLF checkout changes the installed skill's
+# bytes and fails the byte-exact install tests on windows runners.
+crates/par-mux/skills/par-mux/SKILL.md text eol=lf
