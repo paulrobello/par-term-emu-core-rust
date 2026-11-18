@@ -1,5 +1,7 @@
 # ENH-063 — Vitest harness for the shipped agent-state TypeScript extensions
 
+> **Completed (commit `349a0e97`).** The harness landed as one wire-shape suite, `crates/par-mux/integrations/extensions/agent-state.wire.test.ts`, with the host double and the hook-report grammar mirror in `extensions/test/host.ts` and `extensions/test/grammar.ts`, plus `integrations/package.json` and `vitest.config.ts` as planned. `agent-state-core.ts` was never extracted: the two extension assets are rendered from one template by `scripts/gen_extensions.py` (`make extensions-check`), so there is no `agent-state-core.test.ts` or per-extension test file. `make test-integrations` runs the harness from `checkall`, and the CI `integrations-test` job runs it on pull requests.
+
 ## Goal
 
 A real test harness for `crates/par-mux/integrations/extensions/par-mux-agent-state.ts`,
