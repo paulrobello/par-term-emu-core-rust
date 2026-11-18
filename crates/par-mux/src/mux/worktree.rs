@@ -330,7 +330,14 @@ pub(crate) mod tests {
     #[test]
     fn user_path_refuses_relative_paths() {
         assert!(user_path("relative/dir").is_err());
-        assert!(user_path("/abs/dir").is_ok());
+        // Each platform's own absolute spelling: "/abs" is not absolute
+        // on windows (no drive), so the fixture must match the platform.
+        let absolute = if cfg!(windows) {
+            r"C:\abs\dir"
+        } else {
+            "/abs/dir"
+        };
+        assert!(user_path(absolute).is_ok());
         if let Some(home) = dirs::home_dir() {
             assert_eq!(user_path("~/x").unwrap(), home.join("x"));
         }

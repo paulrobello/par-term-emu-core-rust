@@ -777,7 +777,11 @@ fn osc7_wins_over_the_process_cwd() {
 
 /// A persisted cwd whose directory no longer exists must not fail the
 /// restore: the pane spawns in home and the pane itself says so.
+/// Unix only: the degradation lives in the unix spawn path — windows
+/// ConPTY refuses to spawn into a nonexistent cwd instead of falling
+/// back, so the alive-pane assert cannot hold there.
 #[test]
+#[cfg(unix)]
 fn a_gone_persisted_cwd_falls_back_to_home_with_a_visible_message() {
     let mut tree = tree();
     let session = tree.new_session("gone", 80, 24).unwrap();
