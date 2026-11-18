@@ -493,7 +493,11 @@ fn restore_spawns_each_pane_with_its_session_and_window_identity() {
 /// the 2026-10-27 crash-loop restores. The pane's child lives in the
 /// workdir and no OSC 7 exists (the agent-pane shape), so the capture
 /// reads the cwd off the child.
+/// Unix only: same platform gap as a_pane_without_osc7 below — the
+/// capture reads the child's kernel cwd and `process_cwd` has no
+/// Windows implementation.
 #[test]
+#[cfg(unix)]
 fn restore_spawns_each_pane_in_its_persisted_cwd() {
     let dir = tempfile::tempdir().unwrap();
     let workdir = dir.path().join("workdir");
