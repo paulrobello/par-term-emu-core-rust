@@ -370,98 +370,23 @@ async fn main() -> Result<()> {
         return Ok(());
     }
     if args.auto_update {
-        let interval = args.update_interval;
-        let label = args.launchd_label.clone();
-        std::thread::Builder::new()
-            .name("streamer-updater".into())
-            .spawn(move || loop {
-                if let Err(err) = run_self_update(false, &label) {
-                    eprintln!("streamer auto-update: {err}");
-                }
-                std::thread::sleep(Duration::from_secs(interval.seconds()));
-            })?;
+        spawn_auto_updater(&args)?;
     }
 
     // Handle --download-frontend command
     if args.download_frontend {
-        println!("par-term-streamer v{}", env!("CARGO_PKG_VERSION"));
-        println!("Downloading web frontend...\n");
-
-        frontend_download::download_frontend(
-            &args.frontend_version,
-            &args.web_root,
-            args.force_web_download,
-        )
-        .await?;
-
-        println!("\nTo run the server with the downloaded frontend:");
-        println!(
-            "  par-term-streamer --enable-http --web-root {}",
-            args.web_root
-        );
-        return Ok(());
+        return download_frontend_and_report(&args).await;
     }
 
-    // Initialize logging
-    let log_level = if args.verbose {
-        tracing::Level::DEBUG
-    } else {
-        tracing::Level::INFO
-    };
-
-    tracing_subscriber::fmt()
-        .with_max_level(log_level)
-        .with_target(false)
-        .with_thread_ids(false)
-        .init();
+    init_logging(args.verbose);
 
     // Resolve the API key before any consumer of args.api_key (the
     // bind-security gate, config, and banner read it downstream) so the
     // --api-key-file form behaves identically to an inline --api-key.
     args.api_key = bootstrap::resolve_api_key(&args)?;
 
-    // CSP allowlist origins (card 01a1d798): each must be the strict
-    // https://host[:port] form; anything else refuses to start naming the
-    // value, before any listener exists.
-    if let Some(origins) = &args.csp_connect_origins {
-        for origin in origins {
-            if let Err(why) =
-                par_term_emu_core_rust::streaming::server::validate_csp_connect_origin(origin)
-            {
-                eprintln!("par-term-streamer: {why}");
-                std::process::exit(2);
-            }
-        }
-    }
-
-    // OpenTelemetry metrics (kanban 01a18331): installs the global meter
-    // provider when --otel-enabled / PAR_TERM_STREAMER_OTEL_ENABLED is set;
-    // otherwise zero OTLP exports. The guard must live for the whole
-    // process — it holds the provider and flushes on drop.
-    let otel_protocol =
-        par_term_emu_core_rust::streaming::metrics::OtelProtocol::parse(&args.otel_protocol)
-            .unwrap_or_else(|| {
-                eprintln!(
-                    "par-term-streamer: invalid --otel-protocol '{}' (expected grpc|http)",
-                    args.otel_protocol
-                );
-                std::process::exit(2);
-            });
-    let otel_headers =
-        par_term_emu_core_rust::streaming::metrics::parse_otlp_headers(&args.otel_headers);
-    let _otel_guard = par_term_emu_core_rust::streaming::metrics::init(
-        args.otel_enabled,
-        otel_protocol,
-        &args.otel_endpoint,
-        otel_headers,
-        &args.otel_service_name,
-    );
-    if _otel_guard.is_some() {
-        info!(
-            "OpenTelemetry OTLP metrics enabled ({})",
-            args.otel_endpoint
-        );
-    }
+    validate_csp_connect_origins(&args);
+    let _otel_guard = init_otel(&args);
 
     info!("Starting terminal streaming server");
     info!("Version: {}", env!("CARGO_PKG_VERSION"));
@@ -519,47 +444,8 @@ async fn main() -> Result<()> {
         return run_mux_mode(socket, addr, config, theme, &args).await;
     }
 
-    // Create the session factory (shell mode) and the streaming server
-    let (factory, mut streaming_server) = match &run_mode {
-        RunMode::Shell => {
-            // Multi-session mode with factory
-            let factory = Arc::new(BinarySessionFactory::new(
-                args.shell.clone(),
-                args.scrollback,
-                Some(theme.clone()),
-                restart_shell,
-                args.enable_system_stats,
-                args.system_stats_interval,
-            ));
-            let server = StreamingServer::with_factory(
-                addr.clone(),
-                config,
-                Arc::clone(&factory) as Arc<dyn SessionFactory>,
-            );
-            (Some(factory), server)
-        }
-        RunMode::Macro { pty_session, .. } => {
-            // Macro mode - single-session backward compatible
-            let terminal = {
-                let ps = pty_session.lock();
-                ps.terminal()
-            };
-            (
-                None,
-                StreamingServer::with_config(terminal, addr.clone(), config),
-            )
-        }
-    };
-
-    // Set theme on streaming server
-    streaming_server.set_theme(theme.to_protocol());
-
-    let streaming_server = Arc::new(streaming_server);
-
-    // Wire factory's server reference (needed for per-session event broadcasting)
-    if let Some(ref factory) = factory {
-        factory.set_streaming_server(Arc::clone(&streaming_server));
-    }
+    let (factory, streaming_server) =
+        assemble_server(&args, &run_mode, &theme, &addr, config, restart_shell);
 
     // Check if we should play back a macro or run a shell
     if let RunMode::Macro {
@@ -598,6 +484,158 @@ async fn main() -> Result<()> {
         guard.shutdown();
     }
     served
+}
+
+/// Run the self-update check on a background thread every
+/// `--update-interval`.
+fn spawn_auto_updater(args: &Args) -> Result<()> {
+    let interval = args.update_interval;
+    let label = args.launchd_label.clone();
+    std::thread::Builder::new()
+        .name("streamer-updater".into())
+        .spawn(move || loop {
+            if let Err(err) = run_self_update(false, &label) {
+                eprintln!("streamer auto-update: {err}");
+            }
+            std::thread::sleep(Duration::from_secs(interval.seconds()));
+        })?;
+    Ok(())
+}
+
+/// `--download-frontend`: fetch the web frontend and print how to serve it.
+async fn download_frontend_and_report(args: &Args) -> Result<()> {
+    println!("par-term-streamer v{}", env!("CARGO_PKG_VERSION"));
+    println!("Downloading web frontend...\n");
+
+    frontend_download::download_frontend(
+        &args.frontend_version,
+        &args.web_root,
+        args.force_web_download,
+    )
+    .await?;
+
+    println!("\nTo run the server with the downloaded frontend:");
+    println!(
+        "  par-term-streamer --enable-http --web-root {}",
+        args.web_root
+    );
+    Ok(())
+}
+
+fn init_logging(verbose: bool) {
+    let log_level = if verbose {
+        tracing::Level::DEBUG
+    } else {
+        tracing::Level::INFO
+    };
+
+    tracing_subscriber::fmt()
+        .with_max_level(log_level)
+        .with_target(false)
+        .with_thread_ids(false)
+        .init();
+}
+
+/// CSP allowlist origins (card 01a1d798): each must be the strict
+/// https://host[:port] form; anything else refuses to start naming the
+/// value, before any listener exists.
+fn validate_csp_connect_origins(args: &Args) {
+    if let Some(origins) = &args.csp_connect_origins {
+        for origin in origins {
+            if let Err(why) =
+                par_term_emu_core_rust::streaming::server::validate_csp_connect_origin(origin)
+            {
+                eprintln!("par-term-streamer: {why}");
+                std::process::exit(2);
+            }
+        }
+    }
+}
+
+/// OpenTelemetry metrics (kanban 01a18331): installs the global meter
+/// provider when --otel-enabled / PAR_TERM_STREAMER_OTEL_ENABLED is set;
+/// otherwise zero OTLP exports. The returned guard must live for the whole
+/// process — it holds the provider and flushes on drop.
+fn init_otel(args: &Args) -> Option<par_term_emu_core_rust::streaming::metrics::OtelGuard> {
+    let otel_protocol =
+        par_term_emu_core_rust::streaming::metrics::OtelProtocol::parse(&args.otel_protocol)
+            .unwrap_or_else(|| {
+                eprintln!(
+                    "par-term-streamer: invalid --otel-protocol '{}' (expected grpc|http)",
+                    args.otel_protocol
+                );
+                std::process::exit(2);
+            });
+    let otel_headers =
+        par_term_emu_core_rust::streaming::metrics::parse_otlp_headers(&args.otel_headers);
+    let guard = par_term_emu_core_rust::streaming::metrics::init(
+        args.otel_enabled,
+        otel_protocol,
+        &args.otel_endpoint,
+        otel_headers,
+        &args.otel_service_name,
+    );
+    if guard.is_some() {
+        info!(
+            "OpenTelemetry OTLP metrics enabled ({})",
+            args.otel_endpoint
+        );
+    }
+    guard
+}
+
+/// Build the streaming server for the run mode — shell mode gets a session
+/// factory wired back to the server, macro mode a single session over the
+/// macro PTY's terminal.
+fn assemble_server(
+    args: &Args,
+    run_mode: &RunMode,
+    theme: &Theme,
+    addr: &str,
+    config: StreamingConfig,
+    restart_shell: bool,
+) -> (Option<Arc<BinarySessionFactory>>, Arc<StreamingServer>) {
+    let (factory, mut streaming_server) = match run_mode {
+        RunMode::Shell => {
+            // Multi-session mode with factory
+            let factory = Arc::new(BinarySessionFactory::new(
+                args.shell.clone(),
+                args.scrollback,
+                Some(theme.clone()),
+                restart_shell,
+                args.enable_system_stats,
+                args.system_stats_interval,
+            ));
+            let server = StreamingServer::with_factory(
+                addr.to_string(),
+                config,
+                Arc::clone(&factory) as Arc<dyn SessionFactory>,
+            );
+            (Some(factory), server)
+        }
+        RunMode::Macro { pty_session, .. } => {
+            // Macro mode - single-session backward compatible
+            let terminal = {
+                let ps = pty_session.lock();
+                ps.terminal()
+            };
+            (
+                None,
+                StreamingServer::with_config(terminal, addr.to_string(), config),
+            )
+        }
+    };
+
+    // Set theme on streaming server
+    streaming_server.set_theme(theme.to_protocol());
+
+    let streaming_server = Arc::new(streaming_server);
+
+    // Wire factory's server reference (needed for per-session event broadcasting)
+    if let Some(ref factory) = factory {
+        factory.set_streaming_server(Arc::clone(&streaming_server));
+    }
+    (factory, streaming_server)
 }
 
 /// Terminal size. Priority: `--use-tty-size` > `--size` > `--cols`/`--rows`.
