@@ -24,7 +24,7 @@ impl KittyParser {
         // screen ("If specified without any other keys, it will delete all
         // images visible on screen"). A `d=` that failed to resolve from
         // its identifying parameters is malformed, not a bare delete.
-        if self.delete_target.is_none() {
+        let Some(delete_target) = self.delete_target else {
             if self.params.contains_key("d") {
                 return Err(GraphicsError::KittyError(
                     "delete target could not be resolved from its identifying parameters"
@@ -34,12 +34,12 @@ impl KittyParser {
             store.clear();
             store.virtual_placements.clear();
             return Ok(KittyGraphicResult::None);
-        }
+        };
         let free_data = self.delete_frees_data;
         // Affected image ids: what the criteria matched, so the uppercase
         // forms can free stored data for ids left without placements.
         let mut affected: Vec<u32> = Vec::new();
-        match self.delete_target.unwrap() {
+        match delete_target {
             KittyDeleteTarget::All => {
                 affected.extend(
                     store
