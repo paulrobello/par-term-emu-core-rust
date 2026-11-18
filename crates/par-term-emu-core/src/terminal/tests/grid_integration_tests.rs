@@ -3,6 +3,45 @@ use crate::terminal::*;
 
 // ========== Erase Operations ==========
 
+/// xterm's ClearRight (EL 0 / ECH) ends with LineClrWrapped + ResetWrap —
+/// "with the right part cleared, we can't be wrapping" (util.c). The row's
+/// wrapped flag must not survive a right erase, or the logical-line join in
+/// content() merges rows that a real terminal serves separately (kanban
+/// 01a1f016: bash readline's exactly-full-row force-wrap redraw ends in
+/// EL 0, and the surviving flag doubled the echoed line in copies).
+#[test]
+fn el0_clears_the_row_wrap_flag_like_xterm_clearright() {
+    let mut term = Terminal::new(40, 24);
+    // 25-char prompt + 15-char typed line = exactly 40 columns.
+    term.process(b"runner@ip-10-0-130-60:~$ ");
+    term.process(b"echo BELL-ARM-A ");
+    // The force-wrap space resolved onto the next row; readline's redraw
+    // walks back and erases to end of line before accepting the command.
+    term.process(b"\r\x1b[A");
+    for _ in 0..40 {
+        term.process(b"\x1b[C");
+    }
+    term.process(b"\x1b[K");
+
+    assert!(
+        !term.active_grid().is_line_wrapped(0),
+        "EL 0 must clear the row's wrapped flag (xterm LineClrWrapped)"
+    );
+    // The command output the shell sends next lands on its own logical line.
+    term.process(b"A\r\nBELL-ARM-A");
+    let content = term.content();
+    let lines: Vec<&str> = content.lines().collect();
+    assert_eq!(
+        lines.first().copied(),
+        Some("runner@ip-10-0-130-60:~$ echo BELL-ARM-A"),
+        "the echoed row serves alone: {content:?}"
+    );
+    assert!(
+        lines.contains(&"BELL-ARM-A"),
+        "the output row serves separately: {content:?}"
+    );
+}
+
 #[test]
 fn test_erase_in_display_from_cursor() {
     let mut term = Terminal::new(80, 24);

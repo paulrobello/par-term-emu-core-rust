@@ -715,14 +715,14 @@ fn test_get_line_unwrapped() {
 /// A prompt + echoed command that fill the row exactly reproduce bash's
 /// accept-line workaround at the pending-wrap margin: one more space (which
 /// soft-wraps the command row), CR, then a CUU/CUF/EL redraw of the last
-/// glyph before the CRLF that starts the output row. The wrap flag the
-/// space set survives the redraw, so the logical-lines capture joins the
-/// command with its output — the screen shape an 80-column pane whose
-/// prompt is exactly 24 columns produces for a 56-column command
-/// (QA-145). Screen probes over `content()`/capture-pane must therefore
-/// match by substring, never whole-line equality.
+/// glyph before the CRLF that starts the output row. Since the EL
+/// wrap-flag fix (kanban 01a1f016, xterm ClearRight parity) the redraw's
+/// ESC[K clears the row's wrapped flag, so the logical-lines capture
+/// serves the command row and its output separately — QA-145's joined
+/// shape is gone and whole-line equality works again for probes over
+/// `content()`/capture-pane.
 #[test]
-fn exact_margin_command_output_joins_in_logical_capture() {
+fn exact_margin_command_output_serves_separately_in_logical_capture() {
     let mut term = Terminal::new(80, 24);
     let prompt = "aaaaaaaaaaaaaaaaaaaa:~$ "; // 24 columns
     let command = "echo AGENV=$PAR_MUX_ENV/$PAR_MUX_PANE_ID/$PAR_MUX_SOCKET"; // 56
@@ -749,12 +749,12 @@ fn exact_margin_command_output_joins_in_logical_capture() {
     assert!(
         content
             .lines()
-            .any(|l| l.contains(&format!("$PAR_MUX_SOCKET{want}"))),
-        "the exact-margin command row joins with its output: {content:?}"
+            .all(|l| !l.contains(&format!("$PAR_MUX_SOCKET{want}"))),
+        "the command row no longer joins with its output: {content:?}"
     );
     assert!(
-        content.lines().all(|l| l.trim() != want),
-        "no logical line equals the bare output, so equality probes can never match"
+        content.lines().any(|l| l.trim() == want),
+        "the bare output serves as its own whole line, so equality probes match: {content:?}"
     );
 }
 

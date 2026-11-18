@@ -2478,13 +2478,12 @@ fn a_bare_bell_in_a_pane_bells_only_that_panes_mirror() {
 /// 5.x readline emits at an exactly-full row (captured on a real PTY,
 /// ubuntu bash 5.2 and macOS bash 5.3 alike) forces the wrap with a
 /// trailing " \r", then redraws with ESC[A / ESC[C* / ESC[K before
-/// accepting the line. The redraw never clears the grid's wrap flag, so
-/// content()'s logical-line join merges the echoed line with the command
-/// output — the exact "echo BELL-ARM-ABELL-ARM-A" doubling the failing
-/// ubuntu runs dumped. The mirror was faithful; the merge lives in the
-/// grid semantics, so the bell test types shorter lines instead.
+/// accepting the line. With the EL wrap-flag fix (kanban 01a1f016) the
+/// echoed row serves alone in content() — xterm's ClearRight clears the
+/// row's wrapped flag — so the CI "doubling" is gone and the screen reads
+/// like a real terminal.
 #[test]
-fn readline_force_wrap_at_an_exactly_full_row_merges_logical_lines() {
+fn readline_force_wrap_redraw_reads_like_a_real_terminal() {
     let mut term = crate::terminal::Terminal::new(40, 24);
     term.process(b"runner@ip-10-0-130-60:~$ ");
 
@@ -2499,14 +2498,19 @@ fn readline_force_wrap_at_an_exactly_full_row_merges_logical_lines() {
     term.process(&seq);
 
     assert!(
-        term.active_grid().is_line_wrapped(0),
-        "the force-wrap space must leave row 0 marked wrapped"
+        !term.active_grid().is_line_wrapped(0),
+        "EL clears the wrapped flag (xterm LineClrWrapped)"
     );
-    let merged = term.content();
+    let content = term.content();
+    let lines: Vec<&str> = content.lines().collect();
     assert_eq!(
-        merged.lines().next(),
-        Some("runner@ip-10-0-130-60:~$ echo BELL-ARM-ABELL-ARM-A"),
-        "the wrap join must reproduce the CI dump's doubling string; content:\n{merged}"
+        lines.first().copied(),
+        Some("runner@ip-10-0-130-60:~$ echo BELL-ARM-A"),
+        "the echoed row serves alone: {content:?}"
+    );
+    assert!(
+        lines.contains(&"BELL-ARM-A"),
+        "the output row serves separately: {content:?}"
     );
 }
 

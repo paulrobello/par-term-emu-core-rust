@@ -66,9 +66,9 @@ VT100 screen clearing and erasing sequences.
 
 `CSI <n> K`
 
-- `n=0` - Clear from cursor to end of line
+- `n=0` - Clear from cursor to end of line; also clears the row's wrapped flag and the pending wrap (xterm `ClearRight` parity)
 - `n=1` - Clear from beginning of line to cursor
-- `n=2` - Clear entire line
+- `n=2` - Clear entire line; clears the pending wrap (xterm `ClearLine` parity)
 
 ### Screen Alignment Pattern (DECALN)
 

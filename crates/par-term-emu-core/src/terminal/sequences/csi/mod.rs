@@ -93,6 +93,33 @@ impl Terminal {
                     action,
                     params,
                 );
+                // xterm parity: a right-part erase kills the wrap state.
+                // ClearRight (EL 0, and ECH which routes through it) ends
+                // with LineClrWrapped + ResetWrap — "with the right part
+                // cleared, we can't be wrapping"; ClearLine (EL 2) resets
+                // the pending wrap; ClearLeft (EL 1) clears neither.
+                let right_erase = match action {
+                    'X' => Some(true),
+                    'K' => match params
+                        .iter()
+                        .next()
+                        .and_then(|p| p.first())
+                        .copied()
+                        .unwrap_or(0)
+                    {
+                        0 => Some(true),
+                        2 => Some(false),
+                        _ => None,
+                    },
+                    _ => None,
+                };
+                if let Some(clear_row_flag) = right_erase {
+                    self.pending_wrap = false;
+                    if clear_row_flag {
+                        let row = self.cursor.row;
+                        self.active_grid_mut().set_line_wrapped(row, false);
+                    }
+                }
             }
             'S' | 'T' => {
                 self.handle_csi_scroll(action, params, intermediates);
