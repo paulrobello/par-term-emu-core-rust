@@ -1,7 +1,7 @@
 .PHONY: help build build-release build-streaming dev-streaming app test test-rust test-rust-streaming test-python test-pty coverage coverage-html coverage-python clean install install-force python-install python-uninstall par-mux-install par-mux-uninstall streamer-uninstall uninstall dev fmt lint check \
         examples examples-basic examples-pty examples-streaming examples-all setup-venv watch test-integrations \
         typecheck clippy fmt-python lint-python lint-check checkall checkall-ci test-mux-ci test-python-streaming-ci cross-target-check check-features bench pre-commit-install pre-commit-uninstall \
-        caps-table caps-table-check gen-extensions extensions-check ffi-header ffi-header-check ffi-surface-check core-version-check doc-hidden-check api-surface-check python-features-check terminal-fields-check mux-docs-check mux-schema mux-schema-check completions completions-check _completions-into env-docs-check pinned-tests-check stub-docs-check doc-links-check release-check derive-version-check set-version version-train-check audit-deps \
+        caps-table caps-table-check gen-extensions extensions-check ffi-header ffi-header-check ffi-surface-check core-version-check doc-hidden-check reexports-check api-surface-check python-features-check terminal-fields-check mux-docs-check mux-schema mux-schema-check completions completions-check _completions-into env-docs-check pinned-tests-check stub-docs-check doc-links-check release-check derive-version-check set-version version-train-check audit-deps \
         mux-manual-seed mux-package-check rustdoc-check \
         pre-commit-run pre-commit-update deploy \
         proto-generate proto-rust proto-typescript proto-clean \
@@ -97,6 +97,7 @@ help:
 	@echo "  cross-target-check - cargo check par-mux (mux-bin,attach) + par-term-emu-core + root crate (python-test,mux,ffi) for aarch64/x86_64-pc-windows-msvc, -D warnings (part of checkall-ci)"
 	@echo "  bench           - Run VTE throughput benchmarks (criterion, not part of checkall)"
 	@echo "  check-features  - Feature matrix + dependency-tree assertions (not part of checkall; needs cargo-hack)"
+	@echo "  reexports-check - Fail when a par-term-emu-core module has no root re-export at its historical path (ARC-006)"
 	@echo ""
 	@echo "Fuzzing (nightly + cargo-fuzz; not part of checkall):"
 	@echo "  fuzz-all              - Run all ten fuzz targets for FUZZ_SECONDS each (default 60)"
@@ -660,6 +661,13 @@ api-surface-check:
 	python3 scripts/check_api_surface.py
 	python3 scripts/check_api_surface.py --self-test
 
+# ARC-006: every public par-term-emu-core module keeps its historical
+# par_term_emu_core_rust::<module> path; src/lib.rs's re-export list is
+# hand-maintained, so this compares it against the member's module list.
+reexports-check:
+	python3 scripts/check_reexports.py
+	python3 scripts/check_reexports.py --self-test
+
 # python/python-test feature parity gate (audit 2026-11-06 ARC-001): the
 # two lists must differ only in the pyo3 activation entry, so cargo test
 # exercises the same surface the shipped wheel builds. Pure python3.
@@ -764,7 +772,7 @@ audit-deps:
 	uvx --python-preference only-system pip-audit --strict -r $$reqs; \
 	status=$$?; rm -f $$reqs; exit $$status
 
-checkall: extensions-check ffi-header-check ffi-surface-check derive-version-check core-version-check version-train-check doc-hidden-check api-surface-check python-features-check terminal-fields-check mux-docs-check caps-table-check mux-schema-check completions-check env-docs-check otel-check mux-otel-check pinned-tests-check stub-docs-check mux-package-check rustdoc-check doc-links-check lint-check test-integrations test-rust test-rust-streaming stub-check test-python test-web
+checkall: extensions-check ffi-header-check ffi-surface-check derive-version-check core-version-check version-train-check doc-hidden-check reexports-check api-surface-check python-features-check terminal-fields-check mux-docs-check caps-table-check mux-schema-check completions-check env-docs-check otel-check mux-otel-check pinned-tests-check stub-docs-check mux-package-check rustdoc-check doc-links-check lint-check test-integrations test-rust test-rust-streaming stub-check test-python test-web
 	@echo ""
 	@echo "======================================================================"
 	@echo "  All code quality checks passed!"
