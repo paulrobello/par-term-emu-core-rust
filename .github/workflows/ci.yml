@@ -285,7 +285,7 @@ jobs:
       # test per run to hosted-runner load flake without it (measured
       # 2026-11-18, run 44286211798: a_bare_bell ran 92s on 2 vCPU and
       # lost its input echo mid-flight).
-      run: cargo nextest run --profile ci --locked --retries 1 --lib --no-default-features --features rust-only,streaming,mux,serde streaming::mux_factory
+      run: cargo nextest run --profile ci --locked --retries 2 --lib --no-default-features --features rust-only,streaming,mux,serde streaming::mux_factory
 
   lint:
     name: Lint
