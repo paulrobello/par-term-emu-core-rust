@@ -3,7 +3,8 @@
 //! create/setup/teardown of a mirror session.
 
 use super::control::{
-    command, negotiate_version, parse_cwd_token, parse_cwdhost_token, parse_pane_info, MuxLines,
+    command, negotiate_version, parse_cwd_token, parse_cwdhost_token, parse_pane_info,
+    parse_reflow_token, MuxLines,
 };
 use super::mirror::{
     ingest_graphics_seed, parse_pane_exited_token, parse_viewer_status, seed_reply,
@@ -239,6 +240,14 @@ impl SessionFactory for MuxSessionFactory {
             .ok_or_else(|| fail("pane-info", io::Error::other(format!("bad reply {info:?}"))))?;
 
         let mut terminal = Terminal::with_scrollback(cols, rows, self.scrollback);
+        // ENH-045 lockstep: when the daemon's pane terminal reflows
+        // resizes (pane-info's reflow=1), the mirror must run the same
+        // mode — pane truth and the mirrored grid would otherwise diverge
+        // on every resize. Absent token (older daemon, default mode)
+        // keeps the default: no reflow.
+        if info.first().is_some_and(|l| parse_reflow_token(l)) {
+            terminal.set_xterm_resize(true);
+        }
         let seed = seed_reply(&mut writer, &reader, pane, timeout)
             .map_err(|e| fail("refresh-client -t", e))?;
         let (screen, seed_graphics) = split_graphics_seed(&seed);

@@ -467,6 +467,7 @@ impl MuxPane {
     /// The session's wait-free published cursor — what a mirror-reading
     /// consumer sees, as opposed to the terminal's own cursor.
     #[cfg(test)]
+    #[cfg(unix)]
     pub(crate) fn published_cursor(&self) -> (usize, usize) {
         self.session.cursor_position()
     }
@@ -970,6 +971,14 @@ pub struct ShellPaneFactory {
     /// pane can opt back into full control. Independently granted per
     /// session by `PAR_MUX_CONTROL=1` in the session's environment.
     pub expose_control_socket: bool,
+    /// ENH-045: run pane terminals with xterm-style resize reflow — a
+    /// resize rewraps grid and scrollback by xterm.js's algorithm instead
+    /// of the default visible-screen-only reflow. Off by default: a
+    /// streaming consumer that mirrors pane bytes must enable the SAME
+    /// mode on its own terminal or its grid diverges on every resize, so
+    /// the daemon advertises the mode (pane-info's `reflow=` token) and
+    /// consumers gate on it.
+    pub xterm_resize_reflow: bool,
     /// The pane command when the client gave none; unset spawns the
     /// user's shell. Tests pin a quiet child (`sleep`) so the spawned
     /// shell's own startup output cannot race synthetic pane writes.
@@ -989,6 +998,9 @@ impl ShellPaneFactory {
         pane_socket: Option<&str>,
     ) -> PtySession {
         let mut session = PtySession::new(cols as usize, rows as usize, DEFAULT_SCROLLBACK);
+        if self.xterm_resize_reflow {
+            session.set_xterm_resize(true);
+        }
 
         // The per-spawn cwd (a restore re-landing a pane where it left off)
         // outranks the factory-wide default.

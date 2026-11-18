@@ -1022,6 +1022,7 @@ mod tests {
             pane_create_allowed: None,
             cwd_hostname: None,
             cwd_is_local: None,
+            pane_resize_reflow: None,
         };
         let encoded = encode_server_message(&msg).unwrap();
         let decoded = decode_server_message(&encoded).unwrap();
@@ -1368,6 +1369,7 @@ mod tests {
             .pane_create_allowed(Some(true))
             .cwd_hostname(Some("mirror-host".to_string()))
             .cwd_is_local(Some(false))
+            .pane_resize_reflow(Some(true))
             .build();
         let encoded = encode_server_message(&msg).unwrap();
         let decoded = decode_server_message(&encoded).unwrap();
@@ -1388,6 +1390,7 @@ mod tests {
             pane_create_allowed,
             cwd_hostname,
             cwd_is_local,
+            pane_resize_reflow,
         } = decoded
         else {
             panic!("Wrong message type");
@@ -1411,6 +1414,7 @@ mod tests {
         assert_eq!(pane_create_allowed, Some(true));
         assert_eq!(cwd_hostname, Some("mirror-host".to_string()));
         assert_eq!(cwd_is_local, Some(false));
+        assert_eq!(pane_resize_reflow, Some(true));
     }
 
     #[test]

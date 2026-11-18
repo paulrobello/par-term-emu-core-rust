@@ -467,6 +467,9 @@ pub(super) fn cmd_pane_info(ctx: &Ctx<'_>, pane: Target<PaneId>, mirror: bool) -
     // can still render the remain-on-exit state (ARC-095). Both are
     // whitespace-free `key=value` tail tokens, so older clients keep
     // parsing the fixed prefix.
+    // `reflow=1` rides when the pane terminal runs xterm-style resize
+    // reflow (ENH-045) — the lockstep signal a streaming mirror gates its
+    // own reflow mode on.
     let (
         pane,
         window,
@@ -479,6 +482,7 @@ pub(super) fn cmd_pane_info(ctx: &Ctx<'_>, pane: Target<PaneId>, mirror: bool) -
         viewer_count,
         last_viewed,
         last_input,
+        reflow,
         parts,
     ) = {
         let mut guard = ctx.tree.lock();
@@ -515,6 +519,7 @@ pub(super) fn cmd_pane_info(ctx: &Ctx<'_>, pane: Target<PaneId>, mirror: bool) -
             viewer_count,
             last_viewed,
             target.last_client_input_at(),
+            target.terminal().read().xterm_resize(),
             target.snapshot_capture_parts(),
         )
     };
@@ -562,6 +567,9 @@ pub(super) fn cmd_pane_info(ctx: &Ctx<'_>, pane: Target<PaneId>, mirror: bool) -
     }
     if let Some(ms) = cpu_ms {
         presence.push(format!("cpu_ms={ms}"));
+    }
+    if reflow {
+        presence.push("reflow=1".to_string());
     }
     Outcome::ok(ctx, &format!("{row} {status} {}", presence.join(" ")))
 }

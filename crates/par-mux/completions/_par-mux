@@ -40,6 +40,7 @@ _par-mux() {
 '--list-servers[Client mode\: list every live par-mux server this user can reach — registry entries plus the named-default sockets on disk — one line per server (\`<name-or-path>  sessions=N  stamp\`), pruning registry entries whose probe failed. Never starts a daemon. Honors \`--state-dir\`, so tests can point the registry at a fixture; with \`--socket\`/NAME, the named/default resolution is skipped for the target socket (discovery is user-wide, not per-socket)]' \
 '--pane-endpoints[Give each pane its own hook-only socket endpoint\: \`PAR_MUX_SOCKET\` in a pane then names a socket that accepts ONLY hook reports for that pane, so its child processes cannot drive other panes or stop the server. Default off — the in-pane full-socket fallback is a core feature; see docs/MUX.md for the trade and the default-flip gate]' \
 '--expose-control-socket[With --pane-endpoints\: also export \`PAR_MUX_CONTROL_SOCKET\` (the full control socket) in every pane, so agent-driven pane control keeps working. A session env of \`PAR_MUX_CONTROL=1\` grants the same per session without this flag]' \
+'--xterm-resize-reflow[Run pane terminals with xterm-style resize reflow (ENH-045)\: a resize rewraps grid and scrollback by xterm.js'\''s algorithm. Off by default — streaming mirrors must enable the same mode; pane-info advertises it as \`reflow=1\`]' \
 '--gen-config[Write the config file with the CURRENT EFFECTIVE settings (file if present > env > built-in defaults; startup CLI flags are not introspectable after parse, so a flagged value that also appears here wins only where this code path sees the flag — the socket and the daemon bools). Never overwrites without --force. With no config file yet, this is how a user starts one]' \
 '--force[With --gen-config\: overwrite an existing config file. With --stop inside a par-mux pane\: confirm the stop (an alias of \`--yes\`). Without either it is rejected at dispatch]' \
 '--install-skill[Install the bundled par-mux agent skill into the Claude Code skills directory and exit. Never starts or contacts a daemon, so it runs anywhere, including inside a pane; par-term invokes it after installing par-mux so the skill matches the shipped binary]' \
@@ -75,6 +76,7 @@ _arguments "${_arguments_options[@]}" : \
 '--keep-alive[Keep serving after the tree empties (the \`--keep-alive\` spelling)]' \
 '--pane-endpoints[Give each pane its own hook-only socket endpoint]' \
 '--expose-control-socket[With --pane-endpoints\: also export the full control socket]' \
+'--xterm-resize-reflow[Run pane terminals with xterm-style resize reflow\: a resize rewraps grid and scrollback (xterm.js'\''s algorithm) instead of the visible-screen-only default. Off by default — streaming mirrors must enable the same mode; pane-info advertises it as \`reflow=1\`]' \
 '-h[Print help]' \
 '--help[Print help]' \
 '::name -- Named default socket path:_default' \

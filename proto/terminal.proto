@@ -186,6 +186,7 @@ message Connected {
   optional bool pane_create_allowed = 14; // Server admits PaneCreateRequest (allow-pane-create + writable); absent = pre-0.81 server
   optional string cwd_hostname = 15;      // OSC 7 hostname accompanying cwd; absent = no OSC 7 host (kernel/spawn cwd is local)
   optional bool cwd_is_local = 16;        // Server-computed locality of cwd (SEC-128); absent = pre-feature server
+  optional bool pane_resize_reflow = 17;  // ENH-045: the session terminal reflows resizes xterm-style (mux panes with [daemon] xterm-resize-reflow); absent = pre-0.84 server
 }
 
 // Full screen refresh response

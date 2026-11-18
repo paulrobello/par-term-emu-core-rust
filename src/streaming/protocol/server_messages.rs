@@ -260,6 +260,19 @@ pub enum ServerMessage {
             pydict(encode_skip)
         )]
         cwd_is_local: Option<bool>,
+        /// ENH-045: the session terminal reflows resizes xterm-style —
+        /// the resize mode a mirroring client must run to keep its grid
+        /// in lockstep. `Some(false)` = default visible-screen-only
+        /// reflow; `None` = field absent (pre-0.84 server).
+        #[serde(skip_serializing_if = "Option::is_none")]
+        #[cfg_attr(
+            all(
+                any(feature = "python", feature = "python-test"),
+                feature = "streaming"
+            ),
+            pydict(encode_skip)
+        )]
+        pane_resize_reflow: Option<bool>,
     },
 
     /// Screen refresh response (full screen content)
@@ -1040,6 +1053,9 @@ pub struct ConnectedBuilder {
     /// Server-computed locality of `cwd` (SEC-128); `None` = field
     /// absent on the wire (pre-feature servers omit it)
     pub cwd_is_local: Option<bool>,
+    /// ENH-045: the session terminal reflows resizes xterm-style;
+    /// `None` leaves the field absent on the wire
+    pub pane_resize_reflow: Option<bool>,
 }
 
 impl ConnectedBuilder {
@@ -1142,6 +1158,13 @@ impl ConnectedBuilder {
         self
     }
 
+    /// Set the session's xterm-style resize reflow mode; `None` leaves
+    /// the field absent on the wire
+    pub fn pane_resize_reflow(mut self, reflow: Option<bool>) -> Self {
+        self.pane_resize_reflow = reflow;
+        self
+    }
+
     /// Finish and produce the `Connected` message
     pub fn build(self) -> ServerMessage {
         ServerMessage::Connected {
@@ -1161,6 +1184,7 @@ impl ConnectedBuilder {
             pane_create_allowed: self.pane_create_allowed,
             cwd_hostname: self.cwd_hostname,
             cwd_is_local: self.cwd_is_local,
+            pane_resize_reflow: self.pane_resize_reflow,
         }
     }
 }

@@ -60,6 +60,7 @@ fn render_round_trips_through_the_parser() {
         state_dir: "/tmp/rt-state".into(),
         pane_endpoints: true,
         expose_control_socket: true,
+        xterm_resize_reflow: true,
         remain_on_exit: true,
         exit_action: ExitAction::Hold,
         exit_empty: true,

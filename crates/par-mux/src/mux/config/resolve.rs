@@ -28,6 +28,10 @@ pub struct EffectiveConfig {
     pub pane_endpoints: bool,
     /// The expose-control-socket default.
     pub expose_control_socket: bool,
+    /// ENH-045: run pane terminals with xterm-style resize reflow.
+    /// Off by default; pane-info advertises the mode (`reflow=1`) so
+    /// streaming mirrors can stay in lockstep.
+    pub xterm_resize_reflow: bool,
     /// Hold a pane whose child exited instead of removing it. The one
     /// live daemon setting: `reload-config` applies a changed value at
     /// once (it takes effect at the next observed death), everything
@@ -105,6 +109,7 @@ impl Default for EffectiveConfig {
             state_dir: String::new(),
             pane_endpoints: false,
             expose_control_socket: false,
+            xterm_resize_reflow: false,
             remain_on_exit: false,
             exit_action: ExitAction::Remove,
             exit_empty: true,
@@ -139,6 +144,8 @@ pub struct Overrides {
     pub pane_endpoints: Option<bool>,
     /// `--expose-control-socket` passed.
     pub expose_control_socket: Option<bool>,
+    /// `--xterm-resize-reflow` passed.
+    pub xterm_resize_reflow: Option<bool>,
     /// `--keep-alive` passed (daemon start): the flag tier of
     /// `exit-empty` — the flag votes the exit-when-empty off so a
     /// daemon started ahead of its first window can wait for it.
@@ -191,6 +198,9 @@ pub fn resolve(file: &ConfigFile, o: &Overrides) -> EffectiveConfig {
         .or(file.daemon.expose_control_socket)
     {
         eff.expose_control_socket = v;
+    }
+    if let Some(v) = o.xterm_resize_reflow.or(file.daemon.xterm_resize_reflow) {
+        eff.xterm_resize_reflow = v;
     }
     if let Some(v) = file.daemon.remain_on_exit {
         eff.remain_on_exit = v;

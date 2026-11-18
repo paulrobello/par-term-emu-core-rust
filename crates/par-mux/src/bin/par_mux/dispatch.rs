@@ -246,6 +246,7 @@ fn merge_verb(cli: &mut Cli, sub: Sub) -> Result<Verb, ExitCode> {
                 keep_alive,
                 pane_endpoints,
                 expose_control_socket,
+                xterm_resize_reflow,
             } = args;
             merge(name, socket, state_dir);
             cli.foreground |= foreground;
@@ -253,6 +254,7 @@ fn merge_verb(cli: &mut Cli, sub: Sub) -> Result<Verb, ExitCode> {
             cli.keep_alive |= keep_alive;
             cli.pane_endpoints |= pane_endpoints;
             cli.expose_control_socket |= expose_control_socket;
+            cli.xterm_resize_reflow |= xterm_resize_reflow;
         }
         Sub::Stop(args) => {
             let TargetArgs {

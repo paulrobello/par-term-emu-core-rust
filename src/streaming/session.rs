@@ -595,6 +595,10 @@ impl StreamSessionState {
             .pointer_shape(terminal.pointer_shape().map(str::to_string))
             .graphics(graphics)
             .pane_create_allowed(Some(allow_pane_create && !readonly))
+            // ENH-045: the session terminal's own resize mode — a
+            // mirroring client gates its reflow on this to stay in
+            // lockstep (mux panes under [daemon] xterm-resize-reflow).
+            .pane_resize_reflow(Some(terminal.xterm_resize()))
             .build()
     }
 

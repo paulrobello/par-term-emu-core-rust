@@ -20,6 +20,7 @@ fn ask(writer: &mut impl std::io::Write, reader: &mut impl std::io::BufRead, lin
 /// pushes (`%output`, …) stripped, body lines kept. Pane ids themselves
 /// start with `%`, so the prefix alone cannot classify — framing is the
 /// `%<word> ` shape, body lines never are.
+#[cfg(unix)]
 fn body_lines(reply: &str) -> Vec<&str> {
     let framing = ["%begin", "%end", "%output", "%exit", "%error"];
     reply

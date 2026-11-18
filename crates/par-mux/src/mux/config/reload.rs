@@ -321,6 +321,11 @@ pub fn reload_report(applied: &mut EffectiveConfig, file: Option<&ConfigFile>) -
             file.daemon.expose_control_socket,
             applied.expose_control_socket,
         ),
+        (
+            "daemon.xterm-resize-reflow",
+            file.daemon.xterm_resize_reflow,
+            applied.xterm_resize_reflow,
+        ),
     ] {
         lines.push(match stated {
             Some(v) if v != current => format!("restart-required: {name}"),

@@ -178,6 +178,7 @@ SERVER_CASES = [
             "pane_create_allowed": None,
             "cwd_hostname": None,
             "cwd_is_local": None,
+            "pane_resize_reflow": None,
         },
     ),
     (
@@ -199,6 +200,7 @@ SERVER_CASES = [
             "pane_create_allowed": None,
             "cwd_hostname": None,
             "cwd_is_local": None,
+            "pane_resize_reflow": None,
         },
     ),
     ("error", {"message": "boom", "code": "E42"}, {"message": "boom", "code": "E42"}),

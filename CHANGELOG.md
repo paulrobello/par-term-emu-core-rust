@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **`[daemon] xterm-resize-reflow` — opt-in xterm-style resize reflow for mux panes (ENH-045).** A daemon flag (`--xterm-resize-reflow`, env/file tiers too) runs pane terminals with xterm.js's resize reflow, so a resize rewraps grid and scrollback instead of the default visible-screen-only reflow. Lockstep for streaming consumers: `pane-info` advertises `reflow=1`, the streamer's per-pane mirror terminal enables the same mode, and `Connected.pane_resize_reflow` tells mirroring clients (ParDeck's phone mirror) which mode the session runs. `PtySession::set_xterm_resize` and `Terminal::xterm_resize()` are the new core seams.
+
 ## [0.83.0] - 2026-11-17
 
 ### Fixed

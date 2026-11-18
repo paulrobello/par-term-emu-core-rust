@@ -14,7 +14,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 
 use crate::mux::ids::PaneId;
 use crate::mux::pane::SpawnContext;
-use crate::mux::{MuxClient, MuxServer, PaneFactory, ShellPaneFactory};
+use crate::mux::{MuxClient, MuxServer, MuxTree, PaneFactory, ShellPaneFactory};
 use crate::streaming::{ConnectionParams, StreamingConfig};
 use std::time::{Duration, Instant};
 
@@ -811,6 +811,107 @@ fn a_graphic_placed_before_attach_replays_in_connected_graphics() {
         "live frames draw ids from the mirror's own counter"
     );
     assert_eq!(data.len(), 16, "the live frame carries the decoded pixels");
+}
+
+/// ENH-045 criterion 3: a daemon running `[daemon] xterm-resize-reflow`
+/// advertises it (pane-info `reflow=1`), the streamer's mirror terminal
+/// locks onto the same mode, the Connected handshake carries it, and a
+/// resize rewraps the mirrored grid xterm-style — pinned by the
+/// buffer-reflow record only the xterm path leaves.
+#[test]
+fn xterm_resize_reflow_flows_from_the_daemon_pane_to_the_mirror_and_client() {
+    let rt = runtime();
+    let _entered = rt.enter();
+    // ENH-045 criterion 3: a daemon running [daemon] xterm-resize-reflow
+    // advertises it (pane-info reflow=1), the streamer's mirror terminal
+    // locks onto the same mode, the Connected handshake carries it, and a
+    // resize rewraps the mirrored grid xterm-style — a line that fit at
+    // the wide size continues on the next row at the narrow one, instead
+    // of the classic visible-screen-only reflow that clips it.
+    let dir = tempfile::Builder::new()
+        .prefix("par-mux-str-rf-")
+        .tempdir()
+        .expect("temp dir");
+    let socket = dir.path().join("s");
+    let server = MuxServer::bind_with_tree(
+        &socket,
+        MuxTree::new(Box::new(ShellPaneFactory {
+            socket_path: Some(socket.to_string_lossy().into_owned()),
+            xterm_resize_reflow: true,
+            ..ShellPaneFactory::default()
+        })),
+    )
+    .expect("bind");
+    let shutdown = server.shutdown_handle();
+    let serving = std::thread::spawn(move || server.run());
+    let guard = ServingGuard {
+        shutdown,
+        serving: Some(serving),
+    };
+    let mut control = MuxClient::connect(&socket).expect("control client");
+    control.send("new-session -s stream").expect("new-session");
+    let pane = control
+        .send("list-panes")
+        .expect("list-panes")
+        .into_iter()
+        .map(|l| l.trim().to_string())
+        .find(|l| l.starts_with('%'))
+        .expect("a pane");
+    control
+        .send(&format!("refresh-client -t {pane} -C 100x30"))
+        .expect("wide size");
+    let info = control
+        .send(&format!("pane-info -t {pane}"))
+        .expect("pane-info");
+    assert!(
+        info.iter()
+            .any(|l| l.split_whitespace().any(|t| t == "reflow=1")),
+        "the daemon advertises the mode: {info:?}"
+    );
+
+    let streaming_server = streaming(&socket);
+    let session = mirror(&streaming_server, &pane);
+    wait("the mirror terminal runs the pane's reflow mode", || {
+        (!session.terminal.read().xterm_resize()).then(|| "mirror still classic".to_string())
+    });
+    let connected = session.build_connect_message("rf-client", false, false);
+    let ServerMessage::Connected {
+        pane_resize_reflow, ..
+    } = &connected
+    else {
+        panic!("expected Connected, got {connected:?}");
+    };
+    assert_eq!(
+        pane_resize_reflow,
+        &Some(true),
+        "the handshake tells mirroring clients the mode"
+    );
+
+    // A 55-char line fits one row at 100 cols; a 40-col reflow wraps it
+    // so chars 41.. continue at col 0 of the next row.
+    let head = "H".repeat(40);
+    let tail = "T".repeat(15);
+    type_line(&session, &format!("echo {}{}", head, tail));
+    wait_mirror(&session, &format!("{head}{tail}"));
+    session.resize_tx.send((40, 30)).expect("narrow the pane");
+    wait("the pane and mirror at 40x30", || {
+        let pane_now = pane_size(&mut control, &pane);
+        let mirror_now = session.terminal.read().size();
+        (pane_now != (40, 30) || mirror_now != (40, 30))
+            .then(|| format!("pane {pane_now:?}, mirror {mirror_now:?}"))
+    });
+    // The behavioral pin: a resize through the xterm path leaves a
+    // buffer-reflow record (classic reflow never does), and the rewrapped
+    // logical line survives the narrow size intact — `content()` joins the
+    // soft-wrapped pair, so the full marker reads as one line.
+    let reflowed = session.terminal.write().take_buffer_reflow().is_some();
+    assert!(reflowed, "the mirror's resize took the xterm reflow path");
+    wait("the rewrapped line still reads whole", || {
+        let text = session.terminal.read().content();
+        (!text.lines().any(|l| l.contains(&head) && l.contains(&tail)))
+            .then(|| format!("screen held:\n{text}"))
+    });
+    drop(guard);
 }
 
 #[test]

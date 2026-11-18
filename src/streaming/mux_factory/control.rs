@@ -136,6 +136,14 @@ pub(super) fn parse_cwd_token(line: &str) -> Option<String> {
     decode_b64(value)
 }
 
+/// Whether the row carries `reflow=1` (ENH-045): the daemon-side pane
+/// terminal runs xterm-style resize reflow, so a mirroring terminal must
+/// enable the same mode or its grid diverges on every resize. Absent on
+/// older daemons and default-mode panes — false either way.
+pub(super) fn parse_reflow_token(line: &str) -> bool {
+    line.split_whitespace().any(|t| t == "reflow=1")
+}
+
 /// Decode the row's `cwdhost=` tail token: the OSC 7 hostname riding the
 /// daemon's cwd. Absent (or a kernel-cwd/spawn-floor cwd) = local by
 /// construction.

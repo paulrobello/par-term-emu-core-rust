@@ -33,6 +33,7 @@ fn effective(cli: &Cli, include_flags: bool) -> EffectiveConfig {
                 .map(|d| d.to_string_lossy().into_owned()),
             pane_endpoints: cli.pane_endpoints.then_some(true),
             expose_control_socket: cli.expose_control_socket.then_some(true),
+            xterm_resize_reflow: cli.xterm_resize_reflow.then_some(true),
             // --keep-alive sits above the file tier — the one honest use of
             // the flag: a bootstrap start must keep a fresh, still-empty
             // daemon up regardless of the file or the default.
@@ -258,6 +259,13 @@ struct Cli {
     /// per session without this flag.
     #[arg(long)]
     expose_control_socket: bool,
+
+    /// Run pane terminals with xterm-style resize reflow (ENH-045):
+    /// a resize rewraps grid and scrollback by xterm.js's algorithm.
+    /// Off by default — streaming mirrors must enable the same mode;
+    /// pane-info advertises it as `reflow=1`.
+    #[arg(long)]
+    xterm_resize_reflow: bool,
 
     /// The subcommand surface (R1): the verb forms — `par-mux start`,
     /// `stop`, `restart`, `status`, `ls`, `attach`, `config`. Each keeps
@@ -649,6 +657,13 @@ struct StartArgs {
     /// With --pane-endpoints: also export the full control socket.
     #[arg(long)]
     expose_control_socket: bool,
+
+    /// Run pane terminals with xterm-style resize reflow: a resize
+    /// rewraps grid and scrollback (xterm.js's algorithm) instead of the
+    /// visible-screen-only default. Off by default — streaming mirrors
+    /// must enable the same mode; pane-info advertises it as `reflow=1`.
+    #[arg(long)]
+    xterm_resize_reflow: bool,
 }
 
 /// The targeting trio every client-side verb reads.

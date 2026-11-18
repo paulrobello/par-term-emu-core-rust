@@ -1479,6 +1479,14 @@ impl Terminal {
         self.host.xterm_resize = on;
     }
 
+    /// Whether xterm-style resize reflow is on
+    /// ([`Terminal::set_xterm_resize`]) — the read side a mirror or
+    /// capability advertisement checks to stay in lockstep with this
+    /// terminal's resize behavior.
+    pub fn xterm_resize(&self) -> bool {
+        self.host.xterm_resize
+    }
+
     /// Where the last resize moved the primary screen's lines,
     /// once ([`Grid::take_buffer_reflow`]; only with
     /// [`Terminal::set_xterm_resize`]).

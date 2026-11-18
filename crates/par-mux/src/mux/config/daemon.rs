@@ -104,6 +104,18 @@ pub struct DaemonSection {
         skip_serializing_if = "Option::is_none"
     )]
     pub expose_control_socket: Option<bool>,
+
+    /// The `--xterm-resize-reflow` default: run pane terminals with
+    /// xterm-style resize reflow (ENH-045). Off by default — a streaming
+    /// consumer that mirrors pane bytes must enable the same mode on its
+    /// own terminal or its grid diverges on every resize; the daemon
+    /// advertises the mode via pane-info's `reflow=` token.
+    #[serde(
+        default,
+        rename = "xterm-resize-reflow",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub xterm_resize_reflow: Option<bool>,
     /// Hold a pane whose child exited instead of removing it. `false`
     /// (the default) auto-removes a dead pane through the kill-pane
     /// contract at the reaper's next pass; `true` preserves the

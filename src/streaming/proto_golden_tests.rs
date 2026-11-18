@@ -185,6 +185,7 @@ fn server_fixtures() -> Vec<AppServerMessage> {
             pane_create_allowed: Some(true),
             cwd_hostname: Some("mirror-host".into()),
             cwd_is_local: Some(false),
+            pane_resize_reflow: None,
         },
         S::Connected {
             cols: 1,
@@ -203,6 +204,7 @@ fn server_fixtures() -> Vec<AppServerMessage> {
             pane_create_allowed: None,
             cwd_hostname: None,
             cwd_is_local: None,
+            pane_resize_reflow: None,
         },
         S::Refresh {
             cols: 7,
@@ -773,6 +775,7 @@ fn lossy_server_inputs() -> Vec<(&'static str, pb::ServerMessage)> {
                 pane_create_allowed: Some(false),
                 cwd_hostname: None,
                 cwd_is_local: None,
+                pane_resize_reflow: None,
                 graphics: vec![pb::InlineImage {
                     image_id: 1,
                     pane_id: None,

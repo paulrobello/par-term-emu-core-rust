@@ -422,12 +422,14 @@ pub(crate) fn claude_mod_asset_state() -> AssetState {
 mod tests {
     use super::*;
 
+    #[cfg(unix)]
     fn temp_root() -> tempfile::TempDir {
         tempfile::tempdir().expect("temp dir")
     }
 
     /// A user settings file with its own env block and an existing
     /// CLAUDE_CODE_PLUGIN_DIRS value naming a directory we must preserve.
+    #[cfg(unix)]
     const USER_SETTINGS: &str = r#"{
   // personal settings
   "model": "opus",
@@ -447,6 +449,7 @@ mod tests {
 }
 "#;
 
+    #[cfg(unix)]
     fn read(p: &Path) -> String {
         fs::read_to_string(p).expect("reads")
     }

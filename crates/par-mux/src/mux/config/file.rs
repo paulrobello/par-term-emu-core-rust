@@ -163,6 +163,7 @@ pub fn render(eff: &EffectiveConfig) -> String {
             state_dir: Some(eff.state_dir.clone()),
             pane_endpoints: Some(eff.pane_endpoints),
             expose_control_socket: Some(eff.expose_control_socket),
+            xterm_resize_reflow: Some(eff.xterm_resize_reflow),
             remain_on_exit: Some(eff.remain_on_exit),
             exit_action: Some(eff.exit_action.name().to_string()),
             exit_empty: Some(eff.exit_empty),

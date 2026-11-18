@@ -461,6 +461,7 @@ impl DaemonLaunch {
                 .map(|exe| exe.to_string_lossy().into_owned()),
             pane_endpoint_tx: pane_endpoint_tx.clone(),
             expose_control_socket: eff.expose_control_socket,
+            xterm_resize_reflow: eff.xterm_resize_reflow,
             ..Default::default()
         };
         let restored = match par_mux::mux::persist::load_or_quarantine(&state_path) {

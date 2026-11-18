@@ -27,6 +27,17 @@ impl PtySession {
         self.cwd = Some(path.to_string_lossy().to_string());
     }
 
+    /// Set xterm-style resize reflow on the session's terminal (opt-in).
+    ///
+    /// With it on, a resize rewraps the grid and scrollback by xterm.js's
+    /// algorithm; off (the default) keeps the visible-screen-only reflow
+    /// with scrollback frozen at its old width. Call before spawn so the
+    /// first output lands under the final mode — a mid-session flip only
+    /// affects later resizes.
+    pub fn set_xterm_resize(&mut self, on: bool) {
+        self.terminal.write().set_xterm_resize(on);
+    }
+
     /// Spawn a shell process (auto-detected from environment)
     ///
     /// On Unix: Uses $SHELL or defaults to /bin/bash

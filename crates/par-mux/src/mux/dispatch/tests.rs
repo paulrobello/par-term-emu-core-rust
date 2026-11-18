@@ -1928,6 +1928,7 @@ fn git_available() -> bool {
 /// drop.
 struct TempRepo {
     repo: std::path::PathBuf,
+    #[cfg(unix)]
     plain: std::path::PathBuf,
 }
 
@@ -1942,8 +1943,10 @@ impl TempRepo {
                 .as_nanos()
         ));
         let repo = root.join("repo");
-        let plain = root.join("plain");
         std::fs::create_dir_all(&repo).unwrap();
+        #[cfg(unix)]
+        let plain = root.join("plain");
+        #[cfg(unix)]
         std::fs::create_dir_all(&plain).unwrap();
         let git = |args: &[&str]| {
             std::process::Command::new("git")
@@ -1966,7 +1969,11 @@ impl TempRepo {
             "-m",
             "c",
         ]);
-        Self { repo, plain }
+        Self {
+            repo,
+            #[cfg(unix)]
+            plain,
+        }
     }
 }
 
@@ -1982,6 +1989,7 @@ impl Drop for TempRepo {
 
 /// Plant an OSC 7 cwd report in `pane`'s terminal — the chain's
 /// pane-cwd source.
+#[cfg(unix)]
 fn plant_osc7(h: &Harness, pane: crate::mux::ids::PaneId, dir: &std::path::Path) {
     let mut guard = h.tree.lock();
     let pane = guard.pane_mut(pane).unwrap();
@@ -3387,6 +3395,50 @@ fn paste_buffer_stamps_last_input_too() {
 
 /// pane-info reports the pane's per-pane viewer count and
 /// `last_viewed_at`: zero viewers and no stamp for a pane nobody shows;
+/// ENH-045: pane-info carries `reflow=1` exactly when the pane terminal
+/// runs xterm-style resize reflow — the lockstep signal a streaming
+/// mirror gates its own mode on. Default factory: token absent.
+#[test]
+fn pane_info_advertises_the_xterm_resize_reflow_mode() {
+    let run_with = |factory: Box<dyn crate::mux::pane::PaneFactory>| {
+        let tree = Arc::new(Mutex::new(MuxTree::new(factory)));
+        let clients = Arc::new(Mutex::new(Vec::new()));
+        let __output_epoch: crate::mux::server::OutputEpoch = std::sync::Arc::default();
+        let ctx = Ctx {
+            layouts_dir: None,
+            output_epoch: &__output_epoch,
+            tree: &tree,
+            clients: &clients,
+            command_number: 1,
+            shutdown: None,
+            config: None,
+            client_id: None,
+        };
+        let run = |line: &str| dispatch_command(parse_command(line).unwrap(), &ctx, None, None);
+        run("new-session -s main");
+        let pane = {
+            let guard = tree.lock();
+            let session = guard.sessions()[0];
+            let window = guard.session(session).unwrap().windows[0];
+            guard.window(window).unwrap().panes()[0]
+        };
+        run(&format!("pane-info -t {pane}")).to_string()
+    };
+    let plain = run_with(Box::<ShellPaneFactory>::default());
+    assert!(
+        !plain.contains("reflow="),
+        "default panes do not advertise reflow: {plain}"
+    );
+    let reflowing = run_with(Box::new(ShellPaneFactory {
+        xterm_resize_reflow: true,
+        ..ShellPaneFactory::default()
+    }));
+    assert!(
+        reflowing.contains("reflow=1"),
+        "the flag's panes advertise the mode: {reflowing}"
+    );
+}
+
 /// one viewer and a fresh stamp once a client's view/focus lands on the
 /// pane's window — the seen rule's zoomed-or-active slot (D35). A live
 /// pane also reports its process group's cumulative CPU.

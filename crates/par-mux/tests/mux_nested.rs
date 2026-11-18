@@ -14,7 +14,9 @@ compile_error!("this test drives the par-mux binary: build it with --features mu
 
 mod common;
 
-use common::{rerun_isolated, spawn_daemon, wait_listening, MuxFixture, REEXEC_MARKER};
+#[cfg(unix)]
+use common::spawn_daemon;
+use common::{rerun_isolated, wait_listening, MuxFixture, REEXEC_MARKER};
 use par_mux::mux::connect_local_stream;
 use std::io::Read;
 use std::path::Path;

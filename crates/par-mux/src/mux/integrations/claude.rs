@@ -300,10 +300,12 @@ pub(crate) fn heal_claude_hook_asset_into(
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[cfg(unix)]
     use serde_json::Value as JsonValue;
     use std::fs;
     use std::path::Path;
 
+    #[cfg(unix)]
     use super::super::parse_serde;
 
     fn temp_root() -> tempfile::TempDir {
@@ -312,6 +314,7 @@ mod tests {
 
     /// A realistic claude settings.json: comments, nested config, and a user
     /// who already has hooks of their own.
+    #[cfg(unix)]
     const REAL_WORLD_SETTINGS: &str = r#"{
   // personal settings
   "model": "opus",
@@ -352,10 +355,12 @@ mod tests {
 }
 "#;
 
+    #[cfg(unix)]
     fn installed_command(hook_path: &Path) -> String {
         hook_command_for(hook_path)
     }
 
+    #[cfg(unix)]
     fn session_start_commands(content: &str) -> Vec<String> {
         let value: JsonValue = parse_serde(content, Path::new("<test>")).expect("parses");
         value
