@@ -2,7 +2,7 @@
 
 Comprehensive internal architecture documentation for par-term-emu-core-rust, a high-performance terminal emulator library written in Rust with Python bindings.
 
-> **Last verified against v0.79.0 (2026-11-06).** That pass covered the crate layout, the module lists, the dependency lists, and the CI summary. Struct layouts, module lists, and file counts drift quickly; where a section could go stale, prefer the runnable commands given over hard-coded numbers.
+> **Last verified against v0.82.0 (2026-11-17).** That pass covered the crate layout, the module lists, the dependency lists, and the CI summary. The banner is refreshed in a batch at each release cut, so between cuts it can trail the tree by a release. Struct layouts, module lists, and file counts drift quickly; where a section could go stale, prefer the runnable commands given over hard-coded numbers.
 
 ## Table of Contents
 
@@ -359,7 +359,7 @@ The main terminal emulator that ties everything together, organized into submodu
   - `roster.rs` / `roster_watcher.rs` - par-mux agent roster: the `list-agents` parser, and a long-lived watcher that mirrors the roster to clients as `AgentRoster` snapshots plus `AgentStateChanged` deltas
   - `tree_watcher.rs` / `watcher_common.rs` - the same watcher shape for the full workspace/session/window/pane tree (full-replacement snapshots), and the reconnect policy both watchers share
   - `client.rs` - Client connection management
-  - `protocol.rs` - Streaming protocol definitions (app-level `ServerMessage`, `ClientMessage`, `EventType`); count the variants in the enums rather than trusting a number here
+  - `protocol/` - Streaming protocol definitions, split by direction: `server_messages.rs` (`ServerMessage`, `ConnectedBuilder`), `client_messages.rs` (`ClientMessage`), `events.rs` (`EventType` and the `TerminalEvent` mapping), `common.rs` (shared leaf types), `mux_types.rs` (roster and tree payloads); count the variants in the enums rather than trusting a number here
   - `proto.rs` - Protocol Buffers wire format with optional zlib compression, plus the `ToWire`/`FromWire` field rules the `ProtoConvert` derive calls (see below)
   - `proto_golden_tests.rs` - Golden wire test: pins every message variant's encoded bytes and decoded value against `testdata/proto_golden.txt`
   - `terminal.pb.rs` - Generated protobuf types (from `proto/terminal.proto` via `build.rs`; do not edit by hand)
@@ -369,7 +369,7 @@ The main terminal emulator that ties everything together, organized into submodu
   - `inline_image.rs` - Bridges a terminal's `GraphicsAdded` events to size-bounded `InlineImage` frames (the announce carries an id, the pixels are fetched once), and `apply_inline_image` ingests a received frame into a mirroring `Terminal`'s graphics store
   - `metrics.rs` + `metrics/` - Server metrics behind two gates: the `otel` cargo feature (without it, `metrics/stub.rs` compiles an identical-API no-op) and the runtime switch `--otel-enabled` / `PAR_TERM_STREAMER_OTEL_ENABLED`; `metrics/otel.rs` binds the instruments to the global OTLP meter provider. The shared OTLP layer (protocol grammar, header parsing, provider/exporter init) lives once in the `par-term-emu-core` member (`otel.rs` + `otel/`) behind its own `otel` feature — the streamer and par-mux copies are thin per-binary config on top of it (ARC-001)
   - `error.rs` - Streaming-specific errors
-- **App-to-wire conversions (ARC-006)**: the message-level conversions between `protocol.rs` types and the generated protobuf types are derived with `#[derive(par_term_emu_derive::ProtoConvert)]` (macro in `derive/src/proto_convert.rs`). Every field value passes through `ToWire`/`FromWire` in `proto.rs`, keyed on the app and wire field types. Each type pair is listed explicitly, so a missing pair fails to compile instead of silently narrowing; fields with a specific rule (a clamp, a presence check) use `#[proto(with = ..)]`. The golden test fails on any byte-level change. Regenerate it only for an intended wire change: `PROTO_GOLDEN_UPDATE=1 cargo test --lib --no-default-features --features pyo3/auto-initialize,streaming proto_golden`
+- **App-to-wire conversions (ARC-006)**: the message-level conversions between `protocol/` types and the generated protobuf types are derived with `#[derive(par_term_emu_derive::ProtoConvert)]` (macro in `derive/src/proto_convert.rs`). Every field value passes through `ToWire`/`FromWire` in `proto.rs`, keyed on the app and wire field types. Each type pair is listed explicitly, so a missing pair fails to compile instead of silently narrowing; fields with a specific rule (a clamp, a presence check) use `#[proto(with = ..)]`. The golden test fails on any byte-level change. Regenerate it only for an intended wire change: `PROTO_GOLDEN_UPDATE=1 cargo test --lib --no-default-features --features pyo3/auto-initialize,streaming proto_golden`
 - **Features**: Real-time terminal sharing, multiplexing, binary protocol with compression, mouse/focus/paste forwarding, selection/clipboard sync, shell integration events (with cursor_line positioning), per-client event subscription filtering, badge change streaming, per-session client limits, input rate limiting, session metrics, terminal size validation, dead session reaping
 - **Protocol Buffers**: Generated from `proto/terminal.proto` via `build.rs`
 - **Standalone server binary** (`src/bin/streaming_server/`, requires `streaming-bin`): `main.rs` (entry point), `cli.rs` (arg parsing/env overrides), `frontend_download.rs` (release-asset download + extraction), `bootstrap.rs` (PTY/terminal wiring and session bootstrap), `theme.rs` (theme file loading)
@@ -1211,6 +1211,7 @@ The project uses GitHub Actions. `.github/workflows/ci.yml` is authoritative; th
 
 #### Other Jobs
 - **Feature matrix (`features`)**: `make check-features` through cargo-hack builds the library across feature combinations (dispatch only)
+- **Agent-state wire-test harness (`integrations-test`)**: runs the vitest suite for the agent-state extensions under `crates/par-mux/integrations/` (`bun install --frozen-lockfile`, `bun run test`; local equivalent `make test-integrations`, part of `checkall`) on every pull request and on `'all'`/default dispatches
 - **FFI header + surface drift (`ffi-drift`)**: regenerates `include/terminal_core.h` with a pinned cbindgen and fails when the committed header, the exported surface, or its FFI_GUIDE.md coverage drifts (runs on every trigger)
 - **iOS xcframework (`xcframework`)**: builds the C FFI staticlib for iOS with a header smoke-compile and link probe (dispatch only; the shipping artifact is produced by `deployment.yml`)
 
