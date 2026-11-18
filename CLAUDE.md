@@ -121,6 +121,13 @@ prlctl exec "Windows 11" cmd /c "cd C:\ptecr-test && cargo check --locked -p par
 #     recognized" (measured 2026-09-29, Windows 26200; everything passes
 #     with it). Serve a one-line vmtest.ps1 over the same HTTP port rather
 #     than quoting $env: through prlctl+cmd+powershell.
+#     PATH matters for REPRODUCTION too, not just passing: worktree-remove
+#     dispatch tests hold their checkout with a live `sleep 60` pane, which
+#     resolves only with Git's usr\bin on PATH (measured 2026-11-18 — with
+#     it, the ungated worktree_remove tests fail exactly like windows-latest
+#     CI; without it the pane dies instantly and the tests false-green).
+#     Replicate a CI environment dimension at a time: live panes (PATH),
+#     test cwd inside a repo, 8.3 TEMP names, user-vs-SYSTEM.
 #     Also measured 2026-09-29 (Windows 26200): cmd.exe under ConPTY ECHOES
 #     a `\n`-terminated line but never SUBMITS it — a typed Enter must be
 #     `\r` (26100 submitted `\n`; CI intermittents during the image rollout

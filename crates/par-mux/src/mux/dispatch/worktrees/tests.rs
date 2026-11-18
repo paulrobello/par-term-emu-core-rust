@@ -382,11 +382,6 @@ fn kill_workspace_group_broadcasts_releases_for_linked_members() {
 /// same release notices every other kill sends: one `%agent-released` per
 /// claimed pane, ahead of the cascade's `%window-close`, and the row gone
 /// from `list-agents`.
-/// Unix-only until the windows worktree-remove defect is fixed
-/// (kanban 01a1ee0beb8c755f80: git rejects the worktree path with "is
-/// not a working tree" on windows-latest; the leg never ran before
-/// 2026-11-18). The test is correct; windows is broken.
-#[cfg(unix)]
 #[test]
 fn worktree_remove_force_broadcasts_releases_for_claimed_panes() {
     let (_dir, repo) = test_repo();
@@ -454,9 +449,6 @@ fn worktree_remove_force_broadcasts_releases_for_claimed_panes() {
     );
 }
 
-/// Unix-only until the windows worktree-remove defect is fixed (same
-/// kanban card as the force test above).
-#[cfg(unix)]
 #[test]
 fn worktree_remove_refuses_dirty_and_running_agents_unless_forced() {
     let (_dir, repo) = test_repo();

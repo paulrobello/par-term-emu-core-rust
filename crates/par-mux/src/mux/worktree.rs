@@ -245,9 +245,28 @@ pub(crate) fn is_dirty(checkout: &Path) -> Result<bool, String> {
     .map(|out| !out.trim().is_empty())
 }
 
+/// Whether the repo's `worktree list` still registers `checkout`. An
+/// unlistable repo counts as registered, so callers keep git's own error
+/// instead of deleting a directory git may still own.
+fn still_registered(repo: &Path, checkout: &Path) -> Result<bool, String> {
+    let listing = run_str(repo, &["worktree", "list", "--porcelain"])?;
+    let target = canonical(checkout);
+    Ok(listing.lines().any(|line| {
+        line.strip_prefix("worktree ")
+            .is_some_and(|p| canonical(Path::new(p)) == target)
+    }))
+}
+
 /// `git worktree remove [--force] <checkout>` from the main checkout. A
 /// checkout whose directory is already gone is pruned instead — git
 /// refuses to remove what it cannot find.
+///
+/// git deletes the registration even when deleting the directory failed
+/// ("no going back from here", builtin worktree remove), so a retry can
+/// only ever answer "is not a working tree" while the checkout lingers
+/// (a live process holding it as its cwd, the windows pane case). When
+/// nothing registers the checkout anymore, the teardown git committed to
+/// is finished by removing the leftover directory directly.
 pub(crate) fn remove(repo: &Path, checkout: &Path, force: bool) -> Result<(), String> {
     if !checkout.exists() {
         return run_str(repo, &["worktree", "prune"]).map(|_| ());
@@ -258,7 +277,14 @@ pub(crate) fn remove(repo: &Path, checkout: &Path, force: bool) -> Result<(), St
         args.push(os("--force"));
     }
     args.push(checkout.as_os_str());
-    run(repo, &args).map(|_| ())
+    run(repo, &args)
+        .map(|_| ())
+        .or_else(|err| match still_registered(repo, checkout) {
+            Ok(true) => Err(err),
+            Ok(false) => std::fs::remove_dir_all(checkout)
+                .map_err(|left| format!("{err}; leftover checkout {}: {left}", checkout.display())),
+            Err(list_err) => Err(format!("{err}; {list_err}")),
+        })
 }
 
 #[cfg(test)]
@@ -371,6 +397,20 @@ pub(crate) mod tests {
         let again = default_checkout_path(&repo, "topic");
         add(&repo, &again, "topic", "HEAD").unwrap();
         assert_eq!(current_branch(&again).as_deref(), Some("topic"));
+    }
+
+    /// Git's "no going back": the registration is deleted even when the
+    /// directory deletion failed, leaving a checkout nothing registers.
+    /// `remove` must finish that teardown instead of erroring forever.
+    #[test]
+    fn remove_finishes_a_removal_git_abandoned_midway() {
+        let (_dir, repo) = test_repo();
+        let checkout = default_checkout_path(&repo, "topic");
+        add(&repo, &checkout, "topic", "HEAD").unwrap();
+        let checkout = canonical(&checkout);
+        std::fs::remove_dir_all(repo.join(".git").join("worktrees").join("topic")).unwrap();
+        remove(&repo, &checkout, true).unwrap();
+        assert!(!checkout.exists(), "the leftover checkout is gone");
     }
 
     /// Point `repo`'s config at an fsmonitor hook that always answers "no
