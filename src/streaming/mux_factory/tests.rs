@@ -1809,7 +1809,16 @@ fn a_plain_shell_cd_reaches_a_streaming_client_as_cwd_changed() {
         .prefix("cwd-mirror-test-")
         .tempdir()
         .expect("target dir");
-    let target_path = target.path().display().to_string();
+    // The daemon's kernel vnode read reports the canonical path while
+    // tempfile hands out /var/... — compare canonical forms (the same
+    // trap test_daemon_reads_a_child_cwd documents) or macOS never
+    // matches.
+    let target_path = target
+        .path()
+        .canonicalize()
+        .expect("canonical target dir")
+        .display()
+        .to_string();
 
     let server = streaming(&socket);
     let session = mirror(&server, &pane);
