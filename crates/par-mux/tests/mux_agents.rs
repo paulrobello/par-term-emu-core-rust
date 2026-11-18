@@ -174,6 +174,7 @@ fn any_state_key(value: &serde_json::Value) -> bool {
 }
 
 #[test]
+#[ignore = "load-sensitive: real-daemon hook-broadcast waits need a quiet host — 90s timeouts on both tries on 2-vCPU ubuntu-latest (run 44324333732); green on macdaddy/minimac. Runs via make test-rust-sensitive."]
 fn the_agent_arc_lives_and_dies_with_the_daemon() {
     let fixture = MuxFixture::new("arc");
     let path = fixture.socket();
