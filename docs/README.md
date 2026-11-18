@@ -62,7 +62,7 @@ An index of the guides and references in `docs/`, grouped by task. Start with th
 These directories hold point-in-time records. They are kept for history and are not maintained against the current tree, so source paths in them can be stale.
 
 - `fable/` - Committed benchmark baselines (`BENCH-BASELINE-2026-08.md`, `BENCH-BASELINE-2026-09.md`)
-- `opus/` - Enhancement implementation plans (`ENH-048` to `ENH-061`) from audit passes
+- `opus/` - Enhancement implementation plans (`ENH-048` to `ENH-064`) from audit passes
 - `superpowers/plans/` - Feature implementation plans
 - `research/` - Protocol research notes (OSC 9;4 progress bar)
 - `archive/` - Superseded standalone documents kept for history (`MUX_FEATURE_MATRIX.md`, the par-mux 0.62.0 vs herdr feature comparison recorded 2026-10-19)
