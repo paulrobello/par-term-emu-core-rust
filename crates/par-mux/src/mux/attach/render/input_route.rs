@@ -348,22 +348,21 @@ impl WindowSession {
         if self.stdin_backlog.is_empty() {
             let tail = crate::mux::attach::forward_keys(conn, &pane, bytes);
             if !tail.is_empty() {
-                self.stdin_backlog.push((pane, tail.to_vec()));
+                self.stdin_backlog.push_back((pane, tail.to_vec()));
             }
         } else {
-            self.stdin_backlog.push((pane, bytes.to_vec()));
+            self.stdin_backlog.push_back((pane, bytes.to_vec()));
         }
     }
 
     /// Pump step 3's head: retry the parked bytes in order, stopping at the
     /// first entry the bound refuses again.
     pub(super) fn flush_stdin_backlog(&mut self, conn: &mut crate::mux::attach::conn::AttachConn) {
-        while !self.stdin_backlog.is_empty() {
-            let (pane, bytes) = self.stdin_backlog.remove(0);
+        while let Some((pane, bytes)) = self.stdin_backlog.pop_front() {
             let tail = crate::mux::attach::forward_keys(conn, &pane, &bytes);
             if !tail.is_empty() {
                 let tail = tail.to_vec();
-                self.stdin_backlog.insert(0, (pane, tail));
+                self.stdin_backlog.push_front((pane, tail));
                 return;
             }
         }

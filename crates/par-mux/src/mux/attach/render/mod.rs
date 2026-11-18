@@ -24,7 +24,7 @@ use par_term_emu_core::terminal::Terminal;
 use par_term_emu_core::tmux_control::TmuxNotification;
 use ratatui::buffer::{Buffer, Cell as RtCell};
 use ratatui::style::Color as RtColor;
-use std::collections::HashMap;
+use std::collections::{HashMap, VecDeque};
 use std::io::Write as _;
 mod chrome;
 mod copy_mode;
@@ -950,7 +950,7 @@ struct WindowSession {
     /// Input bytes `forward_keys` could not send under the outstanding-reply
     /// bound, as (pane, bytes) in typed order; flushed at the head of pump
     /// step 3.
-    stdin_backlog: Vec<(String, Vec<u8>)>,
+    stdin_backlog: VecDeque<(String, Vec<u8>)>,
     /// Continuations awaiting their command replies: see [`pending_cmd`].
     pending_cmds: pending_cmd::PendingCommands,
     /// Generation of the latest user navigation: see [`WindowSession::begin_nav`].
@@ -1314,7 +1314,7 @@ impl WindowSession {
             zoomed: false,
             daemon_layout: Vec::new(),
             stdin_primer: Vec::new(),
-            stdin_backlog: Vec::new(),
+            stdin_backlog: VecDeque::new(),
             pending_cmds: pending_cmd::PendingCommands::default(),
             nav_gen: 0,
             nav_landing: None,
