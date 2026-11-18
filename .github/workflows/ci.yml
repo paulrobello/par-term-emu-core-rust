@@ -180,9 +180,13 @@ jobs:
     # The macOS leg runs on the repo's MiniMac self-hosted runner (free of
     # hosted-minute billing, idle load 4-10): the PTY-heavy serial suites
     # that lost a different load-sensitive test per macos-latest run
-    # (39700463900..39710987499) ran clean there. ubuntu/windows stay
-    # hosted.
-    runs-on: ${{ matrix.os == 'macos-latest' && fromJSON('["self-hosted", "macOS", "ARM64", "minimac"]') || matrix.os }}
+    # (39700463900..39710987499) ran clean there. The ubuntu leg runs on
+    # the repo's lenny6 self-hosted runner (installed 2026-11-18): the
+    # real-daemon E2E suites are timing-sensitive and lost different
+    # tests per run on hosted 2-vCPU shared runners (agent_arc 90s
+    # timeouts, run 44324333732); windows stays hosted (its failures are
+    # ConPTY/shell-shaped, not load).
+    runs-on: ${{ matrix.os == 'macos-latest' && fromJSON('["self-hosted", "macOS", "ARM64", "minimac"]') || matrix.os == 'ubuntu-latest' && fromJSON('["self-hosted", "Linux", "X64", "lenny6"]') || matrix.os }}
     timeout-minutes: 20
     needs: [version-check]
     strategy:
