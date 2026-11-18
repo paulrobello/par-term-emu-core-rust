@@ -48,6 +48,15 @@ pub enum TriggerSplitCommand {
 }
 
 /// Action to execute when a trigger matches
+///
+/// The `RunCommand`, `SendText`, `PlaySound`, `Notify`, `MarkLine` (label),
+/// and `SetVariable` templates may reference regex captures (`$1`, ...) from
+/// terminal output. `SplitPane` substitutes nothing, but whether it fires is
+/// still decided by terminal output. The frontend-handled actions
+/// (`RunCommand`, `SendText`, `PlaySound`, `SplitPane`) are only queued as an
+/// [`ActionResult`] and never executed by the emulator. Treat the results as
+/// output-derived and untrusted. See the trust-boundary notes on
+/// [`ActionResult`] and [`TriggerEngine::poll_action_results`].
 #[derive(Debug, Clone, PartialEq)]
 pub enum TriggerAction {
     /// Highlight matched text with specified colors and optional duration
@@ -576,7 +585,32 @@ impl TriggerEngine {
         term.triggers.trigger_highlights.retain(|h| h.expiry > now);
     }
 
-    /// Drain pending action results for frontend consumption
+    /// Drain pending action results for frontend consumption.
+    ///
+    /// # Trust boundary (CWE-1427, OWASP A04:2021)
+    ///
+    /// Treat every returned [`ActionResult`] as **untrusted, output-derived
+    /// input**. The `RunCommand`, `SendText`, `PlaySound`, `Notify`, and
+    /// `MarkLine` results have regex captures from processed terminal output
+    /// substituted into their text fields, so a program that can write to the
+    /// terminal (a remote host, a `cat`ed file, a malicious prompt) controls
+    /// part of what a matching trigger produces. `SplitPane` carries the
+    /// trigger's configured command unchanged, but the terminal output still
+    /// decides when it fires, so gate it the same way.
+    ///
+    /// The emulator never executes, sends, or plays anything itself: it only
+    /// queues these results and hands them over here. Executing them is the
+    /// embedder's decision. Before auto-running a `RunCommand` or `SplitPane`
+    /// command, or writing a `SendText` string to a PTY, an embedder should:
+    ///
+    /// - run only triggers whose patterns and actions it (or the user)
+    ///   configured, and never ones created from terminal output;
+    /// - validate or allowlist the command, arguments, and text, never
+    ///   passing substituted captures through a shell;
+    /// - prefer a user confirmation step over silent execution.
+    ///
+    /// The results carry no trusted-versus-output-derived marker, so the
+    /// embedder must apply this policy to all of them.
     pub fn poll_action_results(term: &mut Terminal) -> Vec<ActionResult> {
         std::mem::take(&mut term.triggers.trigger_action_results)
     }
@@ -593,6 +627,18 @@ impl TriggerEngine {
 }
 
 /// Result of executing trigger actions (for frontend-handled actions)
+///
+/// # Trust boundary
+///
+/// These values are requests, not executed effects: the emulator never runs
+/// a command, writes text to a PTY, or plays a sound itself. The
+/// `RunCommand`, `SendText`, `PlaySound`, `Notify`, and `MarkLine` text fields
+/// contain regex captures taken from processed terminal output, so their
+/// content is attacker-influenced whenever the terminal shows untrusted output
+/// (CWE-1427, OWASP A04:2021). No field distinguishes trusted configuration
+/// from output-derived text. An embedder must validate these results, or
+/// confirm them with the user, before acting on them. See
+/// [`TriggerEngine::poll_action_results`].
 #[derive(Debug, Clone, PartialEq)]
 pub enum ActionResult {
     /// Frontend should run this command

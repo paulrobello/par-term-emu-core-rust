@@ -200,6 +200,13 @@ impl PyTerminal {
 
     /// Drain pending action results for frontend consumption
     ///
+    /// Security: treat every result as untrusted. ``run_command``,
+    /// ``send_text``, ``play_sound``, ``notify`` and ``mark_line`` results
+    /// carry regex captures taken from terminal output, and ``split_pane``
+    /// fires on output matches. The emulator never executes any of them;
+    /// validate or confirm with the user before auto-running a command or
+    /// writing text to a PTY.
+    ///
     /// Returns:
     ///     list[dict]: List of action result dicts with 'type' and action-specific fields
     ///
