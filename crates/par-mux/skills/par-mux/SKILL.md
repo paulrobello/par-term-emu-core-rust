@@ -300,6 +300,12 @@ printf '%s\n' "{\"id\":1,\"method\":\"pane.report_agent\",\"params\":{
   drains. The state rides the normal notify/sound pipeline (the
   `%agent-state-changed` broadcast), and the next hook report re-takes the
   state (`source=hook` again).
+  The verb is pane-scoped by design — every roster row is a pane (hooks,
+  the scrape tier, and claims all key on `pane_id`), so `-t` has no
+  caller default: a session spawned bare, outside any par-mux pane (no
+  `PAR_MUX_PANE_ID`), cannot `report-state`. Such sessions surface state
+  through the par-mesh roster, where they auto-register; `-a <agent>`
+  stays the label override for a pane whose claim is unset.
 - `nc -U` needs a netcat with Unix-socket support (macOS built-in works).
 
 ## Requirements
