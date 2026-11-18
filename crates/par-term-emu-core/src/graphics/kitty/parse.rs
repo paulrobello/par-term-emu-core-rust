@@ -3,6 +3,33 @@
 
 use super::*;
 
+/// Accessor selecting the parser field a control key writes to.
+type ParamSlot<T> = fn(&mut KittyParser) -> &mut Option<T>;
+
+/// Control keys whose value is a plain unsigned integer stored in one
+/// field, independent of the action: `i=`/`p=` image and placement ids,
+/// `x=`/`y=`/`w=`/`h=` the source rectangle, `P=`/`Q=` the parent ids.
+const UNSIGNED_PARAMS: &[(&str, ParamSlot<u32>)] = &[
+    ("i", |p| &mut p.image_id),
+    ("p", |p| &mut p.placement_id),
+    ("x", |p| &mut p.source_x),
+    ("y", |p| &mut p.source_y),
+    ("w", |p| &mut p.source_width),
+    ("h", |p| &mut p.source_height),
+    ("P", |p| &mut p.parent_image_id),
+    ("Q", |p| &mut p.parent_placement_id),
+];
+
+/// Signed counterparts: `H=`/`V=` relative offsets in pixels. `V=` is
+/// parsed unconditionally (like `H=`); the offset is only *applied* when a
+/// parent (`P=`) is set (see build_graphic), so storing it early removes
+/// the asymmetry where `V=` was dropped unless `P=` had already been
+/// parsed. Not to be confused with `v=` (height).
+const SIGNED_PARAMS: &[(&str, ParamSlot<i32>)] = &[
+    ("H", |p| &mut p.relative_x_offset),
+    ("V", |p| &mut p.relative_y_offset),
+];
+
 impl KittyParser {
     /// Create a new parser
     pub fn new() -> Self {
@@ -55,6 +82,14 @@ impl KittyParser {
     /// `c`, `r`, `z`) read `self.action`, so an `a=` earlier in the same
     /// list takes effect for the keys after it.
     fn apply_param(&mut self, key: &str, value: &str) {
+        if let Some((_, slot)) = UNSIGNED_PARAMS.iter().find(|(k, _)| *k == key) {
+            *slot(self) = value.parse().ok();
+            return;
+        }
+        if let Some((_, slot)) = SIGNED_PARAMS.iter().find(|(k, _)| *k == key) {
+            *slot(self) = value.parse().ok();
+            return;
+        }
         match key {
             "a" => {
                 if let Some(c) = value.chars().next() {
@@ -70,12 +105,6 @@ impl KittyParser {
                 if let Some(c) = value.chars().next() {
                     self.medium = KittyMedium::from_char(c).unwrap_or_default();
                 }
-            }
-            "i" => {
-                self.image_id = value.parse().ok();
-            }
-            "p" => {
-                self.placement_id = value.parse().ok();
             }
             "s" => {
                 // Animation control state (for AnimationControl action) takes priority
@@ -122,18 +151,6 @@ impl KittyParser {
                     self.rows = value.parse().ok();
                 }
             }
-            "x" => {
-                self.source_x = value.parse().ok();
-            }
-            "y" => {
-                self.source_y = value.parse().ok();
-            }
-            "w" => {
-                self.source_width = value.parse().ok();
-            }
-            "h" => {
-                self.source_height = value.parse().ok();
-            }
             // On `a=f`, `X=` is the composition mode and `Y=` the background color.
             "X" => {
                 if self.action == KittyAction::Frame {
@@ -161,26 +178,6 @@ impl KittyParser {
             "U" => {
                 // Virtual placement
                 self.is_virtual = value == "1";
-            }
-            "P" => {
-                // Parent image ID for relative positioning
-                self.parent_image_id = value.parse().ok();
-            }
-            "Q" => {
-                // Parent placement ID for relative positioning
-                self.parent_placement_id = value.parse().ok();
-            }
-            "H" => {
-                // Relative X offset in pixels
-                self.relative_x_offset = value.parse().ok();
-            }
-            "V" => {
-                // Relative Y offset in pixels (note: different from v=height).
-                // Parsed unconditionally to match H=; the offset is only *applied*
-                // when a parent (P=) is set (see build_graphic), so storing it
-                // early is harmless and removes the H=/V= asymmetry where V=
-                // was silently dropped unless P= had already been parsed.
-                self.relative_y_offset = value.parse().ok();
             }
             "o" => {
                 // Compression format

@@ -31,6 +31,27 @@ pub(super) fn count_param(params: &Params) -> usize {
     }
 }
 
+/// Intermediates that route `CSI u` to the Kitty keyboard protocol rather
+/// than SCORC/DECSMBV.
+const KITTY_KEYBOARD_INTERMEDIATES: &[u8] = b"=?><";
+
+/// Intermediates that route `CSI p` to the report handler: DECSCL (`"`),
+/// DECSTR (`!`), and DECRQM (`$`).
+const REPORT_P_INTERMEDIATES: &[u8] = b"\"!$";
+
+/// True when any byte of `wanted` appears among the sequence's intermediates.
+fn has_any_intermediate(intermediates: &[u8], wanted: &[u8]) -> bool {
+    intermediates.iter().any(|b| wanted.contains(b))
+}
+
+fn log_unsupported_csi(action: char) {
+    debug::log(
+        debug::DebugLevel::Debug,
+        "CSI",
+        &format!("Unsupported CSI action: {}", action),
+    );
+}
+
 impl Terminal {
     /// VTE CSI dispatch - handle CSI sequences
     pub(in crate::terminal) fn csi_dispatch_impl(
@@ -168,11 +189,7 @@ impl Terminal {
                 if intermediates.contains(&b'#') {
                     color_stack::handle_xtpopcolors(&mut self.theme, params);
                 } else {
-                    debug::log(
-                        debug::DebugLevel::Debug,
-                        "CSI",
-                        &format!("Unsupported CSI action: {}", action),
-                    );
+                    log_unsupported_csi(action);
                 }
             }
             'R' => {
@@ -181,19 +198,12 @@ impl Terminal {
                 if intermediates.contains(&b'#') {
                     color_stack::handle_xtreportcolors(&self.theme, &mut self.response_buffer);
                 } else {
-                    debug::log(
-                        debug::DebugLevel::Debug,
-                        "CSI",
-                        &format!("Unsupported CSI action: {}", action),
-                    );
+                    log_unsupported_csi(action);
                 }
             }
             'p' => {
                 // p can be DECSCL (with "), DECSTR (with !), or DECRQM (with $)
-                if intermediates.contains(&b'"')
-                    || intermediates.contains(&b'!')
-                    || intermediates.contains(&b'$')
-                {
+                if has_any_intermediate(intermediates, REPORT_P_INTERMEDIATES) {
                     self.handle_csi_report(action, params, intermediates);
                 }
             }
@@ -204,11 +214,7 @@ impl Terminal {
             'u' => {
                 // u can be SCORC (no params), DECSMBV (with params),
                 // or Kitty keyboard protocol (with =, ?, >, or < intermediates)
-                if intermediates.contains(&b'=')
-                    || intermediates.contains(&b'?')
-                    || intermediates.contains(&b'>')
-                    || intermediates.contains(&b'<')
-                {
+                if has_any_intermediate(intermediates, KITTY_KEYBOARD_INTERMEDIATES) {
                     keyboard::handle_csi_keyboard(
                         &mut self.keyboard_state,
                         &mut self.response_buffer,
@@ -221,11 +227,7 @@ impl Terminal {
                 }
             }
             _ => {
-                debug::log(
-                    debug::DebugLevel::Debug,
-                    "CSI",
-                    &format!("Unsupported CSI action: {}", action),
-                );
+                log_unsupported_csi(action);
             }
         }
     }
