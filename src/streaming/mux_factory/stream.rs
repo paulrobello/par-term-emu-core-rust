@@ -141,8 +141,7 @@ pub(super) fn spawn_drain(
 ) {
     std::thread::spawn(move || {
         let mut parser = TmuxControlParser::new(true);
-        let mut in_reply = false;
-        let mut reply_body = Vec::new();
+        let mut reply_scan = ReplyScan::default();
         let mut next_status = Instant::now();
         // Reused scratch for the Output guard's live pane-id comparison so
         // the per-notification check allocates nothing (QA-004).
@@ -192,49 +191,11 @@ pub(super) fn spawn_drain(
                 }
             }
             while let Some(line) = queue.pop_front() {
-                // Reply blocks (input and resize acks) carry nothing to mirror,
-                // but an %error-terminated one means the daemon rejected a
-                // command this mirror sent (bad send-keys payload, unknown
-                // pane): without this log the rejection is invisible on both
-                // sides of the socket — no PTY_WRITE, no log — and looks
-                // identical to input lost inside the streamer.
-                if line.starts_with("%begin") {
-                    in_reply = true;
-                    reply_body.clear();
+                let Some(line) =
+                    reply_scan.consume(&link, &server, &session_id, &pane_prefix, line)
+                else {
                     continue;
-                }
-                if in_reply {
-                    if line.starts_with("%end") {
-                        in_reply = false;
-                    } else if line.starts_with("%error") {
-                        in_reply = false;
-                        crate::debug_error!(
-                            "STREAMING",
-                            "mux daemon {} rejected a command for pane %{}: {}",
-                            link.daemon_stamp,
-                            link.pane(),
-                            reply_body.join(" | ")
-                        );
-                    } else {
-                        if line.starts_with(&pane_prefix) {
-                            apply_viewer_status(&link, &line);
-                            // A cwd token on the row the mirror polls every
-                            // second: a plain shell's `cd` (no OSC 7)
-                            // still reaches the viewers, within one poll
-                            // (card 01a1ce6a criterion 2).
-                            if let Some(update) = apply_pane_cwd(&link, &line) {
-                                if let Some(server) =
-                                    server.as_ref().and_then(std::sync::Weak::upgrade)
-                                {
-                                    server
-                                        .send_to_session(&session_id, cwd_changed_message(&update));
-                                }
-                            }
-                        }
-                        reply_body.push(line);
-                    }
-                    continue;
-                }
+                };
                 let mut framed = line.into_bytes();
                 framed.push(b'\n');
                 for notification in parser.parse(&framed) {
@@ -270,83 +231,7 @@ pub(super) fn spawn_drain(
                             };
                             dispatch_batch.deliver();
                             forward(&link, &data, damage);
-                            for event in events {
-                                // A bare BEL in the pane rings THIS pane's
-                                // mirror only: the drain thread owns one
-                                // session_id per pane, so the frame reaches
-                                // exactly the clients subscribed to it
-                                // (per-client EventType filters apply in
-                                // ws_session's should_send).
-                                if matches!(event, TerminalEvent::BellRang(_)) {
-                                    if let Some(server) =
-                                        server.as_ref().and_then(std::sync::Weak::upgrade)
-                                    {
-                                        server.send_to_session(&session_id, ServerMessage::bell());
-                                    }
-                                }
-                                // The pane's shell reported a new directory
-                                // via OSC 7 (the instant path; the pane-info
-                                // poll covers shells without integration):
-                                // forward it with the sender's SEC-128
-                                // locality verdict (card 01a1ce6a criteria
-                                // 1+3), and keep the link's copy current so
-                                // the next Connected names it.
-                                if let TerminalEvent::CwdChanged(cwd) = event {
-                                    record_cwd(&link, cwd.new_cwd.clone(), cwd.hostname.clone());
-                                    let is_local =
-                                        par_term_emu_core::shell_integration::osc7_host_is_local(
-                                            cwd.hostname.as_deref(),
-                                        );
-                                    if let Some(server) =
-                                        server.as_ref().and_then(std::sync::Weak::upgrade)
-                                    {
-                                        server.send_to_session(
-                                            &session_id,
-                                            ServerMessage::cwd_changed_full(
-                                                cwd.old_cwd,
-                                                cwd.new_cwd,
-                                                cwd.hostname,
-                                                cwd.username,
-                                                cwd.timestamp,
-                                                is_local,
-                                            ),
-                                        );
-                                    }
-                                    continue;
-                                }
-                                let TerminalEvent::GraphicsAdded { image_id, row } = event else {
-                                    // Mirrors stream text via %output itself; only
-                                    // the frame-bearing event needs converting.
-                                    continue;
-                                };
-                                if !link.claim_image(image_id) {
-                                    continue;
-                                }
-                                let pane_label = link.pane_label();
-                                link.graphics_panes
-                                    .lock()
-                                    .insert(image_id, pane_label.clone());
-                                let Some(mut frame) = inline_image_frame_struct(
-                                    &link.terminal.read(),
-                                    image_id,
-                                    Some(link.pane()),
-                                ) else {
-                                    continue;
-                                };
-                                frame.pane = Some(pane_label.clone());
-                                if let Some(server) =
-                                    server.as_ref().and_then(std::sync::Weak::upgrade)
-                                {
-                                    server.send_to_session(
-                                        &session_id,
-                                        ServerMessage::graphics_added_with_pane(
-                                            row as u16,
-                                            Some(pane_label),
-                                        ),
-                                    );
-                                    server.send_to_session(&session_id, ServerMessage::from(frame));
-                                }
-                            }
+                            forward_pane_events(&link, &server, &session_id, events);
                         }
                         TmuxNotification::LayoutChange {
                             window_id,
@@ -459,6 +344,159 @@ pub(super) fn spawn_drain(
             }
         }
     });
+}
+
+/// Upgrade the weakly held server, `None` when the factory runs without one
+/// or the server is already gone.
+fn upgrade_server(
+    server: &Option<std::sync::Weak<StreamingServer>>,
+) -> Option<Arc<StreamingServer>> {
+    server.as_ref().and_then(std::sync::Weak::upgrade)
+}
+
+/// Tracks the daemon's `%begin` .. `%end`/`%error` reply blocks across the
+/// drain loop's lines.
+#[derive(Default)]
+struct ReplyScan {
+    in_reply: bool,
+    body: Vec<String>,
+}
+
+impl ReplyScan {
+    /// Feed one line through the reply-block scan. Returns the line back
+    /// when it is outside a reply block (a notification to parse), `None`
+    /// when the scan consumed it.
+    ///
+    /// Reply blocks (input and resize acks) carry nothing to mirror, but an
+    /// %error-terminated one means the daemon rejected a command this mirror
+    /// sent (bad send-keys payload, unknown pane): without the log the
+    /// rejection is invisible on both sides of the socket — no PTY_WRITE, no
+    /// log — and looks identical to input lost inside the streamer.
+    fn consume(
+        &mut self,
+        link: &MirrorLink,
+        server: &Option<std::sync::Weak<StreamingServer>>,
+        session_id: &str,
+        pane_prefix: &str,
+        line: String,
+    ) -> Option<String> {
+        if line.starts_with("%begin") {
+            self.in_reply = true;
+            self.body.clear();
+            return None;
+        }
+        if !self.in_reply {
+            return Some(line);
+        }
+        if line.starts_with("%end") {
+            self.in_reply = false;
+        } else if line.starts_with("%error") {
+            self.in_reply = false;
+            crate::debug_error!(
+                "STREAMING",
+                "mux daemon {} rejected a command for pane %{}: {}",
+                link.daemon_stamp,
+                link.pane(),
+                self.body.join(" | ")
+            );
+        } else {
+            if line.starts_with(pane_prefix) {
+                apply_viewer_status(link, &line);
+                // A cwd token on the row the mirror polls every second: a
+                // plain shell's `cd` (no OSC 7) still reaches the viewers,
+                // within one poll (card 01a1ce6a criterion 2).
+                if let Some(update) = apply_pane_cwd(link, &line) {
+                    if let Some(server) = upgrade_server(server) {
+                        server.send_to_session(session_id, cwd_changed_message(&update));
+                    }
+                }
+            }
+            self.body.push(line);
+        }
+        None
+    }
+}
+
+/// Forward the events one `%output` batch raised on the pane's terminal.
+fn forward_pane_events(
+    link: &MirrorLink,
+    server: &Option<std::sync::Weak<StreamingServer>>,
+    session_id: &str,
+    events: Vec<TerminalEvent>,
+) {
+    for event in events {
+        match event {
+            // A bare BEL in the pane rings THIS pane's mirror only: the
+            // drain thread owns one session_id per pane, so the frame
+            // reaches exactly the clients subscribed to it (per-client
+            // EventType filters apply in ws_session's should_send).
+            TerminalEvent::BellRang(_) => {
+                if let Some(server) = upgrade_server(server) {
+                    server.send_to_session(session_id, ServerMessage::bell());
+                }
+            }
+            // The pane's shell reported a new directory via OSC 7 (the
+            // instant path; the pane-info poll covers shells without
+            // integration): forward it with the sender's SEC-128 locality
+            // verdict (card 01a1ce6a criteria 1+3), and keep the link's copy
+            // current so the next Connected names it.
+            TerminalEvent::CwdChanged(cwd) => {
+                record_cwd(link, cwd.new_cwd.clone(), cwd.hostname.clone());
+                let is_local = par_term_emu_core::shell_integration::osc7_host_is_local(
+                    cwd.hostname.as_deref(),
+                );
+                if let Some(server) = upgrade_server(server) {
+                    server.send_to_session(
+                        session_id,
+                        ServerMessage::cwd_changed_full(
+                            cwd.old_cwd,
+                            cwd.new_cwd,
+                            cwd.hostname,
+                            cwd.username,
+                            cwd.timestamp,
+                            is_local,
+                        ),
+                    );
+                }
+            }
+            TerminalEvent::GraphicsAdded { image_id, row } => {
+                forward_graphics_added(link, server, session_id, image_id, row);
+            }
+            // Mirrors stream text via %output itself; only the
+            // frame-bearing event needs converting.
+            _ => {}
+        }
+    }
+}
+
+/// Send the inline-image frame for a newly added graphic, once per image.
+fn forward_graphics_added(
+    link: &MirrorLink,
+    server: &Option<std::sync::Weak<StreamingServer>>,
+    session_id: &str,
+    image_id: u64,
+    row: usize,
+) {
+    if !link.claim_image(image_id) {
+        return;
+    }
+    let pane_label = link.pane_label();
+    link.graphics_panes
+        .lock()
+        .insert(image_id, pane_label.clone());
+    let Some(mut frame) =
+        inline_image_frame_struct(&link.terminal.read(), image_id, Some(link.pane()))
+    else {
+        return;
+    };
+    frame.pane = Some(pane_label.clone());
+    if let Some(server) = upgrade_server(server) {
+        server.send_to_session(
+            session_id,
+            ServerMessage::graphics_added_with_pane(row as u16, Some(pane_label)),
+        );
+        server.send_to_session(session_id, ServerMessage::from(frame));
+    }
 }
 
 /// Incrementally decode pane bytes into text, holding back a trailing
