@@ -41,18 +41,18 @@ pub struct PyAttributes {
 impl From<&crate::cell::Cell> for PyAttributes {
     fn from(cell: &crate::cell::Cell) -> Self {
         PyAttributes {
-            bold: cell.flags.bold(),
-            dim: cell.flags.dim(),
-            italic: cell.flags.italic(),
-            underline: cell.flags.underline(),
-            blink: cell.flags.blink(),
-            reverse: cell.flags.reverse(),
-            hidden: cell.flags.hidden(),
-            strikethrough: cell.flags.strikethrough(),
-            underline_style: cell.flags.underline_style.into(),
-            wide_char: cell.flags.wide_char(),
-            wide_char_spacer: cell.flags.wide_char_spacer(),
-            hyperlink_id: cell.flags.hyperlink_id.map(|nz| nz.get()),
+            bold: cell.flags().bold(),
+            dim: cell.flags().dim(),
+            italic: cell.flags().italic(),
+            underline: cell.flags().underline(),
+            blink: cell.flags().blink(),
+            reverse: cell.flags().reverse(),
+            hidden: cell.flags().hidden(),
+            strikethrough: cell.flags().strikethrough(),
+            underline_style: cell.flags().underline_style.into(),
+            wide_char: cell.flags().wide_char(),
+            wide_char_spacer: cell.flags().wide_char_spacer(),
+            hyperlink_id: cell.flags().hyperlink_id.map(|nz| nz.get()),
         }
     }
 }

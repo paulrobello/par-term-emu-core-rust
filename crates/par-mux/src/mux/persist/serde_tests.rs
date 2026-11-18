@@ -137,16 +137,16 @@ fn ring_snapshot(lines: usize, cols: usize, start: usize, max: usize) -> GridSna
 /// A default cell carrying one marker character, so extracted rows are
 /// identifiable by their logical line.
 fn marker_cell(line: usize) -> par_term_emu_core::cell::Cell {
-    let mut cell = par_term_emu_core::cell::Cell::default();
-    cell.c = char::from_u32((line % 10) as u32 + '0' as u32).unwrap_or('0');
-    cell
+    par_term_emu_core::cell::Cell::new(
+        char::from_u32((line % 10) as u32 + '0' as u32).unwrap_or('0'),
+    )
 }
 
 /// The marker of the first logical line retained after capping
 /// `lines` down to the const's line budget.
 fn first_kept_marker(lines: usize, cols: usize) -> char {
     let keep = (MAX_PERSISTED_SCROLLBACK_CELLS / cols).min(lines);
-    marker_cell(lines - keep).c
+    marker_cell(lines - keep).c()
 }
 
 #[test]
@@ -162,7 +162,7 @@ fn cap_scrollback_drops_oldest_lines_from_a_linear_ring() {
     assert_eq!(grid.max_scrollback, 10_000, "restored pane keeps its depth");
     assert_eq!(grid.total_lines_scrolled, lines, "absolute frame is kept");
     assert_eq!(
-        grid.scrollback_cells[0].c,
+        grid.scrollback_cells[0].c(),
         first_kept_marker(lines, cols),
         "the oldest retained line leads the ring"
     );
@@ -185,8 +185,8 @@ fn cap_scrollback_follows_a_rotated_ring() {
     // slot j holds logical line (max - keep + j).
     for (slot, expected_logical) in (max - keep..max).enumerate() {
         assert_eq!(
-            grid.scrollback_cells[slot * cols].c,
-            marker_cell(expected_logical).c,
+            grid.scrollback_cells[slot * cols].c(),
+            marker_cell(expected_logical).c(),
             "slot {slot} must hold logical line {expected_logical}"
         );
     }
@@ -275,7 +275,7 @@ fn persisted_state_caps_scrollback_to_the_newest_lines() {
         .grid
         .scrollback_cells
         .iter()
-        .map(|c| c.c)
+        .map(|c| c.c())
         .collect();
     // The last `rows` fed lines sit on the visible screen; keep+50 is
     // well inside the retained window, L000000 well below it.

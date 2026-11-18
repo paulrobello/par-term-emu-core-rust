@@ -197,8 +197,7 @@ pub(crate) fn contains_bytes(haystack: &[u8], needle: &[u8]) -> bool {
 /// through the accessor methods.
 pub struct Terminal {
     /// The primary terminal grid
-    #[doc(hidden)]
-    pub grid: Grid,
+    pub(crate) grid: Grid,
     /// Alternate screen grid
     pub(crate) alt_grid: Grid,
     /// Last damage generation observed by the built-in default consumer
@@ -237,8 +236,7 @@ pub struct Terminal {
     pub(crate) hyperlink_state: HyperlinkState,
     /// Unified graphics storage + Sixel limits + cell pixel dimensions +
     /// iTerm2 multipart transfer state + file transfer manager (ARC-001 sub-struct)
-    #[doc(hidden)]
-    pub graphics: GraphicsState,
+    pub(crate) graphics: GraphicsState,
     /// Sixel parser, DCS buffer, active flag, action char (ARC-001 sub-struct)
     pub(crate) dcs_state: DcsState,
     /// OSC 52 clipboard content, read flag, history, cap (ARC-001 sub-struct)
@@ -262,11 +260,9 @@ pub struct Terminal {
     /// DECAWM delayed wrap: set after printing in last column
     pub(crate) pending_wrap: bool,
     /// Pixel width of the text area (XTWINOPS 14)
-    #[doc(hidden)]
-    pub pixel_width: usize,
+    pub(crate) pixel_width: usize,
     /// Pixel height of the text area (XTWINOPS 14)
-    #[doc(hidden)]
-    pub pixel_height: usize,
+    pub(crate) pixel_height: usize,
     /// Embedder configuration carried whole across RIS (ARC-100)
     pub(crate) host: HostConfig,
     /// Security flags: OSC 7 acceptance + insecure-sequence disable (ARC-001 sub-struct)

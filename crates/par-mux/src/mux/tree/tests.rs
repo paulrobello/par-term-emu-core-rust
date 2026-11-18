@@ -126,7 +126,7 @@ fn client_cell_pixels_reach_existing_and_later_panes() {
         let term = tree.pane(first).unwrap().terminal();
         let term = term.read();
         assert_eq!(
-            (term.pixel_width, term.pixel_height),
+            term.pixel_size(),
             (800, 480),
             "pre-report: the 10x20 construction default (80x24 grid)"
         );
@@ -137,12 +137,12 @@ fn client_cell_pixels_reach_existing_and_later_panes() {
         let term = tree.pane(first).unwrap().terminal();
         let term = term.read();
         assert_eq!(
-            (term.pixel_width, term.pixel_height),
+            term.pixel_size(),
             (960, 576),
             "an existing pane re-fits: 80x24 cells at 12x24 px"
         );
         assert_eq!(
-            term.graphics.cell_dimensions,
+            term.cell_dimensions(),
             (12, 24),
             "image cell-span math uses the client's cell size, not the (1,2) default"
         );
@@ -156,7 +156,7 @@ fn client_cell_pixels_reach_existing_and_later_panes() {
         let term = tree.pane(later).unwrap().terminal();
         let term = term.read();
         assert_eq!(
-            (term.pixel_width, term.pixel_height),
+            term.pixel_size(),
             (480, 240),
             "a later pane derives its totals from its own 40x10 grid"
         );

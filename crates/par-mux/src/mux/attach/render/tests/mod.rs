@@ -703,7 +703,7 @@ fn in_place_resize_matches_fresh_replay() {
         for col in 0..60 {
             let ca = ta.active_grid().get(col, row).expect("a cell");
             let cb = tb.active_grid().get(col, row).expect("b cell");
-            assert_eq!(ca.c, cb.c, "char at ({col},{row})");
+            assert_eq!(ca.c(), cb.c(), "char at ({col},{row})");
             assert_eq!(ca.fg(), cb.fg(), "fg at ({col},{row})");
             assert_eq!(ca.bg(), cb.bg(), "bg at ({col},{row})");
         }

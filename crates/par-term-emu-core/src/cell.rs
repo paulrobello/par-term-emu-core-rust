@@ -254,8 +254,7 @@ impl CellFlags {
 )]
 pub struct Cell {
     /// The character stored in this cell
-    #[doc(hidden)]
-    pub c: char,
+    pub(crate) c: char,
     /// Combining characters (variation selectors, ZWJ, modifiers, etc.),
     /// or `None` for the overwhelmingly common no-marks case. SmallVec was
     /// replaced because its 24-byte inline buffer cost 4x the allocation
@@ -269,11 +268,9 @@ pub struct Cell {
     /// foreground color), else the low 31 bits are a [`PackedColor`].
     pub(crate) underline_color: PackedOptionColor,
     /// Text attributes/flags
-    #[doc(hidden)]
-    pub flags: CellFlags,
+    pub(crate) flags: CellFlags,
     /// Cached display width of the character (1 or 2, typically)
-    #[doc(hidden)]
-    pub width: u8,
+    pub(crate) width: u8,
 }
 
 /// Wire-format mirror of [`Cell`] for serde. Field names and value shapes

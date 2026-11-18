@@ -50,7 +50,7 @@ mod tests {
         term.process(b"hi");
         let grid: &Grid = term.active_grid();
         let cell: &Cell = grid.get(0, 0).expect("cell in bounds");
-        assert_eq!(cell.c, 'h');
+        assert_eq!(cell.c(), 'h');
         let _: CursorStyle = term.cursor().style;
         let _: Vec<TerminalEvent> = term.poll_events();
     }

@@ -139,10 +139,7 @@ pub fn apply_inline_image(term: &mut Terminal, message: &ServerMessage) -> Optio
         height,
         data.clone(),
     );
-    graphic.set_cell_dimensions(
-        term.graphics.cell_dimensions.0,
-        term.graphics.cell_dimensions.1,
-    );
+    graphic.set_cell_dimensions(term.cell_dimensions().0, term.cell_dimensions().1);
     term.graphics_store_mut().add_graphic(graphic);
     Some(*image_id)
 }

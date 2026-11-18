@@ -1012,15 +1012,13 @@ impl BadgeState {
 #[doc(hidden)]
 pub struct GraphicsState {
     /// Unified graphics storage (Sixel, iTerm2, Kitty)
-    #[doc(hidden)]
-    pub graphics_store: GraphicsStore,
+    pub(crate) graphics_store: GraphicsStore,
     /// Sixel resource limits (per-terminal, for decoding)
     pub(crate) sixel_limits: sixel::SixelLimits,
     /// Cell dimensions in pixels (width, height) for sixel graphics
     /// Default (1, 2) is for text-mode TUI with half-block rendering
     /// Pixel renderers should set actual cell dimensions
-    #[doc(hidden)]
-    pub cell_dimensions: (u32, u32),
+    pub(crate) cell_dimensions: (u32, u32),
     /// iTerm2 multi-part image transfer state (MultipartFile/FilePart protocol)
     pub(crate) iterm_multipart_buffer: Option<ITermMultipartState>,
     /// File transfer manager for tracking file downloads and uploads

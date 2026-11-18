@@ -2082,7 +2082,7 @@ mod tests {
         assert_eq!(registry.session_count(), 1);
 
         let retrieved = registry.get("test").unwrap();
-        assert_eq!(retrieved.terminal.write().grid.cols(), 100);
+        assert_eq!(retrieved.terminal.write().grid().cols(), 100);
     }
     #[tokio::test]
     async fn test_session_registry_multiple_sessions() {

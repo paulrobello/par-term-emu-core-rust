@@ -1507,7 +1507,7 @@ macro_rules! impl_terminal_cell_line_queries {
             fn get_hyperlink(&self, col: usize, row: usize) -> pyo3::PyResult<Option<String>> {
                 let t = $crate::python_bindings::common::TerminalAccess::term_ref(self);
                 if let Some(cell) = t.active_grid().get(col, row) {
-                    if let Some(id) = cell.flags.hyperlink_id {
+                    if let Some(id) = cell.flags().hyperlink_id {
                         return Ok(t.get_hyperlink_url(id.get()));
                     }
                 }
@@ -2278,7 +2278,7 @@ macro_rules! impl_terminal_exports {
                 if let Some(line) = t.grid().row(row) {
                     Ok(Some(
                         line.iter()
-                            .filter(|cell| !cell.flags.wide_char_spacer())
+                            .filter(|cell| !cell.flags().wide_char_spacer())
                             .map(|cell| cell.get_grapheme())
                             .collect::<Vec<String>>()
                             .join(""),

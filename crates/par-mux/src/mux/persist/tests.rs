@@ -794,7 +794,7 @@ fn a_gone_persisted_cwd_falls_back_to_home_with_a_visible_message() {
         .terminal()
         .read()
         .capture_snapshot();
-    let text: String = snapshot.grid.cells.iter().map(|c| c.c).collect();
+    let text: String = snapshot.grid.cells.iter().map(|c| c.c()).collect();
     assert!(
         text.contains("par-mux: /par-mux-test-no-such-dir is gone"),
         "the fallback announced itself in the pane; screen held: {text}"
@@ -950,7 +950,7 @@ fn restore_note_observer_events_arrive_after_the_terminal_lock_drops() {
         .terminal()
         .read()
         .capture_snapshot();
-    let text: String = snapshot.grid.cells.iter().map(|c| c.c).collect();
+    let text: String = snapshot.grid.cells.iter().map(|c| c.c()).collect();
     assert!(text.contains("par-mux: /par-mux-test-no-such-dir is gone"));
 }
 
@@ -1073,7 +1073,7 @@ fn a_held_dead_pane_round_trips_as_held_dead() {
         par_term_emu_core::mouse::MouseMode::Off,
         "mouse mode kept: there is no new process to protect"
     );
-    let text: String = got.alt_grid.cells.iter().map(|c| c.c).collect();
+    let text: String = got.alt_grid.cells.iter().map(|c| c.c()).collect();
     assert!(text.contains("ALT-LINE"), "the frozen content is real");
 }
 
@@ -1730,7 +1730,7 @@ fn restore_returns_a_full_screen_pane_to_the_main_screen() {
         (0, after.rows - 1),
         "the app's scroll region is gone"
     );
-    let screen_text: String = after.grid.cells.iter().map(|c| c.c).collect();
+    let screen_text: String = after.grid.cells.iter().map(|c| c.c()).collect();
     assert!(
         screen_text.contains("shell line"),
         "the main screen's content survives"
@@ -1792,12 +1792,12 @@ fn round_trip_preserves_screen_content_and_scrollback() {
         after.grid.total_lines_scrolled, before.grid.total_lines_scrolled,
         "scroll history survives"
     );
-    let scrollback_text: String = after.grid.scrollback_cells.iter().map(|c| c.c).collect();
+    let scrollback_text: String = after.grid.scrollback_cells.iter().map(|c| c.c()).collect();
     assert!(
         scrollback_text.contains("scroll line 05"),
         "scrollback content survives the round trip"
     );
-    let screen_text: String = after.grid.cells.iter().map(|c| c.c).collect();
+    let screen_text: String = after.grid.cells.iter().map(|c| c.c()).collect();
     assert!(
         screen_text.contains("ZQX-VISIBLE-TAIL"),
         "visible content survives the round trip"
@@ -3210,8 +3210,8 @@ fn a_failed_resume_leaves_a_live_pane_with_its_restored_history() {
             .read()
             .capture_snapshot();
         text.clear();
-        text.extend(snapshot.grid.scrollback_cells.iter().map(|c| c.c));
-        text.extend(snapshot.grid.cells.iter().map(|c| c.c));
+        text.extend(snapshot.grid.scrollback_cells.iter().map(|c| c.c()));
+        text.extend(snapshot.grid.cells.iter().map(|c| c.c()));
         if (text.contains("PRE-MARK-00")
             && text.contains("PRE-MARK-39")
             && text.contains("par-mux: agent resume failed"))
@@ -3291,8 +3291,8 @@ fn a_clean_agent_exit_also_leaves_a_live_pane() {
             .read()
             .capture_snapshot();
         text.clear();
-        text.extend(snapshot.grid.scrollback_cells.iter().map(|c| c.c));
-        text.extend(snapshot.grid.cells.iter().map(|c| c.c));
+        text.extend(snapshot.grid.scrollback_cells.iter().map(|c| c.c()));
+        text.extend(snapshot.grid.cells.iter().map(|c| c.c()));
         if text.contains("par-mux: agent exited") || std::time::Instant::now() >= deadline {
             break;
         }

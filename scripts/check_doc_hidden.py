@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
-"""ARC-005: the `par-term-emu-core` member's `#[doc(hidden)] pub` set is
-recorded in `crates/par-term-emu-core/DESIGN.md` and may not drift.
+"""ARC-005 / ARC-002: the `par-term-emu-core` member's `#[doc(hidden)] pub`
+set is recorded in `crates/par-term-emu-core/DESIGN.md`, may not drift, and
+may only shrink.
 
 `#[doc(hidden)]` is documentation, not access control: every hidden `pub`
 item is reachable by any external embedder of the published crate, so the
@@ -12,6 +13,16 @@ markers in DESIGN.md. An addition fails, so does a stale entry.
 Policy: promote methods, never fields. A promoted field lets an embedder
 write core state directly and bypass every invariant; a promoted method
 keeps the invariant inside the core.
+
+Shrink-only ratchet (ARC-002): the baseline block is a record, so editing it
+alongside the source would let a new promotion pass set-equality. The
+ceilings below live in this script instead, mirroring `BASELINE` in
+`check_api_surface.py`: `MAX_FIELDS` is 0 (the raw-field promotions were all
+migrated to accessors), and `MAX_ITEMS` is the total count. Either number
+growing fails the gate even when DESIGN.md was updated to match. When a
+change removes promoted items, lower `MAX_ITEMS` in the same commit (the
+gate prints the new count) so the space cannot be refilled. Raising a
+ceiling is an explicit, reviewed decision, never a side effect.
 
 Item identity is `<top-level module>::<owner>::<name>` (for example
 `terminal::Terminal::grid`), not a file path or line, so moving an item
@@ -32,6 +43,10 @@ from pathlib import Path
 from _gate_common import ROOT, expect_failure, fail
 
 SRC_REL = "crates/par-term-emu-core/src"
+
+# The recorded ceilings. Lower MAX_ITEMS when promoted items are removed.
+MAX_FIELDS = 0
+MAX_ITEMS = 22
 DESIGN_REL = "crates/par-term-emu-core/DESIGN.md"
 BEGIN = "<!-- doc-hidden-baseline:begin -->"
 END = "<!-- doc-hidden-baseline:end -->"
@@ -147,7 +162,7 @@ def baseline(root: Path) -> set[str]:
     return items
 
 
-def check(root: Path) -> None:
+def check(root: Path, max_fields: int = MAX_FIELDS, max_items: int = MAX_ITEMS) -> None:
     current = extract(root)
     if not current:
         fail(f"parsed nothing: no #[doc(hidden)] pub items under {SRC_REL}")
@@ -169,7 +184,35 @@ def check(root: Path) -> None:
             "together, or keep the item pub(crate)."
         )
         raise SystemExit(1)
-    print(f"doc-hidden ok: {len(current)} promoted items match {DESIGN_REL}")
+    fields = sorted(i for i in current if i.endswith("(field)"))
+    problems: list[str] = []
+    if len(fields) > max_fields:
+        problems.append(
+            f"{len(fields)} promoted fields, above the ceiling of {max_fields}: "
+            f"{', '.join(fields)}. Policy: promote methods, never fields. Raising "
+            "MAX_FIELDS in scripts/check_doc_hidden.py is an explicit, reviewed "
+            "decision, not a way to land a field (ARC-002)."
+        )
+    if len(current) > max_items:
+        problems.append(
+            f"{len(current)} promoted items, above the ceiling of {max_items} "
+            "(MAX_ITEMS in scripts/check_doc_hidden.py). The set may only shrink "
+            "(ARC-002)."
+        )
+    elif len(current) < max_items:
+        problems.append(
+            f"the promoted set shrank to {len(current)} items (ceiling {max_items}): "
+            f"lower MAX_ITEMS in scripts/check_doc_hidden.py to {len(current)} so "
+            "the ratchet holds."
+        )
+    if problems:
+        for problem in problems:
+            print(problem)
+        raise SystemExit(1)
+    print(
+        f"doc-hidden ok: {len(current)} promoted items match {DESIGN_REL} "
+        f"(ceiling {max_items}, {len(fields)} fields)"
+    )
 
 
 def build_synthetic_tree(root: Path) -> None:
@@ -200,11 +243,15 @@ def build_synthetic_tree(root: Path) -> None:
     )
 
 
+# Ceilings matching build_synthetic_tree: 1 field, 2 items.
+SYNTH = {"max_fields": 1, "max_items": 2}
+
+
 def self_test() -> None:
     with tempfile.TemporaryDirectory(prefix="arc005-selftest-") as tmp:
         root = Path(tmp)
         build_synthetic_tree(root)
-        check(root)  # Baseline passes; pub(crate) hidden items are ignored.
+        check(root, **SYNTH)  # Baseline passes; pub(crate) hidden items are ignored.
 
         # Moving an item to another file of the same module keeps it valid.
         mod_rs = root / SRC_REL / "terminal" / "mod.rs"
@@ -214,7 +261,7 @@ def self_test() -> None:
         (root / SRC_REL / "terminal" / "state.rs").write_text(
             impl_block, encoding="utf-8"
         )
-        check(root)
+        check(root, **SYNTH)
 
         # A newly promoted field fails and cites the policy.
         build_synthetic_tree(root)
@@ -224,7 +271,7 @@ def self_test() -> None:
             ),
             encoding="utf-8",
         )
-        expect_failure(lambda: check(root), "promote methods, never fields")
+        expect_failure(lambda: check(root, **SYNTH), "promote methods, never fields")
 
         # A promotion reverted to pub(crate) leaves a stale baseline entry.
         build_synthetic_tree(root)
@@ -235,30 +282,61 @@ def self_test() -> None:
             ),
             encoding="utf-8",
         )
-        expect_failure(lambda: check(root), "no longer #[doc(hidden)] pub")
+        expect_failure(lambda: check(root, **SYNTH), "no longer #[doc(hidden)] pub")
 
         # The inline form `#[doc(hidden)] pub fn x()` is extracted, not skipped.
         build_synthetic_tree(root)
         with mod_rs.open("a", encoding="utf-8") as fh:
             fh.write("#[doc(hidden)] pub fn inline_leak() {}\n")
-        expect_failure(lambda: check(root), "terminal::inline_leak (fn)")
+        expect_failure(lambda: check(root, **SYNTH), "terminal::inline_leak (fn)")
 
         # An unparseable pub item after #[doc(hidden)] fails closed.
         build_synthetic_tree(root)
         with mod_rs.open("a", encoding="utf-8") as fh:
             fh.write("#[doc(hidden)]\npub macro_rules_like! odd\n")
-        expect_failure(lambda: check(root), "cannot classify")
+        expect_failure(lambda: check(root, **SYNTH), "cannot classify")
 
         # Missing markers fail closed.
         build_synthetic_tree(root)
         (root / DESIGN_REL).write_text("# x\n", encoding="utf-8")
-        expect_failure(lambda: check(root), "missing")
+        expect_failure(lambda: check(root, **SYNTH), "missing")
+
+        # The ratchet: a field added to the source AND the DESIGN.md baseline
+        # still fails, because the ceilings live in this script (ARC-002).
+        build_synthetic_tree(root)
+        mod_rs.write_text(
+            mod_rs.read_text(encoding="utf-8").replace(
+                "    pub(crate) private: u8,",
+                "    #[doc(hidden)]\n    pub sneaked: u8,",
+            ),
+            encoding="utf-8",
+        )
+        design = root / DESIGN_REL
+        design.write_text(
+            design.read_text(encoding="utf-8").replace(
+                END, "- `terminal::Terminal::sneaked (field)`\n" + END
+            ),
+            encoding="utf-8",
+        )
+        expect_failure(lambda: check(root, **SYNTH), "above the ceiling of 1")
+
+        # Zero-field ceiling: any field fails even with a matching baseline.
+        build_synthetic_tree(root)
+        expect_failure(
+            lambda: check(root, max_fields=0, max_items=2), "promote methods"
+        )
+
+        # A shrink without lowering MAX_ITEMS fails and says how to fix it.
+        build_synthetic_tree(root)
+        expect_failure(
+            lambda: check(root, max_fields=1, max_items=3), "lower MAX_ITEMS"
+        )
 
     # Fail closed on an empty source tree.
     with tempfile.TemporaryDirectory(prefix="arc005-selftest2-") as tmp:
         root = Path(tmp)
         (root / SRC_REL).mkdir(parents=True)
-        expect_failure(lambda: check(root), "parsed nothing")
+        expect_failure(lambda: check(root, **SYNTH), "parsed nothing")
 
     # The real tree must pass and must not regress to a trivially small scan.
     real = extract(ROOT)

@@ -1905,7 +1905,7 @@ mod tests {
             let cell = term.active_grid().get(0, 0);
             assert!(cell.is_some());
             if let Some(cell) = cell {
-                assert_eq!(cell.c, 'R');
+                assert_eq!(cell.c(), 'R');
             }
         }
     }

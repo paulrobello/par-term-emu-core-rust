@@ -1457,7 +1457,7 @@ fn passthrough_output_after_a_scroll_reaches_the_host_scrollback() {
     let grid = host_term.grid();
     let mut seen: Vec<String> = (0..grid.scrollback_len())
         .filter_map(|i| grid.scrollback_line(i))
-        .map(|cells| cells.iter().map(|c| c.c).collect())
+        .map(|cells| cells.iter().map(|c| c.c()).collect())
         .collect();
     seen.extend((0..24).map(|r| grid.row_text(r)));
     let missing: Vec<u32> = (1..=40)

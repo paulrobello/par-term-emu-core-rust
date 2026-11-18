@@ -163,8 +163,7 @@ fn target_less_refresh_client_sizes_the_newest_active_window() {
             .unwrap()
             .terminal()
             .read()
-            .graphics
-            .cell_dimensions,
+            .cell_dimensions(),
         (12, 24),
         "the pixel report lands daemon-wide"
     );

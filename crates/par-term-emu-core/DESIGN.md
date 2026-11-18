@@ -203,9 +203,7 @@ the documented API; they are the root's private reach into the core.
 
 | Item | Root consumer(s) |
 |------|------------------|
-| `cell::Cell::{c, flags, width}` | ffi, python_bindings (screen/common/terminal), prelude test, mux persist tests |
-| `terminal::Terminal::{grid, graphics, pixel_width, pixel_height}` | ffi, streaming session, mux pane + mux tests |
-| `terminal::GraphicsState` + `::{graphics_store, cell_dimensions}` | mux pane/tests (through `Terminal::graphics`) |
+| `terminal::GraphicsState` (struct only; its fields are `pub(crate)`) | mux pane/tests (through `Terminal::graphics`) |
 | `Terminal::resize_deferred` | streaming `mux_factory` |
 | `Terminal::set_retain_kitty_temp_files` (`mux`) | mux pane |
 | `Terminal::for_each_dirty_range{,_since}` (`ffi`) | ffi |
@@ -213,7 +211,7 @@ the documented API; they are the root's private reach into the core.
 | `pty_session::PtyInputHandle` + `::write` + `PtySession::input_handle` (`mux`) | mux pane, mux dispatch |
 | `pty_session::pixel_extent` | mux pane |
 | `PtySession::{resize_deferred, resize_with_pixels_deferred}` (`mux`) | mux pane |
-| `graphics::{pixel_at_in, sample_half_block_in, cell_size_for, PlacedPixels}` (+ its 4 fields) | python_bindings graphics |
+| `graphics::{pixel_at_in, sample_half_block_in, cell_size_for, PlacedPixels}` (built through `PlacedPixels::new`) | python_bindings graphics |
 | `terminal::fuzz_apc_filter` (`cfg(fuzzing)`) | the `apc_filter` cargo-fuzz target |
 | `terminal::Terminal::fuzz_file_transfer_caps` (`cfg(fuzzing)`) | the `iterm_transfer` cargo-fuzz target |
 
@@ -221,25 +219,25 @@ the documented API; they are the root's private reach into the core.
 part of `checkall`) extracts the member's `#[doc(hidden)] pub` set from
 `src/**/*.rs` and fails when it differs from the baseline below. Adding a
 promotion fails, and so does leaving an entry here after it went back to
-`pub(crate)`. Update the baseline and the table together. Entries are
+`pub(crate)`. Update the baseline and the table together. It is also a
+shrink-only ratchet (ARC-002): `MAX_FIELDS` (0) and `MAX_ITEMS` live in the
+script, not here, so a promotion cannot be landed by editing this block
+alongside the source. Removing items means lowering `MAX_ITEMS` in the same
+commit; the gate prints the number. Entries are
 `<module>::<owner>::<name> (<kind>)`, keyed by module rather than file, so
 moving an item between files of one module keeps the baseline valid.
 
 **Policy: promote methods, never fields.** A promoted field lets any
 embedder of the published crate write core state directly and bypass every
-invariant. A promoted method keeps the invariant inside the core. The
-`field` entries below predate the gate. Do not add new ones. Replace
-existing ones with accessor methods when their consumers are next touched.
+invariant. A promoted method keeps the invariant inside the core. The 13
+`field` entries that predated the gate (ARC-002) were migrated: the fields
+are `pub(crate)` and consumers read through `Terminal::{grid, graphics_store,
+graphics_store_mut, cell_dimensions, set_cell_dimensions, pixel_size,
+set_pixel_size}`, `Cell::{c, flags, width}`, and `PlacedPixels::new`. No
+field may be promoted again.
 
 <!-- doc-hidden-baseline:begin -->
-- `cell::Cell::c (field)`
-- `cell::Cell::flags (field)`
-- `cell::Cell::width (field)`
 - `graphics::PlacedPixels (struct)`
-- `graphics::PlacedPixels::height (field)`
-- `graphics::PlacedPixels::pixels (field)`
-- `graphics::PlacedPixels::position (field)`
-- `graphics::PlacedPixels::width (field)`
 - `graphics::cell_size_for (fn)`
 - `graphics::pixel_at_in (fn)`
 - `graphics::sample_half_block_in (fn)`
@@ -253,14 +251,8 @@ existing ones with accessor methods when their consumers are next touched.
 - `pty_session::pixel_extent (re-export)`
 - `terminal::EventField (enum)`
 - `terminal::GraphicsState (struct)`
-- `terminal::GraphicsState::cell_dimensions (field)`
-- `terminal::GraphicsState::graphics_store (field)`
 - `terminal::Terminal::for_each_dirty_range (fn)`
 - `terminal::Terminal::for_each_dirty_range_since (fn)`
-- `terminal::Terminal::graphics (field)`
-- `terminal::Terminal::grid (field)`
-- `terminal::Terminal::pixel_height (field)`
-- `terminal::Terminal::pixel_width (field)`
 - `terminal::Terminal::resize_deferred (fn)`
 - `terminal::Terminal::set_retain_kitty_temp_files (fn)`
 - `terminal::event_fields (fn)`
@@ -274,7 +266,8 @@ helper (`crates/par-mux/src/mux/persist.rs` `marker_cell`, in the root at
 the time) built a `Cell` with a
 functional-update literal, which needs every field visible; promoting those
 four would leak the crate-private `PackedColor` types. The helper now builds
-the cell with `Cell::default()` and sets `c` (same value).
+the cell with `Cell::new(c)` (same value), since `Cell::c` is no longer a
+public field.
 
 Root-side edits outside the move: `src/lib.rs` (re-exports, `ffi_tests`
 wiring, the PyErr impls moved out), `crates/par-mux/src/mux/persist.rs`

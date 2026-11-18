@@ -1522,8 +1522,8 @@ impl PyTerminal {
                 row.iter()
                     .map(|cell| {
                         let mut map = HashMap::new();
-                        map.insert("char".to_string(), cell.c.to_string());
-                        map.insert("width".to_string(), cell.width.to_string());
+                        map.insert("char".to_string(), cell.c().to_string());
+                        map.insert("width".to_string(), cell.width().to_string());
                         map
                     })
                     .collect()

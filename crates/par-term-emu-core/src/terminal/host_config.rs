@@ -54,6 +54,12 @@ impl Terminal {
         self.bell_volumes.margin = volume;
     }
 
+    /// The text-area pixel size `(width, height)` XTWINOPS 14 reports, as
+    /// last set by [`Self::set_pixel_size`] (or derived from the cell count).
+    pub fn pixel_size(&self) -> (usize, usize) {
+        (self.pixel_width, self.pixel_height)
+    }
+
     /// Set pixel dimensions for XTWINOPS reporting
     ///
     /// Also refreshes the graphics cell dimensions (the per-cell pixel size

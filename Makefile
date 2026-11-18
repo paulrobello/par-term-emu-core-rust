@@ -80,7 +80,7 @@ help:
 	@echo "  core-version-check - Fail when crates/par-term-emu-core's version or the root's exact pin on it drifts from the root version (ARC-007)"
 	@echo "  set-version VERSION=X.Y.Z - Rewrite the whole version train (5 versions, 3 exact pins, Cargo.lock) in one step; derive excluded (ARC-009)"
 	@echo "  version-train-check - Self-test the set-version writer against a temp copy of the train (ARC-009)"
-	@echo "  doc-hidden-check - Fail when par-term-emu-core's #[doc(hidden)] pub set differs from the DESIGN.md baseline (ARC-005)"
+	@echo "  doc-hidden-check - Fail when par-term-emu-core's #[doc(hidden)] pub set differs from the DESIGN.md baseline or grows past its ceilings (ARC-005, ARC-002)"
 	@echo "  api-surface-check - Fail when Terminal/PtyTerminal method counts in _native.pyi leave the frozen baseline (ARC-001)"
 	@echo "  python-features-check - Fail when the python and python-test feature lists differ beyond the pyo3 activation entry (audit 2026-11-06 ARC-001)"
 	@echo "  terminal-fields-check - Fail when the core Terminal struct's field count leaves its frozen baseline (ARC-001)"
@@ -646,9 +646,10 @@ set-version:
 version-train-check:
 	python3 scripts/set_version_train.py --self-test
 
-# ARC-005: the member's #[doc(hidden)] pub promotions are public API to any
-# embedder of the published crate; the set is frozen by the DESIGN.md
-# baseline (promote methods, never fields).
+# ARC-005 / ARC-002: the member's #[doc(hidden)] pub promotions are public API
+# to any embedder of the published crate; the set must match the DESIGN.md
+# baseline and may only shrink (ceilings in the script: zero fields, a total
+# that is lowered when items are removed).
 doc-hidden-check:
 	python3 scripts/check_doc_hidden.py
 	python3 scripts/check_doc_hidden.py --self-test

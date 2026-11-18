@@ -172,12 +172,12 @@ impl PyGraphic {
         cell_height: u32,
     ) -> Option<HalfBlockColors> {
         crate::graphics::sample_half_block_in(
-            crate::graphics::PlacedPixels {
-                pixels: &self.pixels,
-                width: self.width,
-                height: self.height,
-                position: self.position,
-            },
+            crate::graphics::PlacedPixels::new(
+                &self.pixels,
+                self.width,
+                self.height,
+                self.position,
+            ),
             cell_col,
             cell_row,
             cell_width,

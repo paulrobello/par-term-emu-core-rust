@@ -1357,12 +1357,12 @@ fn refresh_client_pixel_report_reaches_the_pane_terminal() {
         let term = tree.lock().pane(pane).unwrap().terminal();
         let term = term.read();
         assert_eq!(
-            (term.pixel_width, term.pixel_height),
+            term.pixel_size(),
             (800, 480),
             "an 80x24 pane at 10x20 px cells"
         );
         assert_eq!(
-            term.graphics.cell_dimensions,
+            term.cell_dimensions(),
             (10, 20),
             "image cell-span math uses the reported cell size"
         );
@@ -1380,7 +1380,7 @@ fn refresh_client_pixel_report_reaches_the_pane_terminal() {
     let term = tree.lock().pane(pane).unwrap().terminal();
     let term = term.read();
     assert_eq!(
-        (term.pixel_width, term.pixel_height),
+        term.pixel_size(),
         (1200, 800),
         "a 120x40 grid at the kept 10x20 px cells"
     );

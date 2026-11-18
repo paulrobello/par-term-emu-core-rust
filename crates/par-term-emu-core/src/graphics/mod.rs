@@ -431,14 +431,24 @@ pub(crate) type HalfBlockColors = ((u8, u8, u8, u8), (u8, u8, u8, u8));
 #[derive(Debug, Clone, Copy)]
 #[doc(hidden)]
 pub struct PlacedPixels<'a> {
-    #[doc(hidden)]
-    pub pixels: &'a [u8],
-    #[doc(hidden)]
-    pub width: usize,
-    #[doc(hidden)]
-    pub height: usize,
-    #[doc(hidden)]
-    pub position: (usize, usize),
+    pub(crate) pixels: &'a [u8],
+    pub(crate) width: usize,
+    pub(crate) height: usize,
+    pub(crate) position: (usize, usize),
+}
+
+impl<'a> PlacedPixels<'a> {
+    /// Wrap an RGBA buffer of `width`x`height` pixels whose top-left corner
+    /// sits in terminal cell `position` (col, row). The type is
+    /// `#[doc(hidden)]`, so this constructor is hidden with it.
+    pub fn new(pixels: &'a [u8], width: usize, height: usize, position: (usize, usize)) -> Self {
+        Self {
+            pixels,
+            width,
+            height,
+            position,
+        }
+    }
 }
 
 /// Half-block sampling shared by `TerminalGraphic` and the Python

@@ -1665,12 +1665,7 @@ mod tests {
         }
         let sink_text = String::from_utf8_lossy(&sink_bytes.lock().clone()).to_string();
         assert_eq!(
-            pane.terminal()
-                .read()
-                .graphics
-                .graphics_store
-                .all_graphics()
-                .len(),
+            pane.terminal().read().graphics_store().all_graphics().len(),
             1,
             "daemon terminal should hold the t=t graphic; sink bytes so far: {sink_text:?}"
         );
@@ -1685,7 +1680,7 @@ mod tests {
         let mut mirror = par_term_emu_core::terminal::Terminal::new(80, 24);
         mirror.process(&sink_bytes.lock().clone());
         assert_eq!(
-            mirror.graphics.graphics_store.all_graphics().len(),
+            mirror.graphics_store().all_graphics().len(),
             1,
             "client mirror must render the t=t graphic from forwarded bytes"
         );

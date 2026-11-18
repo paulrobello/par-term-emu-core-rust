@@ -582,11 +582,11 @@ impl SharedCell {
     /// `term`'s palette and defaults ([`Terminal::resolve_cell_colors`]).
     fn from_cell(term: &Terminal, cell: &crate::cell::Cell) -> Self {
         let mut text = [0u8; 4];
-        let text_len = cell.c.encode_utf8(&mut text).len() as u8;
+        let text_len = cell.c().encode_utf8(&mut text).len() as u8;
         let colors = term.resolve_cell_colors(cell);
         let (fg_r, fg_g, fg_b) = colors.fg;
         let (bg_r, bg_g, bg_b) = colors.bg;
-        let mut attrs = cell.flags.to_bitflags();
+        let mut attrs = cell.flags().to_bitflags();
         if colors.default_fg {
             attrs |= attr_bits::DEFAULT_FG;
         }
@@ -606,7 +606,8 @@ impl SharedCell {
             bg_g,
             bg_b,
             attrs,
-            width: cell.width,
+            // The accessor widens the stored `u8`; the narrowing is lossless.
+            width: cell.width() as u8,
         }
     }
 
@@ -1134,14 +1135,14 @@ pub unsafe extern "C" fn ptec_terminal_read_cell_grapheme(
         return 0;
     };
     let mut buf = [0u8; 4];
-    let mut total = cell.c.encode_utf8(&mut buf).len();
+    let mut total = cell.c().encode_utf8(&mut buf).len();
     for ch in cell.combining() {
         total += ch.len_utf8();
     }
     if !out.is_null() && cap > 0 {
         let mut written = 0usize;
         let cap = cap as usize;
-        for ch in std::iter::once(cell.c).chain(cell.combining().iter().copied()) {
+        for ch in std::iter::once(cell.c()).chain(cell.combining().iter().copied()) {
             let bytes = ch.encode_utf8(&mut buf).as_bytes();
             let take = bytes.len().min(cap - written);
             // SAFETY: `written + take <= cap`, `out` is non-null, and the
@@ -2350,7 +2351,7 @@ mod tests {
         for (rows, marks) in cases {
             let mut term = Terminal::with_scrollback(10, rows, 0);
             for &(top, bottom) in marks {
-                term.grid.mark_rows_damage(top, bottom);
+                (top..=bottom).for_each(|row| term.mark_row_dirty(row));
             }
             let mut runs = Vec::new();
             term.for_each_dirty_range(|start, end| runs.push(TermRowRange { start, end }));
