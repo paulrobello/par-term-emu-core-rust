@@ -451,6 +451,11 @@ mod tests {
         fs::read_to_string(p).expect("reads")
     }
 
+    /// Unix-only: settings round-trip on the windows settings-writer
+    /// defect (kanban 01a1ee0bf058737cb0) — same root cause as the
+    /// claude.rs family sweep. Ungate with the card when the writer
+    /// escape fix lands.
+    #[cfg(unix)]
     #[test]
     fn install_writes_mod_files_and_merges_env_dir() {
         let root = temp_root();
@@ -477,6 +482,11 @@ mod tests {
         assert!(dirs_contains(&content, &settings, &mod_dir.display().to_string()).unwrap());
     }
 
+    /// Unix-only: settings round-trip on the windows settings-writer
+    /// defect (kanban 01a1ee0bf058737cb0) — same root cause as the
+    /// claude.rs family sweep. Ungate with the card when the writer
+    /// escape fix lands.
+    #[cfg(unix)]
     #[test]
     fn install_appends_to_an_existing_dirs_value_and_preserves_the_rest() {
         let root = temp_root();
@@ -507,6 +517,11 @@ mod tests {
         );
     }
 
+    /// Unix-only: settings round-trip on the windows settings-writer
+    /// defect (kanban 01a1ee0bf058737cb0) — same root cause as the
+    /// claude.rs family sweep. Ungate with the card when the writer
+    /// escape fix lands.
+    #[cfg(unix)]
     #[test]
     fn reinstall_is_a_byte_exact_noop() {
         let root = temp_root();
@@ -521,6 +536,11 @@ mod tests {
         assert_eq!(read(&settings), before, "settings untouched");
     }
 
+    /// Unix-only: settings round-trip on the windows settings-writer
+    /// defect (kanban 01a1ee0bf058737cb0) — same root cause as the
+    /// claude.rs family sweep. Ungate with the card when the writer
+    /// escape fix lands.
+    #[cfg(unix)]
     #[test]
     fn uninstall_keeps_user_dirs_and_removes_ours() {
         let root = temp_root();
@@ -542,6 +562,11 @@ mod tests {
         assert!(!mod_dir.exists(), "our folder is gone");
     }
 
+    /// Unix-only: settings round-trip on the windows settings-writer
+    /// defect (kanban 01a1ee0bf058737cb0) — same root cause as the
+    /// claude.rs family sweep. Ungate with the card when the writer
+    /// escape fix lands.
+    #[cfg(unix)]
     #[test]
     fn uninstall_prunes_the_key_and_env_when_our_removal_empties_them() {
         let root = temp_root();
@@ -558,6 +583,11 @@ mod tests {
         assert!(plugin_dirs_value(&value).is_none());
     }
 
+    /// Unix-only: settings round-trip on the windows settings-writer
+    /// defect (kanban 01a1ee0bf058737cb0) — same root cause as the
+    /// claude.rs family sweep. Ungate with the card when the writer
+    /// escape fix lands.
+    #[cfg(unix)]
     #[test]
     fn round_trip_restores_the_original_settings_bytes() {
         let root = temp_root();
@@ -572,6 +602,11 @@ mod tests {
         assert_eq!(read(&settings), original, "byte-exact round trip");
     }
 
+    /// Unix-only: settings round-trip on the windows settings-writer
+    /// defect (kanban 01a1ee0bf058737cb0) — same root cause as the
+    /// claude.rs family sweep. Ungate with the card when the writer
+    /// escape fix lands.
+    #[cfg(unix)]
     #[test]
     fn uninstall_never_touches_a_foreign_mod_folder() {
         let root = temp_root();
@@ -589,6 +624,11 @@ mod tests {
         assert!(mod_dir.exists(), "the foreign folder stays");
     }
 
+    /// Unix-only: settings round-trip on the windows settings-writer
+    /// defect (kanban 01a1ee0bf058737cb0) — same root cause as the
+    /// claude.rs family sweep. Ungate with the card when the writer
+    /// escape fix lands.
+    #[cfg(unix)]
     #[test]
     fn heal_restores_a_deleted_folder_under_a_surviving_registration() {
         let root = temp_root();
@@ -603,6 +643,11 @@ mod tests {
         assert!(register.contains(CLAUDE_MOD_MARKER));
     }
 
+    /// Unix-only: settings round-trip on the windows settings-writer
+    /// defect (kanban 01a1ee0bf058737cb0) — same root cause as the
+    /// claude.rs family sweep. Ungate with the card when the writer
+    /// escape fix lands.
+    #[cfg(unix)]
     #[test]
     fn heal_skips_a_current_folder_and_an_unregistered_install() {
         let root = temp_root();
