@@ -3967,26 +3967,6 @@ class StreamingConfig:
     @allow_blob_connect_src.setter
     def allow_blob_connect_src(self, value: Any) -> None: ...
     @property
-    def csp_connect_origins(self) -> Any:
-        """Get the opt-in HTTPS origins appended to the CSP's connect-src
-
-        For custom web roots that fetch public APIs directly. Values use the
-        strict https://host[:port] form and are validated at config time.
-
-        Returns:
-            list[str] | None: Origins appended to connect-src (default None)
-
-        Example:
-            >>> config = StreamingConfig()
-            >>> config.csp_connect_origins is None
-            True
-            >>> config.csp_connect_origins = ["https://api.zippopotam.us", "https://api.weather.gov"]
-            >>> config.csp_connect_origins
-            ['https://api.zippopotam.us', 'https://api.weather.gov']
-        """
-    @csp_connect_origins.setter
-    def csp_connect_origins(self, value: Any) -> None: ...
-    @property
     def allow_pane_create(self) -> Any:
         """Get whether clients may create panes on the backing mux daemon
 
@@ -4037,6 +4017,26 @@ class StreamingConfig:
         """
     @api_key.setter
     def api_key(self, value: Any) -> None: ...
+    @property
+    def csp_connect_origins(self) -> Any:
+        """Get the opt-in HTTPS origins appended to the CSP's connect-src
+
+        For custom web roots that fetch public APIs directly. Values use the
+        strict https://host[:port] form and are validated at config time.
+
+        Returns:
+            list[str] | None: Origins appended to connect-src (default None)
+
+        Example:
+            >>> config = StreamingConfig()
+            >>> config.csp_connect_origins is None
+            True
+            >>> config.csp_connect_origins = ["https://api.zippopotam.us", "https://api.weather.gov"]
+            >>> config.csp_connect_origins
+            ['https://api.zippopotam.us', 'https://api.weather.gov']
+        """
+    @csp_connect_origins.setter
+    def csp_connect_origins(self, value: Any) -> None: ...
     @property
     def default_read_only(self) -> Any:
         """Get default read-only mode
@@ -7572,6 +7572,13 @@ class Terminal:
         """
     def poll_action_results(self) -> list[dict]:
         """Drain pending action results for frontend consumption
+
+        Security: treat every result as untrusted. ``run_command``,
+        ``send_text``, ``play_sound``, ``notify`` and ``mark_line`` results
+        carry regex captures taken from terminal output, and ``split_pane``
+        fires on output matches. The emulator never executes any of them;
+        validate or confirm with the user before auto-running a command or
+        writing text to a PTY.
 
         Returns:
             list[dict]: List of action result dicts with 'type' and action-specific fields
