@@ -258,7 +258,7 @@ mod tests {
         let hook = root
             .path()
             .join("par-mux-hooks")
-            .join("par-mux-muse-session-hook.sh");
+            .join(muse_hook_install_name());
         fs::create_dir_all(hook.parent().unwrap()).unwrap();
 
         let result = install_muse_hook_into(&settings, &hook).unwrap();
