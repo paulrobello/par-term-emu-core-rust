@@ -3369,8 +3369,13 @@ fn a_windows_resume_receives_the_exact_arguments() {
             .terminal()
             .read()
             .capture_snapshot();
-        let mut text: String = snapshot.grid.scrollback_cells.iter().map(|c| c.c).collect();
-        text.extend(snapshot.grid.cells.iter().map(|c| c.c));
+        let mut text: String = snapshot
+            .grid
+            .scrollback_cells
+            .iter()
+            .map(|c| c.c())
+            .collect();
+        text.extend(snapshot.grid.cells.iter().map(|c| c.c()));
         if text.contains("ARG<plain>") || std::time::Instant::now() >= deadline {
             break text;
         }
