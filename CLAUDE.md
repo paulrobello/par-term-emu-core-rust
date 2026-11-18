@@ -58,6 +58,10 @@ uv run pytest tests/test_terminal.py::test_function_name -v
 # Rust streaming tests
 cargo test --lib --no-default-features --features pyo3/auto-initialize,streaming test_name
 
+# mux_factory streaming tests (the module is gated behind `mux`; the flag set
+# above matches 0 of them silently)
+cargo test --lib --no-default-features --features pyo3/auto-initialize,streaming,mux mux_factory
+
 # C FFI tests (src/ffi.rs compiles only with the `ffi` feature — without it the filter matches 0 tests)
 cargo test --lib --no-default-features --features pyo3/auto-initialize,ffi ffi
 ```
