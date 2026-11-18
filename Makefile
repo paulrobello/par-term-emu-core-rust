@@ -1,6 +1,6 @@
 .PHONY: help build build-release build-streaming dev-streaming app test test-rust test-rust-streaming test-python test-pty coverage coverage-html coverage-python clean install install-force python-install python-uninstall par-mux-install par-mux-uninstall streamer-uninstall uninstall dev fmt lint check \
         examples examples-basic examples-pty examples-streaming examples-all setup-venv watch test-integrations \
-        typecheck clippy fmt-python lint-python lint-check checkall checkall-ci test-mux-ci test-python-streaming-ci cross-target-check check-features bench pre-commit-install pre-commit-uninstall \
+        typecheck clippy fmt-python lint-python lint-check checkall checkall-ci test-mux-ci test-python-streaming-ci cross-target-check check-features check-feature-combos bench pre-commit-install pre-commit-uninstall \
         caps-table caps-table-check gen-extensions extensions-check ffi-header ffi-header-check ffi-surface-check core-version-check doc-hidden-check reexports-check api-surface-check python-features-check terminal-fields-check mux-docs-check mux-schema mux-schema-check completions completions-check _completions-into env-docs-check pinned-tests-check stub-docs-check doc-links-check release-check derive-version-check set-version version-train-check audit-deps \
         mux-manual-seed mux-package-check rustdoc-check \
         pre-commit-run pre-commit-update deploy \
@@ -97,6 +97,7 @@ help:
 	@echo "  cross-target-check - cargo check par-mux (mux-bin,attach) + par-term-emu-core + root crate (python-test,mux,ffi) for aarch64/x86_64-pc-windows-msvc, -D warnings (part of checkall-ci)"
 	@echo "  bench           - Run VTE throughput benchmarks (criterion, not part of checkall)"
 	@echo "  check-features  - Feature matrix + dependency-tree assertions (not part of checkall; needs cargo-hack)"
+	@echo "  check-feature-combos - cargo check the pinned consumer profiles and risky feature pairings (ARC-005; part of checkall-ci)"
 	@echo "  reexports-check - Fail when a par-term-emu-core module has no root re-export at its historical path (ARC-006)"
 	@echo ""
 	@echo "Fuzzing (nightly + cargo-fuzz; not part of checkall):"
@@ -799,10 +800,11 @@ checkall: extensions-check ffi-header-check ffi-surface-check derive-version-che
 # CI-parity gate (two-tier convention: checkall stays fast, checkall-ci adds
 # what CI's mux-test job runs that the fast gate skips — the par-mux
 # integration suites incl. the attach client, the D1 sim isolation build,
-# the mux feature-set runs — plus the local-only python-test,streaming combo
-# and the Windows MSVC cross-target checks).
+# the mux feature-set runs — plus the local-only python-test,streaming combo,
+# the pinned feature-combination checks, and the Windows MSVC cross-target
+# checks).
 # Heavy; run before pushing, not per-iteration.
-checkall-ci: cross-target-check checkall test-mux-ci test-python-streaming-ci
+checkall-ci: cross-target-check check-feature-combos checkall test-mux-ci test-python-streaming-ci
 	@echo ""
 	@echo "======================================================================"
 	@echo "  All CI-parity checks passed!"
@@ -873,6 +875,12 @@ test-python-streaming-ci:
 # [features] or dependency edit in Cargo.toml.
 check-features:
 	bash scripts/check_features.sh
+
+# ARC-005: the pinned list of feature combinations real consumers build and
+# the pairings no named profile covers. Bounded (about 90 s warm), unlike a
+# cargo-hack powerset, so it rides checkall-ci rather than the fast gate.
+check-feature-combos:
+	bash scripts/check_feature_combos.sh
 
 bench:
 	@echo "Running VTE throughput benchmarks (criterion, ENH-007)..."
