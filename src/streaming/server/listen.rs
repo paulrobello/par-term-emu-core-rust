@@ -77,9 +77,12 @@ impl StreamingServer {
             .await
             .map_err(|e| StreamingError::ServerError(format!("Failed to bind: {}", e)))?;
 
-        axum::serve(listener, app.into_make_service())
-            .await
-            .map_err(|e| StreamingError::ServerError(format!("Server error: {}", e)))?;
+        axum::serve(
+            listener,
+            app.into_make_service_with_connect_info::<std::net::SocketAddr>(),
+        )
+        .await
+        .map_err(|e| StreamingError::ServerError(format!("Server error: {}", e)))?;
 
         Ok(())
     }
@@ -121,7 +124,7 @@ impl StreamingServer {
 
         // Start HTTPS server
         axum_server::bind_rustls(addr, rustls_config)
-            .serve(app.into_make_service())
+            .serve(app.into_make_service_with_connect_info::<std::net::SocketAddr>())
             .await
             .map_err(|e| StreamingError::ServerError(format!("Server error: {}", e)))?;
 
@@ -285,6 +288,7 @@ impl StreamingServer {
             self.config.allowed_origins.clone(),
             self.config.allow_api_key_in_query,
             Arc::clone(&self.auth_throttle),
+            Some(addr),
         );
         // The tungstenite `Callback` trait fixes `ErrorResponse` as
         // `HttpResponse<Option<String>>` — we cannot box or shrink it
@@ -321,7 +325,7 @@ impl StreamingServer {
         let query_str = uri_query.lock().take();
         let params = ConnectionParams::from_uri_query(query_str.as_deref());
         if let Err(e) = self
-            .handle_ws_connection(ws_stream, &params, global_guard, label)
+            .handle_ws_connection(ws_stream, &params, global_guard, label, Some(addr))
             .await
         {
             crate::debug_error!(

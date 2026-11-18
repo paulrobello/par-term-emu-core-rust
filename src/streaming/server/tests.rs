@@ -1468,3 +1468,106 @@ async fn nested_marker_payload_also_yields_one_end_marker() {
     assert_eq!(payload, b"abc [20[201~1~ tail");
     assert_single_end_marker(&frame);
 }
+
+// ─── Auth-failure and connection logging (2026-11-17 audit SEC-001) ─────────
+
+/// Process-wide capture logger for the SEC-001 tests. Records are filtered
+/// by a per-test marker so parallel tests never see each other's lines.
+struct CaptureLog(Mutex<Vec<(log::Level, String)>>);
+
+impl log::Log for CaptureLog {
+    fn enabled(&self, _: &log::Metadata) -> bool {
+        true
+    }
+    fn log(&self, record: &log::Record) {
+        self.0
+            .lock()
+            .push((record.level(), record.args().to_string()));
+    }
+    fn flush(&self) {}
+}
+
+fn capture_log() -> &'static CaptureLog {
+    static CAPTURE: CaptureLog = CaptureLog(Mutex::new(Vec::new()));
+    // The first caller installs it; later callers find it already set.
+    let _ = log::set_logger(&CAPTURE);
+    log::set_max_level(log::LevelFilter::Info);
+    &CAPTURE
+}
+
+#[tokio::test]
+async fn test_auth_middleware_401_logs_peer_and_path_without_query() {
+    use axum::{routing::get, Router};
+    use tower::ServiceExt;
+
+    let capture = capture_log();
+    let auth_config = ApiAuthConfig {
+        api_key: Some("expected-key".to_string()),
+        http_basic_auth: None,
+        allow_api_key_in_query: true,
+    };
+    let throttle = Arc::new(Mutex::new(AuthFailureThrottle::default()));
+    let app = Router::new()
+        .route("/sec001-marker", get(|| async { "ok" }))
+        .layer(axum::middleware::from_fn(move |req, next| {
+            let auth_config = auth_config.clone();
+            let throttle = throttle.clone();
+            api_auth_middleware(req, next, auth_config, throttle)
+        }))
+        // The extension `into_make_service_with_connect_info` inserts per
+        // connection in production.
+        .layer(axum::Extension(axum::extract::ConnectInfo(
+            "203.0.113.7:4242"
+                .parse::<std::net::SocketAddr>()
+                .expect("literal socket address"),
+        )));
+    let req = axum::http::Request::builder()
+        .uri("/sec001-marker?api_key=wrong-secret-value")
+        .body(axum::body::Body::empty())
+        .expect("static request parts are valid");
+    let res = app.oneshot(req).await.expect("router is infallible");
+    assert_eq!(res.status(), axum::http::StatusCode::UNAUTHORIZED);
+
+    let lines = capture.0.lock();
+    let line = lines
+        .iter()
+        .find(|(_, msg)| msg.contains("path=/sec001-marker"))
+        .expect("a 401 emits one auth-failure log line");
+    assert_eq!(line.0, log::Level::Warn);
+    assert!(line.1.contains("peer=203.0.113.7:4242"), "{}", line.1);
+    assert!(
+        !line.1.contains("wrong-secret-value"),
+        "the query string (api_key) must never be logged: {}",
+        line.1
+    );
+}
+
+#[test]
+fn test_ws_handshake_callback_401_logs_peer_and_path() {
+    use tokio_tungstenite::tungstenite::handshake::server::{Callback, Response};
+
+    let capture = capture_log();
+    let (callback, _query) = build_ws_header_callback(
+        Some("expected-key".to_string()),
+        None,
+        None,
+        false,
+        Arc::new(Mutex::new(AuthFailureThrottle::default())),
+        Some("198.51.100.9:5555".parse().expect("literal socket address")),
+    );
+    let req = tokio_tungstenite::tungstenite::http::Request::builder()
+        .uri("/sec001-ws-marker")
+        .body(())
+        .expect("static request parts are valid");
+    let resp: Response = tokio_tungstenite::tungstenite::http::Response::new(());
+    let rejected = callback.on_request(&req, resp).expect_err("no credentials");
+    assert_eq!(rejected.status(), 401);
+
+    let lines = capture.0.lock();
+    let line = lines
+        .iter()
+        .find(|(_, msg)| msg.contains("path=/sec001-ws-marker"))
+        .expect("the handshake 401 emits one auth-failure log line");
+    assert_eq!(line.0, log::Level::Warn);
+    assert!(line.1.contains("peer=198.51.100.9:5555"), "{}", line.1);
+}

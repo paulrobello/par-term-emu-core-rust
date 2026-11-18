@@ -17,8 +17,14 @@ impl StreamingServer {
         S: tokio::io::AsyncRead + tokio::io::AsyncWrite + Unpin + Send,
     {
         assert!(self.try_add_client());
-        self.handle_ws_connection(stream, params, GlobalClientGuard { server: self }, "test")
-            .await
+        self.handle_ws_connection(
+            stream,
+            params,
+            GlobalClientGuard { server: self },
+            "test",
+            None,
+        )
+        .await
     }
 
     /// Run a session over an upgraded tungstenite WebSocket (plain or TLS).
@@ -28,6 +34,7 @@ impl StreamingServer {
         params: &ConnectionParams,
         global_guard: GlobalClientGuard<'_>,
         label: &'static str,
+        peer: Option<std::net::SocketAddr>,
     ) -> Result<()>
     where
         S: tokio::io::AsyncRead + tokio::io::AsyncWrite + Unpin + Send,
@@ -35,7 +42,8 @@ impl StreamingServer {
         let (session, _global_guard, _session_guard, read_only) =
             self.prepare_ws_session(params, global_guard).await?;
         let client = Client::new(ws_stream, read_only);
-        self.run_ws_session(client, session, read_only, label).await
+        self.run_ws_session(client, session, read_only, label, peer)
+            .await
     }
 
     /// Common pre-loop setup shared by both tungstenite WebSocket handlers.
@@ -129,6 +137,7 @@ impl StreamingServer {
         session: Arc<StreamSessionState>,
         read_only: bool,
         transport_label: &'static str,
+        peer: Option<std::net::SocketAddr>,
     ) -> Result<()> {
         let client_id = client.id();
         struct ViewerGuard(Arc<StreamSessionState>, uuid::Uuid);
@@ -173,6 +182,13 @@ impl StreamingServer {
             client.send(mode_msg).await?;
         }
 
+        // SEC-001: the durable per-connection record naming the peer.
+        log::info!(
+            "[STREAMING] WebSocket connection accepted: peer={} session={} readonly={}",
+            super::http::peer_display(peer),
+            session.id,
+            read_only
+        );
         crate::debug_info!(
             "STREAMING",
             "{} {} connected to session {} (total: {})",
@@ -377,6 +393,7 @@ impl StreamingServer {
         self: &Arc<Self>,
         socket: axum::extract::ws::WebSocket,
         params: ConnectionParams,
+        peer: Option<std::net::SocketAddr>,
     ) -> Result<()> {
         // Reserve the global client slot BEFORE resolving or creating a
         // session, so max_clients bounds session spawns too (SEC-011). The
@@ -392,7 +409,7 @@ impl StreamingServer {
             id: uuid::Uuid::new_v4(),
             socket,
         };
-        self.run_ws_session(transport, session, read_only, "Axum WebSocket")
+        self.run_ws_session(transport, session, read_only, "Axum WebSocket", peer)
             .await
     }
 }

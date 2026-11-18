@@ -27,7 +27,8 @@ pub(super) fn ws_accept_config() -> Option<WebSocketConfig> {
 ///    [`validate_ws_handshake_auth`].
 ///
 /// Both listeners MUST use this single factory so a future auth/origin fix
-/// only needs to change one place instead of two.
+/// only needs to change one place instead of two. `peer` is the accepted
+/// TCP stream's remote address, recorded in the 401 log line (SEC-001).
 ///
 /// The tungstenite `Callback` trait fixes `ErrorResponse` as
 /// `HttpResponse<Option<String>>` — we cannot box or shrink it without
@@ -39,6 +40,7 @@ pub(super) fn build_ws_header_callback(
     allowed_origins: Option<Vec<String>>,
     allow_api_key_in_query: bool,
     auth_throttle: Arc<Mutex<AuthFailureThrottle>>,
+    peer: Option<std::net::SocketAddr>,
 ) -> (
     impl FnOnce(
         &WsHandshakeRequest,
@@ -81,6 +83,7 @@ pub(super) fn build_ws_header_callback(
             // and sleeping here would let an attacker park every worker
             // and stall the whole server.
             auth_throttle.lock().record_failure();
+            log_auth_rejection(peer, req.uri().path());
             let reject = tokio_tungstenite::tungstenite::http::Response::builder()
                 .status(401)
                 .body(Some("Unauthorized".to_string()))
@@ -92,6 +95,24 @@ pub(super) fn build_ws_header_callback(
     };
 
     (callback, uri_query)
+}
+
+/// Emit the durable record of one rejected authentication attempt (SEC-001):
+/// one WARN line naming the peer and request path. The throttle state is
+/// in-memory only and lost on restart, so this line is the evidence trail.
+/// Only the path is logged, never the query string, which may carry
+/// `?api_key=` material.
+pub(super) fn log_auth_rejection(peer: Option<std::net::SocketAddr>, path: &str) {
+    log::warn!(
+        "[STREAMING] authentication failed: peer={} path={}",
+        peer_display(peer),
+        path
+    );
+}
+
+/// Render an optional peer address for log lines.
+pub(super) fn peer_display(peer: Option<std::net::SocketAddr>) -> String {
+    peer.map_or_else(|| "unknown".to_string(), |addr| addr.to_string())
 }
 
 /// Failed-auth throttle state (SEC-004): consecutive failed auth attempts
@@ -236,6 +257,12 @@ pub(super) async fn api_auth_middleware(
     // guessing costs wall-clock time (SEC-004). The sleep parks this task
     // only; the connection holds a client slot while it waits.
     let delay = auth_throttle.lock().record_failure();
+    log_auth_rejection(
+        req.extensions()
+            .get::<axum::extract::ConnectInfo<std::net::SocketAddr>>()
+            .map(|info| info.0),
+        req.uri().path(),
+    );
     tokio::time::sleep(delay).await;
 
     // Build 401 response
@@ -682,6 +709,7 @@ pub(super) async fn ws_handler(
     ws: axum::extract::ws::WebSocketUpgrade,
     axum::extract::Query(query): axum::extract::Query<HashMap<String, String>>,
     headers: axum::http::HeaderMap,
+    connect_info: Option<axum::Extension<axum::extract::ConnectInfo<std::net::SocketAddr>>>,
     axum::extract::State(server): axum::extract::State<Arc<StreamingServer>>,
 ) -> impl axum::response::IntoResponse {
     use axum::http::StatusCode;
@@ -693,11 +721,12 @@ pub(super) async fn ws_handler(
         return (StatusCode::FORBIDDEN, "Origin not allowed").into_response();
     }
 
+    let peer = connect_info.map(|axum::Extension(axum::extract::ConnectInfo(addr))| addr);
     let params = ConnectionParams::from_query(&query);
     ws.max_message_size(WS_MAX_MESSAGE_SIZE)
         .max_frame_size(WS_MAX_FRAME_SIZE)
         .on_upgrade(move |socket| async move {
-            if let Err(e) = server.handle_axum_websocket(socket, params).await {
+            if let Err(e) = server.handle_axum_websocket(socket, params, peer).await {
                 crate::debug_error!("STREAMING", "WebSocket handler error: {}", e);
             }
         })
@@ -745,6 +774,7 @@ pub(super) async fn stats_ws_handler(
     ws: axum::extract::ws::WebSocketUpgrade,
     axum::extract::Query(_query): axum::extract::Query<HashMap<String, String>>,
     headers: axum::http::HeaderMap,
+    connect_info: Option<axum::Extension<axum::extract::ConnectInfo<std::net::SocketAddr>>>,
     axum::extract::State(server): axum::extract::State<Arc<StreamingServer>>,
 ) -> impl axum::response::IntoResponse {
     use axum::http::StatusCode;
@@ -763,6 +793,12 @@ pub(super) async fn stats_ws_handler(
 
     // Note: API key auth is handled by the basic_auth middleware if configured
     let interval_secs = server.config.system_stats_interval_secs.max(1);
+
+    let peer = connect_info.map(|axum::Extension(axum::extract::ConnectInfo(addr))| addr);
+    log::info!(
+        "[STREAMING] stats WebSocket connection accepted: peer={}",
+        peer_display(peer)
+    );
 
     ws.max_message_size(WS_MAX_MESSAGE_SIZE)
         .max_frame_size(WS_MAX_FRAME_SIZE)
