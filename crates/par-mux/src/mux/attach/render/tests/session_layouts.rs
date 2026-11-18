@@ -374,7 +374,12 @@ fn alt_digit_chords_send_select_layout_per_preset() {
         (b'5', "tiled"),
     ];
     for (digit, name) in presets {
-        let (rx, mut conn, mut session) = layout_chord_session("altlayout");
+        // Per-iteration tag: the fake daemon binds a pipe that lives until
+        // process exit, and the unix rebind trick (remove_file) is a no-op
+        // on windows, so a repeated name fails its second bind with
+        // ACCESS_DENIED (measured on windows-latest and the local VM).
+        let (rx, mut conn, mut session) =
+            layout_chord_session(&format!("altlayout-{}", digit as char));
         session.route_stdin_bytes(&mut conn, &[0x02, 0x1b, digit]);
         assert_eq!(
             received_within_300ms(&rx),
