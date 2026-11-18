@@ -89,7 +89,8 @@ fn write_mod_files(mod_dir: &Path) -> io::Result<()> {
 /// Whether `content`'s `env.CLAUDE_CODE_PLUGIN_DIRS` names `dir`.
 fn dirs_contains(content: &str, settings_path: &Path, dir: &str) -> io::Result<bool> {
     let value = parse_serde(content, settings_path)?;
-    Ok(plugin_dirs_value(&value).is_some_and(|dirs| dirs.split(':').any(|entry| entry == dir)))
+    let sep = dirs_separator(cfg!(windows));
+    Ok(plugin_dirs_value(&value).is_some_and(|dirs| dirs.split(sep).any(|entry| entry == dir)))
 }
 
 /// The `env.CLAUDE_CODE_PLUGIN_DIRS` string value, or None when env or key
@@ -99,6 +100,17 @@ fn plugin_dirs_value(value: &serde_json::Value) -> Option<&str> {
         .get("env")
         .and_then(|env| env.get(PLUGIN_DIRS_KEY))
         .and_then(serde_json::Value::as_str)
+}
+
+/// CLAUDE_CODE_PLUGIN_DIRS is `:`-separated on unix and `;`-separated on
+/// windows (claude env-vars docs) — a fixed ':' would split windows paths
+/// at the drive-letter colon.
+fn dirs_separator(windows: bool) -> char {
+    if windows {
+        ';'
+    } else {
+        ':'
+    }
 }
 
 /// Merge `dir` into `content`'s `env.CLAUDE_CODE_PLUGIN_DIRS`.
@@ -111,21 +123,20 @@ fn merge_plugin_dirs(content: &str, settings_path: &Path, dir: &str) -> io::Resu
         return Ok(None);
     }
 
+    let dir_json = serde_json::to_string(dir).expect("dir is serializable");
     let updated = match root.get_object("env") {
         None => append_object_property(
             content,
             &root,
             "env",
-            &format!("{{\"{PLUGIN_DIRS_KEY}\":\"{dir}\"}}"),
+            &format!("{{\"{PLUGIN_DIRS_KEY}\":{dir_json}}}"),
         ),
         Some(env_object) => match env_object
             .properties
             .iter()
             .find(|property| prop_name_text(&property.name) == Some(PLUGIN_DIRS_KEY))
         {
-            None => {
-                append_object_property(content, env_object, PLUGIN_DIRS_KEY, &format!("\"{dir}\""))
-            }
+            None => append_object_property(content, env_object, PLUGIN_DIRS_KEY, &dir_json),
             Some(property) => {
                 let AstValue::StringLit(_) = property.value else {
                     return Err(io::Error::other(format!(
@@ -134,10 +145,11 @@ fn merge_plugin_dirs(content: &str, settings_path: &Path, dir: &str) -> io::Resu
                     )));
                 };
                 let existing = string_value(&property.value).unwrap_or_default();
+                let sep = dirs_separator(cfg!(windows));
                 let mut entries: Vec<&str> =
-                    existing.split(':').filter(|e| !e.is_empty()).collect();
+                    existing.split(sep).filter(|e| !e.is_empty()).collect();
                 entries.push(dir);
-                let joined = entries.join(":");
+                let joined = entries.join(&sep.to_string());
                 let range = property.value.range();
                 let escaped = serde_json::to_string(&joined).expect("joined dirs are serializable");
                 let mut text = String::with_capacity(content.len() + escaped.len());
@@ -157,12 +169,13 @@ fn merge_plugin_dirs(content: &str, settings_path: &Path, dir: &str) -> io::Resu
     {
         match env.get(PLUGIN_DIRS_KEY).and_then(serde_json::Value::as_str) {
             Some(existing) => {
+                let sep = dirs_separator(cfg!(windows));
                 let mut entries: Vec<&str> =
-                    existing.split(':').filter(|e| !e.is_empty()).collect();
+                    existing.split(sep).filter(|e| !e.is_empty()).collect();
                 entries.push(dir);
                 env.insert(
                     PLUGIN_DIRS_KEY.to_string(),
-                    serde_json::Value::String(entries.join(":")),
+                    serde_json::Value::String(entries.join(&sep.to_string())),
                 );
             }
             None => {
@@ -248,8 +261,9 @@ fn unmerge_plugin_dirs(
         )));
     };
     let existing = string_value(&property.value).unwrap_or_default();
+    let sep = dirs_separator(cfg!(windows));
     let remaining: Vec<&str> = existing
-        .split(':')
+        .split(sep)
         .filter(|entry| !entry.is_empty() && *entry != dir)
         .collect();
 
@@ -282,7 +296,7 @@ fn unmerge_plugin_dirs(
         })?;
         cut
     } else {
-        let joined = remaining.join(":");
+        let joined = remaining.join(&sep.to_string());
         let escaped = serde_json::to_string(&joined).expect("joined dirs are serializable");
         let range = property.value.range();
         let mut text = String::with_capacity(content.len());
@@ -303,7 +317,7 @@ fn unmerge_plugin_dirs(
         } else {
             env.insert(
                 PLUGIN_DIRS_KEY.to_string(),
-                serde_json::Value::String(remaining.join(":")),
+                serde_json::Value::String(remaining.join(&sep.to_string())),
             );
         }
         let now_empty = desired
@@ -422,14 +436,12 @@ pub(crate) fn claude_mod_asset_state() -> AssetState {
 mod tests {
     use super::*;
 
-    #[cfg(unix)]
     fn temp_root() -> tempfile::TempDir {
         tempfile::tempdir().expect("temp dir")
     }
 
     /// A user settings file with its own env block and an existing
     /// CLAUDE_CODE_PLUGIN_DIRS value naming a directory we must preserve.
-    #[cfg(unix)]
     const USER_SETTINGS: &str = r#"{
   // personal settings
   "model": "opus",
@@ -449,16 +461,10 @@ mod tests {
 }
 "#;
 
-    #[cfg(unix)]
     fn read(p: &Path) -> String {
         fs::read_to_string(p).expect("reads")
     }
 
-    /// Unix-only: settings round-trip on the windows settings-writer
-    /// defect (kanban 01a1ee0bf058737cb0) — same root cause as the
-    /// claude.rs family sweep. Ungate with the card when the writer
-    /// escape fix lands.
-    #[cfg(unix)]
     #[test]
     fn install_writes_mod_files_and_merges_env_dir() {
         let root = temp_root();
@@ -485,11 +491,6 @@ mod tests {
         assert!(dirs_contains(&content, &settings, &mod_dir.display().to_string()).unwrap());
     }
 
-    /// Unix-only: settings round-trip on the windows settings-writer
-    /// defect (kanban 01a1ee0bf058737cb0) — same root cause as the
-    /// claude.rs family sweep. Ungate with the card when the writer
-    /// escape fix lands.
-    #[cfg(unix)]
     #[test]
     fn install_appends_to_an_existing_dirs_value_and_preserves_the_rest() {
         let root = temp_root();
@@ -512,7 +513,8 @@ mod tests {
         let dirs = plugin_dirs_value(&parse_serde(&updated, &settings).expect("parses"))
             .expect("dirs present")
             .to_string();
-        let entries: Vec<&str> = dirs.split(':').collect();
+        let sep = dirs_separator(cfg!(windows));
+        let entries: Vec<&str> = dirs.split(sep).collect();
         assert_eq!(
             entries,
             vec!["/opt/my-mods", mod_dir.display().to_string().as_str()],
@@ -520,11 +522,6 @@ mod tests {
         );
     }
 
-    /// Unix-only: settings round-trip on the windows settings-writer
-    /// defect (kanban 01a1ee0bf058737cb0) — same root cause as the
-    /// claude.rs family sweep. Ungate with the card when the writer
-    /// escape fix lands.
-    #[cfg(unix)]
     #[test]
     fn reinstall_is_a_byte_exact_noop() {
         let root = temp_root();
@@ -539,11 +536,6 @@ mod tests {
         assert_eq!(read(&settings), before, "settings untouched");
     }
 
-    /// Unix-only: settings round-trip on the windows settings-writer
-    /// defect (kanban 01a1ee0bf058737cb0) — same root cause as the
-    /// claude.rs family sweep. Ungate with the card when the writer
-    /// escape fix lands.
-    #[cfg(unix)]
     #[test]
     fn uninstall_keeps_user_dirs_and_removes_ours() {
         let root = temp_root();
@@ -565,11 +557,6 @@ mod tests {
         assert!(!mod_dir.exists(), "our folder is gone");
     }
 
-    /// Unix-only: settings round-trip on the windows settings-writer
-    /// defect (kanban 01a1ee0bf058737cb0) — same root cause as the
-    /// claude.rs family sweep. Ungate with the card when the writer
-    /// escape fix lands.
-    #[cfg(unix)]
     #[test]
     fn uninstall_prunes_the_key_and_env_when_our_removal_empties_them() {
         let root = temp_root();
@@ -586,11 +573,6 @@ mod tests {
         assert!(plugin_dirs_value(&value).is_none());
     }
 
-    /// Unix-only: settings round-trip on the windows settings-writer
-    /// defect (kanban 01a1ee0bf058737cb0) — same root cause as the
-    /// claude.rs family sweep. Ungate with the card when the writer
-    /// escape fix lands.
-    #[cfg(unix)]
     #[test]
     fn round_trip_restores_the_original_settings_bytes() {
         let root = temp_root();
@@ -605,11 +587,6 @@ mod tests {
         assert_eq!(read(&settings), original, "byte-exact round trip");
     }
 
-    /// Unix-only: settings round-trip on the windows settings-writer
-    /// defect (kanban 01a1ee0bf058737cb0) — same root cause as the
-    /// claude.rs family sweep. Ungate with the card when the writer
-    /// escape fix lands.
-    #[cfg(unix)]
     #[test]
     fn uninstall_never_touches_a_foreign_mod_folder() {
         let root = temp_root();
@@ -627,11 +604,6 @@ mod tests {
         assert!(mod_dir.exists(), "the foreign folder stays");
     }
 
-    /// Unix-only: settings round-trip on the windows settings-writer
-    /// defect (kanban 01a1ee0bf058737cb0) — same root cause as the
-    /// claude.rs family sweep. Ungate with the card when the writer
-    /// escape fix lands.
-    #[cfg(unix)]
     #[test]
     fn heal_restores_a_deleted_folder_under_a_surviving_registration() {
         let root = temp_root();
@@ -646,11 +618,50 @@ mod tests {
         assert!(register.contains(CLAUDE_MOD_MARKER));
     }
 
-    /// Unix-only: settings round-trip on the windows settings-writer
-    /// defect (kanban 01a1ee0bf058737cb0) — same root cause as the
-    /// claude.rs family sweep. Ungate with the card when the writer
-    /// escape fix lands.
-    #[cfg(unix)]
+    /// The env splice must JSON-escape the dir: a windows-style path
+    /// (backslashes, embedded space) spliced raw becomes invalid JSON
+    /// (kanban 01a1ee0bf058737cb0). The writer is pure text processing,
+    /// so the windows-shaped path string reproduces the defect on every
+    /// platform; the drive-letter colon is covered by the separator seam
+    /// and the real-windows family run.
+    #[test]
+    fn mod_env_merge_escapes_windows_style_paths() {
+        let root = temp_root();
+        let settings = root.path().join("settings.json");
+        fs::write(&settings, "{}\n").expect("writes settings");
+        let mod_dir = root.path().join("win path\\my par-mux\\mods\\agent-state");
+
+        install_claude_mod_into(&settings, &mod_dir).expect("installs");
+
+        let value: serde_json::Value = parse_serde(
+            &fs::read_to_string(&settings).expect("reads"),
+            Path::new("<test>"),
+        )
+        .expect("the written settings parse");
+        let dirs = value
+            .get("env")
+            .and_then(|env| env.get(PLUGIN_DIRS_KEY))
+            .and_then(serde_json::Value::as_str)
+            .expect("env.CLAUDE_CODE_PLUGIN_DIRS is a string");
+        assert!(
+            dirs.contains("win path\\my par-mux"),
+            "the dir round-trips intact: {dirs}"
+        );
+
+        assert!(
+            uninstall_claude_mod_into(&settings, &mod_dir)
+                .expect("uninstalls")
+                .settings_changed,
+            "uninstall removes the escaped entry"
+        );
+    }
+
+    #[test]
+    fn dirs_separator_follows_the_claude_env_var_convention() {
+        assert_eq!(dirs_separator(false), ':');
+        assert_eq!(dirs_separator(true), ';');
+    }
+
     #[test]
     fn heal_skips_a_current_folder_and_an_unregistered_install() {
         let root = temp_root();

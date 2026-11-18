@@ -300,12 +300,10 @@ pub(crate) fn heal_claude_hook_asset_into(
 #[cfg(test)]
 mod tests {
     use super::*;
-    #[cfg(unix)]
     use serde_json::Value as JsonValue;
     use std::fs;
     use std::path::Path;
 
-    #[cfg(unix)]
     use super::super::parse_serde;
 
     fn temp_root() -> tempfile::TempDir {
@@ -314,7 +312,6 @@ mod tests {
 
     /// A realistic claude settings.json: comments, nested config, and a user
     /// who already has hooks of their own.
-    #[cfg(unix)]
     const REAL_WORLD_SETTINGS: &str = r#"{
   // personal settings
   "model": "opus",
@@ -355,12 +352,10 @@ mod tests {
 }
 "#;
 
-    #[cfg(unix)]
     fn installed_command(hook_path: &Path) -> String {
         hook_command_for(hook_path)
     }
 
-    #[cfg(unix)]
     fn session_start_commands(content: &str) -> Vec<String> {
         let value: JsonValue = parse_serde(content, Path::new("<test>")).expect("parses");
         value
@@ -385,11 +380,6 @@ mod tests {
             .collect()
     }
 
-    /// Unix-only until the windows settings-writer defect is fixed (same
-    /// kanban card as a_hook_path_with_spaces above: 01a1ee0bf058737cb0 —
-    /// raw backslashes in the written settings.json break the re-parse).
-    /// The test is correct; windows is broken.
-    #[cfg(unix)]
     #[test]
     fn install_into_a_fresh_directory_creates_settings_and_asset() {
         let root = temp_root();
@@ -416,11 +406,6 @@ mod tests {
         }
     }
 
-    /// Unix-only: settings round-trip on the windows settings-writer
-    /// defect (kanban 01a1ee0bf058737cb0) — windows flake-fails these
-    /// behind retry masking. Ungate with the rest of the card when the
-    /// writer escape fix lands.
-    #[cfg(unix)]
     #[test]
     fn install_preserves_user_entries_comments_and_formatting() {
         let root = temp_root();
@@ -448,11 +433,6 @@ mod tests {
         assert!(updated.contains(SESSION_START_MATCHER));
     }
 
-    /// Unix-only: settings round-trip on the windows settings-writer
-    /// defect (kanban 01a1ee0bf058737cb0) — windows flake-fails these
-    /// behind retry masking. Ungate with the rest of the card when the
-    /// writer escape fix lands.
-    #[cfg(unix)]
     #[test]
     fn install_is_a_byte_exact_noop_when_already_installed() {
         let root = temp_root();
@@ -468,11 +448,6 @@ mod tests {
         assert_eq!(fs::read_to_string(&settings).unwrap(), once);
     }
 
-    /// Unix-only: settings round-trip on the windows settings-writer
-    /// defect (kanban 01a1ee0bf058737cb0) — windows flake-fails these
-    /// behind retry masking. Ungate with the rest of the card when the
-    /// writer escape fix lands.
-    #[cfg(unix)]
     #[test]
     fn install_is_still_a_noop_after_the_user_reformats() {
         let root = temp_root();
@@ -565,12 +540,6 @@ mod tests {
         );
     }
 
-    /// Unix-only until the windows settings-writer defect is fixed (same
-    /// kanban card as a_hook_path_with_spaces above: 01a1ee0bf058737cb0 —
-    /// the merge writer emits raw backslashes into the JSON on windows,
-    /// "Invalid escape" at re-parse). The test is correct; windows is
-    /// broken. Surfaced as the last gated-run failure (44279106102).
-    #[cfg(unix)]
     #[test]
     fn heal_rewrites_a_deleted_script_and_leaves_settings_untouched() {
         let root = temp_root();
@@ -587,11 +556,6 @@ mod tests {
         assert_eq!(fs::read_to_string(&settings).unwrap(), after_install);
     }
 
-    /// Unix-only: settings round-trip on the windows settings-writer
-    /// defect (kanban 01a1ee0bf058737cb0) — windows flake-fails these
-    /// behind retry masking. Ungate with the rest of the card when the
-    /// writer escape fix lands.
-    #[cfg(unix)]
     #[test]
     fn heal_neither_creates_a_script_nor_touches_settings_without_registration() {
         let root = temp_root();
@@ -605,11 +569,6 @@ mod tests {
         assert_eq!(fs::read_to_string(&settings).unwrap(), REAL_WORLD_SETTINGS);
     }
 
-    /// Unix-only: settings round-trip on the windows settings-writer
-    /// defect (kanban 01a1ee0bf058737cb0) — windows flake-fails these
-    /// behind retry masking. Ungate with the rest of the card when the
-    /// writer escape fix lands.
-    #[cfg(unix)]
     #[test]
     fn uninstall_removes_only_our_entries() {
         let root = temp_root();
@@ -628,11 +587,6 @@ mod tests {
         assert!(!hook.exists());
     }
 
-    /// Unix-only: settings round-trip on the windows settings-writer
-    /// defect (kanban 01a1ee0bf058737cb0) — windows flake-fails these
-    /// behind retry masking. Ungate with the rest of the card when the
-    /// writer escape fix lands.
-    #[cfg(unix)]
     #[test]
     fn uninstall_removes_our_entry_from_a_mixed_group_and_keeps_the_users() {
         let root = temp_root();
@@ -656,11 +610,6 @@ mod tests {
         );
     }
 
-    /// Unix-only: settings round-trip on the windows settings-writer
-    /// defect (kanban 01a1ee0bf058737cb0) — windows flake-fails these
-    /// behind retry masking. Ungate with the rest of the card when the
-    /// writer escape fix lands.
-    #[cfg(unix)]
     #[test]
     fn install_registers_the_session_end_release_entry() {
         let root = temp_root();
@@ -702,11 +651,6 @@ mod tests {
     /// start and end: the installer registers the same-named action under
     /// each of claude's UserPromptSubmit, Notification, and Stop events,
     /// matcher-less, beside the start/end entries.
-    /// Unix-only: settings round-trip on the windows settings-writer
-    /// defect (kanban 01a1ee0bf058737cb0) — windows flake-fails these
-    /// behind retry masking. Ungate with the rest of the card when the
-    /// writer escape fix lands.
-    #[cfg(unix)]
     #[test]
     fn install_registers_the_mid_flight_state_entries() {
         let root = temp_root();
@@ -792,11 +736,6 @@ mod tests {
         );
     }
 
-    /// Unix-only: settings round-trip on the windows settings-writer
-    /// defect (kanban 01a1ee0bf058737cb0) — windows flake-fails these
-    /// behind retry masking. Ungate with the rest of the card when the
-    /// writer escape fix lands.
-    #[cfg(unix)]
     #[test]
     fn uninstall_cleans_a_legacy_install_that_predates_session_end() {
         let root = temp_root();
@@ -830,11 +769,6 @@ mod tests {
         assert!(!after.contains("SessionStart") && !after.contains("SessionEnd"));
     }
 
-    /// Unix-only: settings round-trip on the windows settings-writer
-    /// defect (kanban 01a1ee0bf058737cb0) — windows flake-fails these
-    /// behind retry masking. Ungate with the rest of the card when the
-    /// writer escape fix lands.
-    #[cfg(unix)]
     #[test]
     fn install_preserves_a_user_session_end_group() {
         let root = temp_root();
@@ -898,11 +832,6 @@ mod tests {
         );
     }
 
-    /// Unix-only: settings round-trip on the windows settings-writer
-    /// defect (kanban 01a1ee0bf058737cb0) — windows flake-fails these
-    /// behind retry masking. Ungate with the rest of the card when the
-    /// writer escape fix lands.
-    #[cfg(unix)]
     #[test]
     fn uninstall_noops_when_absent_and_leaves_foreign_assets_alone() {
         let root = temp_root();
@@ -942,12 +871,6 @@ mod tests {
         assert_eq!(mode, 0o600, "the atomic rewrite preserves the mode");
     }
 
-    /// Unix-only until the windows settings-writer defect is fixed
-    /// (kanban 01a1ee0bf058737cb0: the merge writer embeds the windows
-    /// powershell command without JSON-escaping, corrupting the file it
-    /// writes; the leg never ran before 2026-11-18). The test is
-    /// correct; windows is broken.
-    #[cfg(unix)]
     #[test]
     fn a_hook_path_with_spaces_is_shell_quoted() {
         let root = temp_root();
