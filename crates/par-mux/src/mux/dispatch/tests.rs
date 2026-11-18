@@ -2038,6 +2038,11 @@ fn refresh_badges(h: &Harness) {
 /// real chain: OSC 7-reported cwds in two panes of the displayed
 /// session's active window, the active pane's branch badges. A pane
 /// parked in a non-repo drops the row. (Skipped where git is missing.)
+/// Unix-only: the OSC 7 fixture plants a unix-shaped file URI, and
+/// windows has no kernel pid→cwd fallback either (process_cwd is None),
+/// so the cwd chain the badge resolves does not exist there yet
+/// (measured on windows-latest, run 44272007287).
+#[cfg(unix)]
 #[test]
 fn client_snapshot_git_badge_follows_the_active_pane() {
     if !git_available() {
@@ -2212,6 +2217,10 @@ impl PaneFactory for CwdRecordingFactory {
 /// with no `-c` starts the new pane in the target pane's live cwd (the
 /// same OSC 7-tracked cwd the git badge resolves), while an explicit
 /// `-c` always wins.
+/// Unix-only: same cwd-chain gap as the git-badge test above — the
+/// OSC 7 fixture plants a unix-shaped file URI and windows has no
+/// kernel pid→cwd fallback (process_cwd is None there).
+#[cfg(unix)]
 #[test]
 fn split_window_start_dir_previous_pane_dir_and_explicit_c_wins() {
     let recorded = Arc::new(Mutex::new(Vec::<Option<std::path::PathBuf>>::new()));
