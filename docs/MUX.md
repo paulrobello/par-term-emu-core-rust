@@ -335,6 +335,8 @@ Each daemon writes one pointer file into its state directory at bind (`<state-ba
 
 `par-mux attach` with no NAME and no `--socket` while MORE THAN ONE server is live refuses with the same list plus a one-line hint (`attach to one with par-mux attach <name|path>`, exit 1) instead of silently picking one; exactly one live server attaches to it directly.
 
+Attach target resolution priority: explicit `--socket PATH` first; then the positional `[NAME]`, where a NAME may spell an absolute socket PATH that addresses that daemon directly; then `$PAR_MUX_SOCKET` (the pane contract: every pane spawns with it aimed at its hosting daemon, so an env-only attach lands on the pane's own daemon); only when all three are absent does the multi-server refusal / exactly-one attach rule apply.
+
 ## Attaching from a terminal
 
 `par-mux attach` (feature `attach`; `par-mux attach [-t TARGET] [--prefix KEY] [--mode render|passthrough] [NAME | --socket PATH]`) is the built-in client.

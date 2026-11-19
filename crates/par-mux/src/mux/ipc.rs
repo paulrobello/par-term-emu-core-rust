@@ -964,6 +964,12 @@ pub fn resolve_socket_path(
         return path.to_path_buf();
     }
     if let Some(name) = name {
+        // `attach <name|path>`: a NAME may spell an absolute socket path,
+        // which addresses that daemon directly instead of joining the
+        // named-socket convention.
+        if Path::new(name).is_absolute() {
+            return PathBuf::from(name);
+        }
         return default_socket_path(name);
     }
     match env_socket.filter(|value| !value.is_empty()) {

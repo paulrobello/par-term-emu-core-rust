@@ -345,14 +345,11 @@ pub(super) fn run_attach(cli: &Cli, attach: &AttachCommand) -> std::process::Exi
     // with one server running means that server. Zero or an
     // explicit target: unchanged behavior (the connect reports no
     // daemon on the resolved path).
-    let explicit_target = attach
-        .explicit_socket()
-        .map(std::path::Path::to_path_buf)
-        .or_else(|| {
-            attach
-                .explicit_name()
-                .map(|name| par_mux::mux::resolve_socket_path(None, Some(name), None))
-        });
+    let explicit_target = attach_explicit_target(
+        attach.explicit_socket(),
+        attach.explicit_name(),
+        std::env::var_os("PAR_MUX_SOCKET").as_deref(),
+    );
     if explicit_target.is_none() {
         let base = discovery_base(cli);
         let found = par_mux::mux::discovery::enumerate(&base);
@@ -419,5 +416,68 @@ pub(super) fn run_install_skill(cli: &Cli) -> std::process::ExitCode {
             eprintln!("par-mux: {err}");
             std::process::ExitCode::FAILURE
         }
+    }
+}
+
+/// Attach's explicit-target ladder: an explicit `--socket` first, then the
+/// positional name — which may spell an absolute socket path, which
+/// addresses that daemon directly — then `$PAR_MUX_SOCKET` (the pane
+/// contract: panes spawn with it aimed at their hosting daemon, so an
+/// env-only attach lands on the pane's own daemon instead of falling into
+/// the multi-server chooser). `None` applies the chooser.
+#[cfg(feature = "attach")]
+fn attach_explicit_target(
+    socket: Option<&std::path::Path>,
+    name: Option<&str>,
+    env_socket: Option<&std::ffi::OsStr>,
+) -> Option<std::path::PathBuf> {
+    socket
+        .map(std::path::Path::to_path_buf)
+        .or_else(|| name.map(|name| par_mux::mux::resolve_socket_path(None, Some(name), None)))
+        .or_else(|| {
+            env_socket
+                .filter(|value| !value.is_empty())
+                .map(std::path::PathBuf::from)
+        })
+}
+
+#[cfg(all(test, feature = "attach"))]
+mod attach_explicit_target_tests {
+    use super::*;
+
+    #[test]
+    fn explicit_target_prefers_flag_then_name_then_env() {
+        let flag = std::path::Path::new("/tmp/a.sock");
+        assert_eq!(
+            attach_explicit_target(
+                Some(flag),
+                Some("work"),
+                Some(std::ffi::OsStr::new("/tmp/b.sock"))
+            ),
+            Some(flag.to_path_buf())
+        );
+        // A positional absolute path IS a path (card 01a1f5deb0: the chooser
+        // used to join it under the named-socket convention instead).
+        assert_eq!(
+            attach_explicit_target(
+                None,
+                Some("/tmp/c.sock"),
+                Some(std::ffi::OsStr::new("/tmp/b.sock"))
+            ),
+            Some(std::path::PathBuf::from("/tmp/c.sock"))
+        );
+        assert_eq!(
+            attach_explicit_target(None, None, Some(std::ffi::OsStr::new("/tmp/b.sock"))),
+            Some(std::path::PathBuf::from("/tmp/b.sock"))
+        );
+        assert_eq!(attach_explicit_target(None, None, None), None);
+    }
+
+    #[test]
+    fn resolve_socket_path_passes_absolute_names_through() {
+        let absolute = par_mux::mux::resolve_socket_path(None, Some("/tmp/d.sock"), None);
+        assert_eq!(absolute, std::path::PathBuf::from("/tmp/d.sock"));
+        let named = par_mux::mux::resolve_socket_path(None, Some("feed"), None);
+        assert!(named.ends_with("par-mux-feed.sock"));
     }
 }
