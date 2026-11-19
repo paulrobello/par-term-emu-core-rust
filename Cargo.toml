@@ -37,7 +37,7 @@ uuid = { version = "1.23.2", features = ["v4", "serde"] }
 name = "par-term-emu-core-rust"
 version = "0.84.0"
 edition = "2021"
-rust-version = "1.99"
+rust-version = "1.100"
 authors = ["Paul Robello <probello@gmail.com>"]
 description = "Comprehensive terminal emulator library in Rust with Python bindings - VT100/VT220/VT320/VT420/VT520 support, PTY, Sixel/iTerm2/Kitty graphics"
 readme = "README.md"
