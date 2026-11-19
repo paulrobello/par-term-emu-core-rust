@@ -40,6 +40,11 @@ fn par_mux(args: &[&str]) -> Run {
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
+        // Hermetic against the operator's ambient mux env: the attach
+        // ladder treats $PAR_MUX_SOCKET as an explicit target, so a caller
+        // shell pointing at some daemon would flip every no-flag attach
+        // case in this file.
+        .env_remove("PAR_MUX_SOCKET")
         .spawn()
         .expect("par-mux spawns");
     let mut out_pipe = child.stdout.take().expect("stdout piped");
@@ -1084,6 +1089,14 @@ fn list_servers_shows_both_running_daemons_with_session_counts() {
             .arg("--state-dir")
             .arg(registry_base.clone())
             .arg("--foreground")
+            // Fresh state dirs hold zero sessions, so without --keep-alive
+            // the daemon's exit-when-empty self-terminates mid-test under
+            // load; the chooser then sees zero registry servers and the
+            // attach falls through to whatever daemon owns the DEFAULT
+            // socket — on a dev host, the operator's live one (measured
+            // 2026-11-19: this leg rendered the operator's real session
+            // instead of refusing).
+            .arg("--keep-alive")
             .env_remove("PAR_MUX_ENV")
             .stdout(Stdio::null())
             .stderr(Stdio::null())
@@ -1296,6 +1309,14 @@ fn attach_with_multiple_live_servers_refuses_with_a_list() {
             .arg("--state-dir")
             .arg(registry_base.clone())
             .arg("--foreground")
+            // Fresh state dirs hold zero sessions, so without --keep-alive
+            // the daemon's exit-when-empty self-terminates mid-test under
+            // load; the chooser then sees zero registry servers and the
+            // attach falls through to whatever daemon owns the DEFAULT
+            // socket — on a dev host, the operator's live one (measured
+            // 2026-11-19: this leg rendered the operator's real session
+            // instead of refusing).
+            .arg("--keep-alive")
             .env_remove("PAR_MUX_ENV")
             .stdout(Stdio::null())
             .stderr(Stdio::null())
