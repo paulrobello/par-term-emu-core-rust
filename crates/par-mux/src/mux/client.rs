@@ -630,11 +630,30 @@ fn daemon_binary_candidates() -> io::Result<Vec<PathBuf>> {
     Ok(candidates)
 }
 
+/// Nearest ancestor of `dir` (`dir` itself first, at most six levels up)
+/// that contains `file_name`.
+///
+/// Six levels covers both layouts test binaries actually land in: classic
+/// builds put them in `<target>/<profile>/deps` (one hop from the bin in
+/// `<target>/<profile>`), while cargo 1.100's build-dir split puts them in
+/// `<target>/<profile>/build/<pkg>/<hash>/out` (four hops).
+fn daemon_sibling_from(dir: &Path, file_name: &str) -> Option<PathBuf> {
+    let mut cur = dir.to_path_buf();
+    for _ in 0..6 {
+        let candidate = cur.join(file_name);
+        if candidate.is_file() {
+            return Some(candidate);
+        }
+        cur = cur.parent()?.to_path_buf();
+    }
+    None
+}
+
 /// The exe-relative half of [`daemon_binary_candidates`]: the daemon bin
 /// sitting next to our own executable.
 fn exe_sibling_daemon(file_name: &str) -> io::Result<PathBuf> {
     let exe = std::env::current_exe()?;
-    let Some(mut dir) = exe.parent().map(Path::to_path_buf) else {
+    let Some(exe_dir) = exe.parent().map(Path::to_path_buf) else {
         return Err(io::Error::new(
             io::ErrorKind::NotFound,
             format!(
@@ -643,14 +662,18 @@ fn exe_sibling_daemon(file_name: &str) -> io::Result<PathBuf> {
             ),
         ));
     };
-    // Integration-test binaries live in <target>/<profile>/deps while bins
-    // sit in <target>/<profile> — walk out of deps to find the sibling bin.
-    if dir.file_name() == Some(std::ffi::OsStr::new("deps")) {
-        if let Some(parent) = dir.parent() {
-            dir = parent.to_path_buf();
-        }
+    // Resolve through the real layouts first; when no ancestor holds the
+    // bin, keep the classic deps-walk target as the candidate so a cold
+    // tree still fails naming the familiar build-it location.
+    if let Some(found) = daemon_sibling_from(&exe_dir, file_name) {
+        return Ok(found);
     }
-    Ok(dir.join(file_name))
+    let profile_dir = if exe_dir.file_name() == Some(std::ffi::OsStr::new("deps")) {
+        exe_dir.parent().map(Path::to_path_buf).unwrap_or(exe_dir)
+    } else {
+        exe_dir
+    };
+    Ok(profile_dir.join(file_name))
 }
 
 /// The PATH half of [`daemon_binary_candidates`]: every PATH entry that
@@ -726,6 +749,32 @@ fn spawn_daemon(bin: &Path, socket: &Path) -> io::Result<std::process::Child> {
 mod tests {
     use super::*;
     use crate::mux::ipc::bind_local_listener;
+
+    #[test]
+    fn daemon_sibling_walk_finds_the_bin_from_both_cargo_layouts() {
+        let root = std::env::temp_dir().join(format!("ptecr-sibling-{}", std::process::id()));
+        let deps = root.join("target/debug/deps");
+        let out = root.join("target/debug/build/par-mux/a5fdeaf04a8c1f9f/out");
+        std::fs::create_dir_all(&deps).expect("deps tree");
+        std::fs::create_dir_all(&out).expect("out tree");
+        let bin = root.join("target/debug/par-mux");
+        std::fs::write(&bin, b"").expect("bin file");
+        // Classic layout: one hop up from deps/.
+        assert_eq!(
+            daemon_sibling_from(&deps, "par-mux").as_deref(),
+            Some(bin.as_path())
+        );
+        // cargo 1.100 build-dir layout: four hops up from out/.
+        assert_eq!(
+            daemon_sibling_from(&out, "par-mux").as_deref(),
+            Some(bin.as_path())
+        );
+        // No bin anywhere on the walk: None, caller keeps the classic
+        // deps-walk fallback so cold-tree failures name the usual spot.
+        std::fs::remove_file(&bin).expect("remove bin");
+        assert_eq!(daemon_sibling_from(&deps, "par-mux"), None);
+        std::fs::remove_dir_all(&root).expect("cleanup");
+    }
     // Windows serves its wrapper listener, whose accept is inherent.
     #[cfg(unix)]
     use interprocess::local_socket::traits::Listener as _;
