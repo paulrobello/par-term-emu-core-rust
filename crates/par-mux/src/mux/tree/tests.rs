@@ -3118,3 +3118,156 @@ fn keyboard_resize_of_the_middle_pane_of_a_left_leaning_row_moves_only_the_press
         ]
     );
 }
+
+/// Torture finding (core card 01a1f5c1b99a): `-R` accepted on a pane whose
+/// absolute `-x` resize was refused — same pane, same direction, same
+/// cycle. Both forms classify resizability by the same predicate (a
+/// same-axis ancestor must exist on the root→pane path), so the pair is
+/// asserted consistent across every tree shape the muxer can hold: if
+/// `-R` moves a divider, `-x` to the same intent must succeed; if the
+/// pane has no same-axis ancestor, both must refuse.
+#[test]
+fn resize_pane_relative_and_absolute_agree_on_resizability() {
+    type Build = Box<dyn Fn(&mut MuxTree, SessionId, WindowId) -> Vec<PaneId>>;
+    let window_w = 80u16;
+    let window_h = 24u16;
+
+    // Shapes: lone pane; side-by-side; stacked; side-by-side with a stacked
+    // second branch; stacked with a side-by-side second branch; both branch
+    // splits (three panes per orientation).
+    let shapes: Vec<(&str, Build)> = vec![
+        ("lone", Box::new(|_t, _, _| vec![])),
+        (
+            "side-by-side",
+            Box::new(|t, _s, w| {
+                let first = t.window(w).unwrap().panes()[0];
+                t.split_pane(first, SplitDirection::Vertical, 0.5, None)
+                    .unwrap();
+                t.window(w).unwrap().panes().to_vec()
+            }),
+        ),
+        (
+            "stacked",
+            Box::new(|t, _s, w| {
+                let first = t.window(w).unwrap().panes()[0];
+                t.split_pane(first, SplitDirection::Horizontal, 0.5, None)
+                    .unwrap();
+                t.window(w).unwrap().panes().to_vec()
+            }),
+        ),
+        (
+            "side+stack-right",
+            Box::new(|t, _s, w| {
+                let first = t.window(w).unwrap().panes()[0];
+                t.split_pane(first, SplitDirection::Vertical, 0.5, None)
+                    .unwrap();
+                let right = t.window(w).unwrap().panes()[1];
+                t.split_pane(right, SplitDirection::Horizontal, 0.5, None)
+                    .unwrap();
+                t.window(w).unwrap().panes().to_vec()
+            }),
+        ),
+        (
+            "stacked+side-bottom",
+            Box::new(|t, _s, w| {
+                let first = t.window(w).unwrap().panes()[0];
+                t.split_pane(first, SplitDirection::Horizontal, 0.5, None)
+                    .unwrap();
+                let bottom = t.window(w).unwrap().panes()[1];
+                t.split_pane(bottom, SplitDirection::Vertical, 0.5, None)
+                    .unwrap();
+                t.window(w).unwrap().panes().to_vec()
+            }),
+        ),
+    ];
+
+    for (shape, build) in &shapes {
+        for pane_idx in 0..3usize {
+            for dir in [
+                ResizeDirection::Left,
+                ResizeDirection::Right,
+                ResizeDirection::Up,
+                ResizeDirection::Down,
+            ] {
+                for delta in [3u16, 17u16] {
+                    // Fresh tree per case: both forms run against the same
+                    // pre-resize geometry.
+                    let mut t = tree();
+                    let sid = t.new_session("main", window_w, window_h).unwrap();
+                    let wid = t.session(sid).unwrap().windows[0];
+                    let panes = build(&mut t, sid, wid);
+                    if pane_idx >= panes.len() {
+                        continue;
+                    }
+                    let pane = panes[pane_idx];
+                    let win = t.window(wid).unwrap();
+                    let geo = win
+                        .layout
+                        .geometry(0, 0, window_w as usize, window_h as usize);
+                    let rect = geo.iter().find(|g| g.pane == pane).unwrap();
+                    let (w0, h0) = (rect.width as u16, rect.height as u16);
+
+                    let relative = t.resize_pane(pane, dir, delta.into());
+                    let (target_w, target_h) = match dir {
+                        ResizeDirection::Left | ResizeDirection::Right => {
+                            ((w0 as u32 + delta as u32).min(window_w as u32) as u16, h0)
+                        }
+                        ResizeDirection::Up | ResizeDirection::Down => {
+                            (w0, (h0 as u32 + delta as u32).min(window_h as u32) as u16)
+                        }
+                    };
+                    let absolute = match dir {
+                        ResizeDirection::Left | ResizeDirection::Right => {
+                            t.resize_pane_absolute(pane, Some(target_w), None)
+                        }
+                        ResizeDirection::Up | ResizeDirection::Down => {
+                            t.resize_pane_absolute(pane, None, Some(target_h))
+                        }
+                    };
+
+                    let describe = || -> String {
+                        format!(
+                            "shape={shape} pane#{pane_idx} (w={w0},h={h0}) dir={dir:?} delta={delta}: relative={relative:?}, absolute={absolute:?}"
+                        )
+                    };
+
+                    match (relative.is_ok(), absolute.is_ok()) {
+                        // The finding: relative accepted where absolute refused.
+                        (true, false) => panic!("relative/absolute disagreement: {}", describe()),
+                        // Absolute succeeding where relative refused is a
+                        // semantic asymmetry too — both must agree.
+                        (false, true) => panic!("absolute/relative disagreement: {}", describe()),
+                        // Both refuse: legitimate only when the pane has no
+                        // same-axis ancestor — nothing to move for either form.
+                        (false, false) => {}
+                        // Both accept: the absolute form must land within one
+                        // cell of the intent (rounding), and the pane must
+                        // still fit the window.
+                        (true, true) => {
+                            let win = t.window(wid).unwrap();
+                            let geo =
+                                win.layout
+                                    .geometry(0, 0, window_w as usize, window_h as usize);
+                            let rect = geo.iter().find(|g| g.pane == pane).unwrap();
+                            let w1 = rect.width as i32;
+                            let h1 = rect.height as i32;
+                            let (w_err, h_err) = match dir {
+                                ResizeDirection::Left | ResizeDirection::Right => {
+                                    ((w1 - target_w as i32).abs(), 0)
+                                }
+                                ResizeDirection::Up | ResizeDirection::Down => {
+                                    (0, (h1 - target_h as i32).abs())
+                                }
+                            };
+                            assert!(
+                                w_err <= 1 && h_err <= 1,
+                                "absolute landed off-target: {}",
+                                describe()
+                            );
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
