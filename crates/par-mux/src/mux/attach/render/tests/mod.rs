@@ -1,7 +1,8 @@
 //! Render-mode unit tests: the renderer, emulator, and frame-flush suites,
 //! plus the scripted-daemon helpers the session and chord suites share.
 
-use super::input_route::*;
+use super::input_route::keyboard::*;
+use super::input_route::mouse::*;
 use super::modal_menu::*;
 use super::renderer::{
     collect_boundaries, group_boundaries, map_color, pane_in_direction, BoundaryCell, PaneDir,

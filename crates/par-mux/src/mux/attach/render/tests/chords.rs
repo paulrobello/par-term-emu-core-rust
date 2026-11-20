@@ -1644,7 +1644,7 @@ fn non_ascii_chord_key_is_swallowed_whole_or_folded() {
     assert!(drained(&rx).is_empty(), "no byte of it reached the pane");
     assert_eq!(
         session.chrome.flash_text(),
-        Some(super::super::input_route::non_ascii_chord_hint('中').as_str())
+        Some(super::super::input_route::keyboard::non_ascii_chord_hint('中').as_str())
     );
 
     assert!(!session.route_plain("日本".as_bytes(), &mut conn));
