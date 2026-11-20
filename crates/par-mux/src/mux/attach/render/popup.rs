@@ -112,24 +112,24 @@ impl PaneRenderer {
     /// The pane content area in frame cells: right of the side panel,
     /// the frame's full height.
     pub(super) fn popup_area(&self) -> CellRect {
-        let x = self.geometry.sidebar_w.min(self.width);
+        let x = self.geometry.sidebar_w.min(self.frames.width);
         CellRect {
             x,
             y: 0,
-            width: self.width - x,
-            height: self.height,
+            width: self.frames.width - x,
+            height: self.frames.height,
         }
     }
 
     /// Show, re-place, or clear the popup box.
     pub(super) fn set_popup(&mut self, popup: Option<PopupView>) {
         self.popup = popup;
-        self.dirty = true;
+        self.frames.dirty = true;
     }
 
     /// The popup box, if one is up.
     pub(super) fn popup_mut(&mut self) -> Option<&mut PopupView> {
-        self.dirty = true;
+        self.frames.dirty = true;
         self.popup.as_mut()
     }
 
@@ -171,13 +171,13 @@ impl PaneRenderer {
         let outer = popup.outer;
         let inner = popup.inner();
         let title = popup.title.clone();
-        let (width, height) = (self.width, self.height);
+        let (width, height) = (self.frames.width, self.frames.height);
         let accent = RtStyle::default().fg(self.accent());
         let glyphs = self.glyphs;
         let bg = self.bg;
         for y in outer.y..(outer.y + outer.height).min(height) {
             for x in outer.x..(outer.x + outer.width).min(width) {
-                let cell = &mut self.buffer[(x, y)];
+                let cell = &mut self.frames.buffer[(x, y)];
                 cell.reset();
                 if let Some(bg) = bg {
                     cell.set_bg(bg);
@@ -202,7 +202,7 @@ impl PaneRenderer {
         for (i, ch) in label.chars().take(room).enumerate() {
             let x = outer.x + 2 + i as u16;
             if x < width && outer.y < height {
-                let cell = &mut self.buffer[(x, outer.y)];
+                let cell = &mut self.frames.buffer[(x, outer.y)];
                 cell.set_symbol(&ch.to_string());
                 cell.set_style(accent);
             }
@@ -225,7 +225,7 @@ impl PaneRenderer {
                 if core.flags().wide_char_spacer() {
                     continue;
                 }
-                let cell = &mut self.buffer[(x, y)];
+                let cell = &mut self.frames.buffer[(x, y)];
                 let mut symbol = String::from(core.c());
                 for comb in core.combining() {
                     symbol.push(*comb);
@@ -237,7 +237,7 @@ impl PaneRenderer {
                 }
                 cell.set_style(map_flags(core.flags()));
                 if core.width() == 2 && col + 1 < cols && x + 1 < width {
-                    self.buffer[(x + 1, y)].set_diff_option(CellDiffOption::Skip);
+                    self.frames.buffer[(x + 1, y)].set_diff_option(CellDiffOption::Skip);
                 }
             }
         }

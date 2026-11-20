@@ -173,7 +173,7 @@ impl PaneRenderer {
         for emulator in self.emulators.values_mut() {
             emulator.set_cell_px(cell_px);
         }
-        self.dirty = true;
+        self.frames.dirty = true;
     }
 
     /// Feed a pane's `refresh-client -t` replay. The replay rebuilds the
@@ -231,10 +231,10 @@ impl PaneRenderer {
         let origin_y = rect.y + inset_y;
         let max_rows = view_h
             .min(grid.rows() as u16)
-            .min(self.height.saturating_sub(origin_y));
+            .min(self.frames.height.saturating_sub(origin_y));
         let max_cols = view_w
             .min(grid.cols() as u16)
-            .min(self.width.saturating_sub(origin_x));
+            .min(self.frames.width.saturating_sub(origin_x));
         for graphic in graphics {
             if graphic.protocol != GraphicProtocol::Kitty
                 || graphic.is_virtual

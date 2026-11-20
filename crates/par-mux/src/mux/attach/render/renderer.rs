@@ -3,9 +3,8 @@
 
 use super::{DividerHit, Glyphs, PaneChrome, PaneEmulator, PaneRect, PaneRenderer};
 use par_term_emu_core::terminal::Terminal;
-use ratatui::buffer::{Buffer, Cell as RtCell};
-use ratatui::layout::Rect as RtRect;
-use ratatui::style::{Color as RtColor, Style as RtStyle};
+use ratatui::buffer::Cell as RtCell;
+use ratatui::style::Color as RtColor;
 use std::collections::HashMap;
 
 pub(super) use super::{pane_chrome::*, sink::*};
@@ -87,13 +86,10 @@ impl PaneRenderer {
     /// painting with `options` (its `sidebar_width` taken as the
     /// effective panel width).
     pub(crate) fn with_options(width: u16, height: u16, options: &RenderOptions) -> Self {
-        let area = RtRect::new(0, 0, width, height);
         Self {
             emulators: HashMap::new(),
             layout: Vec::new(),
             focused: None,
-            width,
-            height,
             // A session overrides this with its own (`set_geometry`).
             geometry: super::geometry::FrameGeometry::standalone(
                 width,
@@ -120,13 +116,11 @@ impl PaneRenderer {
             pane_gaps: options.pane_gaps,
             scrollbar_gutter: options.scrollbar_gutter,
             reserved_chrome: false,
-            buffer: Buffer::empty(area),
-            prev_buffer: Buffer::empty(area),
+            frames: super::frame::FrameBuffers::new(width, height),
             border_active: options.border_active,
             border_plain: options.border_plain,
             palette: None,
             cell_px: (10, 20),
-            dirty: true,
         }
     }
 
@@ -153,7 +147,7 @@ impl PaneRenderer {
         if self.border_active != active || self.border_plain != plain {
             self.border_active = active;
             self.border_plain = plain;
-            self.dirty = true;
+            self.frames.dirty = true;
         }
     }
 
@@ -162,7 +156,7 @@ impl PaneRenderer {
     pub(crate) fn set_palette(&mut self, palette: Option<crate::mux::theme::Palette>) {
         if self.palette != palette {
             self.palette = palette;
-            self.dirty = true;
+            self.frames.dirty = true;
         }
     }
 
@@ -201,7 +195,7 @@ impl PaneRenderer {
     pub fn set_background(&mut self, bg: Option<RtColor>) {
         if self.bg != bg {
             self.bg = bg;
-            self.dirty = true;
+            self.frames.dirty = true;
         }
     }
 
@@ -219,7 +213,7 @@ impl PaneRenderer {
     /// `resize_to` derived, strip/status included. `window_size` reports
     /// the pane extent; this is the buffer's own.
     pub fn frame_size(&self) -> (u16, u16) {
-        (self.width, self.height)
+        (self.frames.width, self.frames.height)
     }
 
     /// Re-size the frame to `cols` x `rows` in place (ENH-044): the frame
@@ -229,17 +223,12 @@ impl PaneRenderer {
     /// their size follows the daemon's layout, which the caller installs
     /// next with [`Self::apply_layout`]. An unchanged size is a no-op.
     pub fn resize(&mut self, cols: u16, rows: u16) {
-        if (cols, rows) == (self.width, self.height) {
+        if (cols, rows) == self.frames.size() {
             return;
         }
-        let area = RtRect::new(0, 0, cols, rows);
-        self.width = cols;
-        self.height = rows;
-        self.buffer = Buffer::empty(area);
-        self.prev_buffer = Buffer::empty(area);
+        self.frames.resize(cols, rows);
         // A divider mark is geometry from the old frame.
         self.drag_divider = None;
-        self.dirty = true;
     }
 
     /// Forget the last painted frame so the next frame's diff emits every
@@ -248,10 +237,7 @@ impl PaneRenderer {
     /// `render_frame` swaps the buffers first, so the baseline the next
     /// diff reads is the current `buffer`; both are cleared.
     pub fn invalidate_frame(&mut self) {
-        let area = RtRect::new(0, 0, self.width, self.height);
-        self.buffer = Buffer::empty(area);
-        self.prev_buffer = Buffer::empty(area);
-        self.dirty = true;
+        self.frames.invalidate();
     }
 
     /// The window extent the daemon divides: the renderer's full width
@@ -259,16 +245,16 @@ impl PaneRenderer {
     /// the daemon never learns of it), full height.
     pub fn window_size(&self) -> (u16, u16) {
         (
-            self.width.saturating_sub(self.geometry.sidebar_w),
-            self.height,
+            self.frames.width.saturating_sub(self.geometry.sidebar_w),
+            self.frames.height,
         )
     }
 
     /// One painted cell of the last frame — the test/introspection read
     /// of what the renderer would flush.
     pub fn cell(&self, x: u16, y: u16) -> Option<&RtCell> {
-        if x < self.width && y < self.height {
-            Some(&self.buffer[(x, y)])
+        if x < self.frames.width && y < self.frames.height {
+            Some(&self.frames.buffer[(x, y)])
         } else {
             None
         }
@@ -313,7 +299,7 @@ impl PaneRenderer {
             self.focused = Some(layout[0].pane);
         }
         self.layout = layout;
-        self.dirty = true;
+        self.frames.dirty = true;
     }
 
     /// Mark the focused pane (its dividers highlight). A pane the layout
@@ -321,7 +307,7 @@ impl PaneRenderer {
     pub fn focus(&mut self, pane: u32) {
         if self.layout.iter().any(|r| r.pane == pane) && self.focused != Some(pane) {
             self.focused = Some(pane);
-            self.dirty = true;
+            self.frames.dirty = true;
         }
     }
 
@@ -336,7 +322,7 @@ impl PaneRenderer {
     pub fn set_drag_divider(&mut self, divider: Option<(bool, u32, u32)>) {
         if self.drag_divider != divider {
             self.drag_divider = divider;
-            self.dirty = true;
+            self.frames.dirty = true;
         }
     }
 
@@ -346,7 +332,7 @@ impl PaneRenderer {
     pub(crate) fn set_glyphs(&mut self, glyphs: Glyphs) {
         if self.glyphs != glyphs {
             self.glyphs = glyphs;
-            self.dirty = true;
+            self.frames.dirty = true;
         }
     }
 
@@ -366,7 +352,7 @@ impl PaneRenderer {
     pub(crate) fn set_show_label_in_border(&mut self, on: bool) {
         if self.show_label_in_border != on {
             self.show_label_in_border = on;
-            self.dirty = true;
+            self.frames.dirty = true;
         }
     }
 
@@ -498,7 +484,7 @@ impl PaneRenderer {
                 }
             }
         }
-        self.dirty = true;
+        self.frames.dirty = true;
     }
 
     /// The gap-band mode (config `pane-gaps`): every pane's chrome and
@@ -531,12 +517,12 @@ impl PaneRenderer {
                 *seen_osc = osc;
                 if known != title {
                     *known = title.to_string();
-                    self.dirty = true;
+                    self.frames.dirty = true;
                 }
             }
             None => {
                 self.user_titles.insert(pane, (title.to_string(), osc));
-                self.dirty = true;
+                self.frames.dirty = true;
             }
         }
     }
@@ -592,7 +578,7 @@ impl PaneRenderer {
         let (cols, rows) = self.emulator_size(&rect);
         self.emulators
             .insert(pane, PaneEmulator::with_cell_px(cols, rows, self.cell_px));
-        self.dirty = true;
+        self.frames.dirty = true;
     }
 
     /// Feed one pane's `%output` (or replay) bytes. A pane the layout
@@ -609,7 +595,7 @@ impl PaneRenderer {
         match self.emulators.get_mut(&pane) {
             Some(emulator) => {
                 let pushed = emulator.feed(bytes);
-                self.dirty = true;
+                self.frames.dirty = true;
                 pushed
             }
             None => 0,
@@ -620,7 +606,7 @@ impl PaneRenderer {
     /// yet. A flood of ten thousand feeds between two frames still yields
     /// exactly one true here.
     pub fn needs_frame(&self) -> bool {
-        self.dirty
+        self.frames.dirty
     }
 
     /// The pane rect containing window-relative `(x, y)`, else `None`
@@ -640,7 +626,7 @@ impl PaneRenderer {
     /// The frame's row count (the pane renderer's grid height — the
     /// sidebar composes against it).
     pub(crate) fn frame_height(&self) -> u16 {
-        self.height
+        self.frames.height
     }
 
     /// A pane's tracked input-mode state (its emulator's terminal), by
@@ -659,7 +645,7 @@ impl PaneRenderer {
             if emulator.scroll_offset() != 0 {
                 emulator.scroll_to_live();
                 emulator.set_scroll_hold(false);
-                self.dirty = true;
+                self.frames.dirty = true;
             }
         }
     }
@@ -674,7 +660,7 @@ impl PaneRenderer {
             return false;
         };
         emulator.set_scroll_hold(true);
-        self.dirty = true;
+        self.frames.dirty = true;
         true
     }
 
@@ -696,7 +682,7 @@ impl PaneRenderer {
         };
         emulator.set_scroll_hold(true);
         emulator.scroll_by(rows as isize);
-        self.dirty = true;
+        self.frames.dirty = true;
         true
     }
 
@@ -713,7 +699,7 @@ impl PaneRenderer {
     pub(crate) fn set_selection(&mut self, sel: Option<super::Selection>) {
         if self.selection != sel {
             self.selection = sel;
-            self.dirty = true;
+            self.frames.dirty = true;
         }
     }
 
@@ -721,7 +707,7 @@ impl PaneRenderer {
     pub(crate) fn set_copy_cursor(&mut self, cursor: Option<(u32, usize, usize)>) {
         if self.copy_cursor != cursor {
             self.copy_cursor = cursor;
-            self.dirty = true;
+            self.frames.dirty = true;
         }
     }
 
@@ -830,7 +816,7 @@ impl PaneRenderer {
             return 0;
         };
         let after = emulator.scroll_by(delta);
-        self.dirty = true;
+        self.frames.dirty = true;
         after
     }
 
@@ -844,7 +830,7 @@ impl PaneRenderer {
         emulator.set_scroll_hold(false);
         if was_held || emulator.scroll_offset() != 0 {
             emulator.scroll_to_live();
-            self.dirty = true;
+            self.frames.dirty = true;
         }
     }
 
@@ -877,7 +863,7 @@ impl PaneRenderer {
         emulator.set_scroll_hold(after > 0);
         let moved = after != before;
         if moved {
-            self.dirty = true;
+            self.frames.dirty = true;
         }
         moved
     }
@@ -885,7 +871,7 @@ impl PaneRenderer {
     /// Force the next `render_frame` to repaint everything (terminal
     /// restore after suspend, host resize without a layout change).
     pub fn mark_all_dirty(&mut self) {
-        self.dirty = true;
+        self.frames.dirty = true;
     }
 
     /// Paint one frame and return the changed cells against the previous
@@ -893,34 +879,8 @@ impl PaneRenderer {
     /// A no-op frame (nothing dirty, or the frame changed nothing) returns
     /// an empty diff.
     pub fn render_frame(&mut self) -> Vec<(u16, u16, RtCell)> {
-        if !self.dirty {
+        if !self.frames.begin_frame(self.bg) {
             return Vec::new();
-        }
-        self.dirty = false;
-
-        // The last painted frame becomes this frame's diff baseline by a
-        // swap, not a clone (ARC-132): both buffers share the renderer's
-        // area (`resize` replaces both at once), and the reset below
-        // clears the recycled buffer before painting. After the frame,
-        // `self.buffer` holds it for tests and callers to read.
-        std::mem::swap(&mut self.buffer, &mut self.prev_buffer);
-
-        // Clear the frame to the host background BEFORE painting: every
-        // cell that paint_pane skips (a short history line, the wide-char
-        // spacer, past the grid edge) and every cell no pane rect covers
-        // then carries the resolved bg instead of the ratatui default the
-        // buffer was born with — the grey top/bottom bands the host
-        // showed. When the probe failed (`bg: None`), the fill paints NO
-        // color — cells stay terminal-default — so a failed probe can
-        // never mismatch the host theme. Blank cells keep a blank symbol
-        // but a real bg.
-        if let Some(bg) = self.bg {
-            let bg_style = RtStyle::default().bg(bg);
-            self.buffer.reset();
-            self.buffer
-                .set_style(RtRect::new(0, 0, self.width, self.height), bg_style);
-        } else {
-            self.buffer.reset();
         }
 
         // Paint every pane's grid into its rect, then the chrome on top
@@ -945,12 +905,6 @@ impl PaneRenderer {
             self.paint_overlay_highlights();
         }
 
-        let diff = self
-            .prev_buffer
-            .diff(&self.buffer)
-            .into_iter()
-            .map(|(x, y, cell)| (x, y, cell.clone()))
-            .collect::<Vec<_>>();
-        diff
+        self.frames.diff()
     }
 }

@@ -138,11 +138,18 @@ fn inside_delivery_shows_a_toast_that_expires_and_clicks_to_the_pane() {
     assert_eq!(toast.pane, Some(1));
     // It paints at the content area's bottom-right, over the panes.
     let (tx, ty, tw, th) = session.renderer.toast_rect().expect("on screen");
-    assert_eq!(tx + tw, session.renderer.width, "flush right");
-    assert_eq!(ty + th, session.renderer.height, "flush bottom");
+    assert_eq!(tx + tw, session.renderer.frames.width, "flush right");
+    assert_eq!(ty + th, session.renderer.frames.height, "flush bottom");
     session.renderer.render_frame();
     let title_row: String = (tx..tx + tw)
-        .map(|x| session.renderer.buffer[(x, ty + 1)].symbol().to_string())
+        .map(|x| {
+            session
+                .renderer
+                .cell(x, ty + 1)
+                .unwrap()
+                .symbol()
+                .to_string()
+        })
         .collect();
     assert!(title_row.contains("claude blocked"), "{title_row:?}");
     // A click on the card focuses the pane and dismisses the toast.
@@ -207,7 +214,14 @@ fn toast_renders_the_blocked_reason_line() {
     let (tx, ty, tw, th) = session.renderer.toast_rect().expect("on screen");
     assert_eq!(th, 5, "the reason adds the card's fourth row");
     let reason_row: String = (tx..tx + tw)
-        .map(|x| session.renderer.buffer[(x, ty + 3)].symbol().to_string())
+        .map(|x| {
+            session
+                .renderer
+                .cell(x, ty + 3)
+                .unwrap()
+                .symbol()
+                .to_string()
+        })
         .collect();
     assert!(
         reason_row.contains("needs approval"),

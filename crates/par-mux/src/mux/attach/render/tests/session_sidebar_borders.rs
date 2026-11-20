@@ -35,7 +35,7 @@ fn sidebar_clicks_land_on_the_painted_row() {
     );
     session.renderer.paint_sidebar();
     let first: String = (0..19)
-        .map(|x| session.renderer.buffer[(x, 0)].symbol())
+        .map(|x| session.renderer.frames.buffer[(x, 0)].symbol())
         .collect();
     assert!(
         first.contains("alpha"),
@@ -43,7 +43,7 @@ fn sidebar_clicks_land_on_the_painted_row() {
     );
     let panel_text: String = (0..22)
         .flat_map(|y| (0..19).map(move |x| (x, y)))
-        .map(|(x, y)| session.renderer.buffer[(x, y)].symbol())
+        .map(|(x, y)| session.renderer.frames.buffer[(x, y)].symbol())
         .collect();
     assert!(
         !panel_text.contains("workspaces"),

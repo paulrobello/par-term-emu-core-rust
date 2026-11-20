@@ -83,14 +83,17 @@ impl PaneRenderer {
         // Clamped to the frame: a layout broadcast racing a host shrink
         // (or a test fixture) can carry rects past the buffer's edge,
         // and painting would panic on the index.
-        let max_rows = view_h
-            .min(grid.rows() as u16)
-            .min(self.height.saturating_sub(rect.y.saturating_add(inset_y)));
+        let max_rows = view_h.min(grid.rows() as u16).min(
+            self.frames
+                .height
+                .saturating_sub(rect.y.saturating_add(inset_y)),
+        );
         // The clamp counts the side panel's offset: a layout broadcast
         // racing the toggle still carries full-width rects, and painting
         // them offset would run past the buffer's right edge.
         let max_cols = view_w.min(grid.cols() as u16).min(
-            self.width
+            self.frames
+                .width
                 .saturating_sub(rect.x + self.geometry.sidebar_w + inset_x),
         );
         for row in 0..max_rows {
@@ -131,7 +134,7 @@ impl PaneRenderer {
                 if core_cell.flags().wide_char_spacer() {
                     continue;
                 }
-                let cell = &mut self.buffer[(x, y)];
+                let cell = &mut self.frames.buffer[(x, y)];
                 cell.reset();
                 if let Some(bg) = self.bg {
                     cell.set_bg(bg);
@@ -175,8 +178,8 @@ impl PaneRenderer {
                 }
                 // A double-width base marks its right-hand spacer skip so
                 // the diff's flush never draws into it.
-                if core_cell.width() == 2 && col + 1 < view_w && x + 1 < self.width {
-                    self.buffer[(x + 1, y)].set_diff_option(CellDiffOption::Skip);
+                if core_cell.width() == 2 && col + 1 < view_w && x + 1 < self.frames.width {
+                    self.frames.buffer[(x + 1, y)].set_diff_option(CellDiffOption::Skip);
                 }
             }
         }
@@ -191,15 +194,15 @@ impl PaneRenderer {
         if self.scrollbar_gutter && view_h > 0 {
             let accent = self.accent();
             let gx = rect.x + self.geometry.sidebar_w + inset_x + view_w;
-            if gx < self.width {
+            if gx < self.frames.width {
                 let indicator_row = (scroll.min(u16::MAX as usize) as u32 * u32::from(view_h))
                     / (scroll.min(u16::MAX as usize) as u32 + u32::from(view_h));
                 for gy in 0..view_h {
                     let y = rect.y + inset_y + gy;
-                    if y >= self.height {
+                    if y >= self.frames.height {
                         break;
                     }
-                    let cell = &mut self.buffer[(gx, y)];
+                    let cell = &mut self.frames.buffer[(gx, y)];
                     cell.reset();
                     if let Some(bg) = self.bg {
                         cell.set_bg(bg);
@@ -239,10 +242,10 @@ impl PaneRenderer {
                     continue;
                 }
                 let (x, y) = self.geometry.content_to_frame(col, row);
-                if x >= self.width || y >= self.height {
+                if x >= self.frames.width || y >= self.frames.height {
                     continue;
                 }
-                let cell = &mut self.buffer[(x, y)];
+                let cell = &mut self.frames.buffer[(x, y)];
                 cell.reset();
                 cell.set_symbol(".");
                 cell.set_style(style);

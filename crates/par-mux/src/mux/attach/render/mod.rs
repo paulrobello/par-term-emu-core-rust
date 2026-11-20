@@ -22,7 +22,7 @@ use par_term_emu_core::cursor::CursorStyle;
 use par_term_emu_core::mouse::MouseMode;
 use par_term_emu_core::terminal::Terminal;
 use par_term_emu_core::tmux_control::TmuxNotification;
-use ratatui::buffer::{Buffer, Cell as RtCell};
+use ratatui::buffer::Cell as RtCell;
 use ratatui::style::Color as RtColor;
 use std::collections::{HashMap, VecDeque};
 use std::io::Write as _;
@@ -30,6 +30,7 @@ mod chrome;
 mod copy_mode;
 mod cursor;
 mod drag;
+mod frame;
 mod geometry;
 mod input_route;
 mod kitty;
@@ -405,8 +406,6 @@ pub struct PaneRenderer {
     layout: Vec<PaneRect>,
     /// The focused pane id — its adjacent dividers highlight.
     focused: Option<u32>,
-    width: u16,
-    height: u16,
     glyphs: Glyphs,
     /// The background every frame cell is filled with before painting —
     /// the host terminal's resolved background (the OSC 10/11 probe). When
@@ -489,10 +488,10 @@ pub struct PaneRenderer {
     /// feature `chrome`): emulators mirror the PTY grid, the rect less the
     /// chrome, rather than the full rect.
     reserved_chrome: bool,
-    /// The frame being painted.
-    buffer: Buffer,
-    /// The last frame handed out; `render_frame` diffs against it.
-    prev_buffer: Buffer,
+    /// The frame model (ARC-004): the double buffers, the staleness flag,
+    /// and the resize/invalidate/diff cycle — what owns "the current
+    /// composite is stale", separate from the glyph painting.
+    frames: frame::FrameBuffers,
     /// Border colors (config `border-active-color` / `border-color`,
     /// `#rrggbb` hex; `None` = the built-ins — bright-cyan accent for the
     /// focused boundary half, DIM for unfocused dividers).
@@ -506,7 +505,6 @@ pub struct PaneRenderer {
     /// image cell-span math uses it, so an image advances the mirror's
     /// cursor by the same rows the daemon's pane advanced.
     cell_px: (u32, u32),
-    dirty: bool,
 }
 
 /// Sink the flush loop writes through, so the frame path is testable

@@ -39,7 +39,7 @@ impl PaneRenderer {
     pub(crate) fn set_toast(&mut self, toast: Option<Toast>) {
         if self.toast != toast {
             self.toast = toast;
-            self.dirty = true;
+            self.frames.dirty = true;
         }
     }
 
@@ -49,8 +49,8 @@ impl PaneRenderer {
     /// the card's fourth row.
     pub(crate) fn toast_rect(&self) -> Option<(u16, u16, u16, u16)> {
         let toast = self.toast.as_ref()?;
-        let left = self.geometry.sidebar_w.min(self.width);
-        let area_w = self.width - left;
+        let left = self.geometry.sidebar_w.min(self.frames.width);
+        let area_w = self.frames.width - left;
         let lines = toast
             .title
             .chars()
@@ -58,11 +58,11 @@ impl PaneRenderer {
             .max(toast.body.chars().count() + 2)
             .max(toast.message.as_ref().map_or(0, |m| m.chars().count() + 2));
         let w = u16::try_from(lines + 6).unwrap_or(u16::MAX).min(area_w);
-        let h = (4 + u16::from(toast.message.is_some())).min(self.height);
+        let h = (4 + u16::from(toast.message.is_some())).min(self.frames.height);
         if w < 8 || h < 3 {
             return None;
         }
-        Some((self.width - w, self.height - h, w, h))
+        Some((self.frames.width - w, self.frames.height - h, w, h))
     }
 
     /// When the frame cell `(x, y)` is on the card: `Some` of the pane a
@@ -88,7 +88,7 @@ impl PaneRenderer {
         let dim = RtStyle::default().add_modifier(RtModifier::DIM);
         for y in y0..y0 + h {
             for x in x0..x0 + w {
-                let cell = &mut self.buffer[(x, y)];
+                let cell = &mut self.frames.buffer[(x, y)];
                 cell.reset();
                 if let Some(bg) = self.bg {
                     cell.set_bg(bg);
@@ -116,7 +116,7 @@ impl PaneRenderer {
                 if x >= x0 + w - 1 {
                     break;
                 }
-                let cell = &mut self.buffer[(x, y)];
+                let cell = &mut self.frames.buffer[(x, y)];
                 cell.set_symbol(&ch.to_string());
                 cell.set_style(style);
             }

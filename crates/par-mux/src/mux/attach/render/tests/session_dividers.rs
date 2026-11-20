@@ -542,24 +542,28 @@ fn focus_flip_changes_the_shared_dividers_color() {
     renderer.focus(1);
     renderer.render_frame();
     assert_eq!(
-        renderer.buffer[(39, 0)].fg,
+        renderer.frames.buffer[(39, 0)].fg,
         RtColor::Indexed(14),
         "pane 1 (left) focused: the divider's TOP half is the accent"
     );
     assert!(
-        renderer.buffer[(39, 23)].modifier.contains(RtModifier::DIM),
+        renderer.frames.buffer[(39, 23)]
+            .modifier
+            .contains(RtModifier::DIM),
         "pane 1 focused: the divider's bottom half stays dim"
     );
     renderer.focus(2);
     renderer.mark_all_dirty();
     renderer.render_frame();
     assert_eq!(
-        renderer.buffer[(39, 23)].fg,
+        renderer.frames.buffer[(39, 23)].fg,
         RtColor::Indexed(14),
         "pane 2 (right) focused: the divider's BOTTOM half is the accent"
     );
     assert!(
-        renderer.buffer[(39, 0)].modifier.contains(RtModifier::DIM),
+        renderer.frames.buffer[(39, 0)]
+            .modifier
+            .contains(RtModifier::DIM),
         "pane 2 focused: the divider's top half stays dim"
     );
 }

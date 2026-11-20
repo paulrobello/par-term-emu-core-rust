@@ -35,7 +35,7 @@ impl PaneRenderer {
     pub(crate) fn set_geometry(&mut self, geometry: super::geometry::FrameGeometry) {
         if self.geometry.sidebar_w != geometry.sidebar_w {
             self.sidebar_sections = None;
-            self.dirty = true;
+            self.frames.dirty = true;
         }
         self.geometry = geometry;
     }
@@ -45,7 +45,7 @@ impl PaneRenderer {
     pub(crate) fn set_sidebar_sections(&mut self, sections: Option<Vec<SidebarSection>>) {
         if self.sidebar_sections != sections {
             self.sidebar_sections = sections;
-            self.dirty = true;
+            self.frames.dirty = true;
         }
     }
 
@@ -54,7 +54,7 @@ impl PaneRenderer {
     pub(crate) fn set_sidebar_split(&mut self, split: f32) {
         if self.sidebar_split != split {
             self.sidebar_split = split;
-            self.dirty = true;
+            self.frames.dirty = true;
         }
     }
 
@@ -73,7 +73,7 @@ impl PaneRenderer {
     pub(crate) fn set_agents_sort(&mut self, mode: crate::mux::attach::panels::AgentSortMode) {
         if self.agents_sort != mode {
             self.agents_sort = mode;
-            self.dirty = true;
+            self.frames.dirty = true;
         }
     }
 
@@ -82,7 +82,7 @@ impl PaneRenderer {
     pub(crate) fn set_sidebar_collapsed(&mut self, collapsed: bool) {
         if self.sidebar_collapsed != collapsed {
             self.sidebar_collapsed = collapsed;
-            self.dirty = true;
+            self.frames.dirty = true;
         }
     }
 
@@ -95,12 +95,12 @@ impl PaneRenderer {
             return Vec::new();
         };
         if self.sidebar_collapsed {
-            compose_sidebar_rail(sections, self.height, self.sidebar_split)
+            compose_sidebar_rail(sections, self.frames.height, self.sidebar_split)
         } else {
             compose_sidebar(
                 sections,
                 w,
-                self.height,
+                self.frames.height,
                 self.sidebar_split,
                 self.agents_sort,
             )
@@ -165,9 +165,9 @@ impl PaneRenderer {
         let rail = self.sidebar_collapsed;
         // The expanded panel's text stops at its divider column.
         let content_w = if rail { w } else { w - 1 };
-        for y in 0..self.height {
+        for y in 0..self.frames.height {
             for x in 0..w {
-                let cell = &mut self.buffer[(x, y)];
+                let cell = &mut self.frames.buffer[(x, y)];
                 cell.reset();
                 if let Some(bg) = self.bg {
                     cell.set_bg(bg);
@@ -189,7 +189,7 @@ impl PaneRenderer {
             // columns (line.x), body rows at col 0.
             if line.active {
                 for x in 0..content_w {
-                    let cell = &mut self.buffer[(x, line.y)];
+                    let cell = &mut self.frames.buffer[(x, line.y)];
                     cell.reset();
                     cell.set_bg(band);
                 }
@@ -235,7 +235,7 @@ impl PaneRenderer {
                     break;
                 }
                 let is_glyph = if rail { j == 1 } else { ch == STATE_ICON };
-                let cell = &mut self.buffer[(x, line.y)];
+                let cell = &mut self.frames.buffer[(x, line.y)];
                 cell.set_symbol(&ch.to_string());
                 // The glyph cell carries the status's own shape, so the
                 // working half-circle shows on the rail, the workspace

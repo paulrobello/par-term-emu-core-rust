@@ -133,13 +133,13 @@ fn a_window_smaller_than_the_frame_pads_with_dots() {
     }]);
     renderer.feed_output(1, b"HELLO");
     renderer.render_frame();
-    let symbol = |x: u16, y: u16| renderer.buffer[(x, y)].symbol().to_string();
+    let symbol = |x: u16, y: u16| renderer.frames.buffer[(x, y)].symbol().to_string();
     assert_eq!(symbol(0, 0), "H", "the window keeps its cells");
     assert_eq!(symbol(49, 9), " ", "the window's last cell is not padding");
     assert_eq!(symbol(50, 0), ".", "right of the window");
     assert_eq!(symbol(0, 10), ".", "below the window");
     assert_eq!(symbol(79, 23), ".", "the far corner");
-    assert!(renderer.buffer[(50, 0)]
+    assert!(renderer.frames.buffer[(50, 0)]
         .modifier
         .contains(ratatui::style::Modifier::DIM));
 
@@ -153,7 +153,7 @@ fn a_window_smaller_than_the_frame_pads_with_dots() {
     renderer.render_frame();
     let dots = (0..24u16)
         .flat_map(|y| (0..80u16).map(move |x| (x, y)))
-        .filter(|&(x, y)| renderer.buffer[(x, y)].symbol() == ".")
+        .filter(|&(x, y)| renderer.frames.buffer[(x, y)].symbol() == ".")
         .count();
     assert_eq!(dots, 0, "a full-size window pads nothing");
 }
@@ -178,7 +178,7 @@ fn two_pane_split_renders_at_daemon_rects() {
 
     let buffer_text = |x: u16, y: u16, n: u16| -> String {
         (x..x + n)
-            .map(|col| renderer.buffer[(col, y)].symbol())
+            .map(|col| renderer.frames.buffer[(col, y)].symbol())
             .collect()
     };
     assert_eq!(buffer_text(0, 0, 4), "LEFT");
@@ -186,10 +186,10 @@ fn two_pane_split_renders_at_daemon_rects() {
 
     // The dividers: one vertical boundary at col 39 across the row
     // overlap, drawn as UTF-8 box drawing.
-    assert_eq!(renderer.buffer[(39, 0)].symbol(), "│");
-    assert_eq!(renderer.buffer[(39, 23)].symbol(), "│");
+    assert_eq!(renderer.frames.buffer[(39, 0)].symbol(), "│");
+    assert_eq!(renderer.frames.buffer[(39, 23)].symbol(), "│");
     // No horizontal dividers in this layout.
-    assert_eq!(renderer.buffer[(10, 11)].symbol(), " ");
+    assert_eq!(renderer.frames.buffer[(10, 11)].symbol(), " ");
 }
 
 /// Cell mapping: styled bytes (`capture-pane -e` equivalent — the
@@ -205,13 +205,13 @@ fn styled_cells_map_fg_bg_and_attrs() {
     renderer.feed_output(1, b"\x1b[1;38;2;10;20;30;44mAB\x1b[0m normal \r\n");
     renderer.render_frame();
 
-    let a = &renderer.buffer[(0, 0)];
+    let a = &renderer.frames.buffer[(0, 0)];
     assert_eq!(a.symbol(), "A");
     assert_eq!(a.fg, RtColor::Rgb(10, 20, 30), "truecolor fg passthrough");
     assert_eq!(a.bg, RtColor::Indexed(4), "SGR 44 -> indexed blue bg");
     assert!(a.modifier.contains(RtModifier::BOLD));
 
-    let n = &renderer.buffer[(3, 0)];
+    let n = &renderer.frames.buffer[(3, 0)];
     assert_eq!(n.symbol(), "n");
     assert_eq!(n.fg, RtColor::Indexed(7), "post-reset default fg");
 }
@@ -248,7 +248,7 @@ fn output_flood_coalesces_at_frame_cadence() {
     // written ("line 999" at row 23) moved up one row when its \r\n
     // scrolled the grid, leaving row 22 as the final text row.
     let last = (0..6)
-        .map(|c| renderer.buffer[(c, 22)].symbol())
+        .map(|c| renderer.frames.buffer[(c, 22)].symbol())
         .collect::<String>();
     assert_eq!(last, "line 9");
 }
@@ -267,7 +267,7 @@ fn zoomed_triple_renders_one_full_window_pane() {
     renderer.render_frame();
 
     let zoomed = (0..6)
-        .map(|c| renderer.buffer[(c, 0)].symbol())
+        .map(|c| renderer.frames.buffer[(c, 0)].symbol())
         .collect::<String>();
     assert_eq!(zoomed, "ZOOMED");
     assert_eq!(renderer.layout().len(), 1, "one visible pane while zoomed");
@@ -279,11 +279,11 @@ fn zoomed_triple_renders_one_full_window_pane() {
     renderer.feed_output(1, b"LEFT\r\n");
     renderer.render_frame();
     let left = (0..6)
-        .map(|c| renderer.buffer[(c, 0)].symbol())
+        .map(|c| renderer.frames.buffer[(c, 0)].symbol())
         .collect::<String>();
     assert_eq!(left, "LEFT  ", "pane 1 on the left half");
     let right = (40..46)
-        .map(|c| renderer.buffer[(c, 0)].symbol())
+        .map(|c| renderer.frames.buffer[(c, 0)].symbol())
         .collect::<String>();
     assert_eq!(right, "ZOOMED", "pane 2 kept its grid through the zoom");
 }
@@ -361,7 +361,7 @@ fn layout_change_drops_departed_panes() {
     renderer.apply_layout(one);
     renderer.render_frame();
     let solo = (0..4)
-        .map(|c| renderer.buffer[(c, 0)].symbol())
+        .map(|c| renderer.frames.buffer[(c, 0)].symbol())
         .collect::<String>();
     assert_eq!(solo, "    ", "pane 2's grid is empty here");
     assert!(renderer.focused().is_some());
@@ -371,7 +371,7 @@ fn layout_change_drops_departed_panes() {
     renderer.apply_layout(parse_layout(TWO_PANE_LAYOUT).unwrap());
     renderer.render_frame();
     let back = (0..4)
-        .map(|c| renderer.buffer[(c, 0)].symbol())
+        .map(|c| renderer.frames.buffer[(c, 0)].symbol())
         .collect::<String>();
     assert_eq!(back, "    ");
 }
@@ -383,7 +383,7 @@ fn ascii_glyphs_fallback() {
     let mut renderer = PaneRenderer::new(80, 24, Glyphs::Ascii);
     renderer.apply_layout(layout);
     renderer.render_frame();
-    assert_eq!(renderer.buffer[(39, 0)].symbol(), "|");
+    assert_eq!(renderer.frames.buffer[(39, 0)].symbol(), "|");
 }
 
 /// Focus: the focused pane's boundary dividers are bold, the others
@@ -404,14 +404,14 @@ fn horizontal_dividers_paint_on_stacked_splits() {
     let y = 11u16; // the top pane's last row — the boundary cell
     for x in (0..80u16).step_by(7) {
         assert_eq!(
-            renderer.buffer[(x, y)].symbol(),
+            renderer.frames.buffer[(x, y)].symbol(),
             "─",
             "the stacked split's horizontal divider paints at column {x}"
         );
     }
     // And nothing transposed: a mid-pane column keeps its content.
     assert_ne!(
-        renderer.buffer[(11, 3)].symbol(),
+        renderer.frames.buffer[(11, 3)].symbol(),
         "─",
         "no transposed vertical streak at the boundary row's coordinate"
     );
@@ -442,11 +442,15 @@ fn focus_highlights_adjacent_dividers() {
     renderer.focus(1);
     renderer.render_frame();
     assert!(
-        renderer.buffer[(29, 0)].modifier.contains(RtModifier::BOLD),
+        renderer.frames.buffer[(29, 0)]
+            .modifier
+            .contains(RtModifier::BOLD),
         "focused pane 1's right divider is bold"
     );
     assert!(
-        renderer.buffer[(59, 0)].modifier.contains(RtModifier::DIM),
+        renderer.frames.buffer[(59, 0)]
+            .modifier
+            .contains(RtModifier::DIM),
         "the pane2|pane3 divider (no focused neighbor) is dim"
     );
 
@@ -457,17 +461,21 @@ fn focus_highlights_adjacent_dividers() {
     // half highlights) and the LEFT side of the 2|3 boundary (top
     // half highlights).
     assert!(
-        renderer.buffer[(29, 23)]
+        renderer.frames.buffer[(29, 23)]
             .modifier
             .contains(RtModifier::BOLD),
         "moving focus to pane 2: the 1|2 divider's bottom half highlights"
     );
     assert!(
-        renderer.buffer[(29, 0)].modifier.contains(RtModifier::DIM),
+        renderer.frames.buffer[(29, 0)]
+            .modifier
+            .contains(RtModifier::DIM),
         "moving focus to pane 2: the 1|2 divider's top half stays dim"
     );
     assert!(
-        renderer.buffer[(59, 0)].modifier.contains(RtModifier::BOLD),
+        renderer.frames.buffer[(59, 0)]
+            .modifier
+            .contains(RtModifier::BOLD),
         "moving focus to pane 2: the 2|3 divider's top half highlights"
     );
 
@@ -498,13 +506,13 @@ fn wide_chars_mark_their_spacer() {
     renderer.apply_layout(layout);
     renderer.feed_output(1, "世X\r\n".as_bytes());
     renderer.render_frame();
-    assert_eq!(renderer.buffer[(0, 0)].symbol(), "世");
+    assert_eq!(renderer.frames.buffer[(0, 0)].symbol(), "世");
     assert_eq!(
-        renderer.buffer[(1, 0)].diff_option,
+        renderer.frames.buffer[(1, 0)].diff_option,
         CellDiffOption::Skip,
         "wide-char spacer is skip"
     );
-    assert_eq!(renderer.buffer[(2, 0)].symbol(), "X");
+    assert_eq!(renderer.frames.buffer[(2, 0)].symbol(), "X");
 }
 
 /// An empty layout list is a caller contract violation and asserts.
@@ -524,8 +532,8 @@ fn combining_marks_join_the_symbol() {
     renderer.apply_layout(layout);
     renderer.feed_output(1, "e\u{0301}x\r\n".as_bytes());
     renderer.render_frame();
-    assert_eq!(renderer.buffer[(0, 0)].symbol(), "\u{e9}");
-    assert_eq!(renderer.buffer[(1, 0)].symbol(), "x");
+    assert_eq!(renderer.frames.buffer[(0, 0)].symbol(), "\u{e9}");
+    assert_eq!(renderer.frames.buffer[(1, 0)].symbol(), "x");
 }
 
 /// Criterion 3 (client side): a wheel-up over a pane that does NOT own
@@ -565,7 +573,7 @@ fn wheel_scrolls_client_scrollback_when_pane_has_no_mouse_mode() {
     renderer.render_frame();
     // View row 0 now shows the newest unscrolled-back history line.
     let top: String = (0..8)
-        .map(|c| renderer.buffer[(c, 0)].symbol())
+        .map(|c| renderer.frames.buffer[(c, 0)].symbol())
         .collect::<String>();
     assert_eq!(top, expected_top, "the top row scrolled into history");
 
@@ -573,7 +581,7 @@ fn wheel_scrolls_client_scrollback_when_pane_has_no_mouse_mode() {
     assert!(renderer.wheel_scroll(10, 5, -3));
     renderer.render_frame();
     let painted: String = (0..8)
-        .map(|c| renderer.buffer[(c, 0)].symbol())
+        .map(|c| renderer.frames.buffer[(c, 0)].symbol())
         .collect::<String>();
     let live = line_text(grid.row(0).expect("live row"));
     assert_eq!(painted, live, "back at the live view");
@@ -620,7 +628,7 @@ fn wheel_scrolled_view_holds_against_pane_output() {
     );
     renderer.render_frame();
     let top: String = (0..8)
-        .map(|c| renderer.buffer[(c, 0)].symbol())
+        .map(|c| renderer.frames.buffer[(c, 0)].symbol())
         .collect::<String>();
     assert_eq!(top, pinned_top, "the pinned content did not move");
 
@@ -884,7 +892,9 @@ fn scroll_viewport_paints_history_rows() {
         .scrollback_line(grid.scrollback_len() - offset)
         .expect("history line");
     let expected: String = expected.iter().take(8).map(|c| c.c().to_string()).collect();
-    let top: String = (0..8).map(|c| renderer.buffer[(c, 0)].symbol()).collect();
+    let top: String = (0..8)
+        .map(|c| renderer.frames.buffer[(c, 0)].symbol())
+        .collect();
     assert_eq!(top, expected, "the viewport paints from history");
 }
 
@@ -927,7 +937,7 @@ fn scrolled_gutter_stays_outside_the_content_with_the_side_panel_up() {
         let case = format!("borders={borders} gutter={gutter}");
         for row in 0..view_h {
             for col in 0..view_w {
-                let cell = &renderer.buffer[(side + inset_x + col, inset_y + row)];
+                let cell = &renderer.frames.buffer[(side + inset_x + col, inset_y + row)];
                 assert!(
                     cell.symbol().chars().all(|c| c.is_ascii_lowercase())
                         && cell.fg == RtColor::Indexed(1),
@@ -940,7 +950,8 @@ fn scrolled_gutter_stays_outside_the_content_with_the_side_panel_up() {
         if gutter {
             let gx = side + inset_x + view_w;
             assert!(
-                (0..view_h).any(|row| renderer.buffer[(gx, inset_y + row)].symbol() == "\u{2590}"),
+                (0..view_h)
+                    .any(|row| renderer.frames.buffer[(gx, inset_y + row)].symbol() == "\u{2590}"),
                 "{case}: the scroll indicator paints beside the content"
             );
         }
@@ -966,7 +977,7 @@ fn divider_yields_the_gutter_column_with_the_side_panel_up() {
     // Pane 1 is 40 wide at x 0: its last column (39) is the boundary.
     let gx = side + 39;
     assert!(
-        (0..24).any(|row| renderer.buffer[(gx, row)].symbol() == "\u{2590}"),
+        (0..24).any(|row| renderer.frames.buffer[(gx, row)].symbol() == "\u{2590}"),
         "the scrolled left pane's indicator survives the divider paint"
     );
 }
@@ -1142,7 +1153,7 @@ fn focused_divider_carries_accent_vs_dim_unfocused() {
     renderer.focus(1);
     renderer.render_frame();
 
-    let focused_div = &renderer.buffer[(29, 0)];
+    let focused_div = &renderer.frames.buffer[(29, 0)];
     assert_eq!(
         focused_div.fg,
         RtColor::Indexed(14),
@@ -1150,7 +1161,7 @@ fn focused_divider_carries_accent_vs_dim_unfocused() {
     );
     assert!(focused_div.modifier.contains(RtModifier::BOLD));
 
-    let unfocused_div = &renderer.buffer[(59, 0)];
+    let unfocused_div = &renderer.frames.buffer[(59, 0)];
     assert_eq!(
         unfocused_div.fg,
         RtColor::Reset,

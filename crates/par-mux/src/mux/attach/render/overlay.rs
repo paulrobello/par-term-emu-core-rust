@@ -16,11 +16,11 @@ impl PaneRenderer {
             .map(|r| crate::mux::attach::text_input::display_width(&r.text))
             .max()
             .unwrap_or(0)
-            .min(self.width.saturating_sub(2) as usize)
+            .min(self.frames.width.saturating_sub(2) as usize)
             .max(1);
         let height = rows
             .len()
-            .min(self.height.saturating_sub(2) as usize)
+            .min(self.frames.height.saturating_sub(2) as usize)
             .max(1);
         let (x0, y0) = match self.overlay_anchor {
             // Anchored: the box's left ring at the anchor column, pulled
@@ -37,19 +37,19 @@ impl PaneRenderer {
                 };
                 let w = inner + 2;
                 let h = height + 2;
-                let x0 = ax.min((self.width as usize).saturating_sub(w));
+                let x0 = ax.min((self.frames.width as usize).saturating_sub(w));
                 let y0 = if below {
-                    ay.min((self.height as usize).saturating_sub(h))
+                    ay.min((self.frames.height as usize).saturating_sub(h))
                 } else {
                     (ay + 1)
                         .saturating_sub(h)
-                        .min((self.height as usize).saturating_sub(h))
+                        .min((self.frames.height as usize).saturating_sub(h))
                 };
                 (x0, y0)
             }
             None => (
-                (self.width as usize).saturating_sub(inner + 2) / 2,
-                (self.height as usize).saturating_sub(height + 2) / 2,
+                (self.frames.width as usize).saturating_sub(inner + 2) / 2,
+                (self.frames.height as usize).saturating_sub(height + 2) / 2,
             ),
         };
         Some((x0, y0, inner, height))
@@ -75,7 +75,7 @@ impl PaneRenderer {
     pub(crate) fn set_overlay_anchor(&mut self, anchor: Option<OverlayAnchor>) {
         if self.overlay_anchor != anchor {
             self.overlay_anchor = anchor;
-            self.dirty = true;
+            self.frames.dirty = true;
         }
     }
 
@@ -127,7 +127,7 @@ impl PaneRenderer {
             }
             self.overlay = overlay;
             self.overlay_highlights.clear();
-            self.dirty = true;
+            self.frames.dirty = true;
         }
     }
 
@@ -137,7 +137,7 @@ impl PaneRenderer {
     pub(crate) fn set_overlay_highlights(&mut self, highlights: Vec<(usize, usize, usize)>) {
         if self.overlay_highlights != highlights {
             self.overlay_highlights = highlights;
-            self.dirty = true;
+            self.frames.dirty = true;
         }
     }
 
@@ -160,7 +160,7 @@ impl PaneRenderer {
                 continue;
             }
             for col in from..to.min(inner) {
-                let cell = &mut self.buffer[((x0 + 1 + col) as u16, (y0 + 1 + row) as u16)];
+                let cell = &mut self.frames.buffer[((x0 + 1 + col) as u16, (y0 + 1 + row) as u16)];
                 let style = cell.style().add_modifier(RtModifier::REVERSED);
                 cell.set_style(style);
             }
@@ -193,7 +193,7 @@ impl PaneRenderer {
         // Fill every cell of the box with the theme background first.
         for y in y0..y0 + height + 2 {
             for x in x0..x0 + inner + 2 {
-                let cell = &mut self.buffer[(x as u16, y as u16)];
+                let cell = &mut self.frames.buffer[(x as u16, y as u16)];
                 cell.reset();
                 if let Some(bg) = self.bg {
                     cell.set_bg(bg);
@@ -202,7 +202,7 @@ impl PaneRenderer {
         }
         // Border ring in the accent color (ASCII fallback: `+` corners).
         let mut ring = |x: usize, y: usize, symbol: &str| {
-            let cell = &mut self.buffer[(x as u16, y as u16)];
+            let cell = &mut self.frames.buffer[(x as u16, y as u16)];
             cell.set_symbol(symbol);
             cell.set_style(accent_style);
         };
@@ -231,7 +231,7 @@ impl PaneRenderer {
                 if x > x0 + inner {
                     break;
                 }
-                let cell = &mut self.buffer[(x as u16, y0 as u16)];
+                let cell = &mut self.frames.buffer[(x as u16, y0 as u16)];
                 cell.set_symbol(&ch.to_string());
                 cell.set_style(accent_style);
             }
@@ -247,7 +247,7 @@ impl PaneRenderer {
             if row.footer {
                 let band = RtStyle::default().bg(RtColor::Rgb(64, 64, 64));
                 for x in x0 + 1..x0 + inner + 1 {
-                    let cell = &mut self.buffer[(x as u16, (y0 + 1 + i) as u16)];
+                    let cell = &mut self.frames.buffer[(x as u16, (y0 + 1 + i) as u16)];
                     cell.reset();
                     cell.set_style(band);
                 }
@@ -263,7 +263,7 @@ impl PaneRenderer {
                 if j + width > inner {
                     break;
                 }
-                let cell = &mut self.buffer[((x0 + 1 + j) as u16, (y0 + 1 + i) as u16)];
+                let cell = &mut self.frames.buffer[((x0 + 1 + j) as u16, (y0 + 1 + i) as u16)];
                 j += width;
                 cell.set_symbol(&ch.to_string());
                 if row.accent {
@@ -284,7 +284,7 @@ impl PaneRenderer {
                 let max_start = total.saturating_sub(visible).max(1);
                 let thumb_pos = y0 + 1 + start.min(max_start) * (track - thumb_len) / max_start;
                 for y in thumb_pos..thumb_pos + thumb_len {
-                    let cell = &mut self.buffer[((x0 + inner + 1) as u16, y as u16)];
+                    let cell = &mut self.frames.buffer[((x0 + inner + 1) as u16, y as u16)];
                     cell.set_symbol("┃");
                     cell.set_style(accent_style);
                 }

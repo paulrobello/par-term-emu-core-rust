@@ -140,7 +140,7 @@ fn block_selection_covers_and_paints() {
     let mut reversed = 0usize;
     for row in 0..session.renderer.frame_height() {
         for col in 0..40u16 {
-            if session.renderer.buffer[(col, row)]
+            if session.renderer.frames.buffer[(col, row)]
                 .style()
                 .add_modifier
                 .contains(ratatui::style::Modifier::REVERSED)

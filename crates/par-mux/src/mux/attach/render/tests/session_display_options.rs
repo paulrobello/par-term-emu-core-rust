@@ -69,7 +69,7 @@ fn help_chord_opens_filters_and_dismissal_restores_the_frame() {
     assert_eq!(session.renderer.overlay, None);
     session.frame(&mut sink);
     let left: String = (0..4)
-        .map(|c| session.renderer.buffer[(c, 0)].symbol())
+        .map(|c| session.renderer.frames.buffer[(c, 0)].symbol())
         .collect();
     assert_eq!(left, "LEFT", "the prior frame's cells restore");
 }

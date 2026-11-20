@@ -2690,7 +2690,7 @@ fn sidebar_active_entry_paints_a_subtle_band() {
     ]));
     session.renderer.paint_sidebar();
     let band = RtColor::Rgb(28, 28, 41);
-    let buf = &session.renderer.buffer;
+    let buf = &session.renderer.frames.buffer;
     // The active workspace (composed row 0 — the panel opens with its
     // rows): band across the content width, bold, never reversed.
     for x in 0..19 {
@@ -2786,9 +2786,9 @@ fn sidebar_chevron_collapses_to_the_rail_and_persists() {
     );
     // The rail paints its glyphs, no divider column.
     session.renderer.paint_sidebar();
-    assert_eq!(session.renderer.buffer[(0, 1)].symbol(), "2");
-    assert_eq!(session.renderer.buffer[(1, 0)].symbol(), "·");
-    assert_eq!(session.renderer.buffer[(1, 22)].symbol(), "»");
+    assert_eq!(session.renderer.frames.buffer[(0, 1)].symbol(), "2");
+    assert_eq!(session.renderer.frames.buffer[(1, 0)].symbol(), "·");
+    assert_eq!(session.renderer.frames.buffer[(1, 22)].symbol(), "»");
     // Expand: the configured width returns.
     session.pending.grid_refit = false;
     session.route_mouse(&mut conn, sgr(0, 2, 24, false));
@@ -3404,7 +3404,7 @@ fn drag_selection_paints_the_swept_cells_reversed() {
     }));
     session.renderer.render_frame();
     let reversed = |x: u16, y: u16| {
-        session.renderer.buffer[(x, y)]
+        session.renderer.frames.buffer[(x, y)]
             .modifier
             .contains(ratatui::style::Modifier::REVERSED)
     };

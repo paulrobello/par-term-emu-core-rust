@@ -157,7 +157,7 @@ impl PaneRenderer {
         let (active, plain) = self.border_colors();
         for (index, &(along, a, b)) in cells.iter().enumerate() {
             let (x, y) = axis.cell(*boundary, along);
-            if x >= self.width || y >= self.height {
+            if x >= self.frames.width || y >= self.frames.height {
                 continue; // a stale layout racing a shrink can overflow
             }
             if self.gutter_owns(axis, x, y, a) {
@@ -165,7 +165,7 @@ impl PaneRenderer {
             }
             let is_vertical = axis == Axis::Vertical;
             if !is_vertical && vertical.iter().any(|&(vx, vy, _, _)| vx == x && vy == y) {
-                self.buffer[(x, y)].set_symbol(self.glyphs.cross());
+                self.frames.buffer[(x, y)].set_symbol(self.glyphs.cross());
                 continue;
             }
             let glyph = if is_vertical {
@@ -184,7 +184,7 @@ impl PaneRenderer {
                 active,
                 plain,
             );
-            let cell = &mut self.buffer[(x, y)];
+            let cell = &mut self.frames.buffer[(x, y)];
             cell.reset();
             if let Some(bg) = self.bg {
                 cell.set_bg(bg);
@@ -243,7 +243,7 @@ impl PaneRenderer {
                     if x > rect.x && x < x1 && y > rect.y && y < y1 {
                         continue; // interior: not a border cell
                     }
-                    if x >= self.width || y >= self.height {
+                    if x >= self.frames.width || y >= self.frames.height {
                         continue; // a stale layout racing a shrink can overflow
                     }
                     let symbol = if x == rect.x && y == rect.y {
@@ -259,7 +259,7 @@ impl PaneRenderer {
                     } else {
                         self.glyphs.vertical()
                     };
-                    let cell = &mut self.buffer[(x, y)];
+                    let cell = &mut self.frames.buffer[(x, y)];
                     cell.reset();
                     if let Some(bg) = self.bg {
                         cell.set_bg(bg);
@@ -287,7 +287,7 @@ impl PaneRenderer {
                 plain_border_style(plain)
             };
             for (j, ch) in chars.into_iter().enumerate() {
-                let cell = &mut self.buffer[(x + j as u16, y)];
+                let cell = &mut self.frames.buffer[(x + j as u16, y)];
                 cell.reset();
                 if let Some(bg) = self.bg {
                     cell.set_bg(bg);
