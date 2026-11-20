@@ -7,6 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.84.1] - 2026-11-19
+
+### Fixed
+- **mux: attach reaches daemons by explicit path and pane env socket** (card 01a1f5deb0, `89fb2633`): a positional absolute socket path was joined under the named-socket convention (`par-mux-501/par-mux-<path>.sock.sock` — the mangled double suffix), and `PAR_MUX_SOCKET` never counted as an explicit target, so an env-only attach fell into the multi-server chooser and could enumerate and render a stranger daemon's sessions instead of its own pane's host. The attach target ladder is now explicit `--socket` > positional name-or-path > `PAR_MUX_SOCKET` > chooser: an absolute name passes through as the socket path itself, and env counts as explicit because the pane contract points every pane's env at its hosting daemon. Precedence pinned by tests; priority documented in MUX.md.
+- **mux tests: the cli fixtures stay alive and hermetic to the operator env** (`2a40beeb`): the multi-server refusal leg could self-terminate its zero-session fixture daemons mid-test (the exit-when-empty default) and then fall through to whatever daemon owns the default socket — on a developer host, the operator's live one, whose sessions the leg rendered. Fixtures now run `--keep-alive`, and the par-mux test helper strips `PAR_MUX_SOCKET` so the caller shell's ambient mux env can never steer these cases. Separately (`90a46773`), a standing guard enumerates every tree shape across all panes, directions, and magnitudes to pin that relative and absolute pane resize agree on resizability — the par-term torture run's reported disagreement does not exist at the layout layer.
+
+### Changed
+- **mux: the attach renderer's frame model is its own type** (`81d25185`, AUDIT.md ARC-004): the double buffers, staleness flag, and the resize/invalidate/diff cycle moved out of PaneRenderer's ~30-field body into `crates/par-mux/src/mux/attach/render/frame.rs` (`FrameBuffers`), so the ENH-044 both-buffers rebuild invariant holds by construction instead of by caller discipline. No behavior change; the par-mux attach lib suite passes identical (1730 tests).
+- **mux: the attach input router splits into keyboard/mouse/pointer modules** (`df64a223`, AUDIT.md QA-002): the 1650-line `input_route.rs` — the audit's Critical-risk god file (49 functions, complexity 352) — now splits along the audit's three proven seams into the `input_route/` directory module (keyboard: prefix scanner, chords, modal bytes, forwarding; mouse: hit-test and apply passes; pointer: OSC 22 shape routing). A pure move with module-visibility changes only; no behavior change.
+- **deps: routine refresh across Rust, Python, Node, and action refs** (`6a72c710`): cargo update for root and fuzz workspaces (rust-version floor 1.99 → 1.100); maturin 1.16.0, pytest 9.2.0, pytest-asyncio 1.5.0, ruff 0.17.5, websockets 17.4; frontend tailwind 4.3.5, vitest 5.1.1, protobuf 2.17.0 (typescript held at ~5.9.3); `web_term/` rebuilt.
+
 ## [0.84.0] - 2026-11-18
 
 ### Fixed
@@ -2620,7 +2631,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Unicode Support**: Full Unicode including emoji and wide characters
 - **Python Integration**: PyO3 bindings for Python 3.12+
 
-[Unreleased]: https://github.com/paulrobello/par-term-emu-core-rust/compare/v0.84.0...HEAD
+[Unreleased]: https://github.com/paulrobello/par-term-emu-core-rust/compare/v0.84.1...HEAD
+[0.84.1]: https://github.com/paulrobello/par-term-emu-core-rust/compare/v0.84.0...v0.84.1
 [0.84.0]: https://github.com/paulrobello/par-term-emu-core-rust/compare/v0.83.0...v0.84.0
 [0.83.0]: https://github.com/paulrobello/par-term-emu-core-rust/compare/v0.82.0...v0.83.0
 [0.82.0]: https://github.com/paulrobello/par-term-emu-core-rust/compare/v0.81.0...v0.82.0
