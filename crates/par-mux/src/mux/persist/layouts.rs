@@ -87,14 +87,18 @@ pub fn save_layout_state_in(
 /// [`load_or_quarantine`](super::load_or_quarantine), a bad file is reported and left in place: it is
 /// not the daemon's boot state.
 pub fn load_layout_in_dir(dir: &Path, name: &str) -> Result<PersistState, PersistError> {
-    let text = fs::read_to_string(layout_file_in_dir(dir, name)?)?;
-    let state: PersistState = serde_json::from_str(&text)?;
+    let target = layout_file_in_dir(dir, name)?;
+    let text = fs::read_to_string(&target)?;
+    let mut state: PersistState = serde_json::from_str(&text)?;
     if state.format_version != FORMAT_VERSION {
         return Err(PersistError::UnsupportedVersion {
             found: state.format_version,
             supported: FORMAT_VERSION,
         });
     }
+    // Layouts save through the same write path as the boot state, so their
+    // env rides the sidecar store beside the layout file.
+    super::env_store::attach_env_sidecars(&mut state, &target);
     Ok(state)
 }
 

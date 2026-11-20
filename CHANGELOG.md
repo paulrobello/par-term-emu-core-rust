@@ -7,6 +7,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Security
+- **mux: no environment rides the state file — env sidecar store** (card 01a1fa94a26c): the state file embedded every pane's agent-env capture (macOS `KERN_PROCARGS2` / Linux `/proc/<pid>/environ`) and each session's env map inline, so live RTDB tokens (`PD_RTDB_TOKEN_*`) rode the one JSON every downstream reader parses (measured 2026-11-20: the 221 MB `par-mux-default.state.json` carried two). Session and pane env maps now land in a sibling store `<state_dir>/par-mux/<stem>.env/` (`session-<id>.json`, `pane-<id>.json`, atomic `0600` writes like the state file), and a fresh state file contains no env at all — grep-verifiable, pinned by an automated test. A pane sidecar carries its claim's identity (agent + session id/path) and a load merges it only on an identity match, so a stale sidecar from a relabeled pane never leaks another session's env; a save whose capture holds no env drops the stale sidecar. Files written before the split (env inline) still load with that env and externalize on the next save; restores spawn with the same env composition as before (agent snapshot base, session entries over it), and the format version stays 3 — no downstream shape change.
+
 ## [0.84.1] - 2026-11-19
 
 ### Fixed

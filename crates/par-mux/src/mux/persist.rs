@@ -11,9 +11,11 @@
 //! Layout: `format` holds the serde schema (its field order is the
 //! on-disk format), `save` the capture and atomic write, `restore` the
 //! load tiers and the rebuild, `state_file` the state path and daemon
-//! lock, and `layouts` the named-layout store. Every public item is
-//! re-exported here at its historical `crate::mux::persist::` path.
+//! lock, `env_store` the env sidecars (the state file itself carries no
+//! environment), and `layouts` the named-layout store. Every public item
+//! is re-exported here at its historical `crate::mux::persist::` path.
 
+mod env_store;
 mod format;
 mod layouts;
 mod restore;

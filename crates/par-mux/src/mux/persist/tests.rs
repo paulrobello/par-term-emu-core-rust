@@ -2744,6 +2744,214 @@ fn restored_agent_pane_spawns_with_captured_env_under_session_overrides() {
     );
 }
 
+/// Build one captured state whose agent pane carries a token-shaped env
+/// and whose session carries one too — the exact shape the sidecar split
+/// exists for (card 01a1fa94a26c).
+fn state_with_secret_envs(original: &mut MuxTree, pane_id: PaneId) -> PersistState {
+    let session_id = original
+        .sessions()
+        .first()
+        .copied()
+        .expect("the agent tree has a session");
+    original
+        .set_session_env(
+            session_id,
+            "PD_RTDB_TOKEN_SESSION",
+            Some("sess-tok-0123456789abcdef"),
+        )
+        .expect("set-environment works");
+    let mut state = capture_with_alive_agent(original, pane_id);
+    let persisted = state.sessions[0].windows[0].panes[0]
+        .agent_session
+        .as_mut()
+        .expect("the agent pane carries its identity");
+    let mut env = std::collections::BTreeMap::new();
+    env.insert(
+        "PD_RTDB_TOKEN_DIRECTOR".to_string(),
+        "agent-tok-0123456789abcdef".to_string(),
+    );
+    env.insert("PLAIN_KEY".to_string(), "not-a-secret".to_string());
+    persisted.env = Some(env);
+    state
+}
+
+/// Criterion 1 (card 01a1fa94a26c): a freshly-written state file carries
+/// no env at all — neither the session map nor the pane agent-env capture,
+/// so no plaintext token can ride the one JSON every downstream reader
+/// parses. The sidecar store beside the file holds both maps instead.
+#[test]
+fn a_fresh_state_file_carries_no_env_and_no_tokens() {
+    let (mut original, pane_id) = tree_with_agent_pane();
+    let state = state_with_secret_envs(&mut original, pane_id);
+    let (dir, target) = temp_target("env-split");
+    write_state(&state, &target).expect("the save lands");
+    let text = fs::read_to_string(&target).unwrap();
+    assert!(
+        !text.contains("PD_RTDB_TOKEN"),
+        "no token-shaped env KEY rides the state file: {text}"
+    );
+    assert!(
+        !text.contains("tok-0123456789abcdef"),
+        "no secret env VALUE rides the state file: {text}"
+    );
+    assert!(
+        !text.contains("\"env\""),
+        "no env map rides the state file at all: {text}"
+    );
+
+    // The sidecar store beside the file carries both maps.
+    let store = dir.path().join("state.env");
+    let pane_sidecar = fs::read_to_string(store.join("pane-0.json")).unwrap_or_default();
+    assert!(
+        pane_sidecar.contains("PD_RTDB_TOKEN_DIRECTOR"),
+        "the pane's env landed in its sidecar: {pane_sidecar}"
+    );
+    let session_sidecar =
+        fs::read_to_string(store.join(format!("session-{}.json", state.sessions[0].id)))
+            .unwrap_or_default();
+    assert!(
+        session_sidecar.contains("PD_RTDB_TOKEN_SESSION"),
+        "the session's env landed in its sidecar: {session_sidecar}"
+    );
+}
+
+/// Criterion 2 (card 01a1fa94a26c): the split changes storage, not
+/// behavior — a load through `load_or_quarantine` merges the sidecars
+/// back, and the restored panes spawn with the same env composition as
+/// before (agent snapshot as base, explicit session entries over it).
+#[test]
+fn sidecar_env_restores_and_spawns_end_to_end() {
+    let (mut original, pane_id) = tree_with_agent_pane();
+    original
+        .set_session_env(
+            original.sessions().first().copied().unwrap(),
+            "AGENT_SESSION_OVERRIDE",
+            Some("session-wins"),
+        )
+        .expect("set-environment works");
+    let state = state_with_secret_envs(&mut original, pane_id);
+    let (_dir, target) = temp_target("env-roundtrip");
+    write_state(&state, &target).expect("the save lands");
+
+    let Loaded::State(loaded) = load_or_quarantine(&target) else {
+        panic!("the saved file must load back");
+    };
+    let factory = RecordingFactory::default();
+    let _restored =
+        MuxTree::from_persist_state(&loaded, Box::new(factory.clone())).expect("restore");
+    let env = factory.env_for(pane_id).expect("the spawn carried an env");
+    assert_eq!(
+        env.get("PD_RTDB_TOKEN_DIRECTOR").map(String::as_str),
+        Some("agent-tok-0123456789abcdef"),
+        "the pane's captured env reached the spawn from its sidecar"
+    );
+    assert_eq!(
+        env.get("PD_RTDB_TOKEN_SESSION").map(String::as_str),
+        Some("sess-tok-0123456789abcdef"),
+        "the session env reached the spawn from its sidecar"
+    );
+    assert_eq!(
+        env.get("AGENT_SESSION_OVERRIDE").map(String::as_str),
+        Some("session-wins"),
+        "explicit session entries still override the snapshot"
+    );
+    assert_eq!(
+        env.get("PLAIN_KEY").map(String::as_str),
+        Some("not-a-secret"),
+        "non-secret snapshot values ride through unchanged"
+    );
+}
+
+/// A pre-split state file (env embedded inline) still restores with that
+/// env — the read side keeps reading the field, so an upgrade externalizes
+/// on the next save rather than losing the data.
+#[test]
+fn inline_env_from_a_pre_split_state_file_still_restores() {
+    let (mut original, pane_id) = tree_with_agent_pane();
+    let state = state_with_secret_envs(&mut original, pane_id);
+    let (_dir, target) = temp_target("env-legacy");
+    // Serialize the state AS-IS (inline env), bypassing write_job's split.
+    fs::write(&target, serde_json::to_vec(&state).unwrap()).unwrap();
+
+    let Loaded::State(loaded) = load_or_quarantine(&target) else {
+        panic!("the legacy file must load");
+    };
+    let factory = RecordingFactory::default();
+    let _restored =
+        MuxTree::from_persist_state(&loaded, Box::new(factory.clone())).expect("restore");
+    let env = factory.env_for(pane_id).expect("the spawn carried an env");
+    assert_eq!(
+        env.get("PD_RTDB_TOKEN_DIRECTOR").map(String::as_str),
+        Some("agent-tok-0123456789abcdef"),
+        "inline env from the old format still reaches the spawn"
+    );
+}
+
+/// A sidecar whose recorded claim identity does not match the main file's
+/// claim is ignored — a stale sidecar from a relabeled pane never leaks
+/// another session's env into the spawn.
+#[test]
+fn a_stale_sidecar_with_a_different_session_identity_is_ignored() {
+    let (mut original, pane_id) = tree_with_agent_pane();
+    let state = state_with_secret_envs(&mut original, pane_id);
+    let (dir, target) = temp_target("env-stale");
+    write_state(&state, &target).expect("the save lands");
+
+    // Rewrite the pane sidecar under a DIFFERENT session identity.
+    let sidecar = dir.path().join("state.env").join("pane-0.json");
+    let mut record: serde_json::Value =
+        serde_json::from_str(&fs::read_to_string(&sidecar).unwrap()).unwrap();
+    record["session"] = serde_json::json!("a-different-session");
+    fs::write(&sidecar, serde_json::to_string(&record).unwrap()).unwrap();
+
+    let Loaded::State(loaded) = load_or_quarantine(&target) else {
+        panic!("the state must load");
+    };
+    let factory = RecordingFactory::default();
+    let _restored =
+        MuxTree::from_persist_state(&loaded, Box::new(factory.clone())).expect("restore");
+    let env = factory.env_for(pane_id).expect("the spawn carried an env");
+    assert!(
+        !env.contains_key("PD_RTDB_TOKEN_DIRECTOR"),
+        "a sidecar keyed to another session identity must not reach the spawn: {env:?}"
+    );
+}
+
+/// A save whose capture holds no env for a pane drops that pane's stale
+/// sidecar — an unreadable capture must not resurrect an older env on the
+/// next load.
+#[test]
+fn a_save_drops_sidecars_for_panes_that_lost_their_env() {
+    let (mut original, pane_id) = tree_with_agent_pane();
+    let state = state_with_secret_envs(&mut original, pane_id);
+    let (dir, target) = temp_target("env-gc");
+    write_state(&state, &target).expect("the save lands");
+    let store = dir.path().join("state.env");
+    let sidecar = store.join(format!("pane-{}.json", pane_id.0));
+    assert!(sidecar.exists(), "the first save landed the sidecar");
+
+    // Re-save the same tree with the env stripped (the capture could not
+    // read it): the sidecar must go, not linger as stale state.
+    let mut bare = state.clone();
+    bare.sessions[0].windows[0].panes[0]
+        .agent_session
+        .as_mut()
+        .unwrap()
+        .env = None;
+    bare.sessions[0].env.clear();
+    write_state(&bare, &target).expect("the save lands");
+    assert!(
+        !sidecar.exists(),
+        "a pane whose capture holds no env keeps no sidecar"
+    );
+    assert!(
+        !store
+            .join(format!("session-{}.json", state.sessions[0].id))
+            .exists(),
+        "a session whose env emptied keeps no sidecar"
+    );
+}
+
 /// The save's env read is best-effort with retention: a claimed pane whose
 /// agent process cannot be matched (here: the pane child is a plain sleep,
 /// no agent process in its tree) persists its cached last-known env when

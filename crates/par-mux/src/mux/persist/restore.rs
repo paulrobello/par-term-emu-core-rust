@@ -639,6 +639,14 @@ pub enum Loaded {
     },
 }
 
+/// Merge `target`'s env sidecars into a state the load tiers produced
+/// (whichever tier it came from — the store is anchored to the main state
+/// path, and the pane records' identity check is the pairing guard).
+fn with_env_sidecars(mut state: PersistState, target: &Path) -> PersistState {
+    super::env_store::attach_env_sidecars(&mut state, target);
+    state
+}
+
 /// Read the state file at `target`, quarantining a corrupt or
 /// unknown-version file aside so the next save cannot overwrite the
 /// evidence (D3.2). Every failure degrades to a fresh start; nothing here
@@ -662,13 +670,13 @@ pub fn load_or_quarantine(target: &Path) -> Loaded {
                         "par-mux: state {} held no panes; restoring the last-good snapshot",
                         target.display()
                     );
-                    return Loaded::State(Box::new(good));
+                    return Loaded::State(Box::new(with_env_sidecars(good, target)));
                 }
                 if let Some(snapshot) = load_newest_snapshot(target) {
-                    return Loaded::State(Box::new(snapshot));
+                    return Loaded::State(Box::new(with_env_sidecars(snapshot, target)));
                 }
             }
-            return Loaded::State(Box::new(state));
+            return Loaded::State(Box::new(with_env_sidecars(state, target)));
         }
         Ok(state) => PersistError::UnsupportedVersion {
             found: state.format_version,
@@ -694,10 +702,10 @@ pub fn load_or_quarantine(target: &Path) -> Loaded {
             // less than a fresh start.
             if let Some(good) = load_lastgood(target) {
                 log::info!("par-mux: restoring the last-good snapshot after the quarantine");
-                return Loaded::State(Box::new(good));
+                return Loaded::State(Box::new(with_env_sidecars(good, target)));
             }
             if let Some(snapshot) = load_newest_snapshot(target) {
-                return Loaded::State(Box::new(snapshot));
+                return Loaded::State(Box::new(with_env_sidecars(snapshot, target)));
             }
             Loaded::Quarantined {
                 from: target.to_path_buf(),

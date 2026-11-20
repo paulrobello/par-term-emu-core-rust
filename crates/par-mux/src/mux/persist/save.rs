@@ -529,6 +529,12 @@ pub fn write_state(state: &PersistState, target: &Path) -> Result<(), PersistErr
 /// `<target>.tmp`, fsync, then rename over the target, then maintain the
 /// last-good snapshot per `origin`. No tree access — callable from a thread
 /// that holds no locks.
+///
+/// Env never rides the file (card 01a1fa94a26c): every env map is first
+/// split out and landed in the sidecar store beside `target`, and the
+/// serialized state carries none of it. Sidecars land BEFORE the main
+/// rename — the new file is the commit point of the env it references —
+/// and a GC pass after the rename drops sidecars the state no longer owns.
 pub fn write_job(
     origin: SaveOrigin,
     state: &PersistState,
@@ -554,14 +560,21 @@ pub fn write_job(
         }
         fs::create_dir_all(parent)?;
     }
+    // The env split needs a mutable copy — `state` is borrowed, and the
+    // in-memory capture (whose env the restore-side cache reads) must not
+    // be mutated by the write. The clone is a memcpy next to the
+    // serialization it precedes.
+    let mut stripped = state.clone();
+    let extracted = super::env_store::split_env_out_of(&mut stripped);
+    let keep = super::env_store::write_env_records(target, &extracted)?;
     let mut tmp = target.as_os_str().to_os_string();
     tmp.push(".tmp");
     let tmp = PathBuf::from(tmp);
 
     // Owner-only from creation, not chmod-after: the file holds pane
-    // content and session environments (which can carry tokens), and a
-    // create-then-chmod leaves a umask-readable window. On Windows the file
-    // inherits the owner-only ACL of the user-profile state directory.
+    // content, and a create-then-chmod leaves a umask-readable window. On
+    // Windows the file inherits the owner-only ACL of the user-profile
+    // state directory.
     let file = {
         let mut options = fs::OpenOptions::new();
         options.write(true).create(true).truncate(true);
@@ -577,7 +590,7 @@ pub fn write_job(
     // thousands of cells) spends minutes in those syscalls — measured
     // 2026-09-22 as the whole of a 122 s final save of a 136 MB state.
     let mut writer = std::io::BufWriter::new(file);
-    serde_json::to_writer(&mut writer, &state)?;
+    serde_json::to_writer(&mut writer, &stripped)?;
     let file = writer
         .into_inner()
         .map_err(|err| PersistError::Io(err.into_error()))?;
@@ -590,6 +603,7 @@ pub fn write_job(
     drop(file);
 
     fs::rename(&tmp, target)?;
+    super::env_store::gc_env_sidecars(target, &keep);
     maintain_lastgood(origin, state, target);
     maintain_snapshot_history(origin, state, target);
     Ok(())

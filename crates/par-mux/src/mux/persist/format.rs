@@ -281,10 +281,18 @@ pub struct PersistSession {
     pub active_window_index: usize,
     /// The session's windows, in order.
     pub windows: Vec<PersistWindow>,
-    /// The session environment. May hold secrets, which is one reason the
-    /// file is owner-only. Absent in files written before the field
-    /// existed, which load with an empty environment.
-    #[cfg_attr(feature = "serde", serde(default))]
+    /// The session environment. May hold secrets, so it never rides the
+    /// state file: the writer lands it as an env sidecar
+    /// (`env_store::write_env_records`) and a load merges it back
+    /// (`env_store::attach_env_sidecars`). The field stays readable —
+    /// files written before the split embedded it inline — but a save
+    /// skips it when empty, so a fresh file carries no env at all. Absent
+    /// in files written before the field existed, which load with an
+    /// empty environment.
+    #[cfg_attr(
+        feature = "serde",
+        serde(default, skip_serializing_if = "std::collections::BTreeMap::is_empty")
+    )]
     pub env: std::collections::BTreeMap<String, String>,
 }
 
@@ -453,12 +461,16 @@ pub struct PersistAgentSession {
     /// relaunches the resume invocation with it instead of the daemon's
     /// launch context. Mux-managed keys (`PAR_MUX_*`, `COLUMNS`, `LINES`)
     /// are stripped at capture (`agent_env_key_stale_for_spawn`); the
-    /// identity set is re-exported fresh at every spawn. Absent on older
-    /// state files (`serde(default)`), on Windows, and whenever the
-    /// process env was unreadable at every save since the pane's identity
-    /// was claimed. The state file and its recovery copies are written
-    /// `0600`, so the pairs ride the same owner-only posture as the rest
-    /// of the persisted state.
+    /// identity set is re-exported fresh at every spawn. Absent on Windows
+    /// and whenever the process env was unreadable at every save since the
+    /// pane's identity was claimed.
+    ///
+    /// Never rides the state file (card 01a1fa94a26c): the capture sweeps
+    /// up every secret the agent ran with, so the writer lands it in the
+    /// env sidecar store (`0600`, owner-only, identity-paired) beside the
+    /// state file and a load merges it back before the rebuild. The field
+    /// stays readable — files written before the split embedded it inline,
+    /// and in-memory captures carry it — but no fresh file serializes it.
     #[cfg_attr(
         feature = "serde",
         serde(default, skip_serializing_if = "Option::is_none")
