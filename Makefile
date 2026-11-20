@@ -193,6 +193,8 @@ python-install:
 	rm -rf target/wheels
 	uv run maturin build --release
 	uv pip install target/wheels/*.whl --force-reinstall
+	@native=$$(uv run python -c 'import par_term_emu_core_rust._native as n; print(n.__file__)') && \
+		bash scripts/sign-installed-artifact.sh com.paulrobello.par-term-emu-core-rust.native "$$native"
 
 # Everything this repo installs: the python extension, the par-mux binary
 # (the daemon and the attach TUI are one binary; attach adds the ratatui
@@ -208,6 +210,7 @@ python-uninstall:
 
 par-mux-install:
 	cargo install --path crates/par-mux --bin par-mux --features mux-bin,attach --force
+	@bash scripts/sign-installed-artifact.sh com.paulrobello.par-mux "$(HOME)/.cargo/bin/par-mux"
 
 par-mux-uninstall:
 	cargo uninstall par-mux
@@ -1113,6 +1116,7 @@ streamer-install: streamer-build-release
 	@echo "======================================================================"
 	@echo ""
 	cargo install --path . --bin par-term-streamer --no-default-features --features streaming-bin --force
+	@bash scripts/sign-installed-artifact.sh com.paulrobello.par-term-streamer "$(HOME)/.cargo/bin/par-term-streamer"
 	@echo ""
 	@echo "======================================================================"
 	@echo "  Installation Complete!"
