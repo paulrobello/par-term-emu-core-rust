@@ -1085,7 +1085,21 @@ impl WindowSession {
         if let Some((l, v, f)) = layout_event {
             self.zoomed = f.contains('Z');
             if let Ok(layout) = layout::parse_layout_triple(&l, &v, &f) {
-                let replay = self.install_layout(layout, &race);
+                self.install_layout(layout, &race);
+                // A re-seed replays EVERY pane of the landed window, not
+                // only install_layout's new-or-raced set (card
+                // 01a1fb0094): a rewrap emits no %output, so a pane
+                // whose geometry changed while its window went unwatched
+                // sits on a different reflow base than the surviving
+                // emulator — apply_layout's in-place reflow cannot
+                // reconstruct it, and the switched-back view stays wedged
+                // (floating chrome, mis-rendered strips) until a manual
+                // resize re-seeded it. Switch-backs are human-speed; the
+                // extra snapshot replays are the cost of correctness. The
+                // live-viewing pump path keeps the optimization — while
+                // the window is displayed, streamed %output and the
+                // race handling keep the emulators on the daemon's base.
+                let replay: Vec<u32> = self.renderer.layout().iter().map(|r| r.pane).collect();
                 self.replay_panes(conn, &replay);
             }
         }

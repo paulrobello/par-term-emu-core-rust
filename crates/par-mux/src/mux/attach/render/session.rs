@@ -237,7 +237,11 @@ impl WindowSession {
     /// renderer (no emulator state yet) and the `race` panes
     /// ([`Self::drain_around_layout`]). A surviving pane's emulator
     /// reflows in `apply_layout` exactly as the daemon's pane did, so it
-    /// needs no replay.
+    /// needs no replay — true while the window is displayed (streamed
+    /// `%output` and the race handling keep the emulators on the
+    /// daemon's base); a RE-SEED onto a window that went unwatched
+    /// cannot trust this (a rewrap emits no `%output`, card 01a1fb0094)
+    /// and replays every pane instead (see `reseed_window_inner`).
     pub(super) fn install_layout(&mut self, layout: Vec<PaneRect>, race: &[u32]) -> Vec<u32> {
         let before: std::collections::HashSet<u32> =
             self.renderer.layout().iter().map(|r| r.pane).collect();

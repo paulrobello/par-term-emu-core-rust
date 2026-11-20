@@ -196,6 +196,42 @@ fn reseed_to_another_window_replays_every_pane() {
     );
 }
 
+/// Card 01a1fb0094 (2026-11-20 sighting 5): a rewrap emits no %output, so
+/// a pane whose geometry changed while its window went unwatched ends on a
+/// different reflow base than the client emulator — the surviving-emulator
+/// skip left the switched-back view wedged (floating chrome, dotted
+/// placeholder strip) until a manual resize re-seeded it. A re-seed onto a
+/// window the renderer already holds replays that window's panes too:
+/// switch-back is a re-seed, not a no-op.
+#[test]
+fn reseed_to_the_same_window_replays_its_panes_too() {
+    let layout = "0000,80x23,0,0{40x23,0,0,1,40x23,40,0,2}";
+    let mut notify = std::collections::HashMap::new();
+    notify.insert(
+        "refresh-client -t %1 -C 80x23".to_string(),
+        format!("%layout-change @0 {layout} {layout} *"),
+    );
+    let mut replies = std::collections::HashMap::new();
+    reseed_replies(&mut replies, "@0 main\n@1 * other", "@0", "%1\n%2");
+    replies.insert("refresh-client -t %1".to_string(), "left body".to_string());
+    replies.insert("refresh-client -t %2".to_string(), "right body".to_string());
+    let (rx, mut conn, mut session) = two_pane_session(
+        "01a1fb00-samewin",
+        FakeScript {
+            replies,
+            notify,
+            ..FakeScript::default()
+        },
+    );
+    session.reseed_window(&mut conn, "@0", false);
+    let lines = drained(&rx);
+    assert_eq!(
+        replay_lines(&lines),
+        vec!["refresh-client -t %1", "refresh-client -t %2"],
+        "switch-back replays the surviving panes, not only new ones"
+    );
+}
+
 /// ENH-044 follow-up: a refit repaints the WHOLE frame even at an
 /// unchanged size. `resize_to` clears the host (`repaint_all`), so a
 /// diff against the stale last frame would skip the unchanged pane
