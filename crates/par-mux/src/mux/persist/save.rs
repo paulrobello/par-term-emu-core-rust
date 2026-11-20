@@ -35,6 +35,7 @@ fn agent_session_from_metadata(metadata: &HashMap<String, String>) -> Option<Per
             .resume_argv
             .map(|argv| serde_json::to_string(&argv).unwrap_or_default()),
         agent_pid: claim.agent_pid,
+        agent_cwd: None,
         state: claim.state,
         state_source: claim.state_source,
         message: claim.message,
@@ -66,10 +67,23 @@ fn resolve_agent_env(
         .session_id
         .clone()
         .or_else(|| agent.session_path.clone());
-    let fresh = table
+    let agent_pid = table
         .as_ref()
         .zip(child_pid)
-        .and_then(|(table, root)| table.agent_pid(root, &agent.agent))
+        .and_then(|(table, root)| table.agent_pid(root, &agent.agent));
+    // The resume cwd (card 01a1fb05c3): the AGENT process's own working
+    // directory, not the shell's. An agent that moved itself into a
+    // worktree leaves the pane's shell in the main checkout — the pane
+    // cwd chain (OSC 7, child pid, spawn floor) never sees the move, and
+    // a resume from there lands the session fenced out of its worktree.
+    // Read off the same descendant walk the env read uses; a failed read
+    // (process gone, platform gap) leaves `None` and the restore falls
+    // back to the pane cwd.
+    agent.agent_cwd = agent_pid
+        .and_then(|pid| u32::try_from(pid).ok())
+        .and_then(crate::mux::pane::process_cwd)
+        .map(|dir| dir.to_string_lossy().into_owned());
+    let fresh = agent_pid
         .and_then(crate::mux::foreground::read_env)
         .map(|env| {
             let env = super::format::strip_agent_env_for_persistence(env.into_iter().collect());

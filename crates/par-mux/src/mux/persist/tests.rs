@@ -548,6 +548,127 @@ fn restore_spawns_each_pane_in_its_persisted_cwd() {
     );
 }
 
+/// The 2026-11-20 oauth42 incident (card 01a1fb05c3): a claude session
+/// that moved itself into a worktree left the pane's SHELL in the main
+/// checkout, so the save captured the shell's cwd and the restart resume
+/// spawned fenced out of the worktree. The save must capture the AGENT
+/// process's own directory for the resume. Unix only: the capture reads
+/// the agent's kernel cwd (`process_cwd` has no Windows implementation).
+#[test]
+#[cfg(unix)]
+fn a_save_captures_the_agent_process_cwd_for_resume() {
+    let _checkout = tempfile::tempdir().unwrap();
+    let worktree = tempfile::tempdir().unwrap();
+    let (tree, pane_id) = tree_with_metadata(&[("agent", "sleep"), ("agent_session_id", "s-1")]);
+    let child = tree
+        .pane(pane_id)
+        .unwrap()
+        .child_pid()
+        .expect("live pane child") as i32;
+    // A real process in the worktree the synthetic table presents as the
+    // claimed agent: the cwd capture must read THIS process, not the
+    // pane's shell child (which lives elsewhere).
+    let mut agent_proc = std::process::Command::new("sleep")
+        .arg("30")
+        .current_dir(worktree.path())
+        .spawn()
+        .unwrap();
+    let table = crate::mux::foreground::ProcessTable::with_fixed_argv(&[
+        (child, 1, Some(vec!["bash".to_string()])),
+        (
+            agent_proc.id() as i32,
+            child,
+            Some(vec!["sleep".to_string()]),
+        ),
+    ]);
+    let state = tree
+        .collect_persist_capture()
+        .capture_with_table(Some(table));
+    let agent_cwd = state.sessions[0].windows[0].panes[0]
+        .agent_session
+        .as_ref()
+        .expect("claimed")
+        .agent_cwd
+        .as_deref()
+        .expect("the agent process's own cwd was captured for the resume");
+    assert_eq!(
+        std::path::PathBuf::from(agent_cwd).canonicalize().unwrap(),
+        worktree.path().canonicalize().unwrap(),
+        "the resume cwd is the agent's directory, not the shell's"
+    );
+    let _ = agent_proc.kill();
+    let _ = agent_proc.wait();
+}
+
+/// The resume spawn re-enters the agent's own directory when the save
+/// captured one — the pane's shell cwd is only the fallback (card
+/// 01a1fb05c3).
+#[test]
+fn an_agent_cwd_directs_the_resume_spawn_into_it() {
+    let checkout = tempfile::tempdir().unwrap();
+    let worktree = tempfile::tempdir().unwrap();
+    let (tree, pane_id) = tree_with_agent_pane();
+    let mut state = tree.to_persist_state();
+    let pane = &mut state.sessions[0].windows[0].panes[0];
+    pane.cwd = Some(checkout.path().to_string_lossy().into_owned());
+    pane.agent_session = Some(super::format::PersistAgentSession {
+        agent: "claude".to_string(),
+        session_id: Some("s-1".to_string()),
+        session_path: None,
+        source: None,
+        resume_argv: None,
+        agent_pid: None,
+        agent_cwd: Some(worktree.path().to_string_lossy().into_owned()),
+        state: None,
+        state_source: None,
+        message: None,
+        env: None,
+    });
+    let factory = crate::mux::pane::test_support::ContextRecordingFactory::default();
+    let _restored =
+        MuxTree::from_persist_state(&state, Box::new(factory.clone())).expect("the state restores");
+    let spawn = factory.spawn_of(pane_id);
+    assert_eq!(
+        spawn.cwd.map(|cwd| cwd.canonicalize().unwrap()),
+        Some(worktree.path().canonicalize().unwrap()),
+        "the resume lands where the agent ran, not where the shell sat"
+    );
+}
+
+/// A worktree deleted between save and restore (branch merged, tree
+/// removed) degrades to the pane's own cwd — the session re-lands in its
+/// checkout instead of a vanished directory or $HOME.
+#[test]
+fn a_vanished_agent_cwd_falls_back_to_the_pane_cwd() {
+    let checkout = tempfile::tempdir().unwrap();
+    let (tree, pane_id) = tree_with_agent_pane();
+    let mut state = tree.to_persist_state();
+    let pane = &mut state.sessions[0].windows[0].panes[0];
+    pane.cwd = Some(checkout.path().to_string_lossy().into_owned());
+    pane.agent_session = Some(super::format::PersistAgentSession {
+        agent: "claude".to_string(),
+        session_id: Some("s-1".to_string()),
+        session_path: None,
+        source: None,
+        resume_argv: None,
+        agent_pid: None,
+        agent_cwd: Some("/par-mux-test-no-such-dir".to_string()),
+        state: None,
+        state_source: None,
+        message: None,
+        env: None,
+    });
+    let factory = crate::mux::pane::test_support::ContextRecordingFactory::default();
+    let _restored =
+        MuxTree::from_persist_state(&state, Box::new(factory.clone())).expect("the state restores");
+    let spawn = factory.spawn_of(pane_id);
+    assert_eq!(
+        spawn.cwd.map(|cwd| cwd.canonicalize().unwrap()),
+        Some(checkout.path().canonicalize().unwrap()),
+        "a vanished agent cwd falls back to the pane's own cwd"
+    );
+}
+
 /// A pane saved DEAD keeps its cwd: the restore seeds it into the
 /// pane's terminal OSC 7 state, so the agent-append resume and any
 /// respawn-pane re-land where the pane lived — the seam the churn's
@@ -2627,6 +2748,7 @@ fn agent_session_identity_round_trips() {
             source: Some("par-mux:pi".to_string()),
             resume_argv: Some(r#"["pi","--session","/tmp/pi-session.jsonl"]"#.to_string()),
             agent_pid: None,
+            agent_cwd: None,
             state: Some("working".to_string()),
             state_source: Some("hook".to_string()),
             message: None,
@@ -3413,6 +3535,7 @@ fn pi_shaped_path_only_identity_round_trips() {
             source: None,
             resume_argv: Some(r#"["omp","--resume=/tmp/omp-session.jsonl"]"#.to_string()),
             agent_pid: None,
+            agent_cwd: None,
             state: None,
             state_source: None,
             message: None,

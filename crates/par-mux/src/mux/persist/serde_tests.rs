@@ -73,6 +73,7 @@ fn non_agent_envelope_carries_no_agent_session_key() {
             source: None,
             resume_argv: Some(r#"["pi","--session","/tmp/pi.jsonl"]"#.to_string()),
             agent_pid: None,
+            agent_cwd: None,
             state: Some("working".to_string()),
             state_source: Some("hook".to_string()),
             message: None,

@@ -474,6 +474,17 @@ pub struct PersistAgentSession {
         serde(default, skip_serializing_if = "Option::is_none")
     )]
     pub agent_pid: Option<i32>,
+    /// The agent process's own working directory at save time — the
+    /// directory the resume spawn should re-enter. The pane's cwd tracks
+    /// the SHELL (OSC 7, child cwd, spawn floor), but an agent that moved
+    /// itself into a worktree leaves the shell behind in the main
+    /// checkout; resuming from the shell's directory lands the session
+    /// fenced out of its worktree (card 01a1fb05c3).
+    #[cfg_attr(
+        feature = "serde",
+        serde(default, skip_serializing_if = "Option::is_none")
+    )]
+    pub agent_cwd: Option<String>,
     /// The last-known agent state (`metadata["agent_state"]`).
     #[cfg_attr(
         feature = "serde",

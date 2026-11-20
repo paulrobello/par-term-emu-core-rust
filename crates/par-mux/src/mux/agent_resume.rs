@@ -243,6 +243,7 @@ mod tests {
             source: Some("par-mux:test".to_string()),
             resume_argv: None,
             agent_pid: None,
+            agent_cwd: None,
             state: None,
             state_source: None,
             message: None,

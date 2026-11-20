@@ -1326,12 +1326,12 @@ impl PaneFactory for AgentPaneFactory {
 /// sandboxed reader, or an OS without a pid→cwd path all yield `None`, and
 /// the caller falls back to the spawn-time default.
 #[cfg(target_os = "linux")]
-fn process_cwd(pid: u32) -> Option<std::path::PathBuf> {
+pub(crate) fn process_cwd(pid: u32) -> Option<std::path::PathBuf> {
     std::fs::read_link(format!("/proc/{pid}/cwd")).ok()
 }
 
 #[cfg(target_os = "macos")]
-fn process_cwd(pid: u32) -> Option<std::path::PathBuf> {
+pub(crate) fn process_cwd(pid: u32) -> Option<std::path::PathBuf> {
     // proc_pidinfo writes a vnode path — the kernel-side equivalent of
     // Linux's /proc/<pid>/cwd symlink.
     // SAFETY: `proc_vnodepathinfo` is a plain C struct, so all-zero is a valid
@@ -1362,7 +1362,7 @@ fn process_cwd(pid: u32) -> Option<std::path::PathBuf> {
 }
 
 #[cfg(not(any(target_os = "linux", target_os = "macos")))]
-fn process_cwd(_pid: u32) -> Option<std::path::PathBuf> {
+pub(crate) fn process_cwd(_pid: u32) -> Option<std::path::PathBuf> {
     None
 }
 

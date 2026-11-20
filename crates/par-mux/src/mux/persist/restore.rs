@@ -477,6 +477,23 @@ fn restored_spawn_cwd(
     pane: &PersistPane,
     cwd_fallbacks: &mut HashMap<u32, String>,
 ) -> Option<PathBuf> {
+    // The resume re-enters the AGENT's own directory when the save captured
+    // one (card 01a1fb05c3): the pane's cwd tracks the shell, and a
+    // worktree session resumed from the shell's directory lands fenced out
+    // of its worktree. Live panes only — a dead pane has no process to
+    // resume, and its cwd seeds the OSC 7 state from the pane's own. A
+    // vanished agent cwd (worktree removed before the restart) falls
+    // through to the pane cwd below, not to $HOME.
+    if let Some(dir) = pane
+        .agent_session
+        .as_ref()
+        .filter(|_| !pane.dead)
+        .and_then(|session| session.agent_cwd.as_deref())
+        .map(Path::new)
+        .filter(|dir| dir.is_dir())
+    {
+        return Some(dir.to_path_buf());
+    }
     match pane.cwd.as_deref().map(Path::new).filter(|_| !pane.dead) {
         Some(dir) if dir.is_dir() => Some(dir.to_path_buf()),
         Some(dir) => {
