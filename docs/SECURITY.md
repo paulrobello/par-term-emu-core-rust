@@ -1444,9 +1444,9 @@ sections; the numbers live here.
 | `MAX_PROJECT_LEN` | 128 | `crates/par-mux/src/mux/host_probe.rs:289` | Bytes of project name the host probe serves for one pane cwd. |
 | `MAX_STREAM_LINE_BYTES` | 64 MiB | `crates/par-mux/src/mux/pane_stream.rs:29` | Bytes accumulated from one daemon line by a pane stream client before it closes the connection. |
 | `CONTROL_CHUNK` | 4,096 | `crates/par-mux/src/mux/pane_stream.rs:34` | Stdin bytes a control-pane client forwards per send-keys line. |
-| `MAX_PERSISTED_SCROLLBACK_CELLS` | 100,000 | `crates/par-mux/src/mux/persist/format.rs:35` | Scrollback cells restored per pane from an untrusted on-disk state file. |
-| `MAX_RESTORED_COLS` | 1,000 | `crates/par-mux/src/mux/persist/format.rs:45` | Columns one restored window may claim from an untrusted state file. |
-| `MAX_RESTORED_ROWS` | 500 | `crates/par-mux/src/mux/persist/format.rs:47` | Rows one restored window may claim from an untrusted state file. |
+| `MAX_PERSISTED_SCROLLBACK_CELLS` | 100,000 | `crates/par-mux/src/mux/persist/format.rs:50` | Scrollback cells restored per pane from an untrusted on-disk state file. |
+| `MAX_RESTORED_COLS` | 1,000 | `crates/par-mux/src/mux/persist/format.rs:60` | Columns one restored window may claim from an untrusted state file. |
+| `MAX_RESTORED_ROWS` | 500 | `crates/par-mux/src/mux/persist/format.rs:62` | Rows one restored window may claim from an untrusted state file. |
 | `CLIENT_QUEUE_BYTES` | 8 MiB | `crates/par-mux/src/mux/server/mod.rs:96` | Bytes of broadcast lines queued per control-socket client before the daemon evicts it. |
 | `CLIENT_QUEUE_AGGREGATE_BYTES` | `CLIENT_QUEUE_BYTES * 2` | `crates/par-mux/src/mux/server/mod.rs:108` | Bytes of broadcast lines queued across all control-socket clients before the daemon evicts the deepest queue. |
 | `CLIENT_QUEUE_MAX_ITEMS` | `CLIENT_QUEUE_BYTES / MIN_BROADCAST_LINE_BYTES` | `crates/par-mux/src/mux/server/mod.rs:123` | Broadcast queue items per control-socket client before the daemon evicts it (backstop to the CLIENT_QUEUE_BYTES budget). |

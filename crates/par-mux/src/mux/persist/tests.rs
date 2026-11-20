@@ -107,10 +107,22 @@ fn layout_save_load_round_trip() {
     assert_eq!(path, layouts_dir_in(dir.path()).join("dev.json"));
     let loaded = load_layout_in(dir.path(), "dev").unwrap();
     // Live panes keep producing output, so a second capture of `tree`
-    // is not comparable; the file's own JSON is the captured state.
+    // is not comparable; the file's own JSON is the captured state. v4:
+    // the file is metadata only (panes carry `grid_rev`, no `terminal`),
+    // so the comparison strips the load-side re-attached grids back off.
     let on_disk: serde_json::Value =
         serde_json::from_str(&fs::read_to_string(&path).unwrap()).unwrap();
-    assert_eq!(serde_json::to_value(&loaded).unwrap(), on_disk);
+    assert!(
+        on_disk["sessions"][0]["windows"][0]["panes"][0]
+            .as_object()
+            .unwrap()
+            .get("terminal")
+            .is_none(),
+        "the layout file carries no grid bytes"
+    );
+    let mut stripped = loaded.clone();
+    super::grid_store::split_grids_out_of(&mut stripped);
+    assert_eq!(serde_json::to_value(&stripped).unwrap(), on_disk);
     assert_eq!(loaded.format_version, FORMAT_VERSION);
     let names: Vec<&str> = loaded.sessions.iter().map(|s| s.name.as_str()).collect();
     assert!(names.contains(&"main") && names.contains(&"other"));
@@ -931,7 +943,7 @@ fn restore_note_observer_events_arrive_after_the_terminal_lock_drops() {
     assert_eq!(term.cursor().row, rows - 1, "cursor on the bottom row");
     assert_eq!(term.get_zones().len(), 3, "no zone evicted yet");
     let pane = &mut state.sessions[0].windows[0].panes[0];
-    pane.terminal = term.capture_snapshot();
+    pane.terminal = Some(term.capture_snapshot());
     pane.cwd = Some("/par-mux-test-no-such-dir".to_string());
 
     let factory = RestoreProbeFactory::default();
@@ -1033,7 +1045,10 @@ fn a_held_dead_pane_round_trips_as_held_dead() {
     let saved = &state.sessions[0].windows[0].panes[0];
     assert!(saved.dead, "positive control: dead is on the wire");
     assert_eq!(saved.exit_code, Some(3));
-    assert!(saved.terminal.alt_screen_active, "control: alt screen up");
+    assert!(
+        saved.terminal.as_ref().unwrap().alt_screen_active,
+        "control: alt screen up"
+    );
 
     let json = serde_json::to_string(&state).unwrap();
     let state: PersistState = serde_json::from_str(&json).unwrap();
@@ -1066,7 +1081,10 @@ fn a_held_dead_pane_round_trips_as_held_dead() {
         "the agent identity survives a dead restore"
     );
 
-    let want = &state.sessions[0].windows[0].panes[0].terminal;
+    let want = state.sessions[0].windows[0].panes[0]
+        .terminal
+        .as_ref()
+        .unwrap();
     let got = pane.terminal().read().capture_snapshot();
     assert_eq!(got.grid.cells, want.grid.cells, "main screen identical");
     assert_eq!(
@@ -1675,10 +1693,17 @@ fn restore_survives_a_hostile_snapshot_grid_size() {
     let mut state = populated_tree().to_persist_state();
     let zero_pane = state.sessions[0].windows[0].panes[0].id;
     let huge_pane = state.sessions[0].windows[1].panes[0].id;
-    state.sessions[0].windows[0].panes[0].terminal.grid.cols = 0;
-    state.sessions[0].windows[0].panes[0].terminal.grid.rows = 0;
-    state.sessions[0].windows[1].panes[0].terminal.grid.cols = usize::from(u16::MAX);
-    state.sessions[0].windows[1].panes[0].terminal.grid.rows = usize::from(u16::MAX);
+    for (window, cols, rows) in [
+        (0, 0usize, 0usize),
+        (1, usize::from(u16::MAX), usize::from(u16::MAX)),
+    ] {
+        let terminal = state.sessions[0].windows[window].panes[0]
+            .terminal
+            .as_mut()
+            .unwrap();
+        terminal.grid.cols = cols;
+        terminal.grid.rows = rows;
+    }
 
     let restored =
         MuxTree::from_persist_state(&state, Box::new(ShellPaneFactory::default())).unwrap();
@@ -2952,6 +2977,189 @@ fn a_save_drops_sidecars_for_panes_that_lost_their_env() {
     );
 }
 
+/// Criterion 1 (card 01a1fa94ce7a): the state file is pane metadata only.
+/// No grid bytes ride it — a reader that wants cwd, session identity, or
+/// layout parses O(panes) bytes, and each pane's terminal lives in its
+/// own content-addressed file beside it, referenced by `grid_rev`.
+#[test]
+fn the_state_file_is_metadata_only_and_panes_reference_grid_files() {
+    let (dir, target) = temp_target("grid-split");
+    write_state(&populated_tree().to_persist_state(), &target).expect("the save lands");
+
+    let text = fs::read_to_string(&target).unwrap();
+    assert!(
+        !text.contains("\"terminal\"") && !text.contains("\"cells\""),
+        "the state file carries no grid bytes: {}",
+        &text[..text.len().min(400)]
+    );
+    let json: serde_json::Value = serde_json::from_str(&text).unwrap();
+    assert_eq!(json["format_version"], serde_json::json!(FORMAT_VERSION));
+    let panes = &json["sessions"][0]["windows"][0]["panes"];
+    assert!(
+        panes[0]["grid_rev"].is_string(),
+        "every pane record references its grid file"
+    );
+    assert!(panes[0].get("cwd").is_some() || panes[0]["id"].is_number());
+
+    // The referenced files exist beside the state file and hold the
+    // snapshots.
+    let store = dir.path().join("state.panes");
+    let rev = panes[0]["grid_rev"].as_str().unwrap();
+    let grid_file = store.join(format!("pane-0-{rev}.grid.json"));
+    let snapshot: par_term_emu_core::terminal::replay_snapshot::TerminalSnapshot =
+        serde_json::from_str(&fs::read_to_string(&grid_file).unwrap()).unwrap();
+    assert!(
+        snapshot.cols > 0,
+        "the grid file parses back into a snapshot"
+    );
+}
+
+/// Criterion 2 (card 01a1fa94ce7a): a save rewrites only the panes whose
+/// content changed. The grid revision is content-addressed (the snapshot
+/// cache's validity key), so an unchanged pane's revision file already
+/// exists and is skipped by name; a changed pane lands a new revision and
+/// the unreferenced old one is collected.
+#[test]
+fn a_save_rewrites_only_the_changed_panes_grid() {
+    let (dir, target) = temp_target("grid-write-amp");
+    let mut state = populated_tree().to_persist_state();
+    let set_rev = |state: &mut PersistState, pane: usize, rev: &str| {
+        state.sessions[0].windows[0].panes[pane].grid_rev = Some(rev.to_string());
+    };
+    set_rev(&mut state, 0, "nonce-1x80x24");
+    set_rev(&mut state, 1, "nonce-9x80x24");
+    write_state(&state, &target).expect("the first save");
+
+    let store = dir.path().join("state.panes");
+    let unchanged = store.join("pane-1-nonce-9x80x24.grid.json");
+    let unchanged_before = fs::metadata(&unchanged).unwrap().modified().unwrap();
+
+    // Pane 0's content changed (new revision); pane 1 did not.
+    let mut second = state.clone();
+    set_rev(&mut second, 0, "nonce-2x80x24");
+    write_state(&second, &target).expect("the second save");
+
+    assert!(
+        store.join("pane-0-nonce-2x80x24.grid.json").exists(),
+        "the changed pane's new revision landed"
+    );
+    let unchanged_after = fs::metadata(&unchanged).unwrap().modified().unwrap();
+    assert_eq!(
+        unchanged_before, unchanged_after,
+        "the unchanged pane's grid file was not rewritten"
+    );
+}
+
+/// Criterion 3 (card 01a1fa94ce7a): a v3 state file (terminals inline,
+/// no grid_rev) loads and restores its screens — the v4 bump is a
+/// migration-on-read, not a quarantine.
+#[test]
+fn a_v3_state_file_with_inline_terminals_loads_and_restores() {
+    let (tree, pane_id) = tree_with_agent_pane();
+    let mut state = tree.to_persist_state();
+    state.format_version = FORMAT_VERSION - 1;
+    for session in &mut state.sessions {
+        for window in &mut session.windows {
+            for pane in &mut window.panes {
+                pane.grid_rev = None;
+                pane.terminal = pane.terminal.clone().or_else(|| {
+                    Some(
+                        tree.pane(pane_id)
+                            .unwrap()
+                            .terminal()
+                            .read()
+                            .capture_snapshot(),
+                    )
+                });
+            }
+        }
+    }
+    let (_dir, target) = temp_target("grid-v3-migration");
+    fs::write(&target, serde_json::to_vec(&state).unwrap()).unwrap();
+
+    let Loaded::State(loaded) = load_or_quarantine(&target) else {
+        panic!("the v3 file must load, not quarantine");
+    };
+    let restored = MuxTree::from_persist_state(&loaded, Box::new(ShellPaneFactory::default()))
+        .expect("the v3 tree rebuilds");
+    assert!(restored.pane(pane_id).is_some(), "the pane restored");
+    assert!(
+        loaded.sessions[0].windows[0].panes[0].terminal.is_some(),
+        "the inline terminal was used, no grid files needed"
+    );
+}
+
+/// A pane whose grid file is missing at load (deleted, or a GC race
+/// against a hand-copied state) restores its structure and process
+/// without the saved screen — a degraded pane, never a failed boot.
+#[test]
+fn a_missing_grid_file_restores_the_pane_without_its_screen() {
+    let (dir, target) = temp_target("grid-missing");
+    let state = populated_tree().to_persist_state();
+    write_state(&state, &target).expect("the save");
+    let store = dir.path().join("state.panes");
+    let victim = fs::read_dir(&store)
+        .unwrap()
+        .flatten()
+        .find(|entry| {
+            entry
+                .file_name()
+                .to_str()
+                .is_some_and(|name| name.starts_with("pane-0-"))
+        })
+        .expect("pane 0's grid file");
+    fs::remove_file(victim.path()).unwrap();
+
+    let Loaded::State(loaded) = load_or_quarantine(&target) else {
+        panic!("the state must load");
+    };
+    assert!(
+        loaded.sessions[0].windows[0].panes[0].terminal.is_none(),
+        "the pane's terminal is absent, not fatal"
+    );
+    let restored = MuxTree::from_persist_state(&loaded, Box::new(ShellPaneFactory::default()))
+        .expect("a missing grid degrades, never blocks the boot");
+    assert!(!restored.sessions().is_empty(), "the tree rebuilt");
+}
+
+/// A grid file no recovery tier references is collected: a pane that
+/// moved to a new revision leaves its old file behind while the history
+/// snapshot that captured it is still within its keep window (the tier's
+/// whole job), and is collected on the first save after that tier no
+/// longer names it.
+#[test]
+fn unreferenced_grid_files_are_gcd() {
+    let (dir, target) = temp_target("grid-gc");
+    let mut state = populated_tree().to_persist_state();
+    state.sessions[0].windows[0].panes[0].grid_rev = Some("nonce-1x80x24".to_string());
+    write_state(&state, &target).expect("the first save");
+    let stale = dir
+        .path()
+        .join("state.panes")
+        .join("pane-0-nonce-1x80x24.grid.json");
+    assert!(stale.exists());
+
+    let mut second = state.clone();
+    second.sessions[0].windows[0].panes[0].grid_rev = Some("nonce-2x80x24".to_string());
+    write_state(&second, &target).expect("the second save");
+    // The first save's history snapshot (written within its keep window)
+    // still names the old revision — the tier keeps it, deliberately.
+    assert!(
+        stale.exists(),
+        "a revision a kept snapshot references survives the GC pass"
+    );
+
+    // Age the tier out; the next save collects what nothing names.
+    for snapshot in kept_snapshots(&target) {
+        fs::remove_file(snapshot).unwrap();
+    }
+    write_state(&second, &target).expect("the third save");
+    assert!(
+        !stale.exists(),
+        "the superseded revision was collected once no tier referenced it"
+    );
+}
+
 /// The save's env read is best-effort with retention: a claimed pane whose
 /// agent process cannot be matched (here: the pane child is a plain sleep,
 /// no agent process in its tree) persists its cached last-known env when
@@ -3668,22 +3876,27 @@ fn panes_without_resumable_identity_serialize_agent_session_none() {
     );
 }
 
-/// The version this build just superseded is refused exactly like any
-/// unknown one — the bump must be a boundary, not a silent partial read.
+/// The version boundary: v3 (the superseded version, terminals inline)
+/// RESTORES — the v4 bump is a migration-on-read, not a quarantine —
+/// while anything older is refused exactly like an unknown version, a
+/// boundary rather than a silent partial read.
 #[test]
 fn previous_format_version_is_refused() {
     let original = populated_tree();
     let mut state = original.to_persist_state();
     state.format_version = FORMAT_VERSION - 1;
+    MuxTree::from_persist_state(&state, Box::new(ShellPaneFactory::default()))
+        .expect("the superseded v3 restores: migration-on-read, not quarantine");
 
+    state.format_version = FORMAT_VERSION - 2;
     let result = MuxTree::from_persist_state(&state, Box::new(ShellPaneFactory::default()));
     assert!(
         matches!(
             result,
             Err(PersistError::UnsupportedVersion { found, supported })
-                if found == FORMAT_VERSION - 1 && supported == FORMAT_VERSION
+                if found == FORMAT_VERSION - 2 && supported == FORMAT_VERSION
         ),
-        "a v1 file must be refused, not partially read as v2"
+        "a version older than the superseded one must be refused, not partially read"
     );
 }
 

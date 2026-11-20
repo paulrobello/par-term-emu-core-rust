@@ -102,6 +102,10 @@ pub struct PersistCapture {
     active_workspace: Option<WorkspaceId>,
     sessions: Vec<SessionCapture>,
     buffers: HashMap<String, String>,
+    /// The tree's per-boot nonce, mixed into every pane's grid revision
+    /// so no two daemon lives produce the same revision for different
+    /// content (`grid_store`).
+    nonce: String,
 }
 
 struct WorkspaceCapture {
@@ -159,6 +163,7 @@ impl PersistCapture {
     /// (the real snapshot reads the host's process table; the gate's
     /// verdict must be deterministic in tests).
     pub(crate) fn capture_with_table(self, table: Option<ProcessTable>) -> PersistState {
+        let nonce = self.nonce;
         let mut workspaces: Vec<PersistWorkspace> = self
             .workspaces
             .into_iter()
@@ -181,102 +186,114 @@ impl PersistCapture {
             })
             .collect();
         workspaces.sort_by_key(|workspace| workspace.id);
-        let mut sessions: Vec<PersistSession> =
-            self.sessions
-                .into_iter()
-                .map(|session| PersistSession {
-                    id: session.id.0,
-                    name: session.name,
-                    active_window_index: session.active,
-                    env: session.env,
-                    windows: session
-                        .windows
-                        .into_iter()
-                        .map(|window| PersistWindow {
-                            id: window.id.0,
-                            name: window.name,
-                            cols: window.cols,
-                            rows: window.rows,
-                            active_pane: window.active_pane.0,
-                            layout: window.layout,
-                            panes: window
-                                .panes
-                                .into_iter()
-                                .map(|mut pane| {
-                                    // The resurrect gate (Paul, 2026-10-31): a
-                                    // hook claim whose agent the process table
-                                    // PROVES gone from the pane's tree must not
-                                    // ride the save — restore would re-launch a
-                                    // finished session. Mismatch only: Unknown
-                                    // (Windows, unreadable argv, mid-exit race)
-                                    // keeps the claim, the resume stays
-                                    // best-effort. A held-dead pane skips the
-                                    // gate: it never resumes (ARC-114), its
-                                    // stale child pid proves nothing, and its
-                                    // claim only carries identity for the
-                                    // roster.
-                                    if let Some(agent) =
-                                        pane.agent_session.as_ref().filter(|_| !pane.dead)
-                                    {
-                                        let alive = table.as_ref().zip(pane.child_pid).map(
-                                            |(table, root)| table.agent_alive(root, &agent.agent),
-                                        );
-                                        let mut dead = matches!(
-                                            alive,
-                                            Some(crate::mux::foreground::Liveness::Mismatch)
-                                        );
-                                        // Identity liveness (hook v5's stamp, card
-                                        // 01a1a765): a stamped pid provably gone
-                                        // from the pane's tree marks the CLAIMED
-                                        // session dead even when another
-                                        // same-label agent runs in the pane — the
-                                        // composition (no-release exit + refused
-                                        // replacement reports) that resurrected a
-                                        // dead transcript at restart. No stamp
-                                        // (v4 hook, older save) or an unwalkable
-                                        // tree keeps the label verdict above.
-                                        if !dead {
-                                            dead = agent.agent_pid.is_some_and(|pid| {
-                                                table.as_ref().zip(pane.child_pid).and_then(
-                                                    |(table, root)| table.pid_in_tree(root, pid),
-                                                ) == Some(false)
-                                            });
-                                        }
-                                        if dead {
-                                            pane.agent_session = None;
-                                        }
+        let mut sessions: Vec<PersistSession> = self
+            .sessions
+            .into_iter()
+            .map(|session| PersistSession {
+                id: session.id.0,
+                name: session.name,
+                active_window_index: session.active,
+                env: session.env,
+                windows: session
+                    .windows
+                    .into_iter()
+                    .map(|window| PersistWindow {
+                        id: window.id.0,
+                        name: window.name,
+                        cols: window.cols,
+                        rows: window.rows,
+                        active_pane: window.active_pane.0,
+                        layout: window.layout,
+                        panes: window
+                            .panes
+                            .into_iter()
+                            .map(|mut pane| {
+                                // The resurrect gate (Paul, 2026-10-31): a
+                                // hook claim whose agent the process table
+                                // PROVES gone from the pane's tree must not
+                                // ride the save — restore would re-launch a
+                                // finished session. Mismatch only: Unknown
+                                // (Windows, unreadable argv, mid-exit race)
+                                // keeps the claim, the resume stays
+                                // best-effort. A held-dead pane skips the
+                                // gate: it never resumes (ARC-114), its
+                                // stale child pid proves nothing, and its
+                                // claim only carries identity for the
+                                // roster.
+                                if let Some(agent) =
+                                    pane.agent_session.as_ref().filter(|_| !pane.dead)
+                                {
+                                    let alive = table
+                                        .as_ref()
+                                        .zip(pane.child_pid)
+                                        .map(|(table, root)| table.agent_alive(root, &agent.agent));
+                                    let mut dead = matches!(
+                                        alive,
+                                        Some(crate::mux::foreground::Liveness::Mismatch)
+                                    );
+                                    // Identity liveness (hook v5's stamp, card
+                                    // 01a1a765): a stamped pid provably gone
+                                    // from the pane's tree marks the CLAIMED
+                                    // session dead even when another
+                                    // same-label agent runs in the pane — the
+                                    // composition (no-release exit + refused
+                                    // replacement reports) that resurrected a
+                                    // dead transcript at restart. No stamp
+                                    // (v4 hook, older save) or an unwalkable
+                                    // tree keeps the label verdict above.
+                                    if !dead {
+                                        dead = agent.agent_pid.is_some_and(|pid| {
+                                            table.as_ref().zip(pane.child_pid).and_then(
+                                                |(table, root)| table.pid_in_tree(root, pid),
+                                            ) == Some(false)
+                                        });
                                     }
-                                    if let Some(agent) = &mut pane.agent_session {
-                                        resolve_agent_env(
-                                            &table,
-                                            agent,
-                                            pane.child_pid,
-                                            &pane.agent_env,
-                                        );
+                                    if dead {
+                                        pane.agent_session = None;
                                     }
-                                    PersistPane {
-                                        id: pane.id.0,
-                                        terminal: cap_persisted_scrollback(snapshot_from_parts(
-                                            &pane.parts,
-                                        )),
-                                        spawn_command: pane.spawn_command,
-                                        user_title: pane.user_title,
-                                        agent_session: pane.agent_session,
-                                        cwd: pane
-                                            .parts
-                                            .cwd()
-                                            .map(|dir| dir.to_string_lossy().into_owned()),
-                                        cwd_host: pane.parts.cwd_host(),
-                                        dead: pane.dead,
-                                        exit_code: pane.exit_code,
-                                        restore_start_command: pane.restore_start_command,
-                                    }
-                                })
-                                .collect(),
-                        })
-                        .collect(),
-                })
-                .collect();
+                                }
+                                if let Some(agent) = &mut pane.agent_session {
+                                    resolve_agent_env(
+                                        &table,
+                                        agent,
+                                        pane.child_pid,
+                                        &pane.agent_env,
+                                    );
+                                }
+                                PersistPane {
+                                    id: pane.id.0,
+                                    // The grid revision rides beside the
+                                    // snapshot: the snapshot cache's own
+                                    // validity key under the tree nonce.
+                                    // write_job strips the snapshot into
+                                    // its content-addressed grid file and
+                                    // keeps only this reference in the
+                                    // metadata (card 01a1fa94ce7a).
+                                    grid_rev: {
+                                        let (generation, cols, rows) = pane.parts.snapshot_key();
+                                        Some(format!("{nonce}-{generation}x{cols}x{rows}"))
+                                    },
+                                    terminal: Some(cap_persisted_scrollback(snapshot_from_parts(
+                                        &pane.parts,
+                                    ))),
+                                    spawn_command: pane.spawn_command,
+                                    user_title: pane.user_title,
+                                    agent_session: pane.agent_session,
+                                    cwd: pane
+                                        .parts
+                                        .cwd()
+                                        .map(|dir| dir.to_string_lossy().into_owned()),
+                                    cwd_host: pane.parts.cwd_host(),
+                                    dead: pane.dead,
+                                    exit_code: pane.exit_code,
+                                    restore_start_command: pane.restore_start_command,
+                                }
+                            })
+                            .collect(),
+                    })
+                    .collect(),
+            })
+            .collect();
         sessions.sort_by_key(|session| session.id);
 
         PersistState {
@@ -305,6 +322,7 @@ impl MuxTree {
     pub fn collect_persist_capture(&self) -> PersistCapture {
         PersistCapture {
             next_ids: self.ids.next_ids(),
+            nonce: self.persist_nonce.clone(),
             workspaces: self
                 .workspaces
                 .values()
@@ -560,13 +578,19 @@ pub fn write_job(
         }
         fs::create_dir_all(parent)?;
     }
-    // The env split needs a mutable copy — `state` is borrowed, and the
-    // in-memory capture (whose env the restore-side cache reads) must not
-    // be mutated by the write. The clone is a memcpy next to the
+    // The env and grid splits need a mutable copy — `state` is borrowed,
+    // and the in-memory capture (whose env the restore-side cache reads)
+    // must not be mutated by the write. The clone is a memcpy next to the
     // serialization it precedes.
     let mut stripped = state.clone();
     let extracted = super::env_store::split_env_out_of(&mut stripped);
     let keep = super::env_store::write_env_records(target, &extracted)?;
+    // Grids follow the same rule (card 01a1fa94ce7a): the metadata file
+    // carries references only. Grid files land before the main rename —
+    // like the env sidecars, the new file is the commit point of what it
+    // references — and unchanged revisions are skipped by name.
+    let grids = super::grid_store::split_grids_out_of(&mut stripped);
+    let keep_grids = super::grid_store::write_grid_files(target, &grids)?;
     let mut tmp = target.as_os_str().to_os_string();
     tmp.push(".tmp");
     let tmp = PathBuf::from(tmp);
@@ -603,9 +627,13 @@ pub fn write_job(
     drop(file);
 
     fs::rename(&tmp, target)?;
-    super::env_store::gc_env_sidecars(target, &keep);
     maintain_lastgood(origin, state, target);
     maintain_snapshot_history(origin, state, target);
+    // Sidecar GC runs AFTER the recovery tiers update, so it sees what
+    // they now reference: a revision the new lastgood superseded is
+    // collectable this pass, one it still names is not.
+    super::env_store::gc_env_sidecars(target, &keep);
+    super::grid_store::gc_grid_files(target, &keep_grids);
     Ok(())
 }
 

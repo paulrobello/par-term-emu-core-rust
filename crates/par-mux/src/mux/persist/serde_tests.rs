@@ -266,12 +266,12 @@ fn persisted_state_caps_scrollback_to_the_newest_lines() {
     let state = tree.to_persist_state();
     // Panes serialize in layout order; the split pane is the second.
     let pane = &state.sessions[0].windows[0].panes[1];
+    let terminal = pane.terminal.as_ref().expect("capture carries the grid");
     assert_eq!(
-        pane.terminal.grid.scrollback_lines, keep,
+        terminal.grid.scrollback_lines, keep,
         "persisted scrollback is capped to the budget"
     );
-    let persisted_text: String = pane
-        .terminal
+    let persisted_text: String = terminal
         .grid
         .scrollback_cells
         .iter()

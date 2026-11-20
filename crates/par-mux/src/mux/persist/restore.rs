@@ -5,6 +5,7 @@
 use super::format::{
     clamp_restored_grid_dims, clamp_restored_window_size, unix_ms, PersistAgentSession,
     PersistError, PersistPane, PersistSession, PersistState, PersistWindow, FORMAT_VERSION,
+    RESTORABLE_FORMAT_VERSIONS,
 };
 use super::save::{kept_snapshots, lastgood_path, state_has_panes};
 use crate::mux::agent_resume::resume_invocation;
@@ -60,7 +61,7 @@ impl MuxTree {
         agent_append: &crate::mux::config::AgentAppend,
         agent_resume_prompt: &str,
     ) -> Result<MuxTree, PersistError> {
-        if state.format_version != FORMAT_VERSION {
+        if !RESTORABLE_FORMAT_VERSIONS.contains(&state.format_version) {
             return Err(PersistError::UnsupportedVersion {
                 found: state.format_version,
                 supported: FORMAT_VERSION,
@@ -563,10 +564,13 @@ fn restore_pane_screen(
     // and note are what `cursor_position()` serves before the new process
     // prints anything.
     restored_pane.with_terminal_mut(|restored| {
+        // A pane whose grid file was missing at load (v4) carries no
+        // snapshot: nothing to re-hang — the pane keeps its freshly
+        // spawned empty terminal rather than failing the boot.
+        let mut snapshot = pane.terminal.clone()?;
         // ARC-113c2: the snapshot's grid dims are state-file input exactly
         // like the window size, so clamp them before
         // `restore_for_new_process` adopts them.
-        let mut snapshot = pane.terminal.clone();
         clamp_restored_grid_dims(&mut snapshot);
         if pane.dead {
             // No new process to protect: the frozen screen returns exactly
@@ -610,7 +614,7 @@ fn load_newest_snapshot(target: &Path) -> Option<PersistState> {
         let Ok(state) = serde_json::from_slice::<PersistState>(&bytes) else {
             continue;
         };
-        if state.format_version == FORMAT_VERSION && state_has_panes(&state) {
+        if RESTORABLE_FORMAT_VERSIONS.contains(&state.format_version) && state_has_panes(&state) {
             log::info!(
                 "par-mux: restoring the newest history snapshot {}",
                 path.display()
@@ -639,11 +643,13 @@ pub enum Loaded {
     },
 }
 
-/// Merge `target`'s env sidecars into a state the load tiers produced
-/// (whichever tier it came from — the store is anchored to the main state
-/// path, and the pane records' identity check is the pairing guard).
+/// Merge `target`'s sidecar stores into a state the load tiers produced
+/// (whichever tier it came from — the stores are anchored to the main
+/// state path; the pane records' identity check pairs env, the revision
+/// reference pairs grids).
 fn with_env_sidecars(mut state: PersistState, target: &Path) -> PersistState {
     super::env_store::attach_env_sidecars(&mut state, target);
+    super::grid_store::attach_grids(&mut state, target);
     state
 }
 
@@ -663,7 +669,7 @@ pub fn load_or_quarantine(target: &Path) -> Loaded {
     };
 
     let reason = match serde_json::from_slice::<PersistState>(&bytes) {
-        Ok(state) if state.format_version == FORMAT_VERSION => {
+        Ok(state) if RESTORABLE_FORMAT_VERSIONS.contains(&state.format_version) => {
             if !state_has_panes(&state) {
                 if let Some(good) = load_lastgood(target) {
                     log::info!(
@@ -728,7 +734,8 @@ pub fn load_or_quarantine(target: &Path) -> Loaded {
 fn load_lastgood(target: &Path) -> Option<PersistState> {
     let bytes = fs::read(lastgood_path(target)).ok()?;
     let state = serde_json::from_slice::<PersistState>(&bytes).ok()?;
-    (state.format_version == FORMAT_VERSION && state_has_panes(&state)).then_some(state)
+    (RESTORABLE_FORMAT_VERSIONS.contains(&state.format_version) && state_has_panes(&state))
+        .then_some(state)
 }
 
 /// What a read-only peek at the state file predicts the next daemon start
@@ -760,7 +767,7 @@ pub fn peek_state(target: &Path) -> StatePeek {
         Err(_) => return StatePeek::Missing,
     };
     match serde_json::from_slice::<PersistState>(&bytes) {
-        Ok(state) if state.format_version == FORMAT_VERSION => {
+        Ok(state) if RESTORABLE_FORMAT_VERSIONS.contains(&state.format_version) => {
             if state_has_panes(&state) || load_lastgood(target).is_some() {
                 StatePeek::Populated
             } else {

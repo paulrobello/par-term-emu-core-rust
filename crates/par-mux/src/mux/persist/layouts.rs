@@ -97,8 +97,9 @@ pub fn load_layout_in_dir(dir: &Path, name: &str) -> Result<PersistState, Persis
         });
     }
     // Layouts save through the same write path as the boot state, so their
-    // env rides the sidecar store beside the layout file.
+    // env and grids ride the sidecar stores beside the layout file.
     super::env_store::attach_env_sidecars(&mut state, &target);
+    super::grid_store::attach_grids(&mut state, &target);
     Ok(state)
 }
 

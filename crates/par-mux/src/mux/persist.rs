@@ -17,6 +17,7 @@
 
 mod env_store;
 mod format;
+mod grid_store;
 mod layouts;
 mod restore;
 mod save;

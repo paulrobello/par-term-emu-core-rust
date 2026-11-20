@@ -511,6 +511,13 @@ pub struct MuxTree {
     /// and its "server was restarted" toast read it. `None` on a fresh
     /// tree. Never persisted — the next boot's restore sets it again.
     pub(crate) restored_at_boot: Option<std::time::Instant>,
+    /// This tree's persistence nonce — one value per tree (per daemon
+    /// life), mixed into every pane's grid revision token
+    /// (`persist::grid_store`) so two daemon lives never reuse a
+    /// revision name for different content. Derived from the boot wall
+    /// clock and the pid; uniqueness within one state store is all it
+    /// needs, not cryptographic.
+    pub(crate) persist_nonce: String,
     /// Per-connection sizing state behind the smallest-attached-client
     /// window rule ([`ClientView`]). Never persisted: a reconnecting
     /// client re-reports through the attach handshake.
@@ -563,6 +570,14 @@ impl MuxTree {
             window_session: HashMap::new(),
             session_workspace: HashMap::new(),
             restored_at_boot: None,
+            persist_nonce: std::format!(
+                "{:x}-{}",
+                std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .map(|d| d.as_millis())
+                    .unwrap_or_default(),
+                std::process::id()
+            ),
             client_views: HashMap::new(),
             streaming_mirrors: std::collections::HashSet::new(),
             client_focus: HashMap::new(),

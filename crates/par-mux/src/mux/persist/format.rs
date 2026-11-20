@@ -23,7 +23,22 @@ use std::time::{SystemTime, UNIX_EPOCH};
 /// and `next_ids` grew the workspace counter. Not backward compatible BY
 /// DESIGN (workspaces are first-class, no migration): a v2 file fails the
 /// version check and is quarantined, and the daemon starts fresh.
-pub const FORMAT_VERSION: u32 = 3;
+///
+/// v4 (card 01a1fa94ce7a): pane terminal snapshots left the file. The
+/// state file is now pane metadata only — a reader gets cwd, session
+/// identity, and layout in O(panes) bytes — and each pane's grid lives in
+/// its own content-addressed file beside it (`grid_store`), rewritten only
+/// when that pane's content changed. Unlike v3, v4 READS v3: a v3 file
+/// (terminals inline) loads as-is, and the next save externalizes it —
+/// an upgrade keeps the tree instead of quarantining it. A v3 daemon
+/// reading a v4 file fails the (now-required) `terminal` field's parse
+/// and quarantines, the same posture the v2→v3 bump took.
+pub const FORMAT_VERSION: u32 = 4;
+
+/// On-disk format versions this build can RESTORE. v3 rides along until a
+/// release cycle decides to drop it; the writer always writes
+/// [`FORMAT_VERSION`].
+pub const RESTORABLE_FORMAT_VERSIONS: [u32; 2] = [4, 3];
 
 /// Ceiling on the scrollback cells one pane contributes to the state file
 /// — a persistence bound only; the in-memory pane keeps its full history.
@@ -325,8 +340,31 @@ pub struct PersistWindow {
 pub struct PersistPane {
     /// The pane's `%N` number.
     pub id: u32,
-    /// The pane's full terminal state — screen, scrollback, modes.
-    pub terminal: TerminalSnapshot,
+    /// The pane's full terminal state — screen, scrollback, modes. In a
+    /// v4 file this is `None`: the grid rides its own content-addressed
+    /// file beside the state file, named by [`Self::grid_rev`], and a
+    /// load merges it back before the rebuild (`grid_store`). In-memory
+    /// captures always carry it; a v3 file carries it inline (the
+    /// migration-on-read source). A load whose grid file is missing
+    /// leaves it `None` — the pane restores structure and process without
+    /// its saved screen, never a failed boot.
+    #[cfg_attr(
+        feature = "serde",
+        serde(default, skip_serializing_if = "Option::is_none")
+    )]
+    pub terminal: Option<TerminalSnapshot>,
+    /// The grid file's revision token — `<daemon-nonce>-<generation>x<cols>x<rows>`,
+    /// the snapshot cache's own validity key under a per-boot nonce. The
+    /// writer lands `<grid_store>/pane-<id>-<rev>.grid.json` only when
+    /// that exact name does not exist (same rev ⇒ same cached snapshot ⇒
+    /// same bytes), so an unchanged pane's grid is never rewritten. Absent
+    /// on v3 files (the terminal is inline there) and on panes whose
+    /// capture held no terminal.
+    #[cfg_attr(
+        feature = "serde",
+        serde(default, skip_serializing_if = "Option::is_none")
+    )]
+    pub grid_rev: Option<String>,
     /// The command the pane ran (`None` = the default shell).
     pub spawn_command: Option<String>,
     /// The pane's user title (`select-pane -T`), when set. Skipped when

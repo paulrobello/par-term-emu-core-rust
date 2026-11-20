@@ -340,6 +340,15 @@ impl PaneSnapshotParts {
     pub(crate) fn probe_cwd(&self) -> Option<std::path::PathBuf> {
         self.child_pid.and_then(process_cwd)
     }
+
+    /// The snapshot cache's validity key — `(generation, cols, rows)`.
+    /// This is the identity the persistence layer's grid revision reuses
+    /// (`persist::grid_store`): while the key holds, the pane's captured
+    /// snapshot is byte-identical, so its grid file need not be rewritten.
+    pub(crate) fn snapshot_key(&self) -> (u64, usize, usize) {
+        let (cols, rows) = self.terminal.read().size();
+        (self.generation, cols, rows)
+    }
 }
 
 /// [`MuxPane::persisted_snapshot`]'s logic over collected parts: serve the
