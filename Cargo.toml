@@ -101,9 +101,9 @@ uuid = { workspace = true }
 
 # Streaming server dependencies
 tokio = { version = "1.52.3", features = ["rt-multi-thread", "net", "sync", "time", "macros", "io-util", "signal"], optional = true }
-tokio-tungstenite = { version = "0.29", optional = true }
+tokio-tungstenite = { version = "0.30", optional = true }
 axum = { version = "0.8.9", features = ["ws"], optional = true }
-tower-http = { version = "0.6.11", features = ["fs", "trace", "cors"], optional = true }
+tower-http = { version = "0.7", features = ["fs", "trace", "cors"], optional = true }
 futures-util = { version = "0.3.32", optional = true }
 
 # Cross-platform local socket for the streaming server's MuxSessionFactory
@@ -136,7 +136,7 @@ prost = { version = "0.14.3", optional = true }
 #  replacing the unmaintained rustls-pemfile crate — RUSTSEC-2025-0134.)
 rustls = { version = "0.23.40", optional = true }
 tokio-rustls = { version = "0.26.4", optional = true }
-axum-server = { version = "0.8.0", features = ["tls-rustls"], optional = true }
+axum-server = { version = "0.9", features = ["tls-rustls"], optional = true }
 
 # HTTP Basic Auth support (htpasswd-format verification via maintained crates;
 # replaces the abandoned htpasswd-verify chain — RUSTSEC-2022-0011 / -0004 / -0071.)
