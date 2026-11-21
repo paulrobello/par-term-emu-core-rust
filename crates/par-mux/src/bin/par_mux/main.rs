@@ -968,13 +968,122 @@ mod plugin;
 mod runners;
 mod update_cli;
 
-/// Parse, resolve the invocation into its one mode, run that mode.
+/// Parse, resolve the invocation into its one mode, run that mode. A
+/// failed or refused NAME-form daemon start then gets the verb
+/// did-you-mean hint, in addition to the runner's own error: the
+/// failed-start and nested-daemon-guard paths both surface here as a
+/// nonzero exit from the daemon path (the CLI did-you-mean card —
+/// `par-mux lss` inside a pane refuses with the nesting story alone;
+/// the hint names the verb).
 fn main() -> std::process::ExitCode {
     let mut cli = Cli::parse();
+    // Snapshot before `resolve` consumes the verb: after it runs, a bare
+    // NAME and an explicit `start NAME` look identical on the Cli.
+    let name_form = name_form_start_name(&cli);
     match dispatch::resolve(&mut cli) {
-        Ok(mode) => dispatch::run(cli, mode),
+        Ok(mode) => {
+            let daemon_start = matches!(mode, dispatch::Mode::Daemon(_));
+            let code = dispatch::run(cli, mode);
+            if daemon_start {
+                if let Some(name) = name_form {
+                    if let Some(hint) = verb_typo_hint(&name, code) {
+                        eprintln!("{hint}");
+                    }
+                }
+            }
+            code
+        }
         Err(code) => code,
     }
+}
+
+/// The positional NAME of a NAME-form daemon start (`par-mux NAME`):
+/// no subcommand verb was typed, no explicit `--socket` replaces the
+/// name, and the run is a start (not `--stop`/`--restart`, whose guards
+/// own their messages). `None` is every other shape — verbs, client
+/// flags, explicit sockets, no name at all.
+fn name_form_start_name(cli: &Cli) -> Option<String> {
+    if cli.sub.is_none() && cli.socket.is_none() && !cli.stop && !cli.restart {
+        cli.name.clone()
+    } else {
+        None
+    }
+}
+
+/// The failed NAME-form start's hint, if one applies: nothing on a
+/// successful start (a daemon legitimately named `lss` started fine, so
+/// there is nothing to explain), otherwise the did-you-mean line when
+/// the NAME closely matches exactly one known verb. `main` prints it to
+/// stderr in addition to the runner's own error — never instead.
+fn verb_typo_hint(name: &str, code: std::process::ExitCode) -> Option<String> {
+    if code == std::process::ExitCode::SUCCESS {
+        return None;
+    }
+    did_you_mean_verb(name).map(|verb| format!("did you mean `par-mux {verb}`?"))
+}
+
+/// The did-you-mean decision: `Some(verb)` when the lowercased NAME
+/// closely matches exactly one known verb spelling. An exact spelling
+/// matches nothing here — the dispatch collision guard already refuses
+/// command words and verb spellings with its own guidance — and two or
+/// more candidates are ambiguous, so neither hints.
+fn did_you_mean_verb(name: &str) -> Option<String> {
+    let lower = name.to_lowercase();
+    let verbs = known_verbs();
+    if verbs.iter().any(|verb| verb.eq_ignore_ascii_case(&lower)) {
+        return None;
+    }
+    let mut close = verbs.iter().filter(|verb| verb_lookalike(&lower, verb));
+    let first = close.next()?;
+    if close.any(|second| second != first) {
+        return None;
+    }
+    Some(first.clone())
+}
+
+/// The known verb spellings, derived live from the clap surface (`Sub`)
+/// so the list cannot go stale: each subcommand's primary spelling plus
+/// any explicit aliases.
+fn known_verbs() -> Vec<String> {
+    use clap::CommandFactory;
+    let mut verbs = Vec::new();
+    for sub in Cli::command().get_subcommands() {
+        verbs.push(sub.get_name().to_string());
+        verbs.extend(sub.get_all_aliases().map(str::to_string));
+    }
+    verbs
+}
+
+/// The closeness rule (one comment, per the card): the NAME matches a
+/// verb when it is a proper prefix of it, or when the case-insensitive
+/// Levenshtein distance is at most 2 for a NAME of 5+ characters and at
+/// most 1 for a shorter one — `lss` and `lst` reach `ls`, while `lost`
+/// (a plausible real daemon name, distance 2 from `ls` at 4 chars) does
+/// not reach anything, and `ls` is never close to `list-sessions`-length
+/// spellings.
+fn verb_lookalike(name: &str, verb: &str) -> bool {
+    if verb.starts_with(name) && name.len() < verb.len() {
+        return true;
+    }
+    let allowed = if name.chars().count() >= 5 { 2 } else { 1 };
+    levenshtein(name, verb) <= allowed
+}
+
+/// Levenshtein edit distance (insert, delete, substitute), two-row DP,
+/// hand-rolled to keep the binary's dependency set untouched.
+fn levenshtein(a: &str, b: &str) -> usize {
+    let b: Vec<char> = b.chars().collect();
+    let mut prev: Vec<usize> = (0..=b.len()).collect();
+    let mut cur: Vec<usize> = vec![0; b.len() + 1];
+    for (i, ca) in a.chars().enumerate() {
+        cur[0] = i + 1;
+        for (j, cb) in b.iter().copied().enumerate() {
+            let substitution = prev[j] + usize::from(ca != cb);
+            cur[j + 1] = (prev[j + 1] + 1).min(cur[j] + 1).min(substitution);
+        }
+        std::mem::swap(&mut prev, &mut cur);
+    }
+    prev[b.len()]
 }
 
 /// The daemon's stderr logger (ARC-010): the mux library emits through
@@ -1321,6 +1430,90 @@ mod mode_group_tests {
         let err = Cli::try_parse_from(["par-mux", "--cmd=x", "--state-dir", "/tmp"])
             .expect_err("conflict");
         assert_eq!(err.kind(), clap::error::ErrorKind::ArgumentConflict);
+    }
+
+    /// The did-you-mean decision (the CLI card): a NAME close to exactly
+    /// one verb spelling hints that verb; an exact spelling (the
+    /// collision guard's territory), a no-match, and an ambiguous match
+    /// hint nothing.
+    #[test]
+    fn verb_typo_hint_decision() {
+        for exact in ["ls", "start", "status", "update"] {
+            assert_eq!(did_you_mean_verb(exact), None, "exact {exact} never hints");
+        }
+        // The card's typos: one edit from `ls`, nothing else close.
+        assert_eq!(did_you_mean_verb("lss"), Some("ls".to_string()));
+        assert_eq!(did_you_mean_verb("lst"), Some("ls".to_string()));
+        assert_eq!(did_you_mean_verb("LSS"), Some("ls".to_string()));
+        // 5+ char names allow distance 2; a 5-char `start` typo reaches
+        // only `start`.
+        assert_eq!(did_you_mean_verb("staqt"), Some("start".to_string()));
+        // A truncated verb suggests itself when nothing else is close.
+        assert_eq!(did_you_mean_verb("obser"), Some("observe".to_string()));
+        // `statu` is ambiguous: the prefix rule names `status`, but the
+        // distance rule also reaches `start` (2 edits at 5 chars) — two
+        // candidates, no hint.
+        assert_eq!(did_you_mean_verb("statu"), None);
+        // Ambiguous prefixes hint nothing.
+        assert_eq!(did_you_mean_verb("sta"), None);
+        // No-match and plausible daemon names stay silent.
+        assert_eq!(did_you_mean_verb("zzzz"), None);
+        assert_eq!(did_you_mean_verb("lost"), None);
+    }
+
+    /// The hint message and its success gate: the card's exact line, and
+    /// silence when the start succeeded.
+    #[test]
+    fn verb_typo_hint_message_and_success_gate() {
+        assert_eq!(
+            verb_typo_hint("lss", std::process::ExitCode::FAILURE),
+            Some("did you mean `par-mux ls`?".to_string())
+        );
+        assert_eq!(
+            verb_typo_hint("lss", std::process::ExitCode::SUCCESS),
+            None,
+            "a successful start needs no hint"
+        );
+        assert_eq!(
+            verb_typo_hint("zzzz", std::process::ExitCode::FAILURE),
+            None,
+            "no close verb, no hint"
+        );
+    }
+
+    /// The similarity rule behind the decision: proper prefix, or
+    /// Levenshtein within the length tier (≤ 2 at 5+ chars, else ≤ 1).
+    #[test]
+    fn verb_lookalike_rule() {
+        assert!(verb_lookalike("lss", "ls"));
+        assert!(!verb_lookalike("lost", "ls"));
+        // The card's motivating input sits outside the short-word tier:
+        // `list` is 2 edits from `ls` at 4 chars.
+        assert!(!verb_lookalike("list", "ls"));
+        assert!(verb_lookalike("statu", "status"));
+        assert!(verb_lookalike("sta", "start"));
+        assert_eq!(levenshtein("list", "ls"), 2);
+        assert_eq!(levenshtein("", "ls"), 2);
+        assert_eq!(levenshtein("same", "same"), 0);
+    }
+
+    /// The NAME-form candidate: a positional NAME with no verb, no
+    /// explicit socket, and no stop/restart. Verbs, sockets, and stop
+    /// shapes are excluded — the candidate list feeds only the
+    /// daemon-mode-gated hint in `main`.
+    #[test]
+    fn name_form_start_candidate() {
+        let candidate = |args: &[&str]| {
+            let cli = Cli::try_parse_from(std::iter::once("par-mux").chain(args.iter().copied()))
+                .expect("parse");
+            name_form_start_name(&cli)
+        };
+        assert_eq!(candidate(&["mysession"]), Some("mysession".to_string()));
+        assert_eq!(candidate(&[]), None);
+        assert_eq!(candidate(&["start", "mysession"]), None);
+        assert_eq!(candidate(&["mysession", "--socket", "/tmp/x.sock"]), None);
+        assert_eq!(candidate(&["--stop"]), None);
+        assert_eq!(candidate(&["--restart", "name"]), None);
     }
 }
 
