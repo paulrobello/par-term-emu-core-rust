@@ -34,8 +34,10 @@ Options: `--streamer` / `--streamer-mux` / `--mux` (PowerShell: `-Streamer` / `-
 
 ## What's New
 
-> **Note:** This section covers the releases from 0.63.0 through 0.84.0. The
+> **Note:** This section covers the releases from 0.63.0 through 0.85.0. The
 > complete release history is in [CHANGELOG.md](CHANGELOG.md).
+
+Version 0.85.0 is a mux durability and dependency-train release: pane terminal grids leave the state file for content-addressed per-pane snapshot files (format v4, reads v3 — the 221 MB single-file rewrite per mutating command is gone), pane and session environment moves out of the state file into `0600` sidecar files so live tokens no longer ride the one JSON every downstream reader parses, every install target Developer-ID-signs its installed artifacts so macOS Local Network grants survive reinstalls, an attach window switch-back replays the landed window's full panes (transient reconnect corruption fixed), and agent resumes re-enter the agent's own working directory (a claude session that `EnterWorktree`'d no longer restores fenced out of its worktree). `par-mux` now suggests the verb you meant on a typo'd command, and the dependency train moves to pyo3 0.30, syn 3, zbus 6, toml 1.0, and the current streaming stack. See [CHANGELOG.md](CHANGELOG.md) for the full notes.
 
 Version 0.84.0 ships the opt-in `[daemon] xterm-resize-reflow` flag (ENH-045): a mux daemon running with it gives every pane terminal xterm.js's resize reflow — a resize rewraps grid and scrollback as one buffer, and the streamer's per-pane mirror and the `Connected.pane_resize_reflow` handshake field keep streaming viewers in lockstep. Fixes ride along: the claude hook/mod install no longer corrupts `settings.json` on windows (backslashes became invalid JSON escapes), `worktree-remove` finishes a removal git abandoned mid-teardown (git deletes the directory before the registration and continues after the deletion fails — the windows-latest "is not a working tree" failures), EL 0/ECH clear the row's wrapped flag like xterm (an exactly-full readline force-wrap row no longer merges with the row below in `content()`), and the mux test client's daemon auto-spawn finds its binary under cargo 1.100's new `build/<pkg>/<hash>/out/` test layout. See [CHANGELOG.md](CHANGELOG.md) for the full notes.
 
