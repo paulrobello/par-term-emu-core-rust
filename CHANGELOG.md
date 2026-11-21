@@ -7,6 +7,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+- **mux tests: the explicit-target passthrough tests use platform-absolute socket paths** (`d60a3ab8`): the two attach explicit-target tests asserted POSIX-style passthrough of `/tmp/*.sock`, but Rust's `is_absolute()` demands a drive letter on Windows — there the name joined the named-socket convention and both tests failed (pre-existing since 89fb2633 in 0.84.1; surfaced when the windows-latest mux-test leg ran for the first time since, on the 0.86.0 CI dispatch). The name-form arms now build their input from `std::env::temp_dir()` (platform-absolute everywhere), keeping a unix-only arm for the bare POSIX shape; no product-code change.
+
 ## [0.86.0] - 2026-11-21
 
 ### Added
