@@ -627,15 +627,23 @@ impl SessionFactory for BinarySessionFactory {
                 let refresh_kind = RefreshKind::nothing()
                     .with_cpu(CpuRefreshKind::everything())
                     .with_memory(MemoryRefreshKind::everything());
-                let mut sys = sysinfo::System::new_with_specifics(refresh_kind);
-                let mut disks = Disks::new_with_refreshed_list();
-                let mut networks = Networks::new_with_refreshed_list();
+                let (mut sys, mut disks, mut networks) = match (
+                    sysinfo::System::new_with_specifics(refresh_kind),
+                    Disks::new_with_refreshed_list(),
+                    Networks::new_with_refreshed_list(),
+                ) {
+                    (Ok(sys), Ok(disks), Ok(networks)) => (sys, disks, networks),
+                    errs => {
+                        error!("system stats task disabled: sysinfo init failed: {errs:?}");
+                        return;
+                    }
+                };
 
                 // Collect static info once
-                let hostname = sysinfo::System::host_name();
-                let os_name = sysinfo::System::name();
-                let os_version = sysinfo::System::os_version();
-                let kernel_version = sysinfo::System::kernel_version();
+                let hostname = sysinfo::System::host_name().ok();
+                let os_name = sysinfo::System::name().ok();
+                let os_version = sysinfo::System::os_version().ok();
+                let kernel_version = sysinfo::System::kernel_version().ok();
 
                 // Initial CPU refresh for baseline (first reading is always 0%)
                 sys.refresh_specifics(refresh_kind);
@@ -662,7 +670,7 @@ impl SessionFactory for BinarySessionFactory {
                         let global = sys.global_cpu_usage();
                         let cores = sysinfo::System::physical_core_count().unwrap_or(0) as u32;
                         let per_core: Vec<f64> =
-                            sys.cpus().iter().map(|c| c.cpu_usage() as f64).collect();
+                            sys.cpus().iter().map(|c| c.usage() as f64).collect();
                         let brand = sys.cpus().first().map(|c| c.brand().to_string());
                         let freq = sys.cpus().first().map(|c| c.frequency());
                         par_term_emu_core_rust::streaming::protocol::CpuStats {
@@ -705,7 +713,7 @@ impl SessionFactory for BinarySessionFactory {
                         .iter()
                         .map(|(name, data)| {
                             par_term_emu_core_rust::streaming::protocol::NetworkInterfaceStats {
-                                name: name.to_string(),
+                                name: name.to_string_lossy().to_string(),
                                 received_bytes: data.received(),
                                 transmitted_bytes: data.transmitted(),
                                 total_received_bytes: data.total_received(),
@@ -719,14 +727,14 @@ impl SessionFactory for BinarySessionFactory {
                         .collect();
 
                     // Build load average
-                    let load_avg = sysinfo::System::load_average();
+                    let load_avg = sysinfo::System::load_average().unwrap_or_default();
                     let load_average = par_term_emu_core_rust::streaming::protocol::LoadAverage {
                         one_minute: load_avg.one,
                         five_minutes: load_avg.five,
                         fifteen_minutes: load_avg.fifteen,
                     };
 
-                    let uptime = sysinfo::System::uptime();
+                    let uptime = sysinfo::System::uptime().unwrap_or(0);
                     let timestamp = std::time::SystemTime::now()
                         .duration_since(std::time::UNIX_EPOCH)
                         .map(|d| d.as_millis() as u64)

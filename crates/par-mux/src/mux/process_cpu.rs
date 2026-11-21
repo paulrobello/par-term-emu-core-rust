@@ -20,7 +20,10 @@ use sysinfo::{Pid, ProcessesToUpdate, System};
 /// reaped or unknown pid). sysinfo's `accumulated_cpu_time` is already
 /// CPU-milliseconds and may exceed wall time on a multi-core host.
 pub(crate) fn group_cpu_ms(root: u32) -> Option<u64> {
-    let mut system = System::new();
+    let mut system = match System::new() {
+        Ok(system) => system,
+        Err(_) => return None,
+    };
     system.refresh_processes(ProcessesToUpdate::All, true);
     let processes = system.processes();
     let root_pid = Pid::from_u32(root);

@@ -825,15 +825,18 @@ pub(super) async fn handle_stats_websocket(
     let refresh_kind = RefreshKind::nothing()
         .with_cpu(CpuRefreshKind::everything())
         .with_memory(MemoryRefreshKind::everything());
-    let mut sys = sysinfo::System::new_with_specifics(refresh_kind);
-    let mut disks = Disks::new_with_refreshed_list();
-    let mut networks = Networks::new_with_refreshed_list();
+    let mut sys = sysinfo::System::new_with_specifics(refresh_kind)
+        .map_err(|err| StreamingError::ServerError(format!("sysinfo init failed: {err}")))?;
+    let mut disks = Disks::new_with_refreshed_list()
+        .map_err(|err| StreamingError::ServerError(format!("sysinfo init failed: {err}")))?;
+    let mut networks = Networks::new_with_refreshed_list()
+        .map_err(|err| StreamingError::ServerError(format!("sysinfo init failed: {err}")))?;
 
-    // Collect static info once
-    let hostname = sysinfo::System::host_name();
-    let os_name = sysinfo::System::name();
-    let os_version = sysinfo::System::os_version();
-    let kernel_version = sysinfo::System::kernel_version();
+    // Collect static info once (None when the platform query fails)
+    let hostname = sysinfo::System::host_name().ok();
+    let os_name = sysinfo::System::name().ok();
+    let os_version = sysinfo::System::os_version().ok();
+    let kernel_version = sysinfo::System::kernel_version().ok();
 
     // Initial CPU refresh for baseline
     sys.refresh_specifics(refresh_kind);
@@ -850,11 +853,12 @@ pub(super) async fn handle_stats_websocket(
                 networks.refresh(true);
 
                 // Build stats JSON
+                let load_avg = sysinfo::System::load_average().unwrap_or_default();
                 let stats = serde_json::json!({
                     "cpu": {
                         "overall_usage_percent": sys.global_cpu_usage() as f64,
                         "physical_core_count": sysinfo::System::physical_core_count().unwrap_or(0),
-                        "per_core_usage_percent": sys.cpus().iter().map(|c| c.cpu_usage() as f64).collect::<Vec<_>>(),
+                        "per_core_usage_percent": sys.cpus().iter().map(|c| c.usage() as f64).collect::<Vec<_>>(),
                         "brand": sys.cpus().first().map(|c| c.brand().to_string()),
                         "frequency_mhz": sys.cpus().first().map(|c| c.frequency()),
                     },
@@ -886,15 +890,15 @@ pub(super) async fn handle_stats_websocket(
                         "errors_transmitted": data.errors_on_transmitted(),
                     })).collect::<Vec<_>>(),
                     "load_average": {
-                        "one_minute": sysinfo::System::load_average().one,
-                        "five_minutes": sysinfo::System::load_average().five,
-                        "fifteen_minutes": sysinfo::System::load_average().fifteen,
+                        "one_minute": load_avg.one,
+                        "five_minutes": load_avg.five,
+                        "fifteen_minutes": load_avg.fifteen,
                     },
                     "hostname": hostname,
                     "os_name": os_name,
                     "os_version": os_version,
                     "kernel_version": kernel_version,
-                    "uptime_secs": sysinfo::System::uptime(),
+                    "uptime_secs": sysinfo::System::uptime().unwrap_or(0),
                     "timestamp": std::time::SystemTime::now()
                         .duration_since(std::time::UNIX_EPOCH)
                         .map(|d| d.as_millis() as u64)

@@ -14,7 +14,7 @@ exclude = ["fuzz"]
 # manifests. `optional` stays member-side: the workspace entry carries the
 # version (and base features); a member may ADD features on top.
 [workspace.dependencies]
-base64 = "0.22.1"
+base64 = "0.23"
 clap = { version = "4.6.1", features = ["derive", "env"] }
 flate2 = "1.1.9"
 interprocess = "2.4.2"
@@ -28,7 +28,7 @@ regex = "1.12.3"
 serde = { version = "1.0.228", features = ["derive"] }
 serde_json = "1.0.150"
 sha2 = "0.11.0"
-sysinfo = "0.39.3"
+sysinfo = "0.40"
 tempfile = "3.27"
 unicode-width = "0.2.2"
 uuid = { version = "1.23.2", features = ["v4", "serde"] }
@@ -190,7 +190,7 @@ tower = { version = "0.5", features = ["util"] }
 # Benchmark harness for the VTE processing hot path (ENH-007). Still compiles
 # (and is cached) as part of test builds, but the bench target below is skipped
 # unless `rust-only` is enabled, so checkall never runs benchmarks.
-criterion = { version = "0.7", features = ["html_reports"] }
+criterion = { version = "0.8", features = ["html_reports"] }
 
 # Test-only: the SDK's InMemoryMetricExporter (feature `testing`) for the otel
 # metrics unit test — feature-unified into test builds only, never shipped.

@@ -48,10 +48,10 @@ crossbeam-channel = { version = "0.5", optional = true }
 # override files are the point, so the format is TOML not JSON.
 toml = { version = "0.9", optional = true }
 # Platform state-dir resolution for the persistence path (par-mux.md D3.4).
-dirs = { version = "6.0", optional = true }
+dirs = { version = "7.0", optional = true }
 # Agent-integration config merging (claude settings.json keeps the user comments and formatting).
 # `mux-bin` only: the installers back the binary's one-shot flags (ARC-143).
-jsonc-parser = { version = "0.33", default-features = false, features = ["serde"], optional = true }
+jsonc-parser = { version = "0.34", default-features = false, features = ["serde"], optional = true }
 tempfile = { workspace = true, optional = true }
 # Daemon CLI parser (`mux-bin` only, ARC-106).
 clap = { workspace = true, optional = true }
@@ -84,7 +84,7 @@ zbus = { version = "5", default-features = false, features = ["async-io", "block
 
 [target.'cfg(unix)'.dependencies]
 libc = { workspace = true }
-nix = { version = "0.31.3", features = ["process", "term", "signal", "poll"], optional = true }
+nix = { version = "0.32", features = ["process", "term", "signal", "poll"], optional = true }
 
 # Windows-only: UTF-16 SDDL input for the named-pipe security descriptor
 # (par-mux.md D4), and the Win32 process/token/SID calls behind the client's
