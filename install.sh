@@ -205,6 +205,19 @@ self_test() {
     "$(printf '{"html_url":"x","tag_name":"v1.2.3","assets":[]}' | parse_tag_name)"
   check_fails "parse missing tag_name" parse_tag_name ignored '{}\n'
 
+  # Selector parsing: every flag path must survive the script's set -u
+  # (a lowercase $want_streamer at the exclusivity check was unbound on
+  # every invocation — minimac 2026-11-20).
+  parse_args --streamer
+  check "streamer-only selects streamer" "true false false" \
+    "$WANT_STREAMER $WANT_MUX $WANT_STREAMER_MUX"
+  parse_args --mux
+  check "mux-only selects mux" "false true false" \
+    "$WANT_STREAMER $WANT_MUX $WANT_STREAMER_MUX"
+  parse_args
+  check "default selects both" "true true false" \
+    "$WANT_STREAMER $WANT_MUX $WANT_STREAMER_MUX"
+
   if [ "$failures" -eq 0 ]; then
     printf 'self-test: all checks passed\n'
     return 0
@@ -329,7 +342,7 @@ parse_args() {
     esac
     shift
   done
-  if $want_streamer && $want_streamer_mux; then
+  if $WANT_STREAMER && $WANT_STREAMER_MUX; then
     die "--streamer and --streamer-mux are mutually exclusive (pick one streamer variant per run)"
   fi
   if ! $WANT_STREAMER && ! $WANT_MUX && ! $WANT_STREAMER_MUX; then
