@@ -11,12 +11,13 @@
 //! stuck daemon cannot wedge the host, it only spends the window.
 //!
 //! Best-effort by design: a headless container, a non-logind init, or a
-//! missing system bus makes [`spawn_shutdown_inhibitor`] return `None` and
-//! the daemon serves exactly as it would without the feature.
+//! missing system bus ends the watcher thread quietly and the daemon serves
+//! exactly as it would without the feature.
 
 use std::sync::Arc;
 use std::thread::JoinHandle;
 
+use futures_lite::StreamExt;
 use parking_lot::Mutex;
 
 use crate::mux::persist::{PersistState, SaveOrigin};
@@ -29,6 +30,7 @@ pub struct SaveOnShutdown {
 }
 
 impl SaveOnShutdown {
+    /// Bundle the tree handle and the persist worker's inbox.
     pub fn new(
         tree: Arc<Mutex<MuxTree>>,
         persist_tx: std::sync::mpsc::Sender<(SaveOrigin, PersistState)>,
@@ -47,63 +49,73 @@ impl SaveOnShutdown {
     }
 }
 
-/// Watch logind and save on host shutdown. `None` when the system bus or
-/// logind is unreachable (the daemon keeps serving either way).
-pub fn spawn_shutdown_inhibitor(saver: Arc<SaveOnShutdown>) -> Option<JoinHandle<()>> {
-    let connection = match zbus::blocking::Connection::system() {
-        Ok(connection) => connection,
-        Err(err) => {
-            log::info!("par-mux: no logind shutdown inhibitor (no system bus: {err})");
-            return None;
-        }
-    };
-    let manager = match zbus::blocking::Proxy::new(
-        &connection,
-        "org.freedesktop.login1",
-        "/org/freedesktop/login1",
-        "org.freedesktop.login1.Manager",
-    ) {
-        Ok(manager) => manager,
-        Err(err) => {
-            log::info!("par-mux: no logind shutdown inhibitor (login1 unreachable: {err})");
-            return None;
-        }
-    };
-    // The delay lock, held for the thread's life: registration happens at
-    // daemon start, release happens when the process dies (logind closes
-    // the fd), and on the shutdown path the park below never returns.
-    let inhibitor: zbus::zvariant::OwnedFd = match manager.call(
-        "Inhibit",
-        &(
-            "shutdown",
-            "par-mux",
-            "Save terminal session state",
-            "delay",
-        ),
-    ) {
-        Ok(inhibitor) => inhibitor,
-        Err(err) => {
-            log::info!("par-mux: logind refused the shutdown inhibitor: {err}");
-            return None;
-        }
-    };
-    let mut signals = match manager.receive_signal("PrepareForShutdown") {
-        Ok(signals) => signals,
-        Err(err) => {
-            log::info!("par-mux: logind shutdown signal unavailable: {err}");
-            return None;
-        }
-    };
-    log::info!("par-mux: logind shutdown inhibitor active");
-
-    Some(
-        std::thread::Builder::new()
-            .name("mux-shutdown-inhibit".into())
-            .spawn(move || {
+/// Watch logind and save on host shutdown. The watcher is best-effort: when
+/// the system bus, logind, or the inhibit call is unavailable, the thread
+/// exits quietly after logging and the daemon keeps serving.
+pub fn spawn_shutdown_inhibitor(saver: Arc<SaveOnShutdown>) -> JoinHandle<()> {
+    std::thread::Builder::new()
+        .name("mux-shutdown-inhibit".into())
+        .spawn(move || {
+            // zbus 6 removed the blocking API: the whole watcher runs on
+            // zbus::block_on over the default zruntime backend.
+            zbus::block_on(async move {
+                let connection = match zbus::Connection::system().await {
+                    Ok(connection) => connection,
+                    Err(err) => {
+                        log::info!("par-mux: no logind shutdown inhibitor (no system bus: {err})");
+                        return;
+                    }
+                };
+                let manager = match zbus::Proxy::new(
+                    &connection,
+                    "org.freedesktop.login1",
+                    "/org/freedesktop/login1",
+                    "org.freedesktop.login1.Manager",
+                )
+                .await
+                {
+                    Ok(manager) => manager,
+                    Err(err) => {
+                        log::info!(
+                            "par-mux: no logind shutdown inhibitor (login1 unreachable: {err})"
+                        );
+                        return;
+                    }
+                };
+                // The delay lock, held for the thread's life: registration
+                // happens at daemon start, release happens when the process
+                // dies (logind closes the fd), and on the shutdown path the
+                // park below never returns.
+                let inhibitor: zbus::OwnedFd = match manager
+                    .call(
+                        "Inhibit",
+                        &(
+                            "shutdown",
+                            "par-mux",
+                            "Save terminal session state",
+                            "delay",
+                        ),
+                    )
+                    .await
+                {
+                    Ok(inhibitor) => inhibitor,
+                    Err(err) => {
+                        log::info!("par-mux: logind refused the shutdown inhibitor: {err}");
+                        return;
+                    }
+                };
+                let mut signals = match manager.receive_signal("PrepareForShutdown").await {
+                    Ok(signals) => signals,
+                    Err(err) => {
+                        log::info!("par-mux: logind shutdown signal unavailable: {err}");
+                        return;
+                    }
+                };
+                log::info!("par-mux: logind shutdown inhibitor active");
                 // Drop faults (logind gone, bus reset) end the watch quietly;
-                // the inhibitor fd releases with it. The blocking proxy hands
-                // back a plain iterator of signals.
-                for signal in &mut signals {
+                // the inhibitor fd releases with it. The signal stream ends
+                // when the connection dies.
+                while let Some(signal) = signals.next().await {
                     let preparing = signal.body().deserialize::<bool>().unwrap_or(false);
                     if preparing {
                         log::info!("par-mux: host shutdown announced; saving the session tree");
@@ -117,7 +129,7 @@ pub fn spawn_shutdown_inhibitor(saver: Arc<SaveOnShutdown>) -> Option<JoinHandle
                     }
                 }
                 drop(inhibitor);
-            })
-            .expect("spawns the inhibitor thread"),
-    )
+            });
+        })
+        .expect("spawns the inhibitor thread")
 }
