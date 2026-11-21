@@ -457,13 +457,23 @@ mod attach_explicit_target_tests {
             Some(flag.to_path_buf())
         );
         // A positional absolute path IS a path (card 01a1f5deb0: the chooser
-        // used to join it under the named-socket convention instead).
+        // used to join it under the named-socket convention instead). The
+        // name-form arm needs a PLATFORM-absolute input: `is_absolute()`
+        // demands a drive letter on Windows, where a bare `/tmp/x.sock` is
+        // relative and resolves as a name (windows-latest CI, 2026-11-21).
+        let expected = std::env::temp_dir().join("par-mux-explicit.sock");
+        let absolute_str = expected.to_str().expect("temp dir is valid utf-8");
         assert_eq!(
             attach_explicit_target(
                 None,
-                Some("/tmp/c.sock"),
+                Some(absolute_str),
                 Some(std::ffi::OsStr::new("/tmp/b.sock"))
             ),
+            Some(expected)
+        );
+        #[cfg(unix)]
+        assert_eq!(
+            attach_explicit_target(None, Some("/tmp/c.sock"), None),
             Some(std::path::PathBuf::from("/tmp/c.sock"))
         );
         assert_eq!(
@@ -475,8 +485,10 @@ mod attach_explicit_target_tests {
 
     #[test]
     fn resolve_socket_path_passes_absolute_names_through() {
-        let absolute = par_mux::mux::resolve_socket_path(None, Some("/tmp/d.sock"), None);
-        assert_eq!(absolute, std::path::PathBuf::from("/tmp/d.sock"));
+        let expected = std::env::temp_dir().join("par-mux-explicit.sock");
+        let absolute_str = expected.to_str().expect("temp dir is valid utf-8");
+        let absolute = par_mux::mux::resolve_socket_path(None, Some(absolute_str), None);
+        assert_eq!(absolute, expected);
         let named = par_mux::mux::resolve_socket_path(None, Some("feed"), None);
         assert!(named.ends_with("par-mux-feed.sock"));
     }
