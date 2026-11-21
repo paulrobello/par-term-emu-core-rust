@@ -1019,21 +1019,31 @@ fn verb_typo_hint(name: &str, code: std::process::ExitCode) -> Option<String> {
     if code == std::process::ExitCode::SUCCESS {
         return None;
     }
-    did_you_mean_verb(name).map(|verb| format!("did you mean `par-mux {verb}`?"))
+    match did_you_mean_verb(name) {
+        Some((verb, cmd_only)) if cmd_only => Some(format!("did you mean `par-mux --cmd {verb}`?")),
+        Some((verb, _)) => Some(format!("did you mean `par-mux {verb}`?")),
+        None => None,
+    }
 }
 
-/// The did-you-mean decision: `Some(verb)` when the lowercased NAME
-/// closely matches exactly one known verb spelling. An exact spelling
-/// matches nothing here — the dispatch collision guard already refuses
-/// command words and verb spellings with its own guidance — and two or
-/// more candidates are ambiguous, so neither hints.
-fn did_you_mean_verb(name: &str) -> Option<String> {
+/// The did-you-mean decision: `Some((verb, cmd_only))` when the lowercased
+/// NAME closely matches exactly one known verb spelling, where `cmd_only`
+/// routes the suggestion at the `--cmd` spelling instead of the verb form.
+/// An exact spelling matches nothing here — the dispatch collision guard
+/// already refuses command words and verb spellings with its own guidance —
+/// and two or more candidates are ambiguous, so neither hints.
+fn did_you_mean_verb(name: &str) -> Option<(String, bool)> {
     let lower = name.to_lowercase();
     let verbs = known_verbs();
-    if verbs.iter().any(|verb| verb.eq_ignore_ascii_case(&lower)) {
+    if verbs
+        .iter()
+        .any(|(verb, _)| verb.eq_ignore_ascii_case(&lower))
+    {
         return None;
     }
-    let mut close = verbs.iter().filter(|verb| verb_lookalike(&lower, verb));
+    let mut close = verbs
+        .iter()
+        .filter(|(verb, _)| verb_lookalike(&lower, verb));
     let first = close.next()?;
     if close.any(|second| second != first) {
         return None;
@@ -1041,15 +1051,25 @@ fn did_you_mean_verb(name: &str) -> Option<String> {
     Some(first.clone())
 }
 
-/// The known verb spellings, derived live from the clap surface (`Sub`)
-/// so the list cannot go stale: each subcommand's primary spelling plus
-/// any explicit aliases.
-fn known_verbs() -> Vec<String> {
+/// The known verb spellings: the clap `Sub` surface (primary spellings plus
+/// aliases, derived live so the list cannot go stale) plus control-mode
+/// verbs with no `Sub` spelling. The bool marks those `--cmd`-only names —
+/// the hint routes them at the flag form. The one card-named entry is
+/// cross-checked against the daemon's wire grammar by a test, so it cannot
+/// silently drift from what `--cmd` actually accepts.
+fn known_verbs() -> Vec<(String, bool)> {
     use clap::CommandFactory;
-    let mut verbs = Vec::new();
+    let mut verbs: Vec<(String, bool)> = Vec::new();
     for sub in Cli::command().get_subcommands() {
-        verbs.push(sub.get_name().to_string());
-        verbs.extend(sub.get_all_aliases().map(str::to_string));
+        verbs.push((sub.get_name().to_string(), false));
+        verbs.extend(sub.get_all_aliases().map(|a| (a.to_string(), false)));
+    }
+    const CMD_ONLY_VERBS: [&str; 1] = ["list-sessions"];
+    let sub_names: Vec<String> = verbs.iter().map(|(verb, _)| verb.clone()).collect();
+    for name in CMD_ONLY_VERBS {
+        if !sub_names.iter().any(|sub| sub.eq_ignore_ascii_case(name)) {
+            verbs.push((name.to_string(), true));
+        }
     }
     verbs
 }
@@ -1442,14 +1462,26 @@ mod mode_group_tests {
             assert_eq!(did_you_mean_verb(exact), None, "exact {exact} never hints");
         }
         // The card's typos: one edit from `ls`, nothing else close.
-        assert_eq!(did_you_mean_verb("lss"), Some("ls".to_string()));
-        assert_eq!(did_you_mean_verb("lst"), Some("ls".to_string()));
-        assert_eq!(did_you_mean_verb("LSS"), Some("ls".to_string()));
+        assert_eq!(did_you_mean_verb("lss"), Some(("ls".to_string(), false)));
+        assert_eq!(did_you_mean_verb("lst"), Some(("ls".to_string(), false)));
+        assert_eq!(did_you_mean_verb("LSS"), Some(("ls".to_string(), false)));
+        // The card's motivating input: `list` is a proper prefix of the
+        // one control-mode verb it names, `list-sessions`.
+        assert_eq!(
+            did_you_mean_verb("list"),
+            Some(("list-sessions".to_string(), true))
+        );
         // 5+ char names allow distance 2; a 5-char `start` typo reaches
         // only `start`.
-        assert_eq!(did_you_mean_verb("staqt"), Some("start".to_string()));
+        assert_eq!(
+            did_you_mean_verb("staqt"),
+            Some(("start".to_string(), false))
+        );
         // A truncated verb suggests itself when nothing else is close.
-        assert_eq!(did_you_mean_verb("obser"), Some("observe".to_string()));
+        assert_eq!(
+            did_you_mean_verb("obser"),
+            Some(("observe".to_string(), false))
+        );
         // `statu` is ambiguous: the prefix rule names `status`, but the
         // distance rule also reaches `start` (2 edits at 5 chars) — two
         // candidates, no hint.
@@ -1461,13 +1493,18 @@ mod mode_group_tests {
         assert_eq!(did_you_mean_verb("lost"), None);
     }
 
-    /// The hint message and its success gate: the card's exact line, and
-    /// silence when the start succeeded.
+    /// The hint message and its success gate: the card's exact line, the
+    /// `--cmd` routing for control-mode-only verbs, and silence when the
+    /// start succeeded.
     #[test]
     fn verb_typo_hint_message_and_success_gate() {
         assert_eq!(
             verb_typo_hint("lss", std::process::ExitCode::FAILURE),
             Some("did you mean `par-mux ls`?".to_string())
+        );
+        assert_eq!(
+            verb_typo_hint("list", std::process::ExitCode::FAILURE),
+            Some("did you mean `par-mux --cmd list-sessions`?".to_string())
         );
         assert_eq!(
             verb_typo_hint("lss", std::process::ExitCode::SUCCESS),
@@ -1485,6 +1522,18 @@ mod mode_group_tests {
     /// Levenshtein within the length tier (≤ 2 at 5+ chars, else ≤ 1).
     #[test]
     fn verb_lookalike_rule() {
+        assert!(verb_lookalike("lss", "ls"));
+        // The `--cmd` routing candidates parse on the daemon's wire
+        // grammar, so the const list cannot drift from what `--cmd`
+        // actually accepts.
+        for (verb, cmd_only) in known_verbs() {
+            if cmd_only {
+                assert!(
+                    par_mux::mux::command::parse_command(&verb).is_ok(),
+                    "{verb} must parse as a control-mode command"
+                );
+            }
+        }
         assert!(verb_lookalike("lss", "ls"));
         assert!(!verb_lookalike("lost", "ls"));
         // The card's motivating input sits outside the short-word tier:
