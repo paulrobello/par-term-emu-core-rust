@@ -46,7 +46,7 @@ interprocess = { workspace = true, optional = true }
 crossbeam-channel = { version = "0.5", optional = true }
 # Agent scrape patterns (bundled + local override) — comments in the
 # override files are the point, so the format is TOML not JSON.
-toml = { version = "0.9", optional = true }
+toml = { version = "1.0", optional = true }
 # Platform state-dir resolution for the persistence path (par-mux.md D3.4).
 dirs = { version = "7.0", optional = true }
 # Agent-integration config merging (claude settings.json keeps the user comments and formatting).
