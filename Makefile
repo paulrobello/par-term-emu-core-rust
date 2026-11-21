@@ -894,7 +894,7 @@ check-feature-combos:
 
 bench:
 	@echo "Running VTE throughput benchmarks (criterion, ENH-007)..."
-	cargo bench --no-default-features --features rust-only,ffi
+	cargo bench --no-default-features --features bench,ffi
 
 # ============================================================================
 # Pre-commit Hooks

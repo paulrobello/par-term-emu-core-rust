@@ -174,6 +174,11 @@ libc = { workspace = true }
 [target.'cfg(not(target_env = "msvc"))'.dependencies]
 tikv-jemallocator = { version = "0.7.0", optional = true }
 
+# Criterion benches (ENH-007), optional behind the `bench` feature: criterion
+# 0.8 carries an alloca C shim that cannot cross-compile to Windows targets
+# from a non-Windows host, so plain test builds must not resolve it.
+criterion = { version = "0.8", features = ["html_reports"], optional = true }
+
 [build-dependencies]
 # Only needed for regenerating protobuf code (requires protoc installed)
 prost-build = { version = "0.14.3", optional = true }
@@ -186,11 +191,6 @@ tempfile = { workspace = true }
 # (.oneshot) for the in-process router tests in src/streaming/server.rs.
 tower = { version = "0.5", features = ["util"] }
 
-# Benchmark harness for the VTE processing hot path (ENH-007). Still compiles
-# (and is cached) as part of test builds, but the bench target below is skipped
-# unless `rust-only` is enabled, so checkall never runs benchmarks.
-criterion = { version = "0.8", features = ["html_reports"] }
-
 # Test-only: the SDK's InMemoryMetricExporter (feature `testing`) for the otel
 # metrics unit test — feature-unified into test builds only, never shipped.
 opentelemetry_sdk = { workspace = true, features = ["testing"] }
@@ -201,14 +201,14 @@ opentelemetry_sdk = { workspace = true, features = ["testing"] }
 [[bench]]
 name = "terminal_throughput"
 harness = false
-required-features = ["rust-only"]
+required-features = ["bench"]
 
 # FFI per-frame dirty-readback cost (ParDeck RQ2) — same gating as above,
 # plus the `ffi` feature that compiles the C surface (ARC-112).
 [[bench]]
 name = "ffi_readback"
 harness = false
-required-features = ["rust-only", "ffi"]
+required-features = ["bench", "ffi"]
 
 # The FFI dirty-range zero-allocation gate (ENH-026) links the C surface.
 [[test]]
@@ -218,7 +218,7 @@ required-features = ["ffi"]
 [[bench]]
 name = "pty_geometry"
 harness = false
-required-features = ["pty_session"]
+required-features = ["bench", "pty_session"]
 
 # Per-event metrics-recording overhead on the streamer's send path (kanban
 # 01a18331). Compiled with and without `otel` and interleaved to A/B the
@@ -227,7 +227,7 @@ required-features = ["pty_session"]
 [[bench]]
 name = "streaming_otel"
 harness = false
-required-features = ["streaming"]
+required-features = ["bench", "streaming"]
 
 [features]
 default = ["python"]
@@ -307,6 +307,10 @@ ffi = ["par-term-emu-core/ffi"]
 
 # Convenience feature combinations
 rust-only = []
+# Criterion benches (the dev-dep is optional: its alloca C shim cannot
+# cross-compile to Windows targets from a non-Windows host, so plain test
+# builds must not resolve it).
+bench = ["dep:criterion"]
 # Headless simulation profile: grid + terminal + screenshot only. Excludes the
 # real-PTY backend, Python bindings, and streaming server, so a pure-Rust
 # embedder (e.g. par-hack's server-side screen model) can vendor the crate with
