@@ -34,8 +34,10 @@ Options: `--streamer` / `--streamer-mux` / `--mux` (PowerShell: `-Streamer` / `-
 
 ## What's New
 
-> **Note:** This section covers the releases from 0.63.0 through 0.85.0. The
+> **Note:** This section covers the releases from 0.63.0 through 0.86.0. The
 > complete release history is in [CHANGELOG.md](CHANGELOG.md).
+
+Version 0.86.0 adds `par-mux --restart` on macOS: restarting a launchd-managed default-instance daemon now goes through its `com.paulrobello.par-mux` launchd job (clean stop, then `launchctl kickstart -k`), so the fresh daemon stays launchd-managed instead of being replaced by an adhoc-signature fork that loses TCC identity and Local Network grants — with a stamp-changed verification that turns a squatter's autostart noop into a loud error, and fallback to the bare-fork restart for named instances, unloaded jobs, or a failed kickstart. Also fixed: the `install.sh` exclusivity check referenced lowercase globals that were unbound under `set -u`, killing every invocation. See [CHANGELOG.md](CHANGELOG.md) for the full notes.
 
 Version 0.85.0 is a mux durability and dependency-train release: pane terminal grids leave the state file for content-addressed per-pane snapshot files (format v4, reads v3 — the 221 MB single-file rewrite per mutating command is gone), pane and session environment moves out of the state file into `0600` sidecar files so live tokens no longer ride the one JSON every downstream reader parses, every install target Developer-ID-signs its installed artifacts so macOS Local Network grants survive reinstalls, an attach window switch-back replays the landed window's full panes (transient reconnect corruption fixed), and agent resumes re-enter the agent's own working directory (a claude session that `EnterWorktree`'d no longer restores fenced out of its worktree). `par-mux` now suggests the verb you meant on a typo'd command, and the dependency train moves to pyo3 0.30, syn 3, zbus 6, toml 1.0, and the current streaming stack. See [CHANGELOG.md](CHANGELOG.md) for the full notes.
 

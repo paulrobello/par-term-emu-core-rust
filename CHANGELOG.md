@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.86.0] - 2026-11-21
+
+### Added
+- **mux: `par-mux --restart` routes a launchd-managed default-instance daemon through its launchd job** (card 01a1fca5, `e98249bf`): on macOS, restarting the default instance now checks whether the running daemon belongs to the `com.paulrobello.par-mux` job — when the job is loaded, the restart runs the same clean stop and then `launchctl kickstart -k`, so the fresh daemon stays launchd-managed (a direct fork replacing a launchd daemon was the adhoc-orphan incident: TCC identity and Local Network grants lost, the job's KeepAlive later fighting the orphan). The route reuses the fork parent's wait-and-attach and verifies the fresh daemon's build stamp actually changed — a non-job daemon squatting the default socket makes the job's start exit 0 as an autostart noop, and that outcome is a loud error rather than a silent no-op restart. Falls back to the bare-fork restart when the job is unloaded or the kickstart fails; a named instance is never launchd-managed and keeps the bare-fork restart, `--foreground --restart` serves in the caller's process and never routes through the job, and `PAR_MUX_NO_LAUNCHD` governs fresh starts only — the running daemon's own channel wins.
+
+### Fixed
+- **install: the install.sh exclusivity check reads defined globals again** (`5d0b2149`): the check referenced lowercase `want_streamer`/`want_streamer_mux` while the script defines `WANT_*`, so under `set -u` every invocation died on an unbound variable (minimac sighting 2026-11-20). Names uppercased to match, and the self-test now exercises the `parse_args` selector paths so the guard regressions surface.
+
 ## [0.85.0] - 2026-11-20
 
 ### Added
@@ -2650,7 +2658,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Unicode Support**: Full Unicode including emoji and wide characters
 - **Python Integration**: PyO3 bindings for Python 3.12+
 
-[Unreleased]: https://github.com/paulrobello/par-term-emu-core-rust/compare/v0.85.0...HEAD
+[Unreleased]: https://github.com/paulrobello/par-term-emu-core-rust/compare/v0.86.0...HEAD
+[0.86.0]: https://github.com/paulrobello/par-term-emu-core-rust/compare/v0.85.0...v0.86.0
 [0.85.0]: https://github.com/paulrobello/par-term-emu-core-rust/compare/v0.84.1...v0.85.0
 [0.84.1]: https://github.com/paulrobello/par-term-emu-core-rust/compare/v0.84.0...v0.84.1
 [0.84.0]: https://github.com/paulrobello/par-term-emu-core-rust/compare/v0.83.0...v0.84.0
