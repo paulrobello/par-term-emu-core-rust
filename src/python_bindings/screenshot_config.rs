@@ -20,7 +20,7 @@ use super::conversions::parse_sixel_mode;
 /// ``screenshot_to_file_config(path, config, scrollback_offset=0)`` instead of
 /// repeating the keyword arguments on every call.
 #[par_term_emu_derive::pyo3_get_all]
-#[pyclass(name = "ScreenshotConfig", skip_from_py_object)]
+#[pyclass(name = "ScreenshotConfig")]
 #[derive(Clone)]
 pub struct PyScreenshotConfig {
     /// Output image format: "png" | "jpeg" | "svg" | "bmp".

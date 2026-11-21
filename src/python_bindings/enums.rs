@@ -136,7 +136,7 @@ impl From<PyMouseEncoding> for crate::mouse::MouseEncoding {
 /// - Error: Progress with error status (e.g., red)
 /// - Indeterminate: Busy/loading indicator (no specific percentage)
 /// - Warning: Progress with warning/paused status (e.g., yellow)
-#[pyclass(name = "ProgressState", eq, skip_from_py_object)]
+#[pyclass(name = "ProgressState", eq)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum PyProgressState {
     /// Progress bar is hidden (state 0)
