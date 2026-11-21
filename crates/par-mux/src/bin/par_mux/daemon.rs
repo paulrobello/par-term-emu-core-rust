@@ -131,6 +131,15 @@ pub(super) fn run_daemon(
     let path = par_mux::mux::ipc::strip_pipe_prefix(&path);
     let launch = DaemonLaunch::new(cli, path);
     if launch.cli.stop || launch.cli.restart {
+        // macOS: a launchd-managed daemon restarts through its job, not
+        // stop-and-fork (the route below refuses nothing — it declines and
+        // the legacy restart runs whenever the daemon is not the job's).
+        #[cfg(target_os = "macos")]
+        if launch.cli.restart {
+            if let Some(code) = launch.launchd_restart_phase()? {
+                return Ok(code);
+            }
+        }
         if let Some(code) = launch.stop_phase()? {
             return Ok(code);
         }
@@ -397,6 +406,95 @@ impl DaemonLaunch {
             )
             .map(Some),
         }
+    }
+
+    /// `--restart` through the daemon's own run channel (the proper restart
+    /// for a launchd-managed daemon): the same clean stop the bare-fork
+    /// restart performs, then `launchctl kickstart -k` so the
+    /// com.paulrobello.par-mux job restarts its own supervised binary —
+    /// never a direct fork replacing a launchd daemon, which is the
+    /// adhoc-orphan incident (TCC identity and LAN grants lost, and the
+    /// job's KeepAlive later fighting the orphan). Declines — `None`, the
+    /// legacy stop+fork restart runs — whenever the target is not the
+    /// default instance, the job is not loaded, or the restart serves
+    /// in-process (`--foreground` restarts in the caller's process; the job
+    /// itself serves via --foreground under launchd). A kickstart failure
+    /// falls back to the legacy path, whose stop half is then a no-op.
+    ///
+    /// After the kickstart the route verifies the daemon actually changed:
+    /// the pre-stop build stamp compared against the post-kickstart stamp
+    /// catches the one degraded shape — a non-job daemon squatting the
+    /// default socket, which makes the job's start exit 0 as an autostart
+    /// noop and leaves the old daemon serving under the same stamp. That
+    /// outcome fails loudly instead of reporting a restart that never
+    /// happened.
+    #[cfg(target_os = "macos")]
+    fn launchd_restart_phase(&self) -> std::io::Result<Option<std::process::ExitCode>> {
+        if self.cli.foreground {
+            return Ok(None);
+        }
+        let Some(job) = launchd_restart_job(&self.path) else {
+            return Ok(None);
+        };
+        if !launchd_job_loaded(&job) {
+            return Ok(None);
+        }
+        let pre_stamp = query_daemon_stamp(&self.path);
+        if let Some(code) = self.stop_phase()? {
+            return Ok(Some(code));
+        }
+        eprintln!("par-mux: restarting the launchd-managed daemon via job {job}");
+        let started = std::process::Command::new("launchctl")
+            .args(["kickstart", "-k", job.as_str()])
+            .status();
+        match started {
+            Ok(status) if status.success() => {}
+            other => {
+                eprintln!(
+                    "par-mux: launchd kickstart for {job} failed ({other:?}); \
+                 falling back to the bare restart"
+                );
+                return Ok(None);
+            }
+        }
+        // Wait for the fresh daemon the way the fork parent does, so the
+        // stamp verify below reads a live daemon instead of racing its boot.
+        const READY_DEADLINE: std::time::Duration = std::time::Duration::from_secs(10);
+        let deadline = std::time::Instant::now() + READY_DEADLINE;
+        while std::time::Instant::now() < deadline {
+            if par_mux::mux::connect_local_stream(&self.path).is_ok() {
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(100));
+        }
+        if par_mux::mux::connect_local_stream(&self.path).is_err() {
+            // The --restart fire-and-forget contract (the bare-fork restart's
+            // shape): a serve failure after the handoff is the daemon log's
+            // news, not a failed client run.
+            eprintln!(
+                "par-mux: the daemon did not become ready on {} within 10s; see {}",
+                self.path.display(),
+                daemon_log_path(&self.state_path, self.state_dir_pinned).display()
+            );
+            return Ok(Some(std::process::ExitCode::SUCCESS));
+        }
+        if let Some(pre) = pre_stamp {
+            if query_daemon_stamp(&self.path).as_deref() == Some(pre.as_str()) {
+                return Err(std::io::Error::other(format!(
+                    "the daemon on {} still reports `{pre}` after the job restart — a daemon \
+                 outside the {job} job is serving the socket; stop it explicitly and start \
+                 it under launchd",
+                    self.path.display()
+                )));
+            }
+        }
+        run_detached_parent(
+            &self.cli,
+            &self.path,
+            &self.state_path,
+            self.state_dir_pinned,
+        )
+        .map(Some)
     }
 
     /// Restore or build the tree, bind the socket, publish the config,
@@ -793,6 +891,49 @@ fn launchd_job_loaded(job: &str) -> bool {
             .status(),
         Ok(status) if status.success()
     )
+}
+
+/// The launchd restart route's target gate: only the default instance can
+/// be the com.paulrobello.par-mux job's supervised target (the same gate
+/// as the fresh-start handoff), so a non-default socket is never
+/// launchd-managed and its `--restart` always keeps the bare-fork path.
+#[cfg(target_os = "macos")]
+pub(super) fn launchd_restart_job(target_socket: &std::path::Path) -> Option<String> {
+    if target_socket != par_mux::mux::ipc::default_socket_path("default") {
+        return None;
+    }
+    // SAFETY: getuid takes no arguments and cannot fail.
+    Some(format!("gui/{}/{LAUNCHD_JOB_LABEL}", unsafe {
+        libc::getuid()
+    }))
+}
+
+/// The daemon's build stamp (`version` reply body), or `None` when the
+/// daemon does not answer. Used by the launchd restart route's
+/// changed-daemon verify; kept protocol-shaped like `stop_daemon`'s
+/// reply reader so a refusal or an empty block reads as `None`, never as
+/// a false "unchanged" match.
+#[cfg(target_os = "macos")]
+fn query_daemon_stamp(path: &std::path::Path) -> Option<String> {
+    use std::io::{BufRead, BufReader, Write};
+    let stream = par_mux::mux::connect_local_stream(path).ok()?;
+    let mut writer = interprocess::TryClone::try_clone(&stream).ok()?;
+    writeln!(writer, "version").ok()?;
+    writer.flush().ok()?;
+    let mut reader = BufReader::new(stream);
+    let mut line = String::new();
+    loop {
+        line.clear();
+        if reader.read_line(&mut line).ok()? == 0 {
+            return None;
+        }
+        if line.starts_with("%error") || line.starts_with("%end") {
+            return None;
+        }
+        if !line.trim().is_empty() {
+            return Some(line.trim().to_string());
+        }
+    }
 }
 
 #[cfg(unix)]

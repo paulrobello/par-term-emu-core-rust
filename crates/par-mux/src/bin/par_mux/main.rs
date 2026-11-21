@@ -1136,7 +1136,7 @@ mod mode_group_tests {
     use super::*;
     use crate::daemon::stop_inside_pane_guard;
     #[cfg(target_os = "macos")]
-    use crate::daemon::{app_handoff_launcher, launchd_handoff_job};
+    use crate::daemon::{app_handoff_launcher, launchd_handoff_job, launchd_restart_job};
 
     /// The app hand-off decision (card 01a17f9f15): a bare binary outside
     /// the bundle hands off to the installed wrapper's launcher; the
@@ -1252,6 +1252,28 @@ mod mode_group_tests {
             launchd_handoff_job(&default, false, false, true),
             None,
             "the PAR_MUX_NO_LAUNCHD opt-out keeps the bare fork"
+        );
+    }
+
+    /// The launchd restart route targets only the default instance — the
+    /// same gate as the fresh-start handoff — because a non-default socket
+    /// is never the job's supervised daemon.
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn launchd_restart_route_gates() {
+        let default = par_mux::mux::ipc::default_socket_path("default");
+        assert_eq!(
+            launchd_restart_job(&default),
+            Some(format!("gui/{}/com.paulrobello.par-mux", unsafe {
+                libc::getuid()
+            })),
+            "the default instance routes to the launchd job"
+        );
+        let other = std::env::temp_dir().join("par-mux-launchd-restart-test.sock");
+        assert_eq!(
+            launchd_restart_job(&other),
+            None,
+            "a non-default socket keeps the bare-fork restart"
         );
     }
 
