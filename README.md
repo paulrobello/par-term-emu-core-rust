@@ -34,8 +34,10 @@ Options: `--streamer` / `--streamer-mux` / `--mux` (PowerShell: `-Streamer` / `-
 
 ## What's New
 
-> **Note:** This section covers the releases from 0.63.0 through 0.86.0. The
+> **Note:** This section covers the releases from 0.63.0 through 0.87.0. The
 > complete release history is in [CHANGELOG.md](CHANGELOG.md).
+
+Version 0.87.0 improves the par-mux attach settings dialog's agent hook integrations page: each hook row now grades against a PATH probe of the agent binary, so a host with agents installed but no par-mux hooks reads as "detected — hook not installed" instead of "no agents," and pressing `i` installs the session hooks of every detected-but-uninstalled arm; the integrations list itself is selectable (arrow/j/k with a following window), so all 16 rows are reachable. `par-mux --cmd doctor` now reports the daemon's macOS responsible-process attribution with a healthy/tainted verdict that names the bare-fork taint shapes (the herdr#808 bug class). The streamer CSP's `connect-src` always permits `blob:` — the `--csp-allow-blob-connect` opt-in is removed (breaking for `StreamingConfig(allow_blob_connect_src=...)` callers, who should drop the argument). Also fixed: the mux explicit-target passthrough tests use platform-absolute socket paths so they pass on Windows. See [CHANGELOG.md](CHANGELOG.md) for the full notes.
 
 Version 0.86.0 adds `par-mux --restart` on macOS: restarting a launchd-managed default-instance daemon now goes through its `com.paulrobello.par-mux` launchd job (clean stop, then `launchctl kickstart -k`), so the fresh daemon stays launchd-managed instead of being replaced by an adhoc-signature fork that loses TCC identity and Local Network grants — with a stamp-changed verification that turns a squatter's autostart noop into a loud error, and fallback to the bare-fork restart for named instances, unloaded jobs, or a failed kickstart. Also fixed: the `install.sh` exclusivity check referenced lowercase globals that were unbound under `set -u`, killing every invocation. See [CHANGELOG.md](CHANGELOG.md) for the full notes.
 
