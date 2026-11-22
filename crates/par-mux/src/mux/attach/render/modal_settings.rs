@@ -88,9 +88,18 @@ impl SettingsSection {
             ),
             Self::Keys => ("keys", "the prefix and every management chord"),
             Self::Integrations => (
-                "agent integrations",
-                "agent hooks (par-mux --install-agent-hooks)",
+                "agent hook integrations",
+                "session hooks (par-mux --install-agent-hooks)",
             ),
+        }
+    }
+
+    /// The integrations section's roster note (the second description
+    /// line): what the hooks do, and the manual path for unhooked agents.
+    fn note(self) -> Option<&'static str> {
+        match self {
+            Self::Integrations => Some("hooks register running agents; unhooked: use adopt-pane"),
+            _ => None,
         }
     }
 
@@ -622,7 +631,11 @@ pub(super) struct SettingsState {
     pub section: SettingsSection,
     pub selected: usize,
     pub top: usize,
-    pub integrations: Vec<(String, String)>,
+    /// One row per integration: the agent name, the status text, and
+    /// whether the hook is installed (the row mark). Hook rows grade
+    /// their text against the agent binary's PATH presence; extensions
+    /// and the skill have no binary and never read detected.
+    pub integrations: Vec<(String, String, bool)>,
     pub file_mode: String,
     /// The configured popups: the general section's trailing rows.
     pub popups: Vec<crate::mux::popup::PopupEntry>,
@@ -795,18 +808,17 @@ pub(super) fn compose_settings(state: &SettingsState, values: &SettingsValues) -
     let (heading, description) = state.section.heading();
     rows.push(row(format!(" {heading}"), true, false));
     rows.push(row(format!(" {description}"), false, false));
+    if let Some(note) = state.section.note() {
+        rows.push(row(format!(" {note}"), false, false));
+    }
     rows.push(row(String::new(), false, false));
     let body_start = rows.len();
     let body: Vec<String> = match state.section {
         SettingsSection::Integrations => state
             .integrations
             .iter()
-            .map(|(agent, status)| {
-                let mark = if status == "not installed" {
-                    "-"
-                } else {
-                    "\u{2713}"
-                };
+            .map(|(agent, status, installed)| {
+                let mark = if *installed { "\u{2713}" } else { "-" };
                 format!(" {mark} {agent:<10} {status}")
             })
             .collect(),
@@ -873,7 +885,7 @@ pub(super) fn compose_settings(state: &SettingsState, values: &SettingsValues) -
     }
     let controls = match state.section {
         SettingsSection::Integrations => {
-            " \u{2190}\u{2192} section \u{b7} enter/u update outdated \u{b7} esc close "
+            " \u{2190}\u{2192} section \u{b7} i install \u{b7} enter/u update outdated \u{b7} esc close "
         }
         SettingsSection::States => {
             " \u{2191}\u{2193} select \u{b7} space toggle \u{b7} tab section \u{b7} esc close "
@@ -889,20 +901,36 @@ pub(super) fn compose_settings(state: &SettingsState, values: &SettingsValues) -
 }
 
 /// The integrations rows as the dialog shows them: every hook, then the
-/// extensions, then the bundled skill — name plus the version-aware
-/// currency string.
-fn integrations_rows() -> Vec<(String, String)> {
-    let mut integrations: Vec<(String, String)> = crate::mux::integrations::hook_status()
+/// extensions, then the bundled skill — name, the version-aware currency
+/// string, and the installed mark. A hook row that is not installed
+/// grades its text against the agent binary's PATH presence: detected
+/// reads `detected - hook not installed (i to install)`, otherwise
+/// `not detected`.
+fn integrations_rows() -> Vec<(String, String, bool)> {
+    let mut integrations: Vec<(String, String, bool)> = crate::mux::integrations::hook_status()
         .into_iter()
-        .map(|hook| (hook.agent, hook.asset.display(hook.installed)))
+        .map(|hook| {
+            let text = if hook.installed {
+                hook.asset.display(true)
+            } else if hook.detected {
+                "detected - hook not installed (i to install)".to_string()
+            } else {
+                "not detected".to_string()
+            };
+            (hook.agent, text, hook.installed)
+        })
         .collect();
     integrations.extend(
         crate::mux::integrations::extension_status()
             .into_iter()
-            .map(|ext| (ext.agent, ext.asset.display(ext.installed))),
+            .map(|ext| (ext.agent, ext.asset.display(ext.installed), ext.installed)),
     );
     if let Ok(skill) = crate::mux::skill_installer::skill_status() {
-        integrations.push(("skill".to_string(), skill.asset.display(skill.installed)));
+        integrations.push((
+            "skill".to_string(),
+            skill.asset.display(skill.installed),
+            skill.installed,
+        ));
     }
     integrations
 }
@@ -1015,6 +1043,32 @@ impl WindowSession {
         } else {
             self.chrome
                 .flash(format!("integrations: updated {}", updated.join(", ")));
+        }
+        self.draw_status_row();
+        self.refresh_settings();
+    }
+
+    /// The integrations tab's install button (`i`): install the session
+    /// hooks of every detected-but-uninstalled agent arm — the rows the
+    /// page reads `detected - hook not installed`. The rows re-grade and
+    /// the outcome flashes on the status row; a failure line names the
+    /// arm and why (an absent config directory, mostly).
+    fn settings_install_detected(&mut self) {
+        let (installed, failed) = crate::mux::integrations::install_detected_hooks();
+        if let Modal::Settings(state) = &mut self.modal {
+            state.integrations = integrations_rows();
+        }
+        if !failed.is_empty() {
+            self.chrome.flash(format!(
+                "integrations: install failed — {}",
+                failed.join(", ")
+            ));
+        } else if installed.is_empty() {
+            self.chrome
+                .flash("integrations: nothing detected to install".to_string());
+        } else {
+            self.chrome
+                .flash(format!("integrations: installed {}", installed.join(", ")));
         }
         self.draw_status_row();
         self.refresh_settings();
@@ -1338,6 +1392,15 @@ impl WindowSession {
                     self.settings_update_integrations();
                 }
             }
+            b'i' => {
+                let on_integrations = matches!(
+                    &self.modal,
+                    Modal::Settings(state) if state.section == SettingsSection::Integrations
+                );
+                if on_integrations {
+                    self.settings_install_detected();
+                }
+            }
             _ => {}
         }
         matches!(self.modal, Modal::Settings(_))
@@ -1510,7 +1573,11 @@ mod tests {
     #[test]
     fn integrations_footer_offers_the_update_outdated_button() {
         let mut state = state(SettingsSection::Integrations);
-        state.integrations = vec![("claude".to_string(), "v1 \u{2192} v2 outdated".to_string())];
+        state.integrations = vec![(
+            "claude".to_string(),
+            "v1 \u{2192} v2 outdated".to_string(),
+            true,
+        )];
         let composed = compose_settings(&state, &values());
         let footer = &composed.rows.last().unwrap().text;
         assert!(
@@ -1522,6 +1589,40 @@ mod tests {
             body.iter().any(|t| t.contains("v1 \u{2192} v2 outdated")),
             "the status string is visible: {body:?}"
         );
+    }
+
+    /// The integrations rows read the three detection states: an
+    /// installed hook keeps its version text with the `\u{2713}` mark, a
+    /// detected-but-uninstalled agent reads `detected - hook not
+    /// installed (i to install)` with `-`, and an undetected one reads
+    /// `not detected`. The heading, the roster note, and the `i install`
+    /// footer are all present.
+    #[test]
+    fn integrations_rows_render_the_three_detection_states() {
+        let mut state = state(SettingsSection::Integrations);
+        state.integrations = vec![
+            (
+                "claude".to_string(),
+                "detected - hook not installed (i to install)".to_string(),
+                false,
+            ),
+            ("codex".to_string(), "v2".to_string(), true),
+            ("grok".to_string(), "not detected".to_string(), false),
+        ];
+        let composed = compose_settings(&state, &values());
+        let body: Vec<&String> = composed.rows.iter().map(|r| &r.text).collect();
+        let found = |needle: &str| body.iter().any(|t| t.contains(needle));
+        assert!(
+            found("detected - hook not installed (i to install)"),
+            "{body:?}"
+        );
+        assert!(found("- claude"), "{body:?}");
+        assert!(found("\u{2713} codex"), "{body:?}");
+        assert!(found("- grok"), "{body:?}");
+        assert!(found("not detected"), "{body:?}");
+        assert!(found("agent hook integrations"), "the heading: {body:?}");
+        assert!(found("hooks register running agents"), "the note: {body:?}");
+        assert!(found("i install"), "the footer: {body:?}");
     }
 
     /// The tabs row keeps every section's tab inside the fixed panel

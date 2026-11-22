@@ -102,6 +102,10 @@ pub struct AgentHookStatus {
     pub agent: String,
     /// Whether the session hook is registered in the agent config.
     pub installed: bool,
+    /// Whether the agent's binary is on PATH (`claude-mod` probes
+    /// `claude`) — the settings dialog's three-state rows are built from
+    /// this plus `installed`.
+    pub detected: bool,
     /// The installed asset file's currency against the bundled copy.
     pub asset: AssetState,
 }
@@ -243,12 +247,49 @@ pub fn hook_status() -> Vec<AgentHookStatus> {
             .iter()
             .map(|arm| (arm.agent, arm.installed(), arm.hook_asset_state())),
     )
-    .map(|(agent, installed, asset)| AgentHookStatus {
-        agent: agent.to_string(),
-        installed,
-        asset,
+    .map(|(agent, installed, asset)| {
+        let detected = binary_detected(agent);
+        AgentHookStatus {
+            agent: agent.to_string(),
+            installed,
+            detected,
+            asset,
+        }
     })
     .collect()
+}
+
+/// The PATH-probe name for an agent hook arm: the agent name itself,
+/// with `claude-mod` probing `claude` (the same binary, a second
+/// integration shape).
+fn probe_binary_name(agent: &str) -> &str {
+    match agent {
+        "claude-mod" => "claude",
+        other => other,
+    }
+}
+
+/// The platform executable file name for a binary name.
+fn executable_name(name: &str) -> String {
+    if cfg!(windows) {
+        format!("{name}.exe")
+    } else {
+        name.to_string()
+    }
+}
+
+/// Whether an executable file named `name` sits in one of `path`'s
+/// directories. Pure over its inputs — the test seam under
+/// [`binary_detected`].
+fn binary_on_path_in(path: &std::ffi::OsStr, name: &str) -> bool {
+    std::env::split_paths(path).any(|dir| dir.join(executable_name(name)).is_file())
+}
+
+/// Whether the agent hook arm's binary is on PATH. Read-only, best-effort:
+/// a `PATH` that cannot be read detects nothing.
+pub fn binary_detected(agent: &str) -> bool {
+    let name = probe_binary_name(agent);
+    std::env::var_os("PATH").is_some_and(|path| binary_on_path_in(&path, name))
 }
 
 /// Whether the settings dialog's update button reinstalls this
@@ -300,25 +341,60 @@ pub fn update_outdated_with(
 /// installers. Returns `(updated, failed)` as [`update_outdated_with`].
 pub fn update_outdated_integrations() -> (Vec<String>, Vec<String>) {
     let skill = crate::mux::skill_installer::skill_status().ok();
-    update_outdated_with(
-        hook_status(),
-        extension_status(),
-        skill,
-        &mut |name| match name {
-            "claude" => claude::install_claude_hook().map(|_| ()),
-            "claude-mod" => claude_mod::install_claude_mod().map(|_| ()),
-            "codex" => codex::install_codex_hook().map(|_| ()),
-            "grok" => grok::install_grok_hook().map(|_| ()),
-            "muse" => muse::install_muse_hook().map(|_| ()),
-            "pi" => extensions::install_pi_extension().map(|_| ()),
-            "omp" => extensions::install_omp_extension().map(|_| ()),
-            "skill" => crate::mux::skill_installer::install_skill().map(|_| ()),
-            other => match CONFIG_HOOK_ARMS.iter().find(|arm| arm.agent == other) {
-                Some(arm) => arm.install().map(|_| ()),
-                None => Ok(()),
-            },
+    update_outdated_with(hook_status(), extension_status(), skill, &mut install_arm)
+}
+
+/// Install one integration by name — the dispatch the update button
+/// ([`update_outdated_integrations`]) and the `i` key
+/// ([`install_detected_hooks`]) share.
+fn install_arm(name: &str) -> io::Result<()> {
+    match name {
+        "claude" => claude::install_claude_hook().map(|_| ()),
+        "claude-mod" => claude_mod::install_claude_mod().map(|_| ()),
+        "codex" => codex::install_codex_hook().map(|_| ()),
+        "grok" => grok::install_grok_hook().map(|_| ()),
+        "muse" => muse::install_muse_hook().map(|_| ()),
+        "pi" => extensions::install_pi_extension().map(|_| ()),
+        "omp" => extensions::install_omp_extension().map(|_| ()),
+        "skill" => crate::mux::skill_installer::install_skill().map(|_| ()),
+        other => match CONFIG_HOOK_ARMS.iter().find(|arm| arm.agent == other) {
+            Some(arm) => arm.install().map(|_| ()),
+            None => Ok(()),
         },
-    )
+    }
+}
+
+/// The dialog's `i` key: install the session hooks of every agent arm
+/// whose binary is on PATH but whose hook is not registered — the
+/// settings page's three-state rows. Arms whose agent config directory
+/// is absent are refused by their own installers (the same lines
+/// `--install-agent-hooks` prints), so the `detected` gate is the only
+/// filter this adds. Returns `(installed, failed)` as
+/// [`update_outdated_with`].
+pub fn install_detected_hooks() -> (Vec<String>, Vec<String>) {
+    install_detected_with(hook_status(), &mut install_arm)
+}
+
+/// The pure core of [`install_detected_hooks`], so tests drive it with
+/// fake statuses and a recording closure. Only `detected && !installed`
+/// hook rows install; extensions and the skill are not hooks and are
+/// out of scope for this button.
+pub fn install_detected_with(
+    hooks: Vec<AgentHookStatus>,
+    install: &mut dyn FnMut(&str) -> io::Result<()>,
+) -> (Vec<String>, Vec<String>) {
+    let mut installed: Vec<String> = Vec::new();
+    let mut failed: Vec<String> = Vec::new();
+    for hook in hooks {
+        if !(hook.detected && !hook.installed) {
+            continue;
+        }
+        match install(&hook.agent) {
+            Ok(()) => installed.push(hook.agent),
+            Err(err) => failed.push(format!("{}: {err}", hook.agent)),
+        }
+    }
+    (installed, failed)
 }
 
 use jsonc_parser::ast::{
@@ -1476,11 +1552,13 @@ mod tests {
             AgentHookStatus {
                 agent: "stale".to_string(),
                 installed: true,
+                detected: true,
                 asset: stale(Some("1")),
             },
             AgentHookStatus {
                 agent: "current".to_string(),
                 installed: true,
+                detected: true,
                 asset: AssetState {
                     currency: AssetCurrency::Current,
                     installed_version: Some("2".to_string()),
@@ -1490,11 +1568,13 @@ mod tests {
             AgentHookStatus {
                 agent: "gone".to_string(),
                 installed: true,
+                detected: true,
                 asset: stale(None),
             },
             AgentHookStatus {
                 agent: "off".to_string(),
                 installed: false,
+                detected: false,
                 asset: stale(Some("1")),
             },
         ];
@@ -1519,6 +1599,7 @@ mod tests {
         let hooks = vec![AgentHookStatus {
             agent: "stale".to_string(),
             installed: true,
+            detected: true,
             asset: AssetState {
                 currency: AssetCurrency::Outdated,
                 installed_version: Some("1".to_string()),
@@ -1530,6 +1611,61 @@ mod tests {
         });
         assert!(updated.is_empty(), "nothing counts as updated: {updated:?}");
         assert_eq!(failed, vec!["stale: boom".to_string()]);
+    }
+
+    /// `claude-mod` probes the `claude` binary; every other arm probes
+    /// its own name. The probe finds an executable file in a PATH dir,
+    /// platform-spelled (`.exe` on Windows).
+    #[test]
+    fn binary_detection_probes_the_agent_binary_on_path() {
+        assert_eq!(probe_binary_name("claude-mod"), "claude");
+        assert_eq!(probe_binary_name("codex"), "codex");
+
+        let dir = tempfile::tempdir().expect("temp dir");
+        let exe = dir.path().join(executable_name("claude"));
+        std::fs::write(&exe, "#!/bin/sh\n").expect("fake binary");
+        let path_var = std::env::join_paths([dir.path()]).expect("join");
+        assert!(binary_on_path_in(&path_var, "claude"));
+        assert!(!binary_on_path_in(&path_var, "codex"), "absent binary");
+    }
+
+    /// The `i` key's install set: detected-but-uninstalled arms only —
+    /// an installed row and a not-detected row are both left alone, and
+    /// an installer failure surfaces as `name: error`.
+    #[test]
+    fn install_detected_hooks_installs_only_detected_uninstalled_arms() {
+        let hooks = vec![
+            AgentHookStatus {
+                agent: "detected".to_string(),
+                installed: false,
+                detected: true,
+                asset: AssetState::absent("# PAR_MUX_INTEGRATION_VERSION=2\n"),
+            },
+            AgentHookStatus {
+                agent: "hooked".to_string(),
+                installed: true,
+                detected: true,
+                asset: AssetState::absent("# PAR_MUX_INTEGRATION_VERSION=2\n"),
+            },
+            AgentHookStatus {
+                agent: "absent".to_string(),
+                installed: false,
+                detected: false,
+                asset: AssetState::absent("# PAR_MUX_INTEGRATION_VERSION=2\n"),
+            },
+        ];
+        let mut called: Vec<String> = Vec::new();
+        let (installed, failed) = install_detected_with(hooks, &mut |name| {
+            called.push(name.to_string());
+            Ok(())
+        });
+        assert_eq!(
+            installed,
+            vec!["detected".to_string()],
+            "only the detected-but-uninstalled arm installs"
+        );
+        assert!(failed.is_empty(), "no failures expected: {failed:?}");
+        assert_eq!(called, installed);
     }
 
     /// Every bundled asset must carry the marker the status surfaces parse
