@@ -194,13 +194,6 @@ pub struct Args {
     #[arg(long, env = "PAR_TERM_ALLOW_PANE_CREATE")]
     pub allow_pane_create: bool,
 
-    /// Permit `blob:` in the Content-Security-Policy's connect-src so a
-    /// custom web root's own assets can fetch() blob URLs (GLTF embedded
-    /// textures, Troika workers). Default off: the ENH-059 policy stays
-    /// byte-identical. Security review: Paul, 2026-11-01 (card 01a19895bd).
-    #[arg(long, env = "PAR_TERM_CSP_ALLOW_BLOB_CONNECT")]
-    pub csp_allow_blob_connect: bool,
-
     /// Opt-in HTTPS origins appended to the Content-Security-Policy's
     /// connect-src so a custom web root can fetch public APIs directly.
     /// Comma-separated (or repeat the flag); each value must be the strict

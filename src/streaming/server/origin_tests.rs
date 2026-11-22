@@ -1,7 +1,4 @@
-use super::http::{
-    csp_header_value, validate_csp_connect_origin, CONTENT_SECURITY_POLICY,
-    CONTENT_SECURITY_POLICY_BLOB_CONNECT,
-};
+use super::http::{csp_header_value, validate_csp_connect_origin, CONTENT_SECURITY_POLICY};
 use super::{
     build_cors_layer, check_ws_origin, is_local_origin, sessions_handler, StreamingConfig,
     StreamingServer,
@@ -346,21 +343,21 @@ async fn http_app_csp_restricts_scripts_connections_and_objects() {
     );
 }
 
-/// Card 01a19895bd: the opt-in blob-connect capability. With
-/// `allow_blob_connect_src` off (default) the CSP is byte-identical to
-/// the ENH-059 baseline on static and API responses alike; with it on,
-/// `connect-src` also permits `blob:` so a custom web root's own assets
-/// can `fetch()` blob URLs (GLTF embedded textures, Troika workers),
-/// with the anti-framing guarantee intact.
+/// Card 01a1ff9b: `blob:` lives in the baseline `connect-src`
+/// unconditionally — three.js GLTFLoader's embedded-texture path fetches
+/// `blob:` URLs through ImageBitmapLoader under `connect-src`, and
+/// `blob:` URLs are same-page ephemeral objects with no cross-origin
+/// reach. The former opt-in (`allow_blob_connect_src`, card 01a19895bd)
+/// is gone: the served policy on static and API responses alike is the
+/// one constant, with the anti-framing guarantee intact.
 #[tokio::test]
-async fn blob_connect_is_opt_in_and_the_default_policy_stays_byte_identical() {
+async fn blob_connect_is_in_the_default_policy_on_every_response() {
     let web_root = tempfile::Builder::new()
         .prefix("par-term-webroot-blob-")
         .tempdir()
         .expect("create temp dir for web root fixture");
     std::fs::write(web_root.path().join("index.html"), "<html></html>").unwrap();
 
-    // Default: byte-identical baseline, static and API alike.
     let terminal = Arc::new(RwLock::new(Terminal::new(80, 24)));
     let server = Arc::new(StreamingServer::with_config(
         terminal,
@@ -380,42 +377,7 @@ async fn blob_connect_is_opt_in_and_the_default_policy_stays_byte_identical() {
                 .get("content-security-policy")
                 .and_then(|v| v.to_str().ok()),
             Some(CONTENT_SECURITY_POLICY),
-            "{path}: the default policy stays byte-identical"
-        );
-        assert!(
-            !res.headers()
-                .get("content-security-policy")
-                .and_then(|v| v.to_str().ok())
-                .is_some_and(|csp| csp.contains("wss: blob:")),
-            "{path}: blob is not in the default connect-src"
-        );
-    }
-
-    // Opted in: connect-src gains `blob:`, everything else is unchanged,
-    // and the anti-framing guarantee survives.
-    let terminal = Arc::new(RwLock::new(Terminal::new(80, 24)));
-    let server = Arc::new(StreamingServer::with_config(
-        terminal,
-        "127.0.0.1:0".to_string(),
-        StreamingConfig {
-            allow_blob_connect_src: true,
-            ..StreamingConfig::default()
-        },
-    ));
-    let app = server.build_http_app();
-    for path in ["/", "/sessions"] {
-        let res = app
-            .clone()
-            .oneshot(origin_request("GET", path, None))
-            .await
-            .unwrap();
-        assert_eq!(res.status(), 200);
-        assert_eq!(
-            res.headers()
-                .get("content-security-policy")
-                .and_then(|v| v.to_str().ok()),
-            Some(CONTENT_SECURITY_POLICY_BLOB_CONNECT),
-            "{path}: the opted-in policy is the blob-connect variant"
+            "{path}: the served policy is the pinned constant"
         );
         let csp = res
             .headers()
@@ -424,11 +386,11 @@ async fn blob_connect_is_opt_in_and_the_default_policy_stays_byte_identical() {
             .expect("the CSP header");
         assert!(
             csp.contains("connect-src 'self' ws: wss: blob:"),
-            "fetch(blob) is permitted: {csp}"
+            "fetch(blob) is permitted by the default: {csp}"
         );
         assert!(
             csp.contains("frame-ancestors 'none'"),
-            "the anti-framing guarantee survives the variant: {csp}"
+            "the anti-framing guarantee survives: {csp}"
         );
     }
 }
@@ -481,36 +443,21 @@ fn csp_connect_origins_validate_strict_host_port_form() {
 }
 
 /// Card 01a1d798: composition. Without configured origins the header value
-/// is the pinned constant byte-for-byte (both the default and the blob
-/// variant); with origins they are appended to connect-src after the
-/// existing tokens and nothing else moves.
+/// is the pinned constant byte-for-byte; with origins they are appended to
+/// connect-src after the existing tokens (blob: is baseline now) and
+/// nothing else moves.
 #[test]
 fn csp_header_value_appends_origins_and_stays_byte_identical_without_them() {
-    assert_eq!(csp_header_value(false, None), CONTENT_SECURITY_POLICY);
-    assert_eq!(csp_header_value(false, Some(&[])), CONTENT_SECURITY_POLICY);
-    assert_eq!(
-        csp_header_value(true, None),
-        CONTENT_SECURITY_POLICY_BLOB_CONNECT
-    );
-    assert_eq!(
-        csp_header_value(true, Some(&[])),
-        CONTENT_SECURITY_POLICY_BLOB_CONNECT
-    );
+    assert_eq!(csp_header_value(None), CONTENT_SECURITY_POLICY);
+    assert_eq!(csp_header_value(Some(&[])), CONTENT_SECURITY_POLICY);
 
     let origins = [
         "https://api.zippopotam.us".to_string(),
         "https://api.weather.gov".to_string(),
     ];
     assert_eq!(
-        csp_header_value(false, Some(&origins)),
+        csp_header_value(Some(&origins)),
         CONTENT_SECURITY_POLICY.replace(
-            "connect-src 'self' ws: wss:;",
-            "connect-src 'self' ws: wss: https://api.zippopotam.us https://api.weather.gov;"
-        )
-    );
-    assert_eq!(
-        csp_header_value(true, Some(&origins)),
-        CONTENT_SECURITY_POLICY_BLOB_CONNECT.replace(
             "connect-src 'self' ws: wss: blob:;",
             "connect-src 'self' ws: wss: blob: https://api.zippopotam.us https://api.weather.gov;"
         )
@@ -557,8 +504,8 @@ async fn csp_connect_origins_are_opt_in_and_the_default_policy_stays_byte_identi
     }
 
     // Opted in: connect-src gains exactly the supplied origins after the
-    // existing tokens; everything else is unchanged, the blob addition does
-    // not ride along, and the anti-framing guarantee survives.
+    // existing tokens (blob: rides along — it is baseline now); everything
+    // else is unchanged, and the anti-framing guarantee survives.
     let origins = vec![
         "https://api.zippopotam.us".to_string(),
         "https://api.weather.gov".to_string(),
@@ -588,14 +535,10 @@ async fn csp_connect_origins_are_opt_in_and_the_default_policy_stays_byte_identi
         assert_eq!(
             csp,
             CONTENT_SECURITY_POLICY.replace(
-                "connect-src 'self' ws: wss:;",
-                &format!("connect-src 'self' ws: wss: {};", origins.join(" "))
+                "connect-src 'self' ws: wss: blob:;",
+                &format!("connect-src 'self' ws: wss: blob: {};", origins.join(" "))
             ),
             "{path}: connect-src gains exactly the supplied origins"
-        );
-        assert!(
-            !csp.contains("wss: blob:"),
-            "{path}: blob does not ride along without its own flag: {csp}"
         );
         assert!(
             csp.contains("frame-ancestors 'none'"),
@@ -604,19 +547,20 @@ async fn csp_connect_origins_are_opt_in_and_the_default_policy_stays_byte_identi
     }
 }
 
-/// Drift guard: the blob-connect variant differs from the baseline ONLY
-/// in connect-src's `blob:` addition — any other edit to either constant
-/// must land in both, so the default policy can never silently change
-/// relative to the opted-in one.
+/// Drift guard (card 01a1ff9b): the baseline `connect-src` carries exactly
+/// `'self'`, the `ws:`/`wss:` tokens and `blob:` — any future edit to the
+/// directive must land in this pin and in the constant together.
 #[test]
-fn the_blob_connect_variant_differs_from_the_baseline_only_in_connect_src() {
-    assert_eq!(
-        CONTENT_SECURITY_POLICY_BLOB_CONNECT,
-        CONTENT_SECURITY_POLICY.replace(
-            "connect-src 'self' ws: wss:;",
-            "connect-src 'self' ws: wss: blob:;"
-        ),
-        "the variant is the baseline plus exactly the connect-src blob: addition"
+fn the_baseline_connect_src_is_self_ws_wss_and_blob() {
+    let csp = CONTENT_SECURITY_POLICY;
+    let connect = csp
+        .split_once("connect-src ")
+        .map(|(_, tail)| tail.split(';').next().expect("connect-src terminator"))
+        .expect("connect-src directive in the CSP constant");
+    assert_eq!(connect, "'self' ws: wss: blob:", "the pinned connect-src");
+    assert!(
+        csp.matches("blob:").count() == 2,
+        "blob: appears exactly twice (img-src + connect-src): {csp}"
     );
 }
 

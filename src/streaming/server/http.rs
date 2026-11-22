@@ -491,22 +491,17 @@ pub(super) async fn static_host_guard_middleware(
 /// same-origin plus `'unsafe-inline'`: Next.js inlines a per-page,
 /// per-build RSC payload, so a hash list would break every
 /// `--download-frontend` version but the one it was computed for.
+///
+/// Card 01a1ff9b (2026-11-22): `connect-src` carries `blob:`
+/// unconditionally — three.js GLTFLoader's embedded-texture path for GLBs
+/// (bufferView images, the standard Blender export shape) fetches
+/// `blob:<origin>/<uuid>` URLs through ImageBitmapLoader, which is governed
+/// by `connect-src`, not `img-src`. `blob:` URLs are same-page ephemeral
+/// objects with no cross-origin reach, so the token adds no network reach
+/// for a compromised page; the former opt-in
+/// (`allow_blob_connect_src`, card 01a19895bd) had no remaining threat
+/// model and was removed with this change.
 pub(super) const CONTENT_SECURITY_POLICY: &str = "default-src 'self'; \
-    script-src 'self' 'unsafe-inline' 'wasm-unsafe-eval'; \
-    style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; \
-    font-src 'self' data: https://fonts.gstatic.com https://cdn.jsdelivr.net; \
-    img-src 'self' data: blob:; \
-    connect-src 'self' ws: wss:; \
-    object-src 'none'; base-uri 'self'; form-action 'self'; \
-    frame-ancestors 'none'";
-
-/// The opt-in variant (card 01a19895bd): identical to
-/// [`CONTENT_SECURITY_POLICY`] except `connect-src` also permits `blob:`,
-/// so a custom web root's own assets can `fetch()` blob URLs (GLTF
-/// embedded textures, Troika workers). Gated behind
-/// `allow_blob_connect_src` (default off, byte-identical baseline);
-/// a test pins the two strings' relationship so they cannot drift.
-pub(super) const CONTENT_SECURITY_POLICY_BLOB_CONNECT: &str = "default-src 'self'; \
     script-src 'self' 'unsafe-inline' 'wasm-unsafe-eval'; \
     style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; \
     font-src 'self' data: https://fonts.gstatic.com https://cdn.jsdelivr.net; \
@@ -576,20 +571,13 @@ pub fn validate_csp_connect_origin(origin: &str) -> std::result::Result<(), Stri
 /// configured origins this is the pinned constant unchanged
 /// (byte-identical baseline); with origins configured they are appended to
 /// `connect-src` after the existing tokens, so the served policy permits
-/// exactly `'self'`, the `ws:`/`wss:` tokens, `blob:` when opted in, and
-/// nothing beyond the supplied HTTPS origins. Origins must have passed
+/// exactly `'self'`, the `ws:`/`wss:` tokens, `blob:`, and nothing beyond
+/// the supplied HTTPS origins. Origins must have passed
 /// [`validate_csp_connect_origin`] — the streamer CLI and the Python
 /// binding both enforce it — or header composition panics rather than
 /// serving a weakened policy.
-pub(super) fn csp_header_value(
-    allow_blob_connect_src: bool,
-    csp_connect_origins: Option<&[String]>,
-) -> String {
-    let baseline = if allow_blob_connect_src {
-        CONTENT_SECURITY_POLICY_BLOB_CONNECT
-    } else {
-        CONTENT_SECURITY_POLICY
-    };
+pub(super) fn csp_header_value(csp_connect_origins: Option<&[String]>) -> String {
+    let baseline = CONTENT_SECURITY_POLICY;
     let Some(origins) = csp_connect_origins.filter(|o| !o.is_empty()) else {
         return baseline.to_string();
     };

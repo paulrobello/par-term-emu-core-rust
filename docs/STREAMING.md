@@ -335,7 +335,6 @@ par-term-streamer --enable-http
 | `PAR_TERM_SYSTEM_STATS_INTERVAL` | `--system-stats-interval` | Stats collection interval (seconds) |
 | `PAR_TERM_ALLOW_API_KEY_IN_QUERY` | `--allow-api-key-in-query` | Allow API key in URL query param (not recommended) |
 | `PAR_TERM_ALLOW_PANE_CREATE` | `--allow-pane-create` | Let writable clients create panes on the mux daemon (`pane_create_request`; default off, fail-closed; read-only connections always refused) |
-| `PAR_TERM_CSP_ALLOW_BLOB_CONNECT` | `--csp-allow-blob-connect` | Add `blob:` to the CSP's connect-src so a custom web root's own assets can fetch blob URLs (default off; the ENH-059 policy stays byte-identical) |
 | `PAR_TERM_CSP_CONNECT_ORIGINS` | `--csp-connect-origins` | Append HTTPS origins to the CSP's connect-src so a custom web root can fetch public APIs directly (comma-separated or repeat the flag; each value must be the strict `https://host[:port]` form, anything else is rejected at startup naming the value; default off, the ENH-059 policy stays byte-identical) |
 | `PAR_TERM_ALLOW_UNAUTHENTICATED` | `--allow-unauthenticated` | Let the server bind a non-loopback host with no authentication (SEC-002). Off by default: that configuration refuses to start; prefer `--host 127.0.0.1`, `--api-key`, or HTTP Basic Auth |
 | `PAR_TERM_ALLOW_CLEARTEXT_AUTH` | `--allow-cleartext-auth` | Let the server send auth credentials unencrypted on a non-loopback bind with no TLS (SEC-001). Off by default: that configuration refuses to start; prefer `--tls-pem` or `--tls-cert`/`--tls-key` |
