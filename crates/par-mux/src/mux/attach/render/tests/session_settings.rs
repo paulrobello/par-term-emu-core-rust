@@ -99,7 +99,7 @@ fn settings_pointer_wheel_moves_selection_with_scroll_into_view() {
         panic!("dialog open");
     };
     assert_eq!(state.section, SettingsSection::Borders);
-    let count = state.section.row_count() + state.popup_rows();
+    let count = state.section.row_count(state) + state.popup_rows();
     assert!(
         count > 8,
         "the borders section must overflow the 8-row body window"
@@ -470,7 +470,7 @@ fn settings_keys_section_scrolls_to_every_row() {
     let Modal::Settings(state) = &session.modal else {
         panic!("open")
     };
-    let last = state.section.row_count() - 1;
+    let last = state.section.row_count(state) - 1;
     assert_eq!(state.selected, last);
     assert_eq!(state.top, last + 1 - 8);
     // The composed body shows the last row visible with its value.

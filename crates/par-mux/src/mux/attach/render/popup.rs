@@ -704,7 +704,7 @@ impl WindowSession {
             back.popups = self.popup_entries();
             back.selected = back
                 .selected
-                .min(back.section.row_count() + back.popup_rows() - 1);
+                .min(back.section.row_count(&back) + back.popup_rows() - 1);
         }
         self.open_modal(super::Modal::Settings(back));
         self.refresh_settings();

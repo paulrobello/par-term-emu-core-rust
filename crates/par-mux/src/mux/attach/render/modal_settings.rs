@@ -124,12 +124,12 @@ impl SettingsSection {
         }
     }
 
-    /// The section's selectable row count (its rows, or the states
-    /// multi-select's entries).
-    pub(super) fn row_count(self) -> usize {
+    /// The section's selectable row count (its rows, the states
+    /// multi-select's entries, or the integrations list).
+    pub(super) fn row_count(self, state: &SettingsState) -> usize {
         match self {
             Self::States => self.choices().len(),
-            Self::Integrations => 0,
+            Self::Integrations => state.integrations.len(),
             _ => self.rows().len(),
         }
     }
@@ -817,9 +817,15 @@ pub(super) fn compose_settings(state: &SettingsState, values: &SettingsValues) -
         SettingsSection::Integrations => state
             .integrations
             .iter()
-            .map(|(agent, status, installed)| {
+            .enumerate()
+            .map(|(at, (agent, status, installed))| {
+                let pointer = if at == state.selected {
+                    "\u{25B8}"
+                } else {
+                    " "
+                };
                 let mark = if *installed { "\u{2713}" } else { "-" };
-                format!(" {mark} {agent:<10} {status}")
+                format!(" {pointer} {mark} {agent:<10} {status}")
             })
             .collect(),
         SettingsSection::States => state
@@ -878,7 +884,7 @@ pub(super) fn compose_settings(state: &SettingsState, values: &SettingsValues) -
     for i in 0..BODY_ROWS {
         let at = state.top + i;
         let text = body.get(at).cloned().unwrap_or_default();
-        if state.section != SettingsSection::Integrations && i == selected_in_body {
+        if i == selected_in_body && at < body.len() {
             highlights.push((rows.len(), 0, PANEL_WIDTH));
         }
         rows.push(row(text, false, false));
@@ -1097,7 +1103,7 @@ impl WindowSession {
     /// body's window following the selection.
     pub(super) fn settings_move_selection(&mut self, delta: isize) {
         if let Modal::Settings(state) = &mut self.modal {
-            let count = state.section.row_count() + state.popup_rows();
+            let count = state.section.row_count(state) + state.popup_rows();
             if count > 0 {
                 state.selected =
                     (state.selected as isize + delta).clamp(0, count as isize - 1) as usize;
@@ -1437,7 +1443,7 @@ impl WindowSession {
         let Some(index) = row.checked_sub(panel.body_start) else {
             return;
         };
-        let count = state.section.row_count() + state.popup_rows();
+        let count = state.section.row_count(state) + state.popup_rows();
         if index < BODY_ROWS && state.top + index < count {
             let selected = state.top + index;
             if let Modal::Settings(state) = &mut self.modal {
@@ -1625,6 +1631,45 @@ mod tests {
         assert!(found("i install"), "the footer: {body:?}");
     }
 
+    /// The integrations list selects and scrolls like the row sections:
+    /// the full list is selectable, rows past the 8-row window come into
+    /// view, and the pointer rides the selected row.
+    #[test]
+    fn integrations_rows_scroll_and_select_like_row_sections() {
+        let mut st = state(SettingsSection::Integrations);
+        st.integrations = (0..12)
+            .map(|i| (format!("agent{i:02}"), "not detected".to_string(), false))
+            .collect();
+        assert_eq!(
+            st.section.row_count(&st),
+            12,
+            "the integrations list is selectable"
+        );
+        // The window follows the selection, the same math
+        // settings_move_selection applies.
+        st.selected = 9;
+        st.top = 9 + 1 - BODY_ROWS;
+        let composed = compose_settings(&st, &values());
+        let window: Vec<String> = composed.rows
+            [composed.body_start..composed.body_start + BODY_ROWS]
+            .iter()
+            .map(|r| r.text.trim_end().to_string())
+            .collect();
+        assert!(
+            window[0].contains("agent02"),
+            "top follows the selection: {window:?}"
+        );
+        let last = window.last().unwrap();
+        assert!(
+            last.contains("agent09"),
+            "row 9 is reachable inside the window: {window:?}"
+        );
+        assert!(
+            last.contains('\u{25B8}'),
+            "the pointer rides the selected row: {window:?}"
+        );
+    }
+
     /// The tabs row keeps every section's tab inside the fixed panel
     /// width, and every composed row pads to that width.
     #[test]
@@ -1764,7 +1809,7 @@ mod tests {
     #[test]
     fn keys_section_scrolls_and_spells_chords() {
         let mut st = state(SettingsSection::Keys);
-        let count = st.section.row_count();
+        let count = st.section.row_count(&st);
         // The reload chord's spelling (row 1, top of the window).
         st.selected = 1;
         let composed = compose_settings(&st, &values());
@@ -1791,8 +1836,10 @@ mod tests {
             ("layout main vertical", "M-4"),
             ("layout tiled", "M-5"),
         ];
+        let keys = state(SettingsSection::Keys);
+        let count = keys.section.row_count(&keys);
         let mut seen = Vec::new();
-        for i in 0..SettingsSection::Keys.row_count() {
+        for i in 0..count {
             let mut st = state(SettingsSection::Keys);
             st.selected = i;
             st.top = i;

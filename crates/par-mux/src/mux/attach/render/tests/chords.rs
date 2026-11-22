@@ -3430,7 +3430,10 @@ fn settings_chord_prompt_accepts_m_keys() {
     session.enter_settings();
     session.route_stdin_bytes(&mut conn, b"\t\t\t\t\t");
     // layout-even-horizontal sits five rows above the last (respawn).
-    let row = super::modal_settings::SettingsSection::Keys.row_count() - 6;
+    let Modal::Settings(keys_state) = &session.modal else {
+        panic!("settings dialog open");
+    };
+    let row = keys_state.section.row_count(keys_state) - 6;
     for _ in 0..row {
         session.route_stdin_bytes(&mut conn, b"j");
     }
