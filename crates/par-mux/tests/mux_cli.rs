@@ -2735,3 +2735,46 @@ fn agent_start_confirms_droid_by_the_idle_fallback_through_the_cli() {
         assert!(explain.lines().any(|l| l == want), "{want}: {explain}");
     }
 }
+
+/// `--cmd doctor`: the daemon self-reports its responsible-process
+/// attribution (card 01a203dc). The first line names the daemon pid so a
+/// multi-daemon host can tell which daemon answered; macOS always gets a
+/// real verdict (healthy or tainted — a cargo-test-spawned daemon is
+/// whichever its ancestry makes it), other platforms the macOS-only note.
+#[test]
+fn cmd_doctor_reports_attribution_verdict() {
+    let fixture = MuxFixture::new("doctor");
+    let _daemon = daemon_with_session(&fixture, "doctor");
+    let out = cmd_ok(fixture.socket(), "doctor");
+    assert!(
+        out.contains("daemon-pid:"),
+        "the report names the daemon pid: {out:?}"
+    );
+    #[cfg(target_os = "macos")]
+    assert!(
+        out.contains("verdict: healthy") || out.contains("verdict: tainted"),
+        "a macOS daemon always gets a real verdict: {out:?}"
+    );
+    #[cfg(not(target_os = "macos"))]
+    assert!(
+        out.contains("verdict: not-applicable"),
+        "off-macOS the reply is the platform note: {out:?}"
+    );
+}
+
+/// `--cmd doctor` never mutates state: no `%notification` side effects and
+/// a follow-up `version` still serves the same build stamp, mirroring the
+/// read-only contract of `version`.
+#[test]
+fn cmd_doctor_is_tree_free() {
+    let fixture = MuxFixture::new("doctor-free");
+    let _daemon = daemon_with_session(&fixture, "doctor");
+    let out = cmd_ok(fixture.socket(), "doctor");
+    assert!(!out.contains("%notification"), "no side effects: {out:?}");
+    let stamp = cmd_ok(fixture.socket(), "version");
+    assert_eq!(
+        stamp.trim(),
+        par_mux::mux::build_stamp(),
+        "the daemon still serves after doctor"
+    );
+}

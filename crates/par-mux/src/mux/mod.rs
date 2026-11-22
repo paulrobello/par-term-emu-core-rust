@@ -15,6 +15,7 @@ pub mod client;
 pub mod command;
 pub mod config;
 pub mod discovery;
+pub mod doctor;
 pub mod emit;
 pub mod events;
 pub(crate) mod foreground;

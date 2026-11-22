@@ -274,6 +274,7 @@ fn route_command(
         | MuxCommand::ShowBuffer
         | MuxCommand::PasteBuffer { .. }
         | MuxCommand::Version
+        | MuxCommand::Doctor
         | MuxCommand::ReloadConfig
         | MuxCommand::ShowNotification { .. }
         | MuxCommand::ListCommands { .. }) => route_buffer_command(ctx, command),

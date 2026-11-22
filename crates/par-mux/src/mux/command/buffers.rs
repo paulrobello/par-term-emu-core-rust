@@ -165,6 +165,11 @@ pub(super) fn parse_version(_a: &Args<'_>) -> Result<MuxCommand, String> {
     Ok(MuxCommand::Version)
 }
 
+/// `doctor`: no arguments; the daemon probes its own attribution.
+pub(super) fn parse_doctor(_a: &Args<'_>) -> Result<MuxCommand, String> {
+    Ok(MuxCommand::Doctor)
+}
+
 /// `list-commands [-J]`: `-J` selects the JSON schema reply. tmux's own
 /// `-F format` is not taken: the reply rows have no format variables.
 pub(super) fn parse_list_commands(a: &Args<'_>) -> Result<MuxCommand, String> {

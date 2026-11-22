@@ -35,6 +35,7 @@ pub(super) fn route_buffer_command(ctx: &Ctx<'_>, command: MuxCommand) -> Outcom
         MuxCommand::ShowBuffer => cmd_show_buffer(ctx),
         MuxCommand::PasteBuffer { pane } => cmd_paste_buffer(ctx, pane),
         MuxCommand::Version => cmd_version(ctx),
+        MuxCommand::Doctor => cmd_doctor(ctx),
         MuxCommand::ReloadConfig => cmd_reload_config(ctx),
         MuxCommand::ShowNotification { title, body } => {
             Outcome::ok(ctx, "").notifying(TmuxNotification::Notification { title, body })
@@ -364,6 +365,18 @@ pub(super) fn cmd_paste_buffer(ctx: &Ctx<'_>, pane: Target<PaneId>) -> Outcome {
 /// state that a long-lived daemon could have torn down.
 pub(super) fn cmd_version(ctx: &Ctx<'_>) -> Outcome {
     Outcome::ok(ctx, crate::mux::build_stamp())
+}
+
+/// `doctor`: the daemon runs the macOS responsible-process probe on
+/// itself and reports the verdict (module docs in [`crate::mux::doctor`]).
+/// Read-only and tree-free, like `version`; the reply is one line per
+/// fact so the CLI prints it unchanged.
+pub(super) fn cmd_doctor(ctx: &Ctx<'_>) -> Outcome {
+    let macos = cfg!(target_os = "macos");
+    let daemon_pid = std::process::id() as i32;
+    let responsible = crate::mux::doctor::probe_responsible_pid(daemon_pid);
+    let body = crate::mux::doctor::reply_lines(macos, daemon_pid, responsible).join("\n");
+    Outcome::ok(ctx, &body)
 }
 
 /// `reload-config`: re-read the canonical config file and diff its

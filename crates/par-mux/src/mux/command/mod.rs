@@ -780,6 +780,12 @@ pub enum MuxCommand {
     /// client can compare the daemon's core build against its own linked
     /// one and surface a stale daemon instead of silently missing fixes.
     Version,
+    /// `doctor`: run the macOS responsible-process probe on the daemon
+    /// itself and report the verdict — healthy (pane children inherit the
+    /// responsible app's Local Network and TCC attribution) or tainted
+    /// (the daemon is its own responsible process; see
+    /// [`crate::mux::doctor`]). Read-only, tree-free, like `version`.
+    Doctor,
     /// `show-notification [-b body] [--] <title>`: broadcast an ad-hoc
     /// `%notification` every attached render client delivers through its
     /// own `notify-delivery` channel (herdr's `notification show`).
@@ -939,7 +945,8 @@ impl MuxCommand {
             | MuxCommand::UploadAbort { .. }
             | MuxCommand::ShowOptions
             | MuxCommand::HasSession { .. }
-            | MuxCommand::Version => false,
+            | MuxCommand::Version
+            | MuxCommand::Doctor => false,
         }
     }
 }
@@ -1713,6 +1720,7 @@ const COMMANDS: &[(&str, CommandParser, &[&str])] = &[
     ("upload-commit", parse_upload_commit, &["targeted"]),
     ("upload-abort", parse_upload_abort, &[]),
     ("version", parse_version, &[]),
+    ("doctor", parse_doctor, &[]),
     ("reload-config", parse_reload_config, &[]),
     ("show-notification", parse_show_notification, &[]),
     ("worktree-create", parse_worktree_create, &[]),
