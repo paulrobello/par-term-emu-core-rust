@@ -98,6 +98,12 @@
       "synopsis": "-t <pane>"
     },
     {
+      "name": "doctor",
+      "features": [],
+      "flags": [],
+      "synopsis": ""
+    },
+    {
       "name": "events",
       "features": [
         "since"
