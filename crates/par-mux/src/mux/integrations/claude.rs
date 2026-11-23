@@ -5,10 +5,10 @@ use std::fs;
 use std::io;
 use std::path::{Path, PathBuf};
 
+use super::hook_entries::{merge_entries, unmerge_entries, HookEntry};
 use super::{
     has_command, home_dir, hook_asset_path as asset_path_for, hook_command_for,
-    hook_command_with_action, merge_hook_event, remove_marked_file, save_settings,
-    unmerge_hook_entries, write_hook_asset,
+    hook_command_with_action, remove_marked_file, save_settings, write_hook_asset,
 };
 
 const CLAUDE_HOOK_ASSET_POSIX: &str =
@@ -108,26 +108,24 @@ fn hook_asset_path() -> io::Result<PathBuf> {
 /// The claude settings entries par-mux installs, in merge order: the event
 /// name, the hook command, and the matcher (claude's SessionStart sources;
 /// every other event matches everything).
-fn install_entries(hook_path: &Path) -> [(&'static str, String, Option<&'static str>); 5] {
+fn install_entries(hook_path: &Path) -> [HookEntry; 5] {
     let command = hook_command_for(hook_path);
     [
-        ("SessionStart", command, Some(SESSION_START_MATCHER)),
-        (
-            "SessionEnd",
-            hook_command_with_action(hook_path, "release"),
-            None,
-        ),
-        (
+        HookEntry {
+            event: "SessionStart",
+            command,
+            matcher: Some(SESSION_START_MATCHER),
+        },
+        HookEntry::any("SessionEnd", hook_command_with_action(hook_path, "release")),
+        HookEntry::any(
             "UserPromptSubmit",
             hook_command_with_action(hook_path, "prompt"),
-            None,
         ),
-        (
+        HookEntry::any(
             "Notification",
             hook_command_with_action(hook_path, "notify"),
-            None,
         ),
-        ("Stop", hook_command_with_action(hook_path, "stop"), None),
+        HookEntry::any("Stop", hook_command_with_action(hook_path, "stop")),
     ]
 }
 
@@ -170,17 +168,8 @@ pub fn install_claude_hook_into(
     // fail with the file — and the asset — untouched. All five entries merge
     // against the sequentially updated text so a fresh install (or an
     // upgrade from the two-entry version) splices in one write.
-    let mut current = content;
-    let mut settings_changed = false;
-    for (event, entry_command, matcher) in install_entries(hook_path) {
-        current = match merge_hook_event(&current, settings_path, &entry_command, matcher, event)? {
-            Some(updated) => {
-                settings_changed = true;
-                updated
-            }
-            None => current,
-        };
-    }
+    let (current, settings_changed) =
+        merge_entries(content, settings_path, &install_entries(hook_path))?;
 
     write_hook_asset(hook_path, claude_hook_asset())?;
 
@@ -216,12 +205,9 @@ pub fn uninstall_claude_hook_into(
     let mut settings_changed = false;
     if settings_path.is_file() {
         let content = fs::read_to_string(settings_path)?;
-        let entries = install_entries(hook_path);
-        let pairs: Vec<(&str, &str)> = entries
-            .iter()
-            .map(|(event, command, _)| (*event, command.as_str()))
-            .collect();
-        if let Some(updated) = unmerge_hook_entries(&content, settings_path, &pairs)? {
+        if let Some(updated) =
+            unmerge_entries(&content, settings_path, &install_entries(hook_path))?
+        {
             save_settings(settings_path, &updated)?;
             settings_changed = true;
         }

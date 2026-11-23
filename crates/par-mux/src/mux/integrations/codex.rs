@@ -12,9 +12,10 @@ use std::fs;
 use std::io;
 use std::path::{Path, PathBuf};
 
+use super::hook_entries::{merge_entries, unmerge_entries, HookEntry};
 use super::{
     has_command, home_dir, hook_asset_path as asset_path_for, hook_command_with_action,
-    merge_hook_event, remove_marked_file, save_settings, unmerge_hook_entries, write_hook_asset,
+    remove_marked_file, save_settings, write_hook_asset,
 };
 
 const CODEX_HOOK_ASSET_POSIX: &str =
@@ -108,19 +109,19 @@ fn hook_asset_path() -> io::Result<PathBuf> {
 /// asset's arm, the event key only routes the invocation; codex documents
 /// the claude-wire names as its stable `HOOK_EVENT_NAMES`). Codex ignores
 /// matcher fields on these events, so every group is matcher-less.
-fn install_entries(hook_path: &Path) -> [(&'static str, String); 5] {
+fn install_entries(hook_path: &Path) -> [HookEntry; 5] {
     [
-        ("SessionStart", codex_hook_command(hook_path)),
-        (
+        HookEntry::any("SessionStart", codex_hook_command(hook_path)),
+        HookEntry::any(
             "UserPromptSubmit",
             hook_command_with_action(hook_path, "prompt"),
         ),
-        (
+        HookEntry::any(
             "PermissionRequest",
             hook_command_with_action(hook_path, "question"),
         ),
-        ("Stop", hook_command_with_action(hook_path, "stop")),
-        ("SessionEnd", hook_command_with_action(hook_path, "release")),
+        HookEntry::any("Stop", hook_command_with_action(hook_path, "stop")),
+        HookEntry::any("SessionEnd", hook_command_with_action(hook_path, "release")),
     ]
 }
 
@@ -149,17 +150,8 @@ pub fn install_codex_hook_into(codex_dir: &Path, hook_path: &Path) -> io::Result
     // entries merge against the sequentially updated text so a fresh install
     // (or an upgrade from the SessionStart-only version) splices in one
     // write.
-    let mut current = hooks_content;
-    let mut hooks_changed = false;
-    for (event, command) in install_entries(hook_path) {
-        current = match merge_hook_event(&current, &hooks_path, &command, None, event)? {
-            Some(updated) => {
-                hooks_changed = true;
-                updated
-            }
-            None => current,
-        };
-    }
+    let (current, hooks_changed) =
+        merge_entries(hooks_content, &hooks_path, &install_entries(hook_path))?;
     let config_updated = ensure_features_hooks_true(&config_content, &config_path)?;
 
     write_hook_asset(hook_path, codex_hook_asset())?;
@@ -188,12 +180,6 @@ pub fn uninstall_codex_hook() -> io::Result<CodexHookUninstall> {
     uninstall_codex_hook_into(&codex_config_dir()?, &hook_asset_path()?)
 }
 
-/// The entries the uninstall removes: the same five events install merges,
-/// each with its own action-bearing command.
-fn uninstall_entries(hook_path: &Path) -> Vec<(&'static str, String)> {
-    install_entries(hook_path).into_iter().collect()
-}
-
 /// Uninstall with explicit paths (test/install seam).
 pub fn uninstall_codex_hook_into(
     codex_dir: &Path,
@@ -205,12 +191,8 @@ pub fn uninstall_codex_hook_into(
     let mut hooks_changed = false;
     if hooks_path.is_file() {
         let content = fs::read_to_string(&hooks_path)?;
-        let owned_entries = uninstall_entries(hook_path);
-        let entries: Vec<(&str, &str)> = owned_entries
-            .iter()
-            .map(|(event, command)| (*event, command.as_str()))
-            .collect();
-        if let Some(updated) = unmerge_hook_entries(&content, &hooks_path, &entries)? {
+        if let Some(updated) = unmerge_entries(&content, &hooks_path, &install_entries(hook_path))?
+        {
             save_settings(&hooks_path, &updated)?;
             hooks_changed = true;
         }

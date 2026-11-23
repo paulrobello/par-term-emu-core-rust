@@ -43,6 +43,7 @@ mod codex;
 mod config_hooks;
 pub mod extensions;
 mod grok;
+mod hook_entries;
 mod muse;
 
 pub use config_hooks::{
