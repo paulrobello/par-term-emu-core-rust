@@ -33,6 +33,87 @@ fn per_char_print_for_tests() -> bool {
     }
 }
 
+/// How a non-ASCII-control character relates to the cell written before it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum AttachRole {
+    /// Variation selector, ZWJ, skin tone modifier or combining mark: always
+    /// joins the previous cell.
+    Mark,
+    /// Joins the previous cell only when that cell ends in a ZWJ (an emoji
+    /// continuing a ZWJ sequence).
+    ZwjContinuation,
+    /// Writes its own cell.
+    Standalone,
+}
+
+/// Classify `c` for the attach-to-previous-cell decision.
+///
+/// With per-code-point widths a skin tone modifier is a character of its
+/// own, and nothing that attaches to a cell changes its width, so ZWJ
+/// continuations never apply either.
+fn attach_role(c: char, codepoint_widths: bool) -> AttachRole {
+    if codepoint_widths && grapheme::is_skin_tone_modifier(c) {
+        return AttachRole::Standalone;
+    }
+    if grapheme::is_variation_selector(c)
+        || grapheme::is_zwj(c)
+        || grapheme::is_skin_tone_modifier(c)
+        || grapheme::is_combining_mark(c)
+    {
+        return AttachRole::Mark;
+    }
+    if codepoint_widths {
+        return AttachRole::Standalone;
+    }
+    // Only emoji-range characters can continue a ZWJ sequence; most text
+    // never reaches the previous-cell lookup.
+    if matches!(c as u32, 0x2600..=0x27BF | 0x1F000..=0x1FFFF) {
+        AttachRole::ZwjContinuation
+    } else {
+        AttachRole::Standalone
+    }
+}
+
+/// Whether a wide character at `col` cannot fit and must wrap first.
+fn wide_char_needs_wrap(char_width: usize, col: usize, cols: usize, auto_wrap: bool) -> bool {
+    char_width == 2 && col >= cols - 1 && auto_wrap
+}
+
+/// Whether a cell that took a combining mark should widen to two columns:
+/// its grapheme is wide, it is still narrow, and the spacer fits on the row.
+/// A wide pair must never end the row half-written.
+fn cell_should_widen(cell: &Cell, col: usize, cols: usize) -> bool {
+    col + 1 < cols && cell.width() == 1 && grapheme::is_wide_grapheme(&cell.get_grapheme())
+}
+
+/// Whether `prev` is a regional indicator still waiting for its pair.
+fn is_unpaired_regional_indicator(prev: &Cell) -> bool {
+    grapheme::is_regional_indicator(prev.c) && prev.combining_is_empty()
+}
+
+/// The spacer cell that follows `base` once it is two columns wide.
+fn spacer_after(base: &Cell) -> Cell {
+    let mut flags = base.flags;
+    flags.set_wide_char(false);
+    flags.set_wide_char_spacer(true);
+    Cell {
+        c: ' ',
+        combining: None,
+        fg: base.fg,
+        bg: base.bg,
+        underline_color: base.underline_color,
+        flags,
+        width: 1,
+    }
+}
+
+/// Mark `cell` as a two-column character and return its spacer.
+fn widen_with_spacer(cell: &mut Cell) -> Cell {
+    cell.width = 2;
+    cell.flags.set_wide_char(true);
+    spacer_after(cell)
+}
+
 impl Terminal {
     /// DECALN (`ESC # 8`): fill the screen with default-attribute `E`s,
     /// reset the margins, clear origin mode and home the cursor, as xterm
@@ -342,7 +423,7 @@ impl Terminal {
         }
 
         // If wide character won't fit on current line, wrap first
-        if char_width == 2 && self.cursor.col >= cols - 1 && self.modes.auto_wrap {
+        if wide_char_needs_wrap(char_width, self.cursor.col, cols, self.modes.auto_wrap) {
             // Mark the current row as wrapped (line continues to next row)
             let current_row = self.cursor.row;
             self.active_grid_mut().set_line_wrapped(current_row, true);
@@ -493,15 +574,8 @@ impl Terminal {
         // skin tone modifier is a character of its own, and nothing that
         // attaches to a cell changes its width.
         let codepoint_widths = self.unicode_state.codepoint_widths;
-        if codepoint_widths && grapheme::is_skin_tone_modifier(c) {
-            return false;
-        }
-
-        if grapheme::is_variation_selector(c)
-            || grapheme::is_zwj(c)
-            || grapheme::is_skin_tone_modifier(c)
-            || grapheme::is_combining_mark(c)
-        {
+        let role = attach_role(c, codepoint_widths);
+        if role == AttachRole::Mark {
             // The cell of the character written last; at (0, 0) there is
             // nothing to attach to.
             let Some((target_col, target_row)) = self.last_written_cell(cols) else {
@@ -546,28 +620,8 @@ impl Terminal {
                 // spacer after it: a wide pair must never end the row
                 // half-written, so at the last column the mark still attaches
                 // but the cell keeps width 1.
-                let grapheme = target_cell.get_grapheme();
-                if !codepoint_widths
-                    && target_col + 1 < cols
-                    && grapheme::is_wide_grapheme(&grapheme)
-                    && target_cell.width() == 1
-                {
-                    target_cell.width = 2;
-                    target_cell.flags.set_wide_char(true);
-
-                    let mut spacer_flags = target_cell.flags;
-                    spacer_flags.set_wide_char(false);
-                    spacer_flags.set_wide_char_spacer(true);
-
-                    let spacer = Cell {
-                        c: ' ',
-                        combining: None,
-                        fg: target_cell.fg,
-                        bg: target_cell.bg,
-                        underline_color: target_cell.underline_color,
-                        flags: spacer_flags,
-                        width: 1,
-                    };
+                if !codepoint_widths && cell_should_widen(target_cell, target_col, cols) {
+                    let spacer = widen_with_spacer(target_cell);
                     self.active_grid_mut()
                         .set(target_col + 1, target_row, spacer);
                     // The cursor still sits ON the just-planted spacer (the
@@ -596,26 +650,14 @@ impl Terminal {
             return true;
         }
 
+        // Check if previous cell has ZWJ - if so, this char is part of ZWJ sequence
+        // and should be added as combining character (e.g., 👨 + ZWJ + 💻 = 👨‍💻).
         // With per-code-point widths an emoji after a ZWJ takes its own cells.
-        if codepoint_widths {
+        if role != AttachRole::ZwjContinuation {
             return false;
         }
 
-        // Check if previous cell has ZWJ - if so, this char is part of ZWJ sequence
-        // and should be added as combining character (e.g., 👨 + ZWJ + 💻 = 👨‍💻)
-        // OPTIMIZATION: Only check for emoji characters (most text won't trigger this)
-        let char_code = c as u32;
-        let is_potential_emoji = matches!(char_code,
-            0x2600..=0x27BF  // Misc Symbols (❤️, ☀️, etc.)
-            | 0x1F000..=0x1FFFF // Emoji blocks
-        );
-
-        let last_written = if is_potential_emoji {
-            self.last_written_cell(cols)
-        } else {
-            None
-        };
-        if let Some((target_col, target_row)) = last_written {
+        if let Some((target_col, target_row)) = self.last_written_cell(cols) {
             // Check if target cell has ZWJ in combining chars
             if let Some(target_cell) = self.active_grid().get(target_col, target_row) {
                 if target_cell.combining_has('\u{200D}') {
@@ -628,27 +670,8 @@ impl Terminal {
                         // Recalculate width if needed. As in the combining
                         // path above, the cell only widens when the spacer
                         // still fits on the row.
-                        let grapheme = target_cell_mut.get_grapheme();
-                        if target_col + 1 < cols
-                            && grapheme::is_wide_grapheme(&grapheme)
-                            && target_cell_mut.width() == 1
-                        {
-                            target_cell_mut.width = 2;
-                            target_cell_mut.flags.set_wide_char(true);
-
-                            let mut spacer_flags = target_cell_mut.flags;
-                            spacer_flags.set_wide_char(false);
-                            spacer_flags.set_wide_char_spacer(true);
-
-                            let spacer = Cell {
-                                c: ' ',
-                                combining: None,
-                                fg: target_cell_mut.fg,
-                                bg: target_cell_mut.bg,
-                                underline_color: target_cell_mut.underline_color,
-                                flags: spacer_flags,
-                                width: 1,
-                            };
+                        if cell_should_widen(target_cell_mut, target_col, cols) {
+                            let spacer = widen_with_spacer(target_cell_mut);
                             self.active_grid_mut()
                                 .set(target_col + 1, target_row, spacer);
                         }
@@ -689,7 +712,7 @@ impl Terminal {
 
         // Check if previous cell is a regional indicator without a pair yet
         let should_combine = if let Some(prev_cell) = self.active_grid().get(prev_col, prev_row) {
-            grapheme::is_regional_indicator(prev_cell.c) && prev_cell.combining_is_empty()
+            is_unpaired_regional_indicator(prev_cell)
         } else {
             false
         };
@@ -701,22 +724,7 @@ impl Terminal {
 
             // Extract spacer cell properties from target cell first
             let spacer = if cursor_col < cols {
-                if let Some(target_cell) = self.active_grid().get(prev_col, prev_row) {
-                    let mut spacer_flags = target_cell.flags;
-                    spacer_flags.set_wide_char(false);
-                    spacer_flags.set_wide_char_spacer(true);
-                    Some(Cell {
-                        c: ' ',
-                        combining: None,
-                        fg: target_cell.fg,
-                        bg: target_cell.bg,
-                        underline_color: target_cell.underline_color,
-                        flags: spacer_flags,
-                        width: 1,
-                    })
-                } else {
-                    None
-                }
+                self.active_grid().get(prev_col, prev_row).map(spacer_after)
             } else {
                 None
             };
@@ -850,6 +858,84 @@ impl Terminal {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn attach_role_classifies_marks_continuations_and_standalone() {
+        assert_eq!(attach_role('\u{FE0F}', false), AttachRole::Mark); // VS16
+        assert_eq!(attach_role('\u{200D}', false), AttachRole::Mark); // ZWJ
+        assert_eq!(attach_role('\u{1F3FD}', false), AttachRole::Mark); // skin tone
+        assert_eq!(attach_role('\u{0301}', false), AttachRole::Mark); // combining acute
+        assert_eq!(attach_role('\u{1F4BB}', false), AttachRole::ZwjContinuation);
+        assert_eq!(attach_role('\u{2764}', false), AttachRole::ZwjContinuation);
+        assert_eq!(attach_role('a', false), AttachRole::Standalone);
+        assert_eq!(attach_role('\u{4E2D}', false), AttachRole::Standalone);
+    }
+
+    #[test]
+    fn attach_role_codepoint_widths_demote_skin_tones_and_continuations() {
+        assert_eq!(attach_role('\u{1F3FD}', true), AttachRole::Standalone);
+        assert_eq!(attach_role('\u{1F4BB}', true), AttachRole::Standalone);
+        assert_eq!(attach_role('\u{FE0F}', true), AttachRole::Mark);
+        assert_eq!(attach_role('\u{200D}', true), AttachRole::Mark);
+    }
+
+    #[test]
+    fn wide_char_needs_wrap_only_for_wide_chars_at_the_last_column() {
+        assert!(wide_char_needs_wrap(2, 79, 80, true));
+        assert!(wide_char_needs_wrap(2, 80, 80, true));
+        assert!(!wide_char_needs_wrap(2, 78, 80, true));
+        assert!(!wide_char_needs_wrap(1, 79, 80, true));
+        assert!(!wide_char_needs_wrap(2, 79, 80, false));
+    }
+
+    #[test]
+    fn cell_should_widen_requires_wide_grapheme_narrow_cell_and_room() {
+        let mut heart = Cell {
+            c: '\u{2764}',
+            width: 1,
+            ..Cell::default()
+        };
+        assert!(!cell_should_widen(&heart, 0, 4), "bare heart is narrow");
+        heart.combining_push('\u{FE0F}');
+        assert!(cell_should_widen(&heart, 2, 4));
+        assert!(!cell_should_widen(&heart, 3, 4), "no room for the spacer");
+        heart.width = 2;
+        assert!(!cell_should_widen(&heart, 0, 4), "already wide");
+    }
+
+    #[test]
+    fn unpaired_regional_indicator_needs_no_combining_marks() {
+        let mut flag = Cell {
+            c: '\u{1F1FA}',
+            ..Cell::default()
+        };
+        assert!(is_unpaired_regional_indicator(&flag));
+        flag.combining_push('\u{1F1F8}');
+        assert!(!is_unpaired_regional_indicator(&flag));
+        let letter = Cell {
+            c: 'U',
+            ..Cell::default()
+        };
+        assert!(!is_unpaired_regional_indicator(&letter));
+    }
+
+    #[test]
+    fn widen_with_spacer_marks_base_wide_and_inherits_colors() {
+        let mut base = Cell {
+            c: '\u{2764}',
+            width: 1,
+            ..Cell::default()
+        };
+        base.fg = PackedColor::pack(crate::color::Color::Rgb(1, 2, 3));
+        let spacer = widen_with_spacer(&mut base);
+        assert_eq!(base.width, 2);
+        assert!(base.flags.wide_char());
+        assert!(spacer.flags.wide_char_spacer());
+        assert!(!spacer.flags.wide_char());
+        assert_eq!(spacer.c, ' ');
+        assert_eq!(spacer.width, 1);
+        assert_eq!(spacer.fg, base.fg);
+    }
     use crate::color::Color;
 
     fn create_test_terminal() -> Terminal {

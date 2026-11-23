@@ -869,149 +869,7 @@ impl Terminal {
                 self.advance_parser(&passthrough[prev_offset..offset]);
             }
             prev_offset = offset;
-            // Kitty payloads are ASCII text (key=value pairs + base64). Any
-            // non-UTF-8 byte indicates a malformed APC; reset and skip.
-            let payload = match std::str::from_utf8(&payload_bytes) {
-                Ok(s) => s,
-                Err(_) => {
-                    self.kitty_parser.reset();
-                    continue;
-                }
-            };
-
-            match self.kitty_parser.parse_chunk(payload) {
-                Ok(true) => {
-                    // More chunks expected (m=1) — keep state, await next APC.
-                }
-                Ok(false) => {
-                    // Final chunk: handle query (a=q) inline by emitting an
-                    // APC OK reply on response_buffer; non-query actions go to
-                    // build_graphic. See Kitty TGP spec, "Querying support".
-                    if self.kitty_parser.action == crate::graphics::kitty::KittyAction::Query {
-                        if self.kitty_parser.quietness < 2 {
-                            let response = match self.kitty_parser.image_id {
-                                Some(id) => format!("\x1b_Gi={};OK\x1b\\", id),
-                                None => "\x1b_G;OK\x1b\\".to_string(),
-                            };
-                            self.response_buffer.extend_from_slice(response.as_bytes());
-                        }
-                        self.kitty_parser.reset();
-                    } else {
-                        // Errors here are non-fatal: they become graphics
-                        // replies per the spec's q= matrix below.
-                        let position = (self.cursor.col, self.cursor.row);
-                        let mut failure: Option<crate::graphics::GraphicsError> = None;
-                        let dropped_before = self.graphics.graphics_store.dropped_count();
-                        match self
-                            .kitty_parser
-                            .build_graphic(position, &mut self.graphics.graphics_store)
-                        {
-                            Ok(crate::graphics::kitty::KittyGraphicResult::Graphic(
-                                mut graphic,
-                            )) => {
-                                let (cell_width, cell_height) = self.graphics.cell_dimensions;
-                                graphic.set_cell_dimensions(cell_width, cell_height);
-                                let span_rows = graphic.cell_span(cell_width, cell_height).1;
-                                let image_id = graphic.id;
-                                self.add_placement(graphic);
-                                // Graphic landed on screen: notify like the Sixel
-                                // (DCS) and iTerm2 inline paths do, so observers
-                                // and streaming graphics subscribers hear kitty
-                                // placements too. Row is the placement row,
-                                // captured before any cursor move.
-                                self.events
-                                    .push(crate::terminal::TerminalEvent::GraphicsAdded {
-                                        image_id,
-                                        row: position.1,
-                                    });
-                                if !self.kitty_parser.suppress_cursor_move {
-                                    // Kitty TGP: a placement at the cursor moves it
-                                    // to the first line below the image unless C=1
-                                    // suppresses the move. Written through the
-                                    // normal newline path so the scroll region and
-                                    // scrollback promotion apply exactly as they
-                                    // do for a multi-row text write. Virtual
-                                    // placements (U=1) never move the cursor.
-                                    for _ in 0..span_rows {
-                                        self.write_char('\n');
-                                    }
-                                    self.write_char('\r');
-                                }
-                            }
-                            Ok(
-                                crate::graphics::kitty::KittyGraphicResult::VirtualPlacement {
-                                    ..
-                                }
-                                | crate::graphics::kitty::KittyGraphicResult::None,
-                            ) => {}
-                            Err(crate::graphics::GraphicsError::ImageTooLarge(pixels, max)) => {
-                                // A size/budget refusal: publish the unified
-                                // budget event (ENH-062) so an oversized
-                                // payload is visible alongside the per-store
-                                // diagnostics. The error carries the attempted
-                                // pixel count; the RGBA cost is 4 bytes/px.
-                                let bytes = pixels.saturating_mul(4);
-                                self.output_budget.report_exceeded(
-                                    &mut self.events,
-                                    crate::graphics::budget::BudgetStore::Graphics,
-                                    bytes,
-                                );
-                                failure = Some(crate::graphics::GraphicsError::ImageTooLarge(
-                                    pixels, max,
-                                ));
-                            }
-                            Err(err) => {
-                                crate::debug_log!("KITTY", "kitty command failed: {}", err);
-                                failure = Some(err);
-                            }
-                        }
-                        let dropped_after = self.graphics.graphics_store.dropped_count();
-                        if dropped_after > dropped_before {
-                            self.output_budget.report_exceeded(
-                                &mut self.events,
-                                crate::graphics::budget::BudgetStore::Graphics,
-                                0,
-                            );
-                        }
-                        // Reply on the graphics channel per the spec's
-                        // quietness matrix: q=0 sends OK responses for
-                        // successful commands and error responses for
-                        // failures, q=1 suppresses the OK responses only,
-                        // q=2 suppresses all replies. Error codes are
-                        // ENOENT for unknown ids and EINVAL for malformed
-                        // commands; the response echoes the command's
-                        // i=/p= keys (see KittyParser::response_id_prefix).
-                        let quietness = self.kitty_parser.quietness;
-                        let reply = if quietness < 2 {
-                            match failure {
-                                Some(err) => Some(
-                                    self.kitty_parser
-                                        .error_response(err.kitty_code(), &err.kitty_message()),
-                                ),
-                                None if quietness == 0 => Some(self.kitty_parser.ok_response()),
-                                None => None,
-                            }
-                        } else {
-                            None
-                        };
-                        if let Some(reply) = reply {
-                            self.response_buffer.extend_from_slice(reply.as_bytes());
-                        }
-                        self.kitty_parser.reset();
-                    }
-                }
-                Err(err) => {
-                    // Malformed chunk: EINVAL reply per the q= matrix (q=2
-                    // suppresses), then reset and continue.
-                    if self.kitty_parser.quietness < 2 {
-                        let response = self
-                            .kitty_parser
-                            .error_response(err.kitty_code(), &err.kitty_message());
-                        self.response_buffer.extend_from_slice(response.as_bytes());
-                    }
-                    self.kitty_parser.reset();
-                }
-            }
+            self.handle_kitty_apc_payload(&payload_bytes);
         }
 
         // Feed the remaining passthrough tail to vte, then return the
@@ -1020,6 +878,149 @@ impl Terminal {
             self.advance_parser(&passthrough[prev_offset..]);
         }
         self.apc.passthrough = passthrough;
+    }
+
+    /// Feed one completed Kitty APC payload to the Kitty parser and act on
+    /// the result: query replies, graphic placement, and the q= reply matrix.
+    fn handle_kitty_apc_payload(&mut self, payload_bytes: &[u8]) {
+        // Kitty payloads are ASCII text (key=value pairs + base64). Any
+        // non-UTF-8 byte indicates a malformed APC; reset and skip.
+        let payload = match std::str::from_utf8(payload_bytes) {
+            Ok(s) => s,
+            Err(_) => {
+                self.kitty_parser.reset();
+                return;
+            }
+        };
+
+        match self.kitty_parser.parse_chunk(payload) {
+            Ok(true) => {
+                // More chunks expected (m=1) — keep state, await next APC.
+            }
+            Ok(false) => {
+                // Final chunk: handle query (a=q) inline by emitting an
+                // APC OK reply on response_buffer; non-query actions go to
+                // build_graphic. See Kitty TGP spec, "Querying support".
+                if self.kitty_parser.action == crate::graphics::kitty::KittyAction::Query {
+                    if self.kitty_parser.quietness < 2 {
+                        let response = match self.kitty_parser.image_id {
+                            Some(id) => format!("\x1b_Gi={};OK\x1b\\", id),
+                            None => "\x1b_G;OK\x1b\\".to_string(),
+                        };
+                        self.response_buffer.extend_from_slice(response.as_bytes());
+                    }
+                    self.kitty_parser.reset();
+                } else {
+                    // Errors here are non-fatal: they become graphics
+                    // replies per the spec's q= matrix below.
+                    let position = (self.cursor.col, self.cursor.row);
+                    let mut failure: Option<crate::graphics::GraphicsError> = None;
+                    let dropped_before = self.graphics.graphics_store.dropped_count();
+                    match self
+                        .kitty_parser
+                        .build_graphic(position, &mut self.graphics.graphics_store)
+                    {
+                        Ok(crate::graphics::kitty::KittyGraphicResult::Graphic(mut graphic)) => {
+                            let (cell_width, cell_height) = self.graphics.cell_dimensions;
+                            graphic.set_cell_dimensions(cell_width, cell_height);
+                            let span_rows = graphic.cell_span(cell_width, cell_height).1;
+                            let image_id = graphic.id;
+                            self.add_placement(graphic);
+                            // Graphic landed on screen: notify like the Sixel
+                            // (DCS) and iTerm2 inline paths do, so observers
+                            // and streaming graphics subscribers hear kitty
+                            // placements too. Row is the placement row,
+                            // captured before any cursor move.
+                            self.events
+                                .push(crate::terminal::TerminalEvent::GraphicsAdded {
+                                    image_id,
+                                    row: position.1,
+                                });
+                            if !self.kitty_parser.suppress_cursor_move {
+                                // Kitty TGP: a placement at the cursor moves it
+                                // to the first line below the image unless C=1
+                                // suppresses the move. Written through the
+                                // normal newline path so the scroll region and
+                                // scrollback promotion apply exactly as they
+                                // do for a multi-row text write. Virtual
+                                // placements (U=1) never move the cursor.
+                                for _ in 0..span_rows {
+                                    self.write_char('\n');
+                                }
+                                self.write_char('\r');
+                            }
+                        }
+                        Ok(
+                            crate::graphics::kitty::KittyGraphicResult::VirtualPlacement { .. }
+                            | crate::graphics::kitty::KittyGraphicResult::None,
+                        ) => {}
+                        Err(crate::graphics::GraphicsError::ImageTooLarge(pixels, max)) => {
+                            // A size/budget refusal: publish the unified
+                            // budget event (ENH-062) so an oversized
+                            // payload is visible alongside the per-store
+                            // diagnostics. The error carries the attempted
+                            // pixel count; the RGBA cost is 4 bytes/px.
+                            let bytes = pixels.saturating_mul(4);
+                            self.output_budget.report_exceeded(
+                                &mut self.events,
+                                crate::graphics::budget::BudgetStore::Graphics,
+                                bytes,
+                            );
+                            failure =
+                                Some(crate::graphics::GraphicsError::ImageTooLarge(pixels, max));
+                        }
+                        Err(err) => {
+                            crate::debug_log!("KITTY", "kitty command failed: {}", err);
+                            failure = Some(err);
+                        }
+                    }
+                    let dropped_after = self.graphics.graphics_store.dropped_count();
+                    if dropped_after > dropped_before {
+                        self.output_budget.report_exceeded(
+                            &mut self.events,
+                            crate::graphics::budget::BudgetStore::Graphics,
+                            0,
+                        );
+                    }
+                    // Reply on the graphics channel per the spec's
+                    // quietness matrix: q=0 sends OK responses for
+                    // successful commands and error responses for
+                    // failures, q=1 suppresses the OK responses only,
+                    // q=2 suppresses all replies. Error codes are
+                    // ENOENT for unknown ids and EINVAL for malformed
+                    // commands; the response echoes the command's
+                    // i=/p= keys (see KittyParser::response_id_prefix).
+                    let quietness = self.kitty_parser.quietness;
+                    let reply = if quietness < 2 {
+                        match failure {
+                            Some(err) => Some(
+                                self.kitty_parser
+                                    .error_response(err.kitty_code(), &err.kitty_message()),
+                            ),
+                            None if quietness == 0 => Some(self.kitty_parser.ok_response()),
+                            None => None,
+                        }
+                    } else {
+                        None
+                    };
+                    if let Some(reply) = reply {
+                        self.response_buffer.extend_from_slice(reply.as_bytes());
+                    }
+                    self.kitty_parser.reset();
+                }
+            }
+            Err(err) => {
+                // Malformed chunk: EINVAL reply per the q= matrix (q=2
+                // suppresses), then reset and continue.
+                if self.kitty_parser.quietness < 2 {
+                    let response = self
+                        .kitty_parser
+                        .error_response(err.kitty_code(), &err.kitty_message());
+                    self.response_buffer.extend_from_slice(response.as_bytes());
+                }
+                self.kitty_parser.reset();
+            }
+        }
     }
 
     /// Feed bytes to the vte parser. `vte::Parser::advance` needs `&mut self`
