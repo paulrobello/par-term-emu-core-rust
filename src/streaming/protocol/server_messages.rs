@@ -26,10 +26,7 @@ use serde::{Deserialize, Serialize};
         empty = "Empty server message"
     )
 )]
-#[cfg_attr(
-    all(test, feature = "streaming"),
-    derive(par_term_emu_derive::VariantNames)
-)]
+#[cfg_attr(feature = "streaming", derive(par_term_emu_derive::VariantNames))]
 #[serde(tag = "type", rename_all = "lowercase")]
 pub enum ServerMessage {
     /// Terminal output data (raw ANSI escape sequences)

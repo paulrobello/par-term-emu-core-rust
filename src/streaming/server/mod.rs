@@ -4,7 +4,7 @@ use crate::streaming::client::Client;
 use crate::streaming::config::{ApiAuthConfig, HttpBasicAuthConfig, StreamingConfig};
 use crate::streaming::error::{Result, StreamingError};
 use crate::streaming::proto::{decode_client_message, encode_server_message};
-use crate::streaming::protocol::{ClientMessage, ServerMessage, ThemeInfo};
+use crate::streaming::protocol::{ClientMessage, EventType, ServerMessage, ThemeInfo};
 use crate::streaming::rate_limit::InputRateLimiter;
 use crate::streaming::session::{now_millis, OutputChunk, SessionRegistry, StreamSessionState};
 use crate::terminal::{SelectionMode, Terminal};
@@ -694,68 +694,209 @@ impl StreamingServer {
     // -- Backward-compatible send helpers (route to default session) --
 }
 
+/// One row of the [`should_send`] routing table: which message variants
+/// the row covers, and the event subscription they consult.
+struct SendRule {
+    /// Names of the covered `ServerMessage` variants (the Rust variant
+    /// identifiers).
+    variants: &'static [&'static str],
+    /// The event type these variants subscribe to; `None` for messages
+    /// that pass any filter unfiltered.
+    event: Option<EventType>,
+}
+
+/// The message → event routing table [`should_send`], in enum declaration
+/// order. Exhaustiveness is enforced two ways: the `should_send` match over
+/// [`ServerMessage::VARIANT_NAMES`] below is wildcard-free (a new variant
+/// fails to compile until it lands in a rule here), and the
+/// `send_rules_cover_every_variant` test pins the rule set to the same
+/// registry.
+const SEND_RULES: &[SendRule] = &[
+    SendRule {
+        variants: &["Output"],
+        event: Some(EventType::Output),
+    },
+    SendRule {
+        variants: &["CursorPosition"],
+        event: Some(EventType::Cursor),
+    },
+    SendRule {
+        variants: &["Bell"],
+        event: Some(EventType::Bell),
+    },
+    SendRule {
+        variants: &["Title"],
+        event: Some(EventType::Title),
+    },
+    SendRule {
+        variants: &["Resize"],
+        event: Some(EventType::Resize),
+    },
+    SendRule {
+        variants: &["CwdChanged"],
+        event: Some(EventType::Cwd),
+    },
+    SendRule {
+        variants: &["TriggerMatched"],
+        event: Some(EventType::Trigger),
+    },
+    SendRule {
+        variants: &["ActionNotify", "ActionMarkLine"],
+        event: Some(EventType::Action),
+    },
+    SendRule {
+        variants: &["ModeChanged"],
+        event: Some(EventType::Mode),
+    },
+    SendRule {
+        variants: &["GraphicsAdded", "InlineImage"],
+        event: Some(EventType::Graphics),
+    },
+    SendRule {
+        variants: &["HyperlinkAdded"],
+        event: Some(EventType::Hyperlink),
+    },
+    SendRule {
+        variants: &["UserVarChanged"],
+        event: Some(EventType::UserVar),
+    },
+    SendRule {
+        variants: &["ProgressBarChanged"],
+        event: Some(EventType::ProgressBar),
+    },
+    SendRule {
+        variants: &["BadgeChanged"],
+        event: Some(EventType::Badge),
+    },
+    SendRule {
+        variants: &["SelectionChanged"],
+        event: Some(EventType::Selection),
+    },
+    SendRule {
+        variants: &["ClipboardSync"],
+        event: Some(EventType::Clipboard),
+    },
+    SendRule {
+        variants: &["ShellIntegrationEvent"],
+        event: Some(EventType::Shell),
+    },
+    SendRule {
+        variants: &["SystemStats"],
+        event: Some(EventType::SystemStats),
+    },
+    SendRule {
+        variants: &["ZoneOpened", "ZoneClosed", "ZoneScrolledOut"],
+        event: Some(EventType::Zone),
+    },
+    SendRule {
+        variants: &["EnvironmentChanged"],
+        event: Some(EventType::Environment),
+    },
+    SendRule {
+        variants: &["RemoteHostTransition"],
+        event: Some(EventType::RemoteHost),
+    },
+    SendRule {
+        variants: &["SubShellDetected"],
+        event: Some(EventType::SubShell),
+    },
+    SendRule {
+        variants: &["SemanticSnapshot"],
+        event: Some(EventType::Snapshot),
+    },
+    SendRule {
+        variants: &[
+            "FileTransferStarted",
+            "FileTransferProgress",
+            "FileTransferCompleted",
+            "FileTransferFailed",
+        ],
+        event: Some(EventType::FileTransfer),
+    },
+    SendRule {
+        variants: &["UploadRequested"],
+        event: Some(EventType::UploadRequest),
+    },
+    SendRule {
+        variants: &["ScreenCleared"],
+        event: Some(EventType::ScreenCleared),
+    },
+    SendRule {
+        variants: &["PointerShapeChanged"],
+        event: Some(EventType::PointerShape),
+    },
+    // Always send system messages.
+    SendRule {
+        variants: &[
+            "Connected",
+            "Refresh",
+            "Error",
+            "Shutdown",
+            "PaneSizeStatus",
+            "ViewerPresence",
+            "AgentRoster",
+            "AgentStateChanged",
+            "UploadStarted",
+            "UploadFinished",
+            "MuxTreeSnapshot",
+            "PaneProcessState",
+            "PaneCreated",
+            "Pong",
+        ],
+        event: None,
+    },
+];
+
+/// The event type a variant routes to, from [`SEND_RULES`]. A variant name
+/// missing from the table is a table/enum drift: return `None` (unrouted),
+/// and `send_rules_cover_every_variant` fails in tests.
+fn rule_event_for(variant: &str) -> Option<EventType> {
+    SEND_RULES
+        .iter()
+        .find(|rule| rule.variants.contains(&variant))
+        .and_then(|rule| rule.event.clone())
+}
+
 /// Check if a message should be sent based on client's subscription filter
 fn should_send(
     msg: &ServerMessage,
     subscriptions: &Option<std::collections::HashSet<crate::streaming::protocol::EventType>>,
 ) -> bool {
-    use crate::streaming::protocol::EventType;
-    let subs = match subscriptions {
-        Some(s) => s,
-        None => return true, // No filter = send everything
+    let Some(subs) = subscriptions else {
+        return true; // No filter = send everything
     };
+    match rule_event_for(msg.variant_name()) {
+        // Always-send rows and unrouted variants pass any filter.
+        None => true,
+        Some(event) => subs.contains(&event),
+    }
+}
 
-    match msg {
-        ServerMessage::Output { .. } => subs.contains(&EventType::Output),
-        ServerMessage::CursorPosition { .. } => subs.contains(&EventType::Cursor),
-        ServerMessage::Bell => subs.contains(&EventType::Bell),
-        ServerMessage::Title { .. } => subs.contains(&EventType::Title),
-        ServerMessage::Resize { .. } => subs.contains(&EventType::Resize),
-        ServerMessage::CwdChanged { .. } => subs.contains(&EventType::Cwd),
-        ServerMessage::TriggerMatched { .. } => subs.contains(&EventType::Trigger),
-        ServerMessage::ActionNotify { .. } | ServerMessage::ActionMarkLine { .. } => {
-            subs.contains(&EventType::Action)
+#[cfg(test)]
+mod send_rule_tests {
+    use super::*;
+
+    /// The routing table and the enum's variant registry must agree
+    /// exactly: every variant routed once, nothing unrouted, no stale
+    /// names. The registry is compile-tied to the enum by the
+    /// `VariantNames` derive's no-wildcard match (QA-005).
+    #[test]
+    fn send_rules_cover_every_variant() {
+        use std::collections::BTreeSet;
+        let mut routed = BTreeSet::new();
+        for rule in SEND_RULES {
+            for variant in rule.variants {
+                assert!(
+                    routed.insert(*variant),
+                    "variant {variant} appears in more than one SendRule"
+                );
+            }
         }
-        ServerMessage::ModeChanged { .. } => subs.contains(&EventType::Mode),
-        ServerMessage::GraphicsAdded { .. } => subs.contains(&EventType::Graphics),
-        ServerMessage::HyperlinkAdded { .. } => subs.contains(&EventType::Hyperlink),
-        ServerMessage::UserVarChanged { .. } => subs.contains(&EventType::UserVar),
-        ServerMessage::ProgressBarChanged { .. } => subs.contains(&EventType::ProgressBar),
-        ServerMessage::BadgeChanged { .. } => subs.contains(&EventType::Badge),
-        ServerMessage::SelectionChanged { .. } => subs.contains(&EventType::Selection),
-        ServerMessage::ClipboardSync { .. } => subs.contains(&EventType::Clipboard),
-        ServerMessage::ShellIntegrationEvent { .. } => subs.contains(&EventType::Shell),
-        ServerMessage::SystemStats { .. } => subs.contains(&EventType::SystemStats),
-        ServerMessage::ZoneOpened { .. }
-        | ServerMessage::ZoneClosed { .. }
-        | ServerMessage::ZoneScrolledOut { .. } => subs.contains(&EventType::Zone),
-        ServerMessage::EnvironmentChanged { .. } => subs.contains(&EventType::Environment),
-        ServerMessage::RemoteHostTransition { .. } => subs.contains(&EventType::RemoteHost),
-        ServerMessage::SubShellDetected { .. } => subs.contains(&EventType::SubShell),
-        ServerMessage::SemanticSnapshot { .. } => subs.contains(&EventType::Snapshot),
-        ServerMessage::FileTransferStarted { .. }
-        | ServerMessage::FileTransferProgress { .. }
-        | ServerMessage::FileTransferCompleted { .. }
-        | ServerMessage::FileTransferFailed { .. } => subs.contains(&EventType::FileTransfer),
-        ServerMessage::UploadRequested { .. } => subs.contains(&EventType::UploadRequest),
-        ServerMessage::ScreenCleared { .. } => subs.contains(&EventType::ScreenCleared),
-        ServerMessage::PointerShapeChanged { .. } => subs.contains(&EventType::PointerShape),
-        ServerMessage::InlineImage { .. } => subs.contains(&EventType::Graphics),
-        // Always send system messages
-        ServerMessage::Connected { .. }
-        | ServerMessage::Refresh { .. }
-        | ServerMessage::Error { .. }
-        | ServerMessage::Shutdown { .. }
-        | ServerMessage::PaneSizeStatus { .. }
-        | ServerMessage::ViewerPresence { .. }
-        | ServerMessage::AgentRoster { .. }
-        | ServerMessage::AgentStateChanged { .. }
-        | ServerMessage::UploadStarted { .. }
-        | ServerMessage::UploadFinished { .. }
-        | ServerMessage::MuxTreeSnapshot { .. }
-        | ServerMessage::PaneProcessState { .. }
-        | ServerMessage::PaneCreated { .. }
-        | ServerMessage::Pong => true,
+        assert_eq!(
+            routed,
+            ServerMessage::VARIANT_NAMES.iter().copied().collect(),
+            "SEND_RULES and the ServerMessage variant registry disagree"
+        );
     }
 }
 
