@@ -10,6 +10,56 @@
 //! below emit the shared `#[pymethods]` definitions ONCE, invoked per type.
 //! Behavior is preserved (the macros use the clean `Terminal`-method form;
 //! `parking_lot` locks never fail, so no lock-fallback path is needed).
+//!
+//! # Module map
+//!
+//! Layout of this file, top to bottom:
+//!
+//! - [`TerminalAccess`]: the trait both wrappers implement. Every macro below
+//!   reaches the terminal only through `term_ref()` (read) or `term_mut()`
+//!   (write), which is why one macro body serves both classes.
+//! - [`WordSelectionBounds`], [`ScrollbackCell`]: shared return-type aliases.
+//! - The `impl_*` macros, in source order (table below).
+//! - [`PixelResize`] plus the `pub(crate) use { ... }` block at the bottom,
+//!   which re-exports every macro so callers write
+//!   `crate::python_bindings::common::impl_terminal_X!(Ty)` (ARC-117; the
+//!   macros are not `#[macro_export]`).
+//!
+//! Each `impl_terminal_*` macro expands to its own `#[pymethods] impl $ty`
+//! block (pyo3 rejects macro items inside an existing block), so invoke them
+//! at module level next to the pyclass. `PyTerminal`
+//! (`python_bindings/terminal/mod.rs`) and `PyPtyTerminal`
+//! (`python_bindings/pty.rs`) invoke the same set; a method that appears in a
+//! macro must not also be written by hand on either class (the hand-written
+//! impl blocks keep a `// name: provided by impl_terminal_X!` marker where one
+//! used to live).
+//!
+//! | Macro | Python surface it drives |
+//! |---|---|
+//! | `impl_repr` | `__repr__` from a closure body (enum and config pyclasses) |
+//! | `impl_terminal_simple_getters` | trivial read-only getters: `cursor_color`, `cursor_visible`, `bracketed_paste`, clipboard permission flags |
+//! | `impl_terminal_query_getters` | read-only state: `title`, `size`, `cursor_position`, `scrollback`, `keyboard_flags`, `insert_mode`, `default_fg`/`default_bg`, `mouse_mode` |
+//! | `impl_terminal_color_setters` | rendering-hint colors: `set_link_color`, `set_bold_color`, `set_cursor_guide_color`, `set_badge_color`, `set_match_color` |
+//! | `impl_terminal_state_setters` | core config setters: `set_clipboard`, clipboard read/write gates, `set_default_fg`/`set_default_bg`, width and normalization config |
+//! | `impl_terminal_static_helpers` | pure `ansi_utils` wrappers that never touch the terminal: `strip_ansi`, `measure_text_width`, `parse_color` |
+//! | `impl_terminal_sixel_graphics` | Sixel limits and graphics queries: `graphics`, `graphics_at_row`, `graphics_count`, `clear_graphics`, `get_sixel_limits` |
+//! | `impl_terminal_kitty_file_media` | the Kitty file-media gate: `set_allow_file_media`, `get_allow_file_media` (SEC-114) |
+//! | `impl_terminal_badge_session` | badge format and session variables: `badge_format`, `set_badge_format`, `evaluate_badge`, `get_badge_session_variable` |
+//! | `impl_terminal_progress_notifications` | OSC 9;4 progress, OSC 9/777 notifications, and the device-reply drain: `drain_responses`, `take_notifications` |
+//! | `impl_terminal_recording` | session recording: `start_recording`, `stop_recording`, `record_output`, `record_input`, `record_resize` (`&mut self` receivers) |
+//! | `impl_terminal_cell_line_queries` | per-cell and per-line reads: `get_fg_color`, `get_bg_color`, `get_attributes`, `get_hyperlink`, `get_line_cells` |
+//! | `impl_terminal_content_misc` | `content` / `__str__`, `clipboard`, `cursor_style`, shell-integration and focus/paste event sequences |
+//! | `impl_terminal_search_select` | search and selection: `find_text`, `find_next`, `select_word`, `select_semantic_region`, `scrollback_line` |
+//! | `impl_terminal_debug_snapshots` | `debug_snapshot_*` and `debug_log_snapshot` |
+//! | `impl_terminal_file_transfer` | file-transfer API: `get_active_transfers`, `get_transfer`, `take_completed_transfer`, `cancel_file_transfer` |
+//! | `impl_terminal_exports` | `export_text`, `export_styled`, `export_html`, `export_asciicast`, animation ticks, keyboard-flag stack, `get_line`, `get_char`, `create_snapshot` |
+//! | `impl_terminal_screenshot_methods` | `screenshot`, `screenshot_to_file`, `screenshot_config`, `screenshot_to_file_config` (QA-004) |
+//! | `impl_terminal_resize_pixels` | `resize_pixels`, taking the per-class docstring as a macro argument and delegating to [`PixelResize`] |
+//!
+//! Adding a shared method: put it in the macro whose row above matches, add
+//! its Python docstring there, and regenerate the stubs (`make stubs`). Adding
+//! a method that exists on only one class stays in that class's own
+//! `*_api.rs` file or `pty.rs`.
 
 use crate::terminal::Terminal;
 
