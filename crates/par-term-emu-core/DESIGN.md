@@ -148,6 +148,23 @@ with no features compiles neither pyo3 nor swash nor portable-pty
 5. **Test-count preservation.** Each pre-move `make test-rust` invocation's
    test total equals the sum of its root + member counterparts after the move.
 
+## Terminal surface freeze — standing rationale (ARC-001)
+
+`Terminal` is the workspace hub: graph in-degree 174 and about 1,120 direct
+upstream references at depth 2 (audit 2026-11-22). The Python bindings
+(`src/python_bindings/`), par-mux (`crates/par-mux/src/mux/pane.rs`),
+streaming (`src/streaming/`), the C FFI (`src/ffi.rs`) and the screenshot
+renderer all bind to the one flat struct, so any new field or method on it
+has a blast radius across every consumer and every binding surface.
+
+That is the standing reason the freeze must never be relaxed:
+`make api-surface-check` (method-count baselines for the flat `Terminal` and
+`PtyTerminal` Python classes), `make terminal-fields-check` (field-count
+ratchet on the Rust struct) and the pyclass-migration watch card. New
+capability ships as its own pyclass or as a `pub(crate)` sub-struct in
+`terminal/state.rs`. Baselines only ever go down, in the same commit as the
+extraction that lowers them.
+
 ## Locking design note — the single `Arc<RwLock<Terminal>>` (ARC-007 finding)
 
 The PTY reader thread's `process()` takes the write lock and every query

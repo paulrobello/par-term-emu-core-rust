@@ -2,7 +2,11 @@
 """ARC-001: a ratchet on the number of fields on the core `Terminal` struct.
 
 `Terminal` is the integration point for every feature and the repo's widest
-blast radius. The sub-struct program groups its state into cohesive
+blast radius: graph in-degree 174 and about 1,120 direct upstream references
+at depth 2, with the Python bindings, par-mux, streaming, FFI and screenshot
+code all bound to the one flat struct. That blast radius is the standing
+reason this ratchet (and `check_api_surface.py`) must never be relaxed; see
+"Terminal surface freeze" in `crates/par-term-emu-core/DESIGN.md`. The sub-struct program groups its state into cohesive
 `pub(crate)` structs in `terminal/state.rs`; this gate stops new state from
 landing directly on `Terminal` instead. It counts the named fields of
 `pub struct Terminal { .. }` in `crates/par-term-emu-core/src/terminal/mod.rs`
