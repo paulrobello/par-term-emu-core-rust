@@ -10,6 +10,11 @@
 # HEAD via a tag-only force push. Verdicts are advisory: the exit code is 0
 # even when regressions are flagged (set BENCH_FAIL_ON_REGRESSION=1 to fail).
 #
+# FEATURES builds with `bench` because every [[bench]] target gates criterion
+# behind required-features = ["bench"] (95739811: criterion 0.8's alloca C shim
+# broke Windows cross-target test builds); `rust-only` yields zero bench
+# executables and the artifact-locate step fails.
+#
 # Environment knobs (all optional):
 #   BENCH_ROUNDS        interleaved rounds per binary (default 3)
 #   BENCH_THRESHOLD     head/base ratio flagged as regression (default 1.2)
@@ -25,7 +30,7 @@ ROUNDS="${BENCH_ROUNDS:-3}"
 THRESHOLD="${BENCH_THRESHOLD:-1.2}"
 TAG="${BENCH_BASELINE_TAG:-bench-baseline}"
 WORK="${BENCH_GATE_DIR:-$PWD/target/bench-gate}"
-FEATURES=(--no-default-features --features rust-only)
+FEATURES=(--no-default-features --features bench)
 
 REPO_DIR="$PWD"
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
