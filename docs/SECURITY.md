@@ -1514,7 +1514,8 @@ sections; the numbers live here.
 | `DEFAULT_MAX_OSC_DATA_LENGTH` | 1 MiB | `crates/par-term-emu-core/src/terminal/state.rs:971` | Payload bytes accepted for one OSC sequence from terminal output. |
 | `MAX_ARCHIVE_BYTES` | 50 MiB | `src/bin/streaming_server/frontend_download.rs:34` | Bytes accepted from a downloaded web-frontend archive response. |
 | `MAX_SIDECAR_BYTES` | 1 KiB | `src/bin/streaming_server/frontend_download.rs:71` | Bytes accepted from a `.sha256` checksum sidecar response (SEC-203). |
-| `MAX_DECOMPRESSED_SIZE` | 9 MiB | `src/streaming/proto.rs:48` | Decompressed bytes accepted from one zlib-compressed streaming frame. |
+| `MAX_SIGNATURE_BYTES` | 4 KiB | `src/bin/streaming_server/frontend_download.rs:166` | Bytes accepted from a `.minisig` detached-signature sidecar (SEC-001). |
+| `MAX_DECOMPRESSED_SIZE` | 9 MiB | `src/streaming/proto.rs:45` | Decompressed bytes accepted from one zlib-compressed streaming frame. |
 | `MAX_INLINE_IMAGE_BYTES` | 8 MiB | `src/streaming/protocol/common.rs:174` | Image bytes accepted in one InlineImage streaming frame. |
 | `MAX_UPLOAD_CHUNK_BYTES` | 64 KiB | `src/streaming/protocol/common.rs:183` | Bytes accepted in one UploadChunk message payload from a streaming client. |
 | `WS_MAX_MESSAGE_SIZE` | 16 MiB | `src/streaming/server/mod.rs:45` | Bytes accepted in one inbound WebSocket message from a streaming client. |
