@@ -965,7 +965,7 @@ The connect handshake's replay is bounded: NEWEST graphics seed first — the on
 | `pane_create_request` | `correlation_id: string`, `session_id: string`, `name?: string` | Create one new default-shell window (a single new pane) in the daemon session named by `session_id` (`$N` or name). `name` (≤ 64 bytes, no control characters) names the created window via `new-window -n` — absent keeps the daemon default, violations are refused with `pane_create_failed`. Opt-in server-side (`--allow-pane-create`, default off); read-only connections are refused regardless of the flag. See [Mux tree metadata](#mux-tree-metadata) |
 
 > **Note: protobuf names vs serde-JSON tags.** The tables above use the
-> protobuf field/message names. The Rust types in `src/streaming/protocol.rs`
+> protobuf field/message names. The Rust types in `src/streaming/protocol/` (per-direction files re-exported from `mod.rs`)
 > also derive serde `Serialize`/`Deserialize`, and their JSON `"type"` tags do
 > **not** always match: variants without an explicit `#[serde(rename)]` use
 > plain lowercase, dropping the underscores. JSON consumers must use the serde

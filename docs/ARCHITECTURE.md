@@ -329,7 +329,7 @@ The main terminal emulator that ties everything together, organized into submodu
   - `render/geometry.rs` - the frame chrome layout: the one owner of how the host grid divides into tab strip, status bar, side panel, and pane content area (host/frame/content coordinate spaces)
   - `render/renderer.rs` - painting: per-pane grids, dividers, pane boxes, the modal overlay, the stdout flush sink
   - `render/modal.rs` - modal state machines: help, session/workspace pickers, prompts, context menus, resize mode, scroll viewport; the per-dialog owners sit in sibling `modal_*.rs` files (for example `modal_layouts.rs`, the save/load named-layout dialog)
-  - `render/input_route.rs` - routes key runs through the prefix scanner and modal owners (`route_key`) and mouse reports through the overlay hit-testers
+  - `render/input_route/` - (`mod.rs` plus `keyboard.rs`, `mouse.rs`, `pointer.rs`) routes key runs through the prefix scanner and modal owners (`route_key`) and mouse reports through the overlay hit-testers
   - `render/navigate.rs` - management chords and window/session/workspace switches through the select-then-resync contract
   - `render/session.rs` - seeding a window, feeding pane bytes, host resize, status row and tab strip
   - `render/sidebar.rs` - the workspace side panel
