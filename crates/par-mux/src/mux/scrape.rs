@@ -606,6 +606,12 @@ impl ScrapeEngine {
 /// whose agent provably left the pane's process tree is cleared and
 /// released (see `foreground.rs`).
 pub fn scrape_tick(tree: &Arc<Mutex<MuxTree>>, engine: &ScrapeEngine) -> Vec<TmuxNotification> {
+    // The snapshot reads the whole OS process table; a tree with no panes
+    // has nothing to classify, and in-process servers (tests, embedders)
+    // multiply this per-second cost by their instance count.
+    if tree.lock().pane_count() == 0 {
+        return Vec::new();
+    }
     scrape_tick_with(tree, engine, ProcessTable::snapshot().as_ref())
 }
 
@@ -678,6 +684,7 @@ pub(crate) fn scrape_tick_with(
     table: Option<&ProcessTable>,
 ) -> Vec<TmuxNotification> {
     let mut notifications = Vec::new();
+    let kinds: Vec<&'static str> = engine.agent_kinds().collect();
     let mut guard = tree.lock();
     let panes: Vec<PaneId> = guard
         .sessions()
@@ -717,10 +724,7 @@ pub(crate) fn scrape_tick_with(
             // descendant) never claims — the same no-guesses rule the
             // liveness sweep runs under.
             if let (Some(table), Some(child)) = (table, pane.child_pid()) {
-                if let Some(kind) = engine
-                    .agent_kinds()
-                    .find(|kind| table.agent_alive(child, kind) == Liveness::Matches)
-                {
+                if let Some(kind) = table.first_agent_kind(child, &kinds) {
                     pane.set_metadata("agent", kind);
                     agent = Some(kind.to_string());
                 }

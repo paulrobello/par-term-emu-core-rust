@@ -110,6 +110,47 @@ impl ProcessTable {
         }
     }
 
+    /// The first label in `labels` (table order) whose agent runs in
+    /// `root`'s descendant tree, probing every label in ONE walk: the
+    /// child map is built once and each descendant's argv read once,
+    /// instead of once per label. Same verdict as calling
+    /// [`Self::agent_alive`] per label and taking the first `Matches`.
+    pub(crate) fn first_agent_kind<'a>(&self, root: u32, labels: &[&'a str]) -> Option<&'a str> {
+        let root = root as i32;
+        if labels.is_empty() || !self.metas.iter().any(|meta| meta.pid == root) {
+            return None;
+        }
+        let mut children: std::collections::HashMap<i32, Vec<i32>> =
+            std::collections::HashMap::new();
+        for meta in &self.metas {
+            children.entry(meta.ppid).or_default().push(meta.pid);
+        }
+        let mut best: Option<usize> = None;
+        let mut stack = vec![root];
+        let mut visited = std::collections::HashSet::new();
+        while let Some(pid) = stack.pop() {
+            if !visited.insert(pid) {
+                continue;
+            }
+            if let Some(argv) = self.argv_of(pid) {
+                let limit = best.unwrap_or(labels.len());
+                if let Some(index) = labels[..limit]
+                    .iter()
+                    .position(|label| argv_matches_excluding_shell_payloads(&argv, label))
+                {
+                    best = Some(index);
+                    if index == 0 {
+                        break;
+                    }
+                }
+            }
+            if let Some(kids) = children.get(&pid) {
+                stack.extend(kids.iter().copied());
+            }
+        }
+        best.map(|index| labels[index])
+    }
+
     /// Whether `pid` sits in `root`'s descendant tree (root included):
     /// the identity-liveness probe for a pid-stamped claim (hook v5). A
     /// pure presence walk over the child map — no argv is read, so there
@@ -966,6 +1007,29 @@ mod tests {
                 ("UTF8".to_string(), "ok".to_string()),
             ]
         );
+    }
+
+    /// The one-walk probe agrees with the per-label probe: it returns the
+    /// first label in table order that `agent_alive` would call a match,
+    /// whatever order the process tree is walked in.
+    #[test]
+    fn first_agent_kind_matches_the_per_label_probe() {
+        let table = ProcessTable::with_fixed_argv(&[
+            (100, 1, argv(&["-zsh"])),
+            (101, 100, argv(&["node", "/x/codex/cli.js"])),
+            (102, 101, argv(&["pi"])),
+            (103, 100, None),
+        ]);
+        let labels = ["claude", "pi", "codex", "grok"];
+        let expected = labels
+            .iter()
+            .copied()
+            .find(|label| table.agent_alive(100, label) == Liveness::Matches);
+        assert_eq!(expected, Some("pi"));
+        assert_eq!(table.first_agent_kind(100, &labels), expected);
+        assert_eq!(table.first_agent_kind(100, &["claude", "grok"]), None);
+        assert_eq!(table.first_agent_kind(999, &labels), None, "absent root");
+        assert_eq!(table.first_agent_kind(100, &[]), None);
     }
 
     /// `parse_env_pairs` skips what it cannot name or decode: an entry
