@@ -1521,37 +1521,39 @@ mod zone_tests {
         assert_zone_rows_consistent(&grid);
     }
 
+    /// A scroll that crosses the scrollback cap must hand the zone on the
+    /// dropped row to the evicted buffer immediately, not at the next scroll.
     #[test]
-    fn test_scroll_up_batch_crossing_cap_evicts_zones_immediately() {
-        // 2 zone rows in a 4-row scrollback, then one 3-row scroll: the
-        // batch crosses the cap and drops abs row 0, so zone 0 must land in
-        // the evicted buffer now, not at the next scroll.
-        let mut grid = grid_with_scrollback_zones(4, 2);
-        assert_eq!(grid.scrollback_len(), 2);
-        grid.scroll_up(3);
-        assert_eq!(grid.scrollback_len(), 4);
-        assert_eq!(grid.total_lines_scrolled(), 5);
-        let evicted: Vec<usize> = grid.drain_evicted_zones().iter().map(|z| z.id).collect();
-        assert_eq!(evicted, vec![0]);
-        let live: Vec<usize> = grid.zones().iter().map(|z| z.id).collect();
-        assert_eq!(live, vec![1]);
-        assert_zone_rows_consistent(&grid);
-    }
-
-    #[test]
-    fn test_scroll_region_up_batch_crossing_cap_evicts_zones_immediately() {
-        // Same crossing through push_rows_to_scrollback: a top-anchored
-        // region that stops short of the bottom row (2 rows into 3 slots
-        // holding 2 drops abs row 0).
-        let mut grid = grid_with_scrollback_zones(3, 2);
-        assert!(grid.scroll_region_up(2, 0, 1));
-        assert_eq!(grid.scrollback_len(), 3);
-        assert_eq!(grid.total_lines_scrolled(), 4);
-        let evicted: Vec<usize> = grid.drain_evicted_zones().iter().map(|z| z.id).collect();
-        assert_eq!(evicted, vec![0]);
-        let live: Vec<usize> = grid.zones().iter().map(|z| z.id).collect();
-        assert_eq!(live, vec![1]);
-        assert_zone_rows_consistent(&grid);
+    fn test_scroll_batch_crossing_cap_evicts_zones_immediately() {
+        type Scroll = fn(&mut Grid);
+        // (label, scrollback cap, scroll, expected scrollback_len, expected total scrolled)
+        let cases: [(&str, usize, Scroll, usize, usize); 2] = [
+            // 2 zone rows in a 4-row scrollback, then one 3-row scroll: the
+            // batch crosses the cap and drops abs row 0.
+            ("scroll_up", 4, |g| g.scroll_up(3), 4, 5),
+            // Same crossing through push_rows_to_scrollback: a top-anchored
+            // region that stops short of the bottom row (2 rows into 3 slots
+            // holding 2 drops abs row 0).
+            (
+                "scroll_region_up",
+                3,
+                |g| assert!(g.scroll_region_up(2, 0, 1)),
+                3,
+                4,
+            ),
+        ];
+        for (label, cap, scroll, scrollback_len, total_scrolled) in cases {
+            let mut grid = grid_with_scrollback_zones(cap, 2);
+            assert_eq!(grid.scrollback_len(), 2, "{label}: precondition");
+            scroll(&mut grid);
+            assert_eq!(grid.scrollback_len(), scrollback_len, "{label}");
+            assert_eq!(grid.total_lines_scrolled(), total_scrolled, "{label}");
+            let evicted: Vec<usize> = grid.drain_evicted_zones().iter().map(|z| z.id).collect();
+            assert_eq!(evicted, vec![0], "{label}");
+            let live: Vec<usize> = grid.zones().iter().map(|z| z.id).collect();
+            assert_eq!(live, vec![1], "{label}");
+            assert_zone_rows_consistent(&grid);
+        }
     }
 
     #[test]
