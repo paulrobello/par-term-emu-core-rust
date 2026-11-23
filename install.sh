@@ -6,7 +6,9 @@
 #
 # Installs par-term-streamer and/or par-mux into ~/.cargo/bin (or --bin-dir),
 # verifying every download against its release SHA-256 before anything is
-# moved into place. Never touches launchd or any other service.
+# moved into place, and against the release's detached minisign signature
+# (<asset>.minisig) when one is published. Never touches launchd or any other
+# service.
 #
 # Self-test (no network): bash install.sh --self-test
 
@@ -15,6 +17,15 @@ set -euo pipefail
 REPO="paulrobello/par-term-emu-core-rust"
 API_LATEST="https://api.github.com/repos/${REPO}/releases/latest"
 DL_BASE="https://github.com/${REPO}/releases/download"
+
+# Release-signing public key (minisign key ID 7D5A457F1AB85B55); the private key
+# stays offline with the owner. Activation contract: this hardens, never blocks,
+# until activated. Releases published before the first signed release carry no
+# <asset>.minisig, so an absent sidecar (or a missing minisign CLI) warns and the
+# install proceeds on the SHA-256 gate alone. A present sidecar that does not
+# verify against this key aborts the install.
+MINISIGN_PUB_KEY='untrusted comment: minisign public key 7D5A457F1AB85B55
+RWRVW7gaf0VafV4bihSeMbq2JiaTYTanOpdm5EkgpPk65edfjHsAnA+t'
 
 log() { printf 'install.sh: %s\n' "$*" >&2; }
 die() { log "error: $*"; exit 1; }
@@ -248,6 +259,20 @@ sha256_of() { # $1=file -> digest on stdout
   fi
 }
 
+# verify_signature <asset-file> <sig-file> <pubkey-string>: 0 verified, 1 bad
+# signature, 2 minisign CLI not installed (mirrors statusline.sh _minisign_verify).
+verify_signature() {
+  local msg=$1 sig=$2 pub_key=$3 pub rc
+  command -v minisign >/dev/null 2>&1 || return 2
+  pub=$(mktemp) || return 2
+  printf '%s\n' "$pub_key" >"$pub"
+  rc=0
+  minisign -V -q -p "$pub" -m "$msg" -x "$sig" >/dev/null 2>&1 || rc=$?
+  rm -f "$pub"
+  [ "$rc" -eq 0 ] && return 0
+  return 1
+}
+
 # --------------------------------------------------------------- install core
 
 install_binary() { # $1=staged-file $2=destination
@@ -296,6 +321,21 @@ install_one() { # $1=streamer|streamer-mux|mux  $2=version $3=os $4=arch $5=dest
   actual=$(sha256_of "$asset_file")
   if [ "$actual" != "$expected" ]; then
     die "SHA-256 mismatch for ${asset}: expected ${expected}, got ${actual}; nothing was installed"
+  fi
+
+  # Authenticity after integrity: the checksum sidecar shares the release
+  # channel with the asset, a detached signature made offline does not.
+  local sig_file="${tmp}/${asset}.minisig" sig_rc
+  if fetch "${DL_BASE}/v${version}/${asset}.minisig" "$sig_file" 2>/dev/null; then
+    sig_rc=0
+    verify_signature "$asset_file" "$sig_file" "$MINISIGN_PUB_KEY" || sig_rc=$?
+    case "$sig_rc" in
+      0) log "minisign signature verified (key 7D5A457F1AB85B55)" ;;
+      2) log "warning: ${asset}.minisig is published but the minisign CLI is not installed; authenticity NOT verified (install minisign to enable)" ;;
+      *) die "minisign signature verification FAILED for ${asset}; nothing was installed" ;;
+    esac
+  else
+    log "warning: release v${version} publishes no ${asset}.minisig; authenticity NOT verified (SHA-256 integrity only)"
   fi
 
   if [ "$kind" = "mux" ]; then

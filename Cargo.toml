@@ -21,6 +21,7 @@ image = { version = "0.25.10", default-features = false, features = ["bmp", "ff"
 interprocess = "2.4.2"
 libc = "0.2.186"
 log = "0.4"
+minisign-verify = "0.3.0"
 opentelemetry = { version = "0.33", default-features = false }
 opentelemetry_sdk = { version = "0.33", default-features = false, features = ["metrics"] }
 parking_lot = "0.13"
@@ -189,6 +190,8 @@ prost-build = { version = "0.14.3", optional = true }
 pyo3 = { workspace = true, features = ["auto-initialize"] }
 tokio = { version = "1.52.3", features = ["full", "test-util"] }
 tempfile = { workspace = true }
+# Signing-capable counterpart of minisign-verify, tests only (throwaway keypairs).
+minisign = "0.10.0"
 # axum already depends on tower/util; as a dev-dep it only adds ServiceExt
 # (.oneshot) for the in-process router tests in src/streaming/server.rs.
 tower = { version = "0.5", features = ["util"] }

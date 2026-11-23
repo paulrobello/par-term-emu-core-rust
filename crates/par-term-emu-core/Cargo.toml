@@ -21,6 +21,7 @@ name = "par_term_emu_core"
 log = { workspace = true }
 sha2 = { workspace = true, optional = true }
 semver = { version = "1", optional = true }
+minisign-verify = { workspace = true, optional = true }
 tempfile = { workspace = true, optional = true }
 vte = "0.15.0"
 # SIMD byte search for the OSC guard and the APC pre-filter (already a
@@ -83,12 +84,14 @@ libc = { workspace = true }
 
 [dev-dependencies]
 proptest = "1.11.0"
+# Signing-capable counterpart of minisign-verify, tests only (throwaway keypairs).
+minisign = "0.10.0"
 tempfile = { workspace = true }
 
 [features]
 default = []
 # Shared release updater used by the standalone binaries.
-self-update = ["dep:sha2", "dep:semver", "dep:tempfile"]
+self-update = ["dep:sha2", "dep:semver", "dep:tempfile", "dep:minisign-verify"]
 # Terminal-to-image renderer (embedded fonts + swash).
 screenshot = ["dep:swash"]
 # Real PTY backend (PtySession).

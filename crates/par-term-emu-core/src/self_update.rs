@@ -121,6 +121,56 @@ pub fn checksum(text: &str, name: &str) -> Result<String, String> {
     found.ok_or_else(|| format!("checksum sidecar has no entry for {name}"))
 }
 
+/// Pinned minisign public key (key ID `7D5A457F1AB85B55`) that release
+/// artifacts must be signed with. The matching private key stays offline on the
+/// owner's machine and is never part of this repository or its CI.
+///
+/// Activation contract: this hardens, never blocks, until activated. Releases
+/// published before the first signed release carry no `<asset>.minisig`
+/// sidecar, so an absent sidecar warns loudly and the update proceeds on the
+/// SHA-256 gate alone. A sidecar that is present but does not verify against
+/// this key is a hard failure. The warn-on-absent window closes when the owner
+/// signs a release: from then on a stripped sidecar is a downgrade attempt and
+/// the absent branch in [`verify_release_signature`] should become a refusal.
+pub const RELEASE_PUBLIC_KEY: &str = "untrusted comment: minisign public key 7D5A457F1AB85B55\n\
+RWRVW7gaf0VafV4bihSeMbq2JiaTYTanOpdm5EkgpPk65edfjHsAnA+t\n";
+
+/// Cap on a downloaded `.minisig` sidecar.
+const SIGNATURE_CAP: u64 = 4 * 1024;
+
+/// Outcome of the authenticity gate that follows the SHA-256 integrity gate.
+#[derive(Debug, PartialEq, Eq)]
+pub enum SignatureStatus {
+    /// The detached signature verified against the pinned key.
+    Verified,
+    /// No sidecar was published; the caller must surface a warning.
+    Absent,
+}
+
+/// Verify `bytes` against an optional detached minisign signature using
+/// `public_key` (the two-line `.pub` text). Bad signature, wrong key ID, or an
+/// unparsable sidecar is an error; only a missing sidecar yields
+/// [`SignatureStatus::Absent`].
+pub fn verify_release_signature(
+    public_key: &str,
+    bytes: &[u8],
+    signature: Option<&[u8]>,
+) -> Result<SignatureStatus, String> {
+    let Some(signature) = signature else {
+        return Ok(SignatureStatus::Absent);
+    };
+    let key = minisign_verify::PublicKey::decode(public_key)
+        .map_err(|e| format!("pinned release public key is invalid: {e}"))?;
+    let text = std::str::from_utf8(signature)
+        .map_err(|_| "release signature is not valid UTF-8".to_string())?;
+    let signature = minisign_verify::Signature::decode(text)
+        .map_err(|e| format!("release signature is malformed: {e}"))?;
+    key.verify(bytes, &signature, true).map_err(|e| {
+        format!("release signature verification failed: {e}; installed binary unchanged")
+    })?;
+    Ok(SignatureStatus::Verified)
+}
+
 fn verify(bytes: &[u8], expected: &str) -> Result<(), String> {
     let actual = sha2::Sha256::digest(bytes)
         .iter()
@@ -302,6 +352,29 @@ fn update_release(
     release: &serde_json::Value,
     download: impl Fn(&str, u64) -> Result<Vec<u8>, String>,
 ) -> Result<Outcome, String> {
+    update_release_with_key(
+        binary,
+        current,
+        exe,
+        check,
+        force,
+        release,
+        download,
+        RELEASE_PUBLIC_KEY,
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+fn update_release_with_key(
+    binary: Binary,
+    current: &str,
+    exe: &Path,
+    check: bool,
+    force: bool,
+    release: &serde_json::Value,
+    download: impl Fn(&str, u64) -> Result<Vec<u8>, String>,
+    public_key: &str,
+) -> Result<Outcome, String> {
     let tag = release["tag_name"]
         .as_str()
         .ok_or("release has no tag_name")?;
@@ -348,6 +421,25 @@ fn update_release(
     )?;
     let bytes = download(url(&name)?, 256 * 1024 * 1024)?;
     verify(&bytes, &expected)?;
+    // Authenticity after integrity: the checksum sidecar shares the release
+    // channel with the artifact, a detached signature does not.
+    let signature_url = assets
+        .iter()
+        .find(|a| a["name"].as_str() == Some(format!("{name}.minisig").as_str()))
+        .and_then(|a| a["browser_download_url"].as_str());
+    let signature = signature_url
+        .map(|u| download(u, SIGNATURE_CAP))
+        .transpose()?;
+    let warning = match verify_release_signature(public_key, &bytes, signature.as_deref())? {
+        SignatureStatus::Verified => None,
+        SignatureStatus::Absent => Some(format!(
+            "WARNING: release {tag} publishes no {name}.minisig; authenticity is NOT verified \
+             (SHA-256 integrity only)"
+        )),
+    };
+    if let Some(w) = &warning {
+        eprintln!("{w}");
+    }
     let payload = if binary == Binary::Mux {
         let dir = tempfile::tempdir_in(exe.parent().ok_or("executable has no parent")?)
             .map_err(|e| e.to_string())?;
@@ -381,7 +473,11 @@ fn update_release(
         .collect::<String>();
     let backup = install_verified(exe, &payload, &digest)?;
     Ok(Outcome {
-        report: format!("updated to {tag} ({name}); backup: {}", backup.display()),
+        report: format!(
+            "updated to {tag} ({name}); backup: {}{}",
+            backup.display(),
+            warning.map(|w| format!("; {w}")).unwrap_or_default()
+        ),
         installed: true,
     })
 }
@@ -775,5 +871,129 @@ mod tests {
         );
         assert!(checksum(&format!("{digest}  other"), "wanted").is_err());
         assert!(checksum("bad  wanted", "wanted").is_err());
+    }
+
+    fn signed_fixture(payload: &[u8]) -> (String, String) {
+        let pair = minisign::KeyPair::generate_unencrypted_keypair().unwrap();
+        let sig = minisign::sign(
+            Some(&pair.pk),
+            &pair.sk,
+            std::io::Cursor::new(payload),
+            Some("test"),
+            None,
+        )
+        .unwrap();
+        let pk = pair.pk.to_box().unwrap().into_string();
+        (pk, sig.to_string())
+    }
+
+    /// Format check only: the pinned production key must stay a parsable
+    /// minisign public key with the documented key ID.
+    #[test]
+    fn embedded_release_key_parses() {
+        minisign_verify::PublicKey::decode(RELEASE_PUBLIC_KEY).unwrap();
+        assert!(RELEASE_PUBLIC_KEY.contains("7D5A457F1AB85B55"));
+    }
+
+    #[test]
+    fn signature_verifies_rejects_tamper_and_absent_warns() {
+        let (pk, sig_text) = signed_fixture(b"artifact");
+        assert_eq!(
+            verify_release_signature(&pk, b"artifact", Some(sig_text.as_bytes())).unwrap(),
+            SignatureStatus::Verified
+        );
+        assert!(verify_release_signature(&pk, b"artifacT", Some(sig_text.as_bytes())).is_err());
+        assert!(verify_release_signature(&pk, b"artifact", Some(b"garbage")).is_err());
+        // A valid signature from a different key must not verify against the pinned key.
+        assert!(verify_release_signature(
+            RELEASE_PUBLIC_KEY,
+            b"artifact",
+            Some(sig_text.as_bytes())
+        )
+        .is_err());
+        assert_eq!(
+            verify_release_signature(&pk, b"artifact", None).unwrap(),
+            SignatureStatus::Absent
+        );
+    }
+
+    #[test]
+    fn update_aborts_on_bad_signature_and_warns_when_absent() {
+        let dir = tempfile::tempdir().unwrap();
+        let exe = dir.path().join("streamer");
+        std::fs::write(&exe, b"original").unwrap();
+        let name = asset_name(
+            Binary::Streamer,
+            "99.0.0",
+            std::env::consts::OS,
+            std::env::consts::ARCH,
+        )
+        .unwrap();
+        let digest = "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad";
+        let (pk, good_sig) = signed_fixture(b"abc");
+        let (_pk2, other_sig) = signed_fixture(b"abc");
+        let release = |with_sig: bool| {
+            let mut assets = vec![
+                serde_json::json!({"name": name, "browser_download_url": "https://example.test/binary"}),
+                serde_json::json!({"name": format!("{name}.sha256"), "browser_download_url": "https://example.test/checksum"}),
+            ];
+            if with_sig {
+                assets.push(serde_json::json!({"name": format!("{name}.minisig"), "browser_download_url": "https://example.test/sig"}));
+            }
+            serde_json::json!({"tag_name": "v99.0.0", "assets": assets})
+        };
+        let serve = |sig: String| {
+            let name = name.clone();
+            move |url: &str, _cap: u64| -> Result<Vec<u8>, String> {
+                Ok(if url.ends_with("checksum") {
+                    format!("{digest}  {name}\n").into_bytes()
+                } else if url.ends_with("sig") {
+                    sig.clone().into_bytes()
+                } else {
+                    b"abc".to_vec()
+                })
+            }
+        };
+        // Signed by a different key: hard failure, installation untouched.
+        let err = update_release_with_key(
+            Binary::Streamer,
+            "1.0.0",
+            &exe,
+            false,
+            false,
+            &release(true),
+            serve(other_sig),
+            &pk,
+        )
+        .unwrap_err();
+        assert!(err.contains("signature"), "{err}");
+        assert_eq!(std::fs::read(&exe).unwrap(), b"original");
+        // Valid signature installs.
+        let ok = update_release_with_key(
+            Binary::Streamer,
+            "1.0.0",
+            &exe,
+            false,
+            false,
+            &release(true),
+            serve(good_sig),
+            &pk,
+        )
+        .unwrap();
+        assert!(ok.installed && !ok.report.contains("WARNING"));
+        // Absent sidecar warns and proceeds.
+        std::fs::write(&exe, b"original").unwrap();
+        let warned = update_release_with_key(
+            Binary::Streamer,
+            "1.0.0",
+            &exe,
+            false,
+            false,
+            &release(false),
+            serve(String::new()),
+            &pk,
+        )
+        .unwrap();
+        assert!(warned.installed && warned.report.contains("WARNING"));
     }
 }

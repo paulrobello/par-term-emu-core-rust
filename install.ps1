@@ -61,6 +61,17 @@ function Get-ChecksumFromSums([string]$SumsText, [string]$AssetName) {
     return $found
 }
 
+# Release-signing public key (minisign key ID 7D5A457F1AB85B55); the private key
+# stays offline with the owner. Activation contract: this hardens, never blocks,
+# until activated. Releases published before the first signed release carry no
+# <asset>.minisig, so an absent sidecar (or a missing minisign CLI) warns and the
+# install proceeds on the SHA-256 gate alone. A present sidecar that does not
+# verify against this key aborts the install.
+$MinisignPubKey = @'
+untrusted comment: minisign public key 7D5A457F1AB85B55
+RWRVW7gaf0VafV4bihSeMbq2JiaTYTanOpdm5EkgpPk65edfjHsAnA+t
+'@
+
 # Download $Url to $Dest; returns $false on failure instead of throwing.
 function Get-RemoteFile([string]$Url, [string]$Dest) {
     if (-not $Url.StartsWith('https://')) {
@@ -164,6 +175,24 @@ try {
         $actual = (Get-FileHash -Path $assetFile -Algorithm SHA256).Hash.ToLowerInvariant()
         if ($actual -ne $expected) {
             Die "SHA-256 mismatch for ${asset}: expected $expected, got $actual; nothing was installed"
+        }
+
+        # Authenticity after integrity: detached signature made offline.
+        $sigFile = Join-Path $tempRoot "$asset.minisig"
+        if (Get-RemoteFile "$DlBase/v$version/$asset.minisig" $sigFile) {
+            if (Get-Command minisign -ErrorAction SilentlyContinue) {
+                $pubFile = Join-Path $tempRoot 'release.pub'
+                Set-Content -Path $pubFile -Value $MinisignPubKey -Encoding ascii
+                & minisign -V -q -p $pubFile -m $assetFile -x $sigFile *> $null
+                if ($LASTEXITCODE -ne 0) {
+                    Die "minisign signature verification FAILED for $asset; nothing was installed"
+                }
+                Write-Host "install.ps1: minisign signature verified (key 7D5A457F1AB85B55)"
+            } else {
+                Write-Host "install.ps1: warning: $asset.minisig is published but the minisign CLI is not installed; authenticity NOT verified" -ForegroundColor Yellow
+            }
+        } else {
+            Write-Host "install.ps1: warning: release v$version publishes no $asset.minisig; authenticity NOT verified (SHA-256 integrity only)" -ForegroundColor Yellow
         }
 
         $dest = Join-Path $BinDir $target.DestName

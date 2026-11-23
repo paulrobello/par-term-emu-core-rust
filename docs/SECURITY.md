@@ -46,6 +46,7 @@ This document outlines security considerations when using the PTY functionality 
 - [Security Checklist](#security-checklist)
 - [Streaming Server Security (Network Attack Surface)](#streaming-server-security-network-attack-surface)
 - [Multiplexer Daemon Security (par-mux, Local Attack Surface)](#multiplexer-daemon-security-par-mux-local-attack-surface)
+- [Release Authenticity (Detached Signatures)](#release-authenticity-detached-signatures)
 - [Resource Limits Reference](#resource-limits-reference)
 - [Reporting Security Issues](#reporting-security-issues)
 
@@ -1415,6 +1416,17 @@ host, a downloaded file, or a log you did not write.
   these guarantees attach to.
 - [ARCHITECTURE.md](ARCHITECTURE.md) — the mux subsystem's place in the
   crate.
+
+## Release Authenticity (Detached Signatures)
+
+Every update path (`self_update.rs` for `par-term-streamer` and `par-mux`, the streamer's `--download-frontend`, `install.sh`, `install.ps1`) verifies integrity against a SHA-256 sidecar published in the same release. That sidecar shares the release channel with the artifact, so it cannot vouch against a compromised channel that ships a matching malicious pair. Authenticity therefore rests on a detached [minisign](https://jedisct1.github.io/minisign/) signature (`<asset>.minisig`) made offline with a key that never touches the release channel.
+
+- **Pinned key**: minisign key ID `7D5A457F1AB85B55`, embedded in `crates/par-term-emu-core/src/self_update.rs` (`RELEASE_PUBLIC_KEY`), `install.sh`, and `install.ps1`. The private key stays offline on the owner's machine.
+- **Order**: SHA-256 integrity first, then signature authenticity, both before anything is staged, extracted, or installed.
+- **Bad signature is a hard failure.** A `.minisig` that is present but does not verify against the pinned key aborts the update and leaves the installed binary unchanged.
+- **Activation contract**: this hardens, never blocks, until activated. Releases published before the first signed release have no `.minisig`, so an absent sidecar prints a loud warning and proceeds on the SHA-256 gate alone (the shell installers also warn and proceed when a `.minisig` is published but the `minisign` CLI is not installed). The warn-on-absent window closes when the owner signs a release with `scripts/sign-release.sh`: from then on a missing sidecar on a signed-era release should become a refusal.
+- **Signing**: `MINISIGN_SECRET_KEY=<keyfile> scripts/sign-release.sh <artifact>...` writes `<artifact>.minisig` and re-verifies each against the pinned key.
+- **Not covered**: theft of the offline private key, and the interval before activation.
 
 ## Resource Limits Reference
 
