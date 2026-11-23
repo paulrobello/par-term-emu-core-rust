@@ -1113,6 +1113,18 @@ fn test_decsera_erases_unprotected_cells() {
     );
 }
 
+#[test]
+fn test_decsera_off_grid_or_inverted_rectangle_is_noop() {
+    // Fuzz crash-e913e0eb: a left column past the grid width indexed
+    // `cells[left]` out of bounds in the pair-edge pass.
+    let mut term = Terminal::new(80, 24);
+    term.process(b"hello");
+    term.process(b"\x1b[1;400;5;5${"); // left (400) > clamped right (80)
+    term.process(b"\x1b[30;1;40;5${"); // top (30) > clamped bottom (24)
+    term.process(b"\x1b[5;1;2;5${"); // inverted rows
+    assert!(term.content().starts_with("hello"));
+}
+
 // ─── Synchronized Updates ──────────────────────────────────────────────────
 
 #[test]

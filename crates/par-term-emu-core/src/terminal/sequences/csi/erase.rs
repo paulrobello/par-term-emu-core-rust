@@ -158,6 +158,12 @@ pub(crate) fn handle_decsera(grid: &mut Grid, bg: Color, params: &Params) {
     let bottom = bottom.min(rows - 1);
     let right = right.min(cols - 1);
 
+    // An empty or off-grid rectangle (left/top beyond the grid, or inverted
+    // bounds) erases nothing; the pair-edge pass below indexes `cells[left]`.
+    if top > bottom || left > right {
+        return;
+    }
+
     // First pass: collect which cells to erase (unprotected only)
     let mut to_erase: Vec<(usize, usize)> = Vec::new();
     for row in top..=bottom {
