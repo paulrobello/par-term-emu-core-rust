@@ -198,7 +198,6 @@ fn send_keys_from_the_cli_drives_a_live_pane() {
     }
 }
 
-#[ignore = "load-sensitive: PTY/timing suite; run via make test-rust-sensitive or checkall-ci"]
 #[test]
 fn a_multi_line_reply_prints_one_line_per_reply_line_without_framing() {
     let fixture = MuxFixture::new("clilist");
@@ -338,7 +337,6 @@ fn no_daemon_fails_fast_and_does_not_start_one() {
 
 /// The positional NAME resolves through `default_socket_path`, the same
 /// helper the daemon binds with, on both transports.
-#[ignore = "load-sensitive: PTY/timing suite; run via make test-rust-sensitive or checkall-ci"]
 #[test]
 fn the_named_form_reaches_the_daemon_on_the_named_default_socket() {
     let fixture = MuxFixture::new("cliname");
@@ -590,7 +588,6 @@ impl Drop for EnvDaemonGuard {
 /// `PAR_MUX_SOCKET` set and no `--socket`/NAME given, `--cmd` reaches the
 /// daemon that variable names — the daemon that spawned the pane — instead
 /// of the unnamed default socket.
-#[ignore = "load-sensitive: PTY/timing suite; run via make test-rust-sensitive or checkall-ci"]
 #[test]
 fn the_env_socket_default_targets_the_panes_daemon() {
     let fixture = MuxFixture::new("clienvsock");
@@ -683,7 +680,6 @@ fn restart_and_stop_honor_the_env_socket() {
 /// Explicit targeting wins over the env default: both the `--socket` flag
 /// and the positional NAME reach their daemon while `PAR_MUX_SOCKET` points
 /// at a path nothing serves.
-#[ignore = "load-sensitive: PTY/timing suite; run via make test-rust-sensitive or checkall-ci"]
 #[test]
 fn explicit_socket_and_name_beat_the_env_default() {
     let fixture = MuxFixture::new("envprec");
@@ -1276,7 +1272,6 @@ fn list_servers_prunes_only_dead_entries_and_reregistration_is_a_noop() {
 }
 
 /// Zero servers: a friendly empty report, exit 0.
-#[ignore = "load-sensitive: PTY/timing suite; run via make test-rust-sensitive or checkall-ci"]
 #[test]
 fn list_servers_with_nothing_running_reports_empty() {
     let fixture = MuxFixture::new("clilist-none");
@@ -1296,7 +1291,6 @@ fn list_servers_with_nothing_running_reports_empty() {
 /// spawns it). Exactly-one auto-select is exercised by the attach suite's
 /// PTY harness.
 #[cfg(feature = "attach")]
-#[ignore = "load-sensitive: PTY/timing suite; run via make test-rust-sensitive or checkall-ci"]
 #[test]
 fn attach_with_multiple_live_servers_refuses_with_a_list() {
     let alpha = MuxFixture::new("cliatt-a");
@@ -1475,7 +1469,6 @@ fn reload_config_command_reaches_a_live_daemon() {
 
 /// `par-mux --gen-config` writes the effective config; the file parses
 /// back; a second run refuses without --force and succeeds with it.
-#[ignore = "load-sensitive: PTY/timing suite; run via make test-rust-sensitive or checkall-ci"]
 #[test]
 fn gen_config_writes_effective_config_and_refuses_overwrite() {
     let dir = tempfile::tempdir().expect("tempdir");
@@ -1578,7 +1571,6 @@ fn install_skill_writes_the_bundled_skill_without_a_daemon() {
 /// agent — the second token is still `installed|absent`, the shape the
 /// par-term Settings rows consume; what follows it names the asset's
 /// version currency (`v2`, `v1 → v2 outdated`, `asset missing`).
-#[ignore = "load-sensitive: PTY/timing suite; run via make test-rust-sensitive or checkall-ci"]
 #[test]
 fn agent_hooks_status_prints_one_line_per_agent_without_a_daemon() {
     let run = par_mux(&["--agent-hooks-status"]);
@@ -1625,7 +1617,6 @@ fn agent_hooks_status_prints_one_line_per_agent_without_a_daemon() {
 /// keep their missing-directory failure, so this asserts only the registry
 /// arms' lines.)
 #[cfg(unix)]
-#[ignore = "load-sensitive: PTY/timing suite; run via make test-rust-sensitive or checkall-ci"]
 #[test]
 fn install_agent_hooks_skips_absent_droid_copilot_and_cursor() {
     let root = tempfile::tempdir().expect("temp dir");
@@ -1742,7 +1733,6 @@ fn machine_profiles_round_trip_through_the_config() {
 /// and refuses without --trust; with it, the plugin lands under the state
 /// dir, lists with its hook count, updates from the recorded source, and
 /// removes cleanly. Never contacts a daemon.
-#[ignore = "load-sensitive: PTY/timing suite; run via make test-rust-sensitive or checkall-ci"]
 #[test]
 fn plugin_install_previews_then_installs_with_trust() {
     let root = tempfile::tempdir().expect("temp dir");
@@ -1847,7 +1837,6 @@ fn plugin_install_previews_then_installs_with_trust() {
 
 /// A manifest naming an unknown event, or a source with no manifest,
 /// fails the install with the reason.
-#[ignore = "load-sensitive: PTY/timing suite; run via make test-rust-sensitive or checkall-ci"]
 #[test]
 fn plugin_install_refuses_invalid_manifests() {
     let root = tempfile::tempdir().expect("temp dir");
@@ -1894,7 +1883,6 @@ fn plugin_install_refuses_invalid_manifests() {
 }
 
 /// A user config with comments keeps every comment through machine edits.
-#[ignore = "load-sensitive: PTY/timing suite; run via make test-rust-sensitive or checkall-ci"]
 #[test]
 fn machine_edits_preserve_the_users_comments() {
     let root = tempfile::tempdir().expect("temp dir");
@@ -2130,7 +2118,6 @@ fn the_default_start_daemonizes_and_exits_leaving_a_live_daemon() {
 
 /// `par-mux status`: the one-shot orientation block — stamp,
 /// workspaces, sessions, displayed session, pane count.
-#[ignore = "load-sensitive: PTY/timing suite; run via make test-rust-sensitive or checkall-ci"]
 #[test]
 fn status_subcommand_prints_the_orientation_block() {
     let fixture = MuxFixture::new("clistatus");
@@ -2154,7 +2141,6 @@ fn status_subcommand_prints_the_orientation_block() {
 }
 
 /// `par-mux ls`: the tmux-habit session listing, subcommand spelling.
-#[ignore = "load-sensitive: PTY/timing suite; run via make test-rust-sensitive or checkall-ci"]
 #[test]
 fn ls_subcommand_lists_sessions() {
     let fixture = MuxFixture::new("clils");
@@ -2170,7 +2156,6 @@ fn ls_subcommand_lists_sessions() {
 }
 
 /// `status` against nothing running: the actionable hint, exit 1.
-#[ignore = "load-sensitive: PTY/timing suite; run via make test-rust-sensitive or checkall-ci"]
 #[test]
 fn status_without_a_daemon_hints_and_exits_one() {
     let fixture = MuxFixture::new("clistatusnone");
@@ -2186,7 +2171,6 @@ fn status_without_a_daemon_hints_and_exits_one() {
 
 /// The collision guard: a bare NAME that spells a command word is
 /// refused instead of silently starting a stray daemon.
-#[ignore = "load-sensitive: PTY/timing suite; run via make test-rust-sensitive or checkall-ci"]
 #[test]
 fn bare_name_matching_a_command_word_is_refused() {
     // No --socket: the guard's escape hatch is an explicit socket, so the
@@ -2210,7 +2194,6 @@ fn bare_name_matching_a_command_word_is_refused() {
 /// verb-first (`par-mux server stop`), and verb-last (`par-mux status
 /// server` / `par-mux start server`) — with the default-daemon spelling
 /// in the explanation and --socket as the escape (Paul, 2026-10-18).
-#[ignore = "load-sensitive: PTY/timing suite; run via make test-rust-sensitive or checkall-ci"]
 #[test]
 fn the_reserved_name_server_is_refused_in_every_name_position() {
     for args in [
@@ -2242,7 +2225,6 @@ fn the_reserved_name_server_is_refused_in_every_name_position() {
 }
 
 /// `--cmd`'s no-daemon error carries the same start hint (R9).
-#[ignore = "load-sensitive: PTY/timing suite; run via make test-rust-sensitive or checkall-ci"]
 #[test]
 fn cmd_without_a_daemon_hints_the_start_command() {
     let fixture = MuxFixture::new("clihint");
@@ -2317,7 +2299,6 @@ fn new_session_start_command_runs_in_the_pane() {
 }
 
 /// `has-session` exit codes: 0 for a live session, 1 for an absent one.
-#[ignore = "load-sensitive: PTY/timing suite; run via make test-rust-sensitive or checkall-ci"]
 #[test]
 fn has_session_exit_codes_probe_existence() {
     let fixture = MuxFixture::new("clihas");
@@ -2330,7 +2311,6 @@ fn has_session_exit_codes_probe_existence() {
 }
 
 /// `set-option`/`show-options` through the CLI: the live booleans.
-#[ignore = "load-sensitive: PTY/timing suite; run via make test-rust-sensitive or checkall-ci"]
 #[test]
 fn set_option_and_show_options_round_trip_via_cli() {
     let fixture = MuxFixture::new("cliopts");
@@ -2350,7 +2330,6 @@ fn set_option_and_show_options_round_trip_via_cli() {
 }
 
 /// `-F` through the CLI: stable field output without roster parsing.
-#[ignore = "load-sensitive: PTY/timing suite; run via make test-rust-sensitive or checkall-ci"]
 #[test]
 fn list_sessions_format_flag_prints_fields() {
     let fixture = MuxFixture::new("clifmt");
@@ -2364,7 +2343,6 @@ fn list_sessions_format_flag_prints_fields() {
 }
 
 /// `list-panes -t $N`: the session target lists its active window.
-#[ignore = "load-sensitive: PTY/timing suite; run via make test-rust-sensitive or checkall-ci"]
 #[test]
 fn list_panes_session_target_via_cli() {
     let fixture = MuxFixture::new("clilpses");
@@ -2520,7 +2498,6 @@ fn wait_output_under_continuous_output_exits_zero() {
 
 /// H-API: `--print-schema` needs no daemon and prints the same JSON a
 /// live daemon serves for `list-commands -J`.
-#[ignore = "load-sensitive: PTY/timing suite; run via make test-rust-sensitive or checkall-ci"]
 #[test]
 fn print_schema_matches_the_daemons_list_commands_j() {
     let printed = par_mux(&["--print-schema"]);

@@ -214,7 +214,6 @@ fn pane_titles_broadcast_query_and_clear() {
     let _ = handle;
 }
 
-#[ignore = "load-sensitive: PTY/timing suite; run via make test-rust-sensitive or checkall-ci"]
 #[test]
 fn prepare_socket_path_makes_auto_spawn_race_safe() {
     let fixture = MuxFixture::new("race");
@@ -1306,7 +1305,6 @@ fn next_layout_change(
 /// visible layout is the zoomed pane alone at the window's full extent,
 /// and the raw flags carry tmux's `Z`. Unzooming pushes the tree back
 /// into both layout fields with empty flags.
-#[ignore = "load-sensitive: PTY/timing suite; run via make test-rust-sensitive or checkall-ci"]
 #[test]
 fn a_zoom_marks_layout_change_and_unzoom_restores_it() {
     let fixture = MuxFixture::new("zoomwire");
@@ -1374,7 +1372,6 @@ fn next_notification(
 /// the pane back and closes the emptied window (`%window-close`), with
 /// layout changes for both windows; `swap-window` reorders, and
 /// `list-windows` reflects the new order.
-#[ignore = "load-sensitive: PTY/timing suite; run via make test-rust-sensitive or checkall-ci"]
 #[test]
 fn panes_break_join_and_windows_reorder_over_the_wire() {
     let fixture = MuxFixture::new("bjr");
@@ -1486,7 +1483,6 @@ fn panes_break_join_and_windows_reorder_over_the_wire() {
 /// exactly `mux::build_stamp()`, with no session state involved — so a
 /// client can compare the daemon's core build against its own and surface a
 /// stale daemon instead of silently missing daemon-side fixes.
-#[ignore = "load-sensitive: PTY/timing suite; run via make test-rust-sensitive or checkall-ci"]
 #[test]
 fn version_reports_the_daemon_build_stamp() {
     let fixture = MuxFixture::new("version");
@@ -2036,7 +2032,6 @@ fn an_unterminated_stream_over_budget_closes_the_connection() {
 /// target — left of it under `-h`, above it in the default direction.
 /// `list-panes` walks the layout's leaf order, so its line order is the
 /// on-screen left-to-right / top-to-bottom order.
-#[ignore = "load-sensitive: PTY/timing suite; run via make test-rust-sensitive or checkall-ci"]
 #[test]
 fn split_window_b_places_the_new_pane_before_its_target() {
     let fixture = MuxFixture::new("splitb");
@@ -2188,7 +2183,6 @@ fn pane_info_reports_exit_for_held_pane() {
 }
 
 /// ARC-095: a live pane's `pane-info` carries no `exited=` token.
-#[ignore = "load-sensitive: PTY/timing suite; run via make test-rust-sensitive or checkall-ci"]
 #[test]
 fn pane_info_live_pane_has_no_exited_token() {
     let fixture = MuxFixture::new("panelive");
@@ -2545,7 +2539,6 @@ fn window_add_replay_recovers_a_session_lost_to_ring_eviction() {
 /// a taken name is answered `duplicate session: <name>`, renaming onto a
 /// taken name refuses while keeping a session's own name succeeds, and
 /// the nameless default walks past taken names.
-#[ignore = "load-sensitive: PTY/timing suite; run via make test-rust-sensitive or checkall-ci"]
 #[test]
 fn duplicate_session_names_refuse_over_the_wire() {
     let fixture = MuxFixture::new("dupnames");
