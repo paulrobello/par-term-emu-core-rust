@@ -1,0 +1,32 @@
+# par-mux agent scrape patterns — agy (Google's Antigravity CLI, the
+# successor to Gemini CLI). Authored by par-mux, not ported from herdr.
+#
+# Evidence: live captures of agy 1.5.15 in a par-mux pane (2026-11-23).
+# A running turn draws one status line led by a braille spinner glyph
+# (U+2800..U+28FF) followed by the activity text ("⢿  Generating...",
+# "⣾  Working...", "⡿  Running command...", or the model's streamed
+# thought summary), above a boxed `>` prompt and the
+# `model | ctx N% | $cost | cwd` footer. The idle screen shows the same
+# boxed prompt with no spinner line. An interrupted turn leaves
+# `Interrupted · What should Antigravity CLI do instead?` and a bare prompt.
+#
+# No question rule: agy's default Auto mode approves edits and safe
+# commands, and a permission dialog was not observed, so no phrase is
+# invented here. A blocked agy reads working (spinner) or idle (fallback)
+# until a captured approval screen exists.
+#
+# idle_fallback: agy draws no distinguishing idle marker apart from the
+# absence of the spinner, so idle is "running, nothing matched", applied
+# only while the process table shows agy (or antigravity) in the pane.
+id = "agy"
+version = "2026.11.23-parmux1"
+updated_at = "2026-11-23T00:00:00Z"
+aliases = ["antigravity", "antigravity-cli"]
+idle_fallback = true
+
+[[rules]]
+id = "spinner_working"
+state = "working"
+priority = 900
+region = "bottom_non_empty_lines(8)"
+line_regex = ['^\s*[⠀-⣿]\s+\S']

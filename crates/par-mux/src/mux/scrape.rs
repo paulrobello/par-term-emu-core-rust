@@ -53,6 +53,7 @@ const BUNDLED_PATTERNS: &[(&str, &str)] = &[
     ("devin", include_str!("patterns/devin.toml")),
     ("gemini", include_str!("patterns/gemini.toml")),
     ("amp", include_str!("patterns/amp.toml")),
+    ("agy", include_str!("patterns/agy.toml")),
 ];
 
 /// The states a rule may assert. `unknown` is not among them: it is the
@@ -1879,6 +1880,57 @@ contains = ["Override Idle"]
         );
     }
 
+    /// agy (Antigravity CLI) draws a braille-spinner status line above its
+    /// boxed prompt while a turn runs (captured live, agy 1.5.15), and no
+    /// marker at all while idle: the spinner is the only rule, and the
+    /// idle verdict is the process-gated fallback.
+    #[test]
+    fn agy_rules_read_the_spinner_line_as_working() {
+        let engine = ScrapeEngine::load(None);
+        let set = engine.set_for("agy").expect("agy bundled");
+        assert!(set.idle_fallback(), "idle is the process-gated fallback");
+        for alias in ["antigravity", "antigravity-cli"] {
+            assert!(engine.set_for(alias).is_some(), "{alias} alias");
+        }
+
+        let rule = |screen: &str| {
+            set.evaluate(&PaneSnapshot {
+                title: String::new(),
+                screen: screen.to_string(),
+            })
+            .map(|(s, r)| (s.to_string(), r.to_string()))
+        };
+        let frame = |status: &str| {
+            format!(
+                "> write a story\n{status}\n{bar}\n>\n{bar}\nGemini 4 Neon (High) | ctx 0% | $0 | /w\n",
+                bar = "─".repeat(60)
+            )
+        };
+        for status in [
+            "⢿  Generating...",
+            "⣾  Working...",
+            "⡿  Running command...",
+            "⣽  The third paragraph currently contains 87 words...",
+        ] {
+            assert_eq!(
+                rule(&frame(status)),
+                Some(("working".to_string(), "spinner_working".to_string())),
+                "{status}"
+            );
+        }
+
+        // The idle and interrupted screens carry no spinner line, so no rule
+        // matches and the fallback owns the idle verdict.
+        assert_eq!(rule(&frame("")), None, "idle screen");
+        assert_eq!(
+            rule(&frame(
+                "  ⎿  Interrupted · What should Antigravity CLI do instead?"
+            )),
+            None,
+            "interrupted screen"
+        );
+    }
+
     /// Evaluate `screen` against `agent`'s bundled set: (state, rule id).
     fn scrape_screen(agent: &str, screen: &str) -> Option<(String, String)> {
         let engine = ScrapeEngine::load(None);
@@ -2061,6 +2113,34 @@ contains = ["Override Idle"]
         );
     }
 
+    /// A fresh pane running `agy` (the Antigravity CLI) enrolls from its
+    /// process tree the same way codex does, landing on the idle fallback.
+    #[test]
+    #[cfg(unix)]
+    fn a_fresh_pane_running_agy_enrolls_through_the_tick_without_hooks() {
+        let mut tree = MuxTree::new(Box::new(ShellPaneFactory::default()));
+        let session = tree.new_session("scrape", 80, 24).expect("session spawns");
+        let root = tree
+            .session(session)
+            .expect("session exists")
+            .windows
+            .iter()
+            .filter_map(|window| tree.window(*window))
+            .flat_map(|window| window.panes())
+            .next()
+            .expect("a new session has a pane");
+        let pane_id = split_pane_with_command(&mut tree, root, "sleep 300");
+        let tree = Arc::new(Mutex::new(tree));
+        let child = fixture_child(&tree, pane_id);
+        let table = table_running(child, &["agy"]);
+        let (state, rule) = tick_state(&tree, pane_id, Some(&table));
+        assert_eq!(state.as_deref(), Some("idle"), "the fallback lands idle");
+        assert_eq!(rule.as_deref(), Some(IDLE_FALLBACK_RULE));
+        let guard = tree.lock();
+        let metadata = guard.pane(pane_id).expect("pane exists").metadata();
+        assert_eq!(metadata.get("agent").map(String::as_str), Some("agy"));
+    }
+
     /// A fresh pane whose tree runs nothing known stays unclaimed — the
     /// detection probes only the bundled agent kinds.
     #[test]
@@ -2093,7 +2173,7 @@ contains = ["Override Idle"]
     #[cfg(unix)]
     fn idle_fallback_needs_the_agents_process_and_loses_to_a_rule() {
         let engine = ScrapeEngine::load(None);
-        for agent in ["droid", "copilot", "cursor", "codex"] {
+        for agent in ["droid", "copilot", "cursor", "codex", "agy"] {
             assert!(engine.set_for(agent).unwrap().idle_fallback(), "{agent}");
         }
         for agent in ["claude", "grok", "muse"] {

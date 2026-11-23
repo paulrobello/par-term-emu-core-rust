@@ -83,6 +83,12 @@ pub fn resume_argv(agent: &str, session: &PersistAgentSession) -> Option<Vec<Str
         "claude" => Some(vec!["claude".into(), "--resume".into(), id_ref(session)?]),
         "codex" => Some(vec!["codex".into(), "resume".into(), id_ref(session)?]),
         "grok" => Some(vec!["grok".into(), "--resume".into(), id_ref(session)?]),
+        // agy resumes a conversation by id; its hook also reports this argv.
+        "agy" => Some(vec![
+            "agy".into(),
+            "--conversation".into(),
+            id_ref(session)?,
+        ]),
         // muse's subcommand takes an exact UUID or session name; without a
         // reported id the workspace-scoped --last flag still re-lands the
         // session that was running here.
@@ -286,6 +292,15 @@ mod tests {
             resume_argv("grok", &session("grok", Some("abc-123"), None)),
             argv(&["grok", "--resume", "abc-123"])
         );
+    }
+
+    #[test]
+    fn agy_resumes_a_conversation_by_id() {
+        assert_eq!(
+            resume_argv("agy", &session("agy", Some("c-1"), None)),
+            argv(&["agy", "--conversation", "c-1"])
+        );
+        assert_eq!(resume_argv("agy", &session("agy", None, None)), None);
     }
 
     #[test]
