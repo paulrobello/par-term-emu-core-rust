@@ -488,9 +488,13 @@ pub(super) async fn static_host_guard_middleware(
 /// (`'unsafe-inline'` styles), the image addon's WASM decoder
 /// (`'wasm-unsafe-eval'`) and blob-URL images, and any `ws:`/`wss:`
 /// endpoint (the UI accepts a user-typed server URL). Scripts are
-/// same-origin plus `'unsafe-inline'`: Next.js inlines a per-page,
-/// per-build RSC payload, so a hash list would break every
-/// `--download-frontend` version but the one it was computed for.
+/// same-origin plus `'unsafe-inline'` in this BASELINE constant: Next.js
+/// inlines a per-page, per-build RSC payload, so a hash list would break
+/// every `--download-frontend` version but the one it was computed for.
+/// SEC-004: HTML document responses do not get the baseline. Each one is
+/// served with `'unsafe-inline'` swapped for a fresh `'nonce-…'` and its
+/// `<script>` tags rewritten to carry it (see `add_security_headers`); the
+/// baseline remains for non-HTML responses and oversized HTML.
 ///
 /// Card 01a1ff9b (2026-11-22): `connect-src` carries `blob:`
 /// unconditionally — three.js GLTFLoader's embedded-texture path for GLBs
@@ -601,17 +605,145 @@ pub(super) async fn add_security_headers(
     next: axum::middleware::Next,
     csp: &str,
 ) -> axum::response::Response {
-    use axum::http::{HeaderName, HeaderValue};
+    use axum::http::{header, HeaderName, HeaderValue};
     let mut res = next.run(req).await;
-    let headers = res.headers_mut();
-    headers.insert(
+    res.headers_mut().insert(
         HeaderName::from_static("x-frame-options"),
         HeaderValue::from_static("DENY"),
     );
-    let csp = HeaderValue::from_str(csp)
+    // SEC-004: a complete, unencoded HTML document gets a per-response script
+    // nonce instead of `'unsafe-inline'`. Everything else (JS/CSS/assets, API
+    // routes, partial/conditional/oversized responses) keeps the baseline.
+    let is_html = res.status() == axum::http::StatusCode::OK
+        && !res.headers().contains_key(header::CONTENT_ENCODING)
+        && res
+            .headers()
+            .get(header::CONTENT_TYPE)
+            .and_then(|v| v.to_str().ok())
+            .is_some_and(|ct| ct.to_ascii_lowercase().starts_with("text/html"));
+    let known_len = res
+        .headers()
+        .get(header::CONTENT_LENGTH)
+        .and_then(|v| v.to_str().ok())
+        .and_then(|v| v.parse::<usize>().ok());
+    let mut csp_value = csp.to_string();
+    if is_html && known_len.is_some_and(|n| n <= MAX_NONCED_HTML_BYTES) {
+        let (parts, body) = res.into_parts();
+        match axum::body::to_bytes(body, MAX_NONCED_HTML_BYTES).await {
+            Ok(bytes) => {
+                let nonce = generate_csp_nonce();
+                let rewritten = add_script_nonces(&bytes, &nonce);
+                csp_value = csp_with_script_nonce(csp, &nonce);
+                res =
+                    axum::response::Response::from_parts(parts, axum::body::Body::from(rewritten));
+                let h = res.headers_mut();
+                h.remove(header::CONTENT_LENGTH);
+                h.remove(header::ETAG);
+                h.remove(header::LAST_MODIFIED);
+                h.remove(header::ACCEPT_RANGES);
+                // The nonce is per response, so a cached or revalidated copy
+                // would pair an old body with a new policy.
+                h.insert(header::CACHE_CONTROL, HeaderValue::from_static("no-store"));
+            }
+            Err(_) => {
+                let mut failed = axum::response::Response::new(axum::body::Body::from(
+                    "Failed to read HTML response",
+                ));
+                *failed.status_mut() = axum::http::StatusCode::INTERNAL_SERVER_ERROR;
+                failed.headers_mut().insert(
+                    HeaderName::from_static("x-frame-options"),
+                    HeaderValue::from_static("DENY"),
+                );
+                failed.headers_mut().insert(
+                    HeaderName::from_static("content-security-policy"),
+                    HeaderValue::from_str(csp).expect("valid CSP"),
+                );
+                return failed;
+            }
+        }
+    }
+    let csp_header = HeaderValue::from_str(&csp_value)
         .expect("validated CSP origins keep the policy a valid header value");
-    headers.insert(HeaderName::from_static("content-security-policy"), csp);
+    res.headers_mut().insert(
+        HeaderName::from_static("content-security-policy"),
+        csp_header,
+    );
     res
+}
+
+/// Largest HTML document buffered for nonce rewriting (SEC-004). Next.js
+/// exports are well under 1 MiB; a larger body is served unmodified under the
+/// baseline policy rather than buffered.
+const MAX_NONCED_HTML_BYTES: usize = 8 * 1024 * 1024;
+
+/// Fresh 256-bit base64 nonce from the OS CSPRNG (two v4 UUIDs' worth of
+/// `getrandom` output; the 12 fixed version/variant bits are negligible).
+fn generate_csp_nonce() -> String {
+    use base64::Engine;
+    let mut raw = [0u8; 32];
+    raw[..16].copy_from_slice(uuid::Uuid::new_v4().as_bytes());
+    raw[16..].copy_from_slice(uuid::Uuid::new_v4().as_bytes());
+    base64::engine::general_purpose::STANDARD.encode(raw)
+}
+
+/// Replace `'unsafe-inline'` in `script-src` (only) with `'nonce-<nonce>'`.
+/// Browsers ignore `'unsafe-inline'` once a nonce is present, so it is dropped
+/// rather than left as a misleading fallback. `style-src` is untouched.
+pub(super) fn csp_with_script_nonce(csp: &str, nonce: &str) -> String {
+    csp.split("; ")
+        .map(|directive| {
+            if directive.starts_with("script-src ") {
+                directive.replace("'unsafe-inline'", &format!("'nonce-{nonce}'"))
+            } else {
+                directive.to_string()
+            }
+        })
+        .collect::<Vec<_>>()
+        .join("; ")
+}
+
+/// Add `nonce="<nonce>"` to every `<script>` open tag, and only to those:
+/// the scanner skips script bodies, so a `<script` substring inside an inline
+/// payload string is never touched. Bytes are processed as ASCII; everything
+/// outside the inserted attribute is copied verbatim.
+pub(super) fn add_script_nonces(html: &[u8], nonce: &str) -> Vec<u8> {
+    let lower = html.to_ascii_lowercase();
+    let mut out = Vec::with_capacity(html.len() + 64);
+    let mut pos = 0;
+    while let Some(rel) = find_sub(&lower[pos..], b"<script") {
+        let tag = pos + rel;
+        let name_end = tag + b"<script".len();
+        // `<scripts>` or `<script-foo>` are not script tags.
+        let boundary = lower.get(name_end).copied();
+        if !matches!(
+            boundary,
+            Some(b' ' | b'\t' | b'\n' | b'\r' | b'\x0c' | b'/' | b'>')
+        ) {
+            out.extend_from_slice(&html[pos..name_end]);
+            pos = name_end;
+            continue;
+        }
+        out.extend_from_slice(&html[pos..name_end]);
+        out.extend_from_slice(format!(" nonce=\"{nonce}\"").as_bytes());
+        // Copy the rest of the open tag, then skip the script body to its
+        // closing tag so payload text is left alone.
+        let Some(gt) = find_sub(&lower[name_end..], b">") else {
+            pos = name_end;
+            break;
+        };
+        let body_start = name_end + gt + 1;
+        let body_end = find_sub(&lower[body_start..], b"</script")
+            .map(|r| body_start + r)
+            .unwrap_or(html.len());
+        out.extend_from_slice(&html[name_end..body_end]);
+        pos = body_end;
+    }
+    out.extend_from_slice(&html[pos..]);
+    out
+}
+
+fn find_sub(haystack: &[u8], needle: &[u8]) -> Option<usize> {
+    haystack.windows(needle.len()).position(|w| w == needle)
 }
 
 pub(super) fn validate_ws_handshake_auth(

@@ -1014,11 +1014,16 @@ Google Fonts CSS plus its font files and the jsDelivr Nerd Font, xterm's
 runtime `<style>` elements and React's SSR `style=` attributes
 (`'unsafe-inline'` styles), the image addon's WASM decoder
 (`'wasm-unsafe-eval'`) and blob-URL images, and any `ws:`/`wss:` endpoint
-(the UI accepts a user-typed server URL). Scripts are same-origin plus
-`'unsafe-inline'` rather than hashes: Next.js inlines a per-page,
-per-build RSC payload, so a hash list would break every
-`--download-frontend` version but the one it was computed for; computing
-hashes at startup by scanning `web_root` is a possible follow-up. A
+(the UI accepts a user-typed server URL). The constant above is the
+baseline served for non-HTML responses. Each complete HTML document
+response (SEC-004) instead gets a fresh 256-bit nonce: `script-src` swaps
+`'unsafe-inline'` for `'nonce-<value>'` and every `<script>` open tag in the
+body is rewritten to carry `nonce="<value>"` at serve time (script bodies are
+skipped, `style-src` keeps `'unsafe-inline'`). Such responses are sent
+`Cache-Control: no-store` and without validators, since body and policy are
+per response. The shipped export has no inline event handlers, so a
+nonce-only `script-src` does not break hydration. HTML larger than 8 MiB, or
+without a known length, is served unmodified under the baseline. A
 frontend change that loads a new external origin must extend
 `CONTENT_SECURITY_POLICY` in the same change —
 `csp_allows_every_external_origin_the_shipped_frontend_loads` fails

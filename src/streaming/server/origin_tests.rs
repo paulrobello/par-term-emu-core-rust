@@ -225,6 +225,27 @@ async fn sessions_endpoint_allows_configured_origin() {
     assert_eq!(res.status(), 403);
 }
 
+/// The served CSP with any per-response script nonce (SEC-004) mapped back to
+/// the baseline `'unsafe-inline'`, so baseline pins hold for HTML responses.
+fn served_csp(res: &axum::http::Response<axum::body::Body>) -> Option<String> {
+    let csp = res
+        .headers()
+        .get("content-security-policy")
+        .and_then(|v| v.to_str().ok())?;
+    Some(
+        csp.split(' ')
+            .map(|t| {
+                if t.starts_with("'nonce-") {
+                    "'unsafe-inline'"
+                } else {
+                    t
+                }
+            })
+            .collect::<Vec<_>>()
+            .join(" "),
+    )
+}
+
 /// SEC-010: every response from the HTTP app — static frontend files
 /// (ServeDir fallback) and API routes alike — must carry the
 /// anti-framing headers, or a transparent iframe plus cached Basic
@@ -266,12 +287,7 @@ async fn http_app_responses_carry_anti_framing_headers() {
             .and_then(|v| v.to_str().ok()),
         Some("DENY")
     );
-    assert_eq!(
-        res.headers()
-            .get("content-security-policy")
-            .and_then(|v| v.to_str().ok()),
-        Some(CONTENT_SECURITY_POLICY)
-    );
+    assert_eq!(served_csp(&res).as_deref(), Some(CONTENT_SECURITY_POLICY));
     assert!(
         res.headers()
             .get("content-security-policy")
@@ -292,12 +308,7 @@ async fn http_app_responses_carry_anti_framing_headers() {
             .and_then(|v| v.to_str().ok()),
         Some("DENY")
     );
-    assert_eq!(
-        res.headers()
-            .get("content-security-policy")
-            .and_then(|v| v.to_str().ok()),
-        Some(CONTENT_SECURITY_POLICY)
-    );
+    assert_eq!(served_csp(&res).as_deref(), Some(CONTENT_SECURITY_POLICY));
 }
 /// ENH-059: the full policy carries the directives the page needs, and
 /// never the unscoped eval.
@@ -373,9 +384,7 @@ async fn blob_connect_is_in_the_default_policy_on_every_response() {
             .unwrap();
         assert_eq!(res.status(), 200);
         assert_eq!(
-            res.headers()
-                .get("content-security-policy")
-                .and_then(|v| v.to_str().ok()),
+            served_csp(&res).as_deref(),
             Some(CONTENT_SECURITY_POLICY),
             "{path}: the served policy is the pinned constant"
         );
@@ -495,9 +504,7 @@ async fn csp_connect_origins_are_opt_in_and_the_default_policy_stays_byte_identi
             .unwrap();
         assert_eq!(res.status(), 200);
         assert_eq!(
-            res.headers()
-                .get("content-security-policy")
-                .and_then(|v| v.to_str().ok()),
+            served_csp(&res).as_deref(),
             Some(CONTENT_SECURITY_POLICY),
             "{path}: the default policy stays byte-identical"
         );
@@ -527,11 +534,7 @@ async fn csp_connect_origins_are_opt_in_and_the_default_policy_stays_byte_identi
             .await
             .unwrap();
         assert_eq!(res.status(), 200);
-        let csp = res
-            .headers()
-            .get("content-security-policy")
-            .and_then(|v| v.to_str().ok())
-            .expect("the CSP header");
+        let csp = served_csp(&res).expect("the CSP header");
         assert_eq!(
             csp,
             CONTENT_SECURITY_POLICY.replace(
@@ -659,4 +662,110 @@ fn glob_css(web: &std::path::Path) -> Vec<std::path::PathBuf> {
         }
     }
     out
+}
+
+/// SEC-004: the nonce is a per-response value that appears in both the CSP
+/// header and every `<script>` tag of the served HTML, and nowhere else.
+#[tokio::test]
+async fn html_responses_carry_a_per_response_script_nonce_matching_the_csp() {
+    let web_root = tempfile::Builder::new()
+        .prefix("par-term-webroot-nonce-")
+        .tempdir()
+        .expect("create temp dir for web root fixture");
+    let html = "<html><head><script src=\"/a.js\" async=\"\"></script>\
+        <SCRIPT>self.__next_f.push([1,\"<script>x</script>\"])</SCRIPT>\
+        <scripts-not-a-tag></scripts-not-a-tag><style>b{}</style></head><body></body></html>";
+    std::fs::write(web_root.path().join("index.html"), html).unwrap();
+    std::fs::write(web_root.path().join("a.js"), "console.log(1)").unwrap();
+    let terminal = Arc::new(RwLock::new(Terminal::new(80, 24)));
+    let config = StreamingConfig {
+        web_root: web_root.path().to_string_lossy().into_owned(),
+        ..StreamingConfig::default()
+    };
+    let server = Arc::new(StreamingServer::with_config(
+        terminal,
+        "127.0.0.1:0".to_string(),
+        config,
+    ));
+    let app = server.build_http_app();
+
+    let mut nonces = Vec::new();
+    for _ in 0..2 {
+        let res = app
+            .clone()
+            .oneshot(origin_request("GET", "/", None))
+            .await
+            .unwrap();
+        assert_eq!(res.status(), 200);
+        let csp = res
+            .headers()
+            .get("content-security-policy")
+            .and_then(|v| v.to_str().ok())
+            .expect("the CSP header")
+            .to_string();
+        let script_src = csp
+            .split("; ")
+            .find(|d| d.starts_with("script-src "))
+            .expect("script-src directive");
+        assert!(!script_src.contains("'unsafe-inline'"), "{script_src}");
+        assert!(
+            csp.contains("style-src 'self' 'unsafe-inline'"),
+            "style-src is untouched: {csp}"
+        );
+        let nonce = script_src
+            .split("'nonce-")
+            .nth(1)
+            .and_then(|t| t.split('\'').next())
+            .expect("nonce in script-src")
+            .to_string();
+        let body = axum::body::to_bytes(res.into_body(), 1 << 20)
+            .await
+            .unwrap();
+        let body = String::from_utf8(body.to_vec()).unwrap();
+        assert!(
+            body.contains(&format!("<script nonce=\"{nonce}\" src=\"/a.js\"")),
+            "{body}"
+        );
+        assert!(
+            body.contains(&format!("<SCRIPT nonce=\"{nonce}\">")),
+            "{body}"
+        );
+        // Script payload text and non-script tags are untouched.
+        assert!(body.contains("push([1,\"<script>x</script>\"])"), "{body}");
+        assert!(body.contains("<scripts-not-a-tag>"), "{body}");
+        assert_eq!(body.matches("nonce=").count(), 2, "{body}");
+        nonces.push(nonce);
+    }
+    assert_ne!(nonces[0], nonces[1], "nonce must differ per response");
+
+    // Non-HTML static assets keep the baseline policy.
+    let res = app
+        .oneshot(origin_request("GET", "/a.js", None))
+        .await
+        .unwrap();
+    assert_eq!(
+        res.headers()
+            .get("content-security-policy")
+            .and_then(|v| v.to_str().ok()),
+        Some(CONTENT_SECURITY_POLICY)
+    );
+}
+
+/// SEC-004: every script tag of the real shipped export is rewritten, and the
+/// export has no inline event handlers a nonce-only policy would block.
+#[test]
+fn shipped_frontend_html_has_every_script_tag_nonced() {
+    let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("web_term");
+    let Ok(html) = std::fs::read(dir.join("index.html")) else {
+        return; // frontend not built in this checkout
+    };
+    let text = String::from_utf8_lossy(&html);
+    let tags = text.matches("<script").count();
+    assert!(tags > 0);
+    let out = String::from_utf8(super::http::add_script_nonces(&html, "N0NCE")).unwrap();
+    assert_eq!(out.matches("<script nonce=\"N0NCE\"").count(), tags);
+    assert!(
+        !text.contains(" onclick=") && !text.contains(" onload=") && !text.contains(" onerror="),
+        "inline event handlers would be blocked by a nonce-only script-src"
+    );
 }
