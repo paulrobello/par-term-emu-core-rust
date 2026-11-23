@@ -882,6 +882,10 @@ impl Terminal {
 
     /// Feed one completed Kitty APC payload to the Kitty parser and act on
     /// the result: query replies, graphic placement, and the q= reply matrix.
+    // Out of line and cold: inlined into `filter_apc_and_advance` this body
+    // bloats `process()`, whose plain-text path never sees an APC.
+    #[cold]
+    #[inline(never)]
     fn handle_kitty_apc_payload(&mut self, payload_bytes: &[u8]) {
         // Kitty payloads are ASCII text (key=value pairs + base64). Any
         // non-UTF-8 byte indicates a malformed APC; reset and skip.

@@ -51,6 +51,7 @@ enum AttachRole {
 /// With per-code-point widths a skin tone modifier is a character of its
 /// own, and nothing that attaches to a cell changes its width, so ZWJ
 /// continuations never apply either.
+#[inline]
 fn attach_role(c: char, codepoint_widths: bool) -> AttachRole {
     if codepoint_widths && grapheme::is_skin_tone_modifier(c) {
         return AttachRole::Standalone;
@@ -75,6 +76,7 @@ fn attach_role(c: char, codepoint_widths: bool) -> AttachRole {
 }
 
 /// Whether a wide character at `col` cannot fit and must wrap first.
+#[inline]
 fn wide_char_needs_wrap(char_width: usize, col: usize, cols: usize, auto_wrap: bool) -> bool {
     char_width == 2 && col >= cols - 1 && auto_wrap
 }
@@ -82,16 +84,19 @@ fn wide_char_needs_wrap(char_width: usize, col: usize, cols: usize, auto_wrap: b
 /// Whether a cell that took a combining mark should widen to two columns:
 /// its grapheme is wide, it is still narrow, and the spacer fits on the row.
 /// A wide pair must never end the row half-written.
+#[inline]
 fn cell_should_widen(cell: &Cell, col: usize, cols: usize) -> bool {
     col + 1 < cols && cell.width() == 1 && grapheme::is_wide_grapheme(&cell.get_grapheme())
 }
 
 /// Whether `prev` is a regional indicator still waiting for its pair.
+#[inline]
 fn is_unpaired_regional_indicator(prev: &Cell) -> bool {
     grapheme::is_regional_indicator(prev.c) && prev.combining_is_empty()
 }
 
 /// The spacer cell that follows `base` once it is two columns wide.
+#[inline]
 fn spacer_after(base: &Cell) -> Cell {
     let mut flags = base.flags;
     flags.set_wide_char(false);
@@ -108,6 +113,7 @@ fn spacer_after(base: &Cell) -> Cell {
 }
 
 /// Mark `cell` as a two-column character and return its spacer.
+#[inline]
 fn widen_with_spacer(cell: &mut Cell) -> Cell {
     cell.width = 2;
     cell.flags.set_wide_char(true);
