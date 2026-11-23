@@ -5,23 +5,7 @@ Shows terminal content with visual boundaries
 """
 
 from par_term_emu_core_rust import Terminal
-
-
-def print_terminal_with_border(term: Terminal, title: str = "Terminal"):
-    """Print terminal content with a visible border"""
-    cols, rows = term.size()
-
-    print(f"\n{'=' * 80}")
-    print(f"{title} ({cols}x{rows})")
-    print("=" * 80)
-
-    # Get content line by line
-    for row in range(rows):
-        line = term.get_line(row)
-        if line and line.strip():  # Only show non-empty lines
-            print(f"{row:2d}: |{line}|")
-
-    print("=" * 80 + "\n")
+from render_utils import print_terminal_with_border
 
 
 def print_terminal_with_colors(term: Terminal, title: str = "Terminal with Colors"):
