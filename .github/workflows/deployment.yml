@@ -13,9 +13,10 @@ name: Build and Deploy
 on:
   workflow_dispatch:
 
+# Least privilege: jobs that write get their own grant below
+# (github-release: contents+id-token; publish (PyPI): id-token).
 permissions:
-  contents: write
-  id-token: write
+  contents: read
 
 jobs:
   # Version sanity check - runs before all builds
@@ -733,6 +734,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 15
     needs: [build-streaming-binaries, build-mux-binaries, linux, macos, windows, sdist, package-web-frontend, ios-xcframework]
+    environment: release
     permissions:
       contents: write
       id-token: write
@@ -792,6 +794,38 @@ jobs:
           name: ios-xcframework
           path: xcframework
 
+      - name: Install minisign
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y minisign
+
+      # Minisign authenticity for every artifact the update paths consume
+      # (streamer binaries, par-mux archives, web frontend): wheels ride
+      # Sigstore + PyPI instead. SEC-001; the verifier pins key
+      # 7D5A457F1AB85B55. The `release` environment holds
+      # MINISIGN_SECRET_KEY (passwordless key) and needs owner approval.
+      - name: Sign release assets with minisign
+        env:
+          MINISIGN_SECRET_KEY: ${{ secrets.MINISIGN_SECRET_KEY }}
+        run: |
+          key_file=$(mktemp)
+          printf '%s' "$MINISIGN_SECRET_KEY" > "$key_file"
+          pub_file=$(mktemp)
+          printf 'untrusted comment: minisign public key 7D5A457F1AB85B55\nRWRVW7gaf0VafV4bihSeMbq2JiaTYTanOpdm5EkgpPk65edfjHsAnA+t\n' > "$pub_file"
+          sign_one() {
+            f="$1"
+            minisign -S -W -s "$key_file" -m "$f" -x "${f}.minisig" -t "par-term-emu-core-rust release artifact $(basename "$f")"
+            minisign -V -q -p "$pub_file" -m "$f" -x "${f}.minisig"
+            echo "signed: ${f}.minisig"
+          }
+          for f in binaries/par-term-streamer-*; do
+            case "$f" in *.sha256) continue ;; esac
+            sign_one "$f"
+          done
+          for f in mux-release/*.tar.gz mux-release/*.zip; do sign_one "$f"; done
+          for f in web-frontend/*; do sign_one "$f"; done
+          rm -f "$key_file" "$pub_file"
+
       - name: Sign the dists with Sigstore
         uses: sigstore/gh-action-sigstore-python@790bc6befb9d733738f18d8f895854b453640ec9 # v3.5.0
         with:
@@ -843,7 +877,7 @@ jobs:
           # Merge the per-target checksum files into the release-level SUMS.
           cat mux-release/*.sha256 > par-mux-v${{ steps.get_version.outputs.version }}-SHA256SUMS.txt
           gh release upload \
-          'v${{ steps.get_version.outputs.version }}' mux-release/*.tar.gz mux-release/*.zip \
+          'v${{ steps.get_version.outputs.version }}' mux-release/*.tar.gz mux-release/*.zip mux-release/*.minisig \
           par-mux-v${{ steps.get_version.outputs.version }}-SHA256SUMS.txt \
           --repo '${{ github.repository }}' \
           --clobber

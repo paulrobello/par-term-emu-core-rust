@@ -760,6 +760,12 @@ doc-links-check:
 release-check: derive-version-check core-version-check
 	python3 scripts/check_release_notes.py && python3 scripts/check_release_notes.py --self-test
 
+# SEC-001: verify a cut's built assets all carry minisign signatures that
+# verify against the pinned key. Run against the assembled asset directories
+# before uploading (CI signs and uploads its own; this is the local-cut check).
+release-signature-check:
+	bash scripts/check-release-signatures.sh release-binaries mux-release web-frontend
+
 # ENH-040: dependency advisories across all three ecosystems. Needs network
 # (advisory DB, npm and PyPI audit APIs); deliberately NOT in checkall.
 # pip-audit runs under --python-preference only-system: uv-managed

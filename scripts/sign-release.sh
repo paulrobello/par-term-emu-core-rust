@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Sign release artifacts with minisign, writing <artifact>.minisig next to each.
-# Run by the repository owner on their own machine at release cuts; the private
-# key never lives in this repository or in CI.
+# CI signs at the cut (deployment.yml, gated on the `release` environment);
+# this script is the owner's manual fallback and uses the same pinned key.
 #
 # Usage: MINISIGN_SECRET_KEY=/path/to/minisign.key scripts/sign-release.sh FILE...
 #
