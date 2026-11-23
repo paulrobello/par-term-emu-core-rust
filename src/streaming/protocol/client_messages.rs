@@ -23,6 +23,10 @@ use serde::{Deserialize, Serialize};
         empty = "Empty client message"
     )
 )]
+#[cfg_attr(
+    all(test, feature = "streaming"),
+    derive(par_term_emu_derive::VariantNames)
+)]
 #[serde(tag = "type", rename_all = "lowercase")]
 pub enum ClientMessage {
     /// Declare this connection's presence kind (web or mobile).
@@ -395,59 +399,6 @@ impl ClientMessage {
         Self::SnapshotRequest {
             scope,
             max_commands,
-        }
-    }
-}
-
-/// Every [`ClientMessage`] variant name, in `variant_name` order.
-#[cfg(all(test, feature = "streaming"))]
-pub(crate) const CLIENT_MESSAGE_VARIANT_NAMES: &[&str] = &[
-    "ViewerIdentity",
-    "Input",
-    "Resize",
-    "Ping",
-    "RequestRefresh",
-    "Subscribe",
-    "Mouse",
-    "FocusChange",
-    "Paste",
-    "SelectionRequest",
-    "ClipboardRequest",
-    "SnapshotRequest",
-    "UploadBegin",
-    "UploadChunk",
-    "UploadCommit",
-    "UploadAbort",
-    "MuxTreeRequest",
-    "PaneCreateRequest",
-];
-
-#[cfg(feature = "streaming")]
-impl ClientMessage {
-    /// The variant's own name (`"Input"` for [`ClientMessage::Input`]),
-    /// the fixture-coverage key. Exhaustive with no wildcard arm (repo
-    /// rule), so an unnamed new variant fails to compile here.
-    #[cfg(all(test, feature = "streaming"))]
-    pub(crate) fn variant_name(&self) -> &'static str {
-        match self {
-            Self::ViewerIdentity { .. } => "ViewerIdentity",
-            Self::Input { .. } => "Input",
-            Self::Resize { .. } => "Resize",
-            Self::Ping => "Ping",
-            Self::RequestRefresh => "RequestRefresh",
-            Self::Subscribe { .. } => "Subscribe",
-            Self::Mouse { .. } => "Mouse",
-            Self::FocusChange { .. } => "FocusChange",
-            Self::Paste { .. } => "Paste",
-            Self::SelectionRequest { .. } => "SelectionRequest",
-            Self::ClipboardRequest { .. } => "ClipboardRequest",
-            Self::SnapshotRequest { .. } => "SnapshotRequest",
-            Self::UploadBegin { .. } => "UploadBegin",
-            Self::UploadChunk { .. } => "UploadChunk",
-            Self::UploadCommit => "UploadCommit",
-            Self::UploadAbort => "UploadAbort",
-            Self::MuxTreeRequest => "MuxTreeRequest",
-            Self::PaneCreateRequest { .. } => "PaneCreateRequest",
         }
     }
 }

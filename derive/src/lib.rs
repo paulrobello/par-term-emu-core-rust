@@ -2,6 +2,7 @@
 //! and the streaming app <-> protobuf conversions (ARC-006).
 
 mod proto_convert;
+mod variant_names;
 
 use proc_macro::TokenStream;
 use quote::quote;
@@ -607,6 +608,15 @@ fn expand_py_dict_convert(input: proc_macro2::TokenStream) -> proc_macro2::Token
 #[proc_macro_derive(ProtoConvert, attributes(proto))]
 pub fn derive_proto_convert(input: TokenStream) -> TokenStream {
     proto_convert::expand(input.into()).into()
+}
+
+/// Derives `variant_name(&self)` and `VARIANT_NAMES` for an enum: the variant
+/// identifier as a string, via an exhaustive wildcard-free `match` (a new
+/// variant is named automatically, never silently unmapped). Both items are
+/// `pub(crate)` inherent items. Takes no attributes.
+#[proc_macro_derive(VariantNames)]
+pub fn derive_variant_names(input: TokenStream) -> TokenStream {
+    variant_names::expand(input.into()).into()
 }
 
 fn parse_path_value(meta: &syn::meta::ParseNestedMeta<'_>) -> syn::Result<Path> {

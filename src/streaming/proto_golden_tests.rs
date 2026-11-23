@@ -13,8 +13,7 @@ use super::*;
 use crate::streaming::protocol::{
     CpuStats, DiskStats, InlineImageFrame, LoadAverage, MemoryStats, MuxTreePane as AppMuxTreePane,
     MuxTreeSession as AppMuxTreeSession, MuxTreeWindow as AppMuxTreeWindow,
-    MuxTreeWorkspace as AppMuxTreeWorkspace, NetworkInterfaceStats, CLIENT_MESSAGE_VARIANT_NAMES,
-    SERVER_MESSAGE_VARIANT_NAMES,
+    MuxTreeWorkspace as AppMuxTreeWorkspace, NetworkInterfaceStats,
 };
 use std::fmt::Write as _;
 
@@ -888,9 +887,9 @@ fn proto_golden_wire_conversions_are_unchanged() {
 
 /// Every variant appears in the fixtures: the covered set (named per
 /// message via `variant_name`) must equal the enum's variant-name
-/// registry in protocol.rs EXACTLY - a fixture-less variant and a
+/// registry (`VARIANT_NAMES`, derived) EXACTLY - a fixture-less variant and a
 /// registry drift both fail here, naming the variant. The registry is
-/// compile-tied to the enum by `variant_name`'s no-wildcard match, so a
+/// compile-tied to the enum by the `VariantNames` derive's no-wildcard match, so a
 /// new variant is a compile error there until named (QA-005).
 #[test]
 fn proto_golden_fixtures_cover_every_variant() {
@@ -901,13 +900,13 @@ fn proto_golden_fixtures_cover_every_variant() {
         .collect();
     assert_eq!(
         covered,
-        SERVER_MESSAGE_VARIANT_NAMES.iter().copied().collect(),
+        AppServerMessage::VARIANT_NAMES.iter().copied().collect(),
         "server fixtures and the variant registry disagree"
     );
     assert_eq!(
-        SERVER_MESSAGE_VARIANT_NAMES.len(),
+        AppServerMessage::VARIANT_NAMES.len(),
         48,
-        "server variant registry count changed - keep registry, match and this count in one edit"
+        "server variant registry count changed - update this count with the enum"
     );
 
     let covered: BTreeSet<&'static str> = client_fixtures()
@@ -916,12 +915,12 @@ fn proto_golden_fixtures_cover_every_variant() {
         .collect();
     assert_eq!(
         covered,
-        CLIENT_MESSAGE_VARIANT_NAMES.iter().copied().collect(),
+        AppClientMessage::VARIANT_NAMES.iter().copied().collect(),
         "client fixtures and the variant registry disagree"
     );
     assert_eq!(
-        CLIENT_MESSAGE_VARIANT_NAMES.len(),
+        AppClientMessage::VARIANT_NAMES.len(),
         18,
-        "client variant registry count changed - keep registry, match and this count in one edit"
+        "client variant registry count changed - update this count with the enum"
     );
 }

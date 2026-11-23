@@ -29,8 +29,3 @@ pub use common::{
 pub use events::{terminal_event_to_server_message, EventType};
 pub use mux_types::{AgentEntry, MuxTreePane, MuxTreeSession, MuxTreeWindow, MuxTreeWorkspace};
 pub use server_messages::{ConnectedBuilder, ServerMessage};
-
-#[cfg(all(test, feature = "streaming"))]
-pub(crate) use client_messages::CLIENT_MESSAGE_VARIANT_NAMES;
-#[cfg(all(test, feature = "streaming"))]
-pub(crate) use server_messages::SERVER_MESSAGE_VARIANT_NAMES;

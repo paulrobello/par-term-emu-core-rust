@@ -26,6 +26,10 @@ use serde::{Deserialize, Serialize};
         empty = "Empty server message"
     )
 )]
+#[cfg_attr(
+    all(test, feature = "streaming"),
+    derive(par_term_emu_derive::VariantNames)
+)]
 #[serde(tag = "type", rename_all = "lowercase")]
 pub enum ServerMessage {
     /// Terminal output data (raw ANSI escape sequences)
@@ -1793,130 +1797,6 @@ impl ServerMessage {
             state: state.map(|s| s.description().to_string()),
             percent,
             label,
-        }
-    }
-}
-
-// ---------------------------------------------------------------------------
-// Variant-name registries (QA-005)
-//
-// The golden fixture-coverage test (proto_golden_tests.rs) asserts the
-// fixtures cover these name lists EXACTLY (both directions). The
-// `variant_name` matches below are the compile-side tie: they are
-// exhaustive with no wildcard arm (repo rule), so adding a variant is a
-// compile error until it is named there, and the coverage test then
-// demands its registry entry and a fixture. Keep registry and match in
-// the same order.
-
-/// Every [`ServerMessage`] variant name, in `variant_name` order.
-#[cfg(all(test, feature = "streaming"))]
-pub(crate) const SERVER_MESSAGE_VARIANT_NAMES: &[&str] = &[
-    "Output",
-    "Resize",
-    "Title",
-    "Connected",
-    "Refresh",
-    "CursorPosition",
-    "Bell",
-    "CwdChanged",
-    "TriggerMatched",
-    "ActionNotify",
-    "ActionMarkLine",
-    "Error",
-    "Shutdown",
-    "Pong",
-    "ModeChanged",
-    "GraphicsAdded",
-    "HyperlinkAdded",
-    "UserVarChanged",
-    "ProgressBarChanged",
-    "BadgeChanged",
-    "SelectionChanged",
-    "ClipboardSync",
-    "ShellIntegrationEvent",
-    "SystemStats",
-    "ZoneOpened",
-    "ZoneClosed",
-    "ZoneScrolledOut",
-    "EnvironmentChanged",
-    "RemoteHostTransition",
-    "SubShellDetected",
-    "SemanticSnapshot",
-    "FileTransferStarted",
-    "FileTransferProgress",
-    "FileTransferCompleted",
-    "FileTransferFailed",
-    "UploadRequested",
-    "ScreenCleared",
-    "AgentRoster",
-    "AgentStateChanged",
-    "PointerShapeChanged",
-    "PaneSizeStatus",
-    "ViewerPresence",
-    "InlineImage",
-    "UploadStarted",
-    "UploadFinished",
-    "MuxTreeSnapshot",
-    "PaneProcessState",
-    "PaneCreated",
-];
-
-#[cfg(feature = "streaming")]
-impl ServerMessage {
-    /// The variant's own name (`"Output"` for [`ServerMessage::Output`]),
-    /// the fixture-coverage key. Exhaustive with no wildcard arm (repo
-    /// rule), so an unnamed new variant fails to compile here.
-    #[cfg(all(test, feature = "streaming"))]
-    pub(crate) fn variant_name(&self) -> &'static str {
-        match self {
-            Self::Output { .. } => "Output",
-            Self::Resize { .. } => "Resize",
-            Self::Title { .. } => "Title",
-            Self::Connected { .. } => "Connected",
-            Self::Refresh { .. } => "Refresh",
-            Self::CursorPosition { .. } => "CursorPosition",
-            Self::Bell => "Bell",
-            Self::CwdChanged { .. } => "CwdChanged",
-            Self::TriggerMatched { .. } => "TriggerMatched",
-            Self::ActionNotify { .. } => "ActionNotify",
-            Self::ActionMarkLine { .. } => "ActionMarkLine",
-            Self::Error { .. } => "Error",
-            Self::Shutdown { .. } => "Shutdown",
-            Self::Pong => "Pong",
-            Self::ModeChanged { .. } => "ModeChanged",
-            Self::GraphicsAdded { .. } => "GraphicsAdded",
-            Self::HyperlinkAdded { .. } => "HyperlinkAdded",
-            Self::UserVarChanged { .. } => "UserVarChanged",
-            Self::ProgressBarChanged { .. } => "ProgressBarChanged",
-            Self::BadgeChanged { .. } => "BadgeChanged",
-            Self::SelectionChanged { .. } => "SelectionChanged",
-            Self::ClipboardSync { .. } => "ClipboardSync",
-            Self::ShellIntegrationEvent { .. } => "ShellIntegrationEvent",
-            Self::SystemStats { .. } => "SystemStats",
-            Self::ZoneOpened { .. } => "ZoneOpened",
-            Self::ZoneClosed { .. } => "ZoneClosed",
-            Self::ZoneScrolledOut { .. } => "ZoneScrolledOut",
-            Self::EnvironmentChanged { .. } => "EnvironmentChanged",
-            Self::RemoteHostTransition { .. } => "RemoteHostTransition",
-            Self::SubShellDetected { .. } => "SubShellDetected",
-            Self::SemanticSnapshot { .. } => "SemanticSnapshot",
-            Self::FileTransferStarted { .. } => "FileTransferStarted",
-            Self::FileTransferProgress { .. } => "FileTransferProgress",
-            Self::FileTransferCompleted { .. } => "FileTransferCompleted",
-            Self::FileTransferFailed { .. } => "FileTransferFailed",
-            Self::UploadRequested { .. } => "UploadRequested",
-            Self::ScreenCleared { .. } => "ScreenCleared",
-            Self::AgentRoster { .. } => "AgentRoster",
-            Self::AgentStateChanged { .. } => "AgentStateChanged",
-            Self::PointerShapeChanged { .. } => "PointerShapeChanged",
-            Self::PaneSizeStatus { .. } => "PaneSizeStatus",
-            Self::ViewerPresence { .. } => "ViewerPresence",
-            Self::InlineImage { .. } => "InlineImage",
-            Self::UploadStarted { .. } => "UploadStarted",
-            Self::UploadFinished { .. } => "UploadFinished",
-            Self::MuxTreeSnapshot { .. } => "MuxTreeSnapshot",
-            Self::PaneProcessState { .. } => "PaneProcessState",
-            Self::PaneCreated { .. } => "PaneCreated",
         }
     }
 }
