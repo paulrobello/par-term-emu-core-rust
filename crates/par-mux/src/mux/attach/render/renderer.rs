@@ -359,7 +359,10 @@ impl PaneRenderer {
     /// The divider within `tol` cells of window-relative `(x, y)`, if any
     /// — the shared edge of the two rects it separates. Dividers draw on
     /// the left/top pane's last column/row (the daemon's geometry tiles
-    /// exactly), so the test measures against that cell line.
+    /// exactly), so the test measures against that cell line. Under
+    /// `pane-borders` each pane paints its own ring, so the divider is
+    /// two adjacent border cells (the left/top pane's far edge and the
+    /// right/bottom pane's near edge): both are the same drag handle.
     pub fn divider_near(&self, x: u16, y: u16, tol: i32) -> Option<DividerHit> {
         let px = i32::from(x);
         let py = i32::from(y);
@@ -379,7 +382,11 @@ impl PaneRenderer {
                 };
                 if l.x + l.width == r.x && rows_overlap(l, r) {
                     let div = i32::from(r.x) - 1;
-                    if (px - div).abs() <= tol {
+                    if self
+                        .divider_cells(div, l, r)
+                        .iter()
+                        .any(|cell| (px - cell).abs() <= tol)
+                    {
                         return Some(DividerHit {
                             vertical: true,
                             a: l.pane,
@@ -389,7 +396,11 @@ impl PaneRenderer {
                 }
                 if t.y + t.height == b.y && cols_overlap(t, b) {
                     let div = i32::from(b.y) - 1;
-                    if (py - div).abs() <= tol {
+                    if self
+                        .divider_cells(div, t, b)
+                        .iter()
+                        .any(|cell| (py - cell).abs() <= tol)
+                    {
                         return Some(DividerHit {
                             vertical: false,
                             a: t.pane,
@@ -400,6 +411,26 @@ impl PaneRenderer {
             }
         }
         None
+    }
+
+    /// The cell lines (columns or rows) that start a drag on the boundary
+    /// between `first` and `second`, `div` being the first pane's last
+    /// cell line. Under `pane-borders` each pane paints its own ring, so
+    /// the boundary is two border lines: the first pane's far ring and
+    /// the second pane's near ring, each `pane-gaps` cells inside its
+    /// rect. Without rings it is the one shared line.
+    fn divider_cells(&self, div: i32, first: &PaneRect, second: &PaneRect) -> Vec<i32> {
+        if !self.pane_borders {
+            return vec![div];
+        }
+        let gap = |rect: &PaneRect| {
+            let chrome = PaneChrome {
+                gap: self.pane_gaps,
+                ..PaneChrome::default()
+            };
+            i32::from(chrome.interior(rect.width, rect.height).0)
+        };
+        vec![div, div - gap(first), div + 1 + gap(second)]
     }
 
     /// The rect the pane's chrome and content paint into: the layout

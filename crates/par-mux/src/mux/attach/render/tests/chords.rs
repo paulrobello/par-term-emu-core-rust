@@ -3015,6 +3015,54 @@ fn mouse_hit_maps_the_tab_strip_and_the_pane_area() {
     );
 }
 
+/// Divider drag start on BOTH border cells of a shared divider, both
+/// axes: under `pane-borders` each pane paints its own ring, so the
+/// boundary is two adjacent cells and either one starts the same drag.
+#[test]
+fn both_border_cells_of_a_shared_divider_start_the_same_drag() {
+    for (layout, vertical) in [
+        ("0000,80x24,0,0{40x24,0,0,1,40x24,40,0,2}", true),
+        ("0000,80x24,0,0[80x12,0,0,1,80x12,0,12,2]", false),
+    ] {
+        let mut session = WindowSession::new(80, 25);
+        session.renderer.set_pane_borders(true);
+        session
+            .renderer
+            .apply_layout(parse_layout(layout).expect("parses"));
+        // Content coordinates of the two border cells beside the seam.
+        let (near, far) = if vertical { (39u16, 40u16) } else { (11, 12) };
+        let cell = |line: u16| if vertical { (line, 6) } else { (20, line) };
+        let divider = session
+            .renderer
+            .divider_near(cell(near).0, cell(near).1, 0)
+            .expect("divider");
+        assert_eq!(divider.vertical, vertical);
+        for line in [near, far] {
+            let (cx, cy) = cell(line);
+            assert_eq!(
+                session.renderer.divider_near(cx, cy, 0),
+                Some(divider),
+                "border cell {line} resolves to the shared divider"
+            );
+            // SGR is 1-based and the tab strip takes the first host row.
+            assert_eq!(
+                session.mouse_hit(&sgr(0, cx + 1, cy + 2, false)),
+                Hit::DragStart {
+                    divider,
+                    x: cx,
+                    y: cy
+                },
+                "press on border cell {line} starts the drag"
+            );
+        }
+        // Cells inside the panes are still plain clicks.
+        let (ix, iy) = cell(near - 2);
+        assert_eq!(session.renderer.divider_near(ix, iy, 0), None);
+        let (ix, iy) = cell(far + 2);
+        assert_eq!(session.renderer.divider_near(ix, iy, 0), None);
+    }
+}
+
 /// Same rebase, opposite dialect: a pane that enabled only 1000 (its
 /// terminfo lacked the SGR caps - htop under iTerm.app's bundled
 /// terminfo, whose TERMINFO_DIRS the daemon's panes inherit) is answered
