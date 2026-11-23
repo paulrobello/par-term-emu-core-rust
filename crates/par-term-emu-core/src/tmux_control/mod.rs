@@ -15,6 +15,7 @@
 //!
 //! - [Tmux Control Mode Wiki](https://github.com/tmux/tmux/wiki/Control-Mode)
 
+mod line;
 mod notification;
 mod parser;
 
