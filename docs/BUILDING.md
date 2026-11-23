@@ -49,7 +49,7 @@ After changing any `#[repr(C)]` type or `extern "C"` function, regenerate and co
 
 ### Rust
 
-You need Rust 1.99 or later (as specified in `Cargo.toml` with `rust-version = "1.99"`). Install Rust from [rustup.rs](https://rustup.rs):
+You need the Rust version set by `rust-version` in `Cargo.toml` (the source of truth). Install Rust from [rustup.rs](https://rustup.rs):
 
 ```bash
 curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh

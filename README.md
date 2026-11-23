@@ -253,7 +253,7 @@ Wheels ship with the streaming server compiled in (`StreamingServer` works out o
 
 ### From Source
 
-Requires Rust 1.99+ and Python 3.12+:
+Requires Rust 1.100+ and Python 3.12+:
 
 ```bash
 # Install maturin (build tool)
@@ -712,7 +712,7 @@ A full-featured TUI (Text User Interface) application is available in the sister
 
 ## Technology
 
-- **Rust** (1.99+) - Core library implementation
+- **Rust** (1.100+) - Core library implementation
 - **Python** (3.12+) - Python bindings
 - **PyO3** - Zero-cost Python/Rust bindings
 - **VTE** - ANSI sequence parsing
