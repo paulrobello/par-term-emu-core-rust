@@ -239,9 +239,7 @@ fn render_mode_zoom_rename_border_chords() {
     // snapshot that ever held the flash still reads `labels on`.
     let saw_on_raw = got.windows("labels on".len()).any(|w| w == b"labels on");
     assert!(
-        ever.iter()
-            .flatten()
-            .any(|r| r.contains("labels on")),
+        ever.iter().flatten().any(|r| r.contains("labels on")),
         "prefix l again must flash labels on (presses: {presses}, raw needle seen: {saw_on_raw}). stderr: {} bytes: {:?}",
         stderr.lock().unwrap(),
         String::from_utf8_lossy(&got)

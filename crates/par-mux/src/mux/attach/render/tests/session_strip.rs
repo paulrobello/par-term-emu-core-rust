@@ -31,7 +31,11 @@ fn one_session_body() -> Vec<String> {
 /// Apply a snapshot body to the session's status state and repaint both
 /// strips the way the status continuation does.
 fn apply_and_draw(session: &mut WindowSession, body: Vec<String>) {
-    let reply = crate::mux::client::Reply { ok: true, body };
+    let reply = crate::mux::client::Reply {
+        ok: true,
+        body,
+        generation: None,
+    };
     session
         .status
         .apply_snapshot_reply(&reply, 1)

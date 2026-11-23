@@ -1436,7 +1436,7 @@ sections; the numbers live here.
 | `MAX_CLIENT_COLS` | 1,000 | `crates/par-mux/src/mux/command/mod.rs:1025` | Columns a par-mux client may report for a window grid (`refresh-client -C`). |
 | `MAX_CLIENT_ROWS` | 500 | `crates/par-mux/src/mux/command/mod.rs:1027` | Rows a par-mux client may report for a window grid (`refresh-client -C`). |
 | `MAX_CELL_PIXELS` | 512 | `crates/par-mux/src/mux/command/mod.rs:1029` | Pixels per cell axis a par-mux client may report (`refresh-client -p`). |
-| `STALLED_AFTER_MS` | 300,000 | `crates/par-mux/src/mux/dispatch/client.rs:319` | Milliseconds of no output and no report before a working agent reads stalled. |
+| `STALLED_AFTER_MS` | 300,000 | `crates/par-mux/src/mux/dispatch/client.rs:328` | Milliseconds of no output and no report before a working agent reads stalled. |
 | `EVENT_RING_CAPACITY` | 1,024 | `crates/par-mux/src/mux/events.rs:27` | Lifecycle events retained by the daemon's replay ring. |
 | `MAX_FOREGROUND_NAME_LEN` | 128 | `crates/par-mux/src/mux/foreground.rs:42` | Bytes of a pane's foreground command name served by pane-info. |
 | `MAX_REPORT_VALUE_LEN` | 4,096 | `crates/par-mux/src/mux/hooks/mod.rs:148` | Bytes accepted for one hook or agent report value sent from a pane. |

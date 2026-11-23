@@ -565,10 +565,11 @@ fn a_dead_pane_is_held_announced_and_respawnable() {
     let deadline = Instant::now() + Duration::from_secs(15);
     let mut saw = false;
     while Instant::now() < deadline && !saw {
-        if let Ok(par_term_emu_core::tmux_control::TmuxNotification::Output { pane_id, data }) =
-            client
-                .notifications()
-                .recv_timeout(Duration::from_millis(250))
+        if let Ok(par_term_emu_core::tmux_control::TmuxNotification::Output {
+            pane_id, data, ..
+        }) = client
+            .notifications()
+            .recv_timeout(Duration::from_millis(250))
         {
             saw = pane_id == "%0" && String::from_utf8_lossy(&data).contains("respawned-out");
         }
@@ -1154,9 +1155,9 @@ fn respawn_pane_ignores_flags_inside_the_command() {
             {
                 respawned = true
             }
-            Ok(par_term_emu_core::tmux_control::TmuxNotification::Output { pane_id, data })
-                if pane_id == "%0" && String::from_utf8_lossy(&data).contains("RESP-42") =>
-            {
+            Ok(par_term_emu_core::tmux_control::TmuxNotification::Output {
+                pane_id, data, ..
+            }) if pane_id == "%0" && String::from_utf8_lossy(&data).contains("RESP-42") => {
                 output = true
             }
             _ => {}
@@ -1252,10 +1253,11 @@ fn a_split_pane_pushes_its_output_to_clients() {
     let deadline = Instant::now() + Duration::from_secs(15);
     let mut saw = false;
     while Instant::now() < deadline && !saw {
-        if let Ok(par_term_emu_core::tmux_control::TmuxNotification::Output { pane_id, data }) =
-            client
-                .notifications()
-                .recv_timeout(Duration::from_millis(250))
+        if let Ok(par_term_emu_core::tmux_control::TmuxNotification::Output {
+            pane_id, data, ..
+        }) = client
+            .notifications()
+            .recv_timeout(Duration::from_millis(250))
         {
             saw = pane_id == new_pane && String::from_utf8_lossy(&data).contains("split-out");
         }

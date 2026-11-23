@@ -337,7 +337,7 @@ impl StatusState {
         {
             Ok(reply) => reply,
             Err(err) if err.kind() == std::io::ErrorKind::TimedOut => {
-                return Err(StatusError::TimedOut)
+                return Err(StatusError::TimedOut);
             }
             Err(_) => return Err(StatusError::Query),
         };
@@ -1299,7 +1299,11 @@ mod tests {
         let mut body = snapshot_body();
         body.insert(3, "restored 7".to_string());
         body.push("agent %1 claude question hook session=$0 win=@0".to_string());
-        let reply = Reply { ok: true, body };
+        let reply = Reply {
+            ok: true,
+            body,
+            generation: None,
+        };
         got.apply_snapshot_reply(&reply, 1).expect("applies");
         assert_eq!(got.restored_age, Some(7));
         let scoped = got

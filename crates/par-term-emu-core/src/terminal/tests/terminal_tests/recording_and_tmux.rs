@@ -259,7 +259,7 @@ fn test_tmux_control_mode_suppresses_raw_protocol() {
         .find(|n| matches!(n, TmuxNotification::Output { .. }));
     assert!(output_notif.is_some(), "Should have Output notification");
 
-    if let Some(TmuxNotification::Output { pane_id, data }) = output_notif {
+    if let Some(TmuxNotification::Output { pane_id, data, .. }) = output_notif {
         assert_eq!(pane_id, "%1");
         assert_eq!(data, b"Hello World");
     }

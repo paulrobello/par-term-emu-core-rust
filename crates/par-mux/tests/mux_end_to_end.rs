@@ -434,7 +434,7 @@ fn a_new_panes_first_output_is_pushed_even_when_wiring_lags() {
     while !seen.contains("EARLY-MARK") {
         let left = deadline.saturating_duration_since(Instant::now());
         match observer.notifications().recv_timeout(left) {
-            Ok(TmuxNotification::Output { pane_id, data }) if pane_id == "%0" => {
+            Ok(TmuxNotification::Output { pane_id, data, .. }) if pane_id == "%0" => {
                 seen.push_str(&String::from_utf8_lossy(&data));
             }
             Ok(_) => {}

@@ -79,15 +79,18 @@ pub use io::PtyInputHandle;
 pub type OutputCallback = Arc<dyn Fn(&[u8]) + Send + Sync>;
 
 /// The damage-aware [`OutputCallback`]: called with the raw PTY bytes, the
-/// pane terminal's damage generation after those bytes applied, and the
-/// inclusive viewport row ranges (ascending, 0-based, viewport-relative)
-/// they changed since this consumer's previous chunk. Installed via
+/// pane terminal's damage generation after those bytes applied, the
+/// chunk's APPLY STAMP (card 01a205ba — the reader's per-read generation
+/// bump, unique per chunk and monotone per pane even when the chunk
+/// changed no grid rows), and the inclusive viewport row ranges
+/// (ascending, 0-based, viewport-relative) they changed since this
+/// consumer's previous chunk. Installed via
 /// [`PtySession::set_output_callback_with_damage`]; when set, the reader
-/// invokes it INSTEAD of any plain callback. The generation is present on
-/// every chunk, so `ranges` empty means "no viewport row changed", never
-/// "unknown" — the unknown case only exists for consumers (and chunks)
-/// without damage information.
-pub type OutputDamageCallback = Arc<dyn Fn(&[u8], u64, &[(u32, u32)]) + Send + Sync>;
+/// invokes it INSTEAD of any plain callback. The damage generation is
+/// present on every chunk, so `ranges` empty means "no viewport row
+/// changed", never "unknown" — the unknown case only exists for consumers
+/// (and chunks) without damage information.
+pub type OutputDamageCallback = Arc<dyn Fn(&[u8], u64, u64, &[(u32, u32)]) + Send + Sync>;
 
 /// Wait-free geometry mirror (ENH-023). The reader thread and every resize
 /// path publish `(cols, rows, cursor)` here while already holding the

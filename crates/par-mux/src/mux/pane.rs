@@ -561,6 +561,15 @@ impl MuxPane {
         self.session.update_waiter()
     }
 
+    /// The pane's apply stamp (card 01a205ba): the reader's per-read
+    /// generation counter, read at a replay export alongside the seed.
+    /// The pre-guard bump on every chunk is what makes the read
+    /// fence-coherent — a chunk stamped at or before the value seen here
+    /// is provably already reflected in an export taken at this instant.
+    pub(crate) fn apply_generation(&self) -> u64 {
+        self.session.update_generation()
+    }
+
     /// Liveness for the reaper's periodic pass — the reader flag plus the OS
     /// child handle. On Windows ConPTY the reader never observes EOF after
     /// the child exits, so [`Self::is_running`] alone would leave an exited
@@ -1541,7 +1550,7 @@ mod tests {
         let collected = Arc::new(Mutex::new(Vec::new()));
         let into = Arc::clone(&collected);
         let sink = OutputSink(Arc::new(
-            move |bytes: &[u8], _gen: u64, _rows: &[(u32, u32)]| {
+            move |bytes: &[u8], _gen: u64, _stamp: u64, _rows: &[(u32, u32)]| {
                 into.lock().extend_from_slice(bytes)
             },
         ));

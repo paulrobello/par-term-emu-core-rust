@@ -306,7 +306,7 @@ fn sidebar_groups_worktree_workspaces_under_their_repo() {
 #[test]
 fn pane_osc52_clipboard_bridges_to_the_host_outbox() {
     let mut session = snapshot_session();
-    session.feed_pane("%1", b"\x1b]52;c;aGVsbG8=\x07");
+    session.feed_pane("%1", b"\x1b]52;c;aGVsbG8=\x07", None);
     session.bridge_pane_clipboard();
     let out = session.notify.outbox.clone();
     let needle = b"\x1b]52;c;aGVsbG8=\x1b\\";
@@ -322,7 +322,7 @@ fn pane_osc52_clipboard_bridges_to_the_host_outbox() {
     assert_eq!(session.notify.outbox.len(), len_before, "deduped");
 
     // New content re-forwards.
-    session.feed_pane("%1", b"\x1b]52;c;aGVsbG8gd29ybGQ=\x07");
+    session.feed_pane("%1", b"\x1b]52;c;aGVsbG8gd29ybGQ=\x07", None);
     session.bridge_pane_clipboard();
     let out = session.notify.outbox.clone();
     let needle = b"\x1b]52;c;aGVsbG8gd29ybGQ=\x1b\\";
@@ -334,7 +334,7 @@ fn pane_osc52_clipboard_bridges_to_the_host_outbox() {
 
     // A pane switch forwards the pane it lands on.
     session.renderer.focus(2);
-    session.feed_pane("%2", b"\x1b]52;c;cGFuZTI=\x07");
+    session.feed_pane("%2", b"\x1b]52;c;cGFuZTI=\x07", None);
     session.bridge_pane_clipboard();
     let out = session.notify.outbox.clone();
     let needle = b"\x1b]52;c;cGFuZTI=\x1b\\";

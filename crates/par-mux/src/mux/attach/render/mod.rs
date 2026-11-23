@@ -847,6 +847,13 @@ struct WindowSession {
     /// registration replay), with their exit code — the status row's exit
     /// cue and the respawn chord's gate. `%pane-respawned` clears one.
     held: std::collections::HashMap<u32, Option<i32>>,
+    /// Per-pane replay fences (card 01a205ba): the damage generation a
+    /// pane's replay export covered (`gen=<N>` on the reply's closing
+    /// flag). A `%output` chunk stamped at or before it was already on the
+    /// replayed screen — re-applying it holes the grid with mixed-era
+    /// content — so `feed_pane` drops it. Cleared when the pane respawns
+    /// (a fresh terminal, a fresh generation chain).
+    output_fences: std::collections::HashMap<u32, u64>,
     /// The config's `sidebar-on-launch` (the settings dialog shows and
     /// edits it; the live panel's visibility is `sidebar`).
     sidebar_on_launch: bool,
@@ -1283,6 +1290,7 @@ impl WindowSession {
             agent_rows: chords.agent_rows.clone(),
             notify: notify::NotifyState::default(),
             held: std::collections::HashMap::new(),
+            output_fences: std::collections::HashMap::new(),
             join_source: None,
             tab_drag_from: None,
             scroll_matches: Vec::new(),
@@ -1964,12 +1972,14 @@ impl WindowSession {
     /// emptying, which leaves nothing to render).
     fn handle_event(&mut self, event: TmuxNotification) -> EventOutcome {
         match event {
-            TmuxNotification::Output { pane_id, data } => {
-                self.feed_pane(&pane_id, &data);
+            TmuxNotification::Output { pane_id, data, generation } => {
+                self.feed_pane(&pane_id, &data, generation);
                 EventOutcome::Continue
             }
             TmuxNotification::ExtendedOutput { pane_id, data, .. } => {
-                self.feed_pane(&pane_id, &data);
+                // Flow-control extended output carries no generation token,
+                // so it feeds unfenced (the pre-fence behavior).
+                self.feed_pane(&pane_id, &data, None);
                 EventOutcome::Continue
             }
             TmuxNotification::LayoutChange {

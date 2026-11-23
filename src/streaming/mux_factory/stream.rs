@@ -205,9 +205,9 @@ pub(super) fn spawn_drain(
                         // followed by more `%output`, and lines for the OLD
                         // pane must not survive the retarget that happened
                         // mid-batch.
-                        TmuxNotification::Output { pane_id: id, data }
-                            if id == live_pane_id(&link, &mut pane_guard_buf) =>
-                        {
+                        TmuxNotification::Output {
+                            pane_id: id, data, ..
+                        } if id == live_pane_id(&link, &mut pane_guard_buf) => {
                             // The damage line, when the daemon sent one, is the
                             // VERY next line (one fan-out write). Peek at the
                             // queue's front: this pane's `%pane-damage` is

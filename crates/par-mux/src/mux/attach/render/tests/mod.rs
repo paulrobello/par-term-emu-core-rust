@@ -1627,6 +1627,9 @@ struct FakeScript {
     /// Per-line reply delays: the fake sleeps this long before the
     /// line's reply block (a wedged daemon, for the status bound).
     delays: std::collections::HashMap<String, std::time::Duration>,
+    /// Card 01a205ba: replies whose closing line carries the `gen=<N>`
+    /// fence flag, as a real daemon's replay reply does.
+    gen_replies: std::collections::HashMap<String, (String, u64)>,
 }
 
 fn fake_daemon(
@@ -1641,6 +1644,7 @@ fn fake_daemon(
         failing,
         notify,
         delays,
+        gen_replies,
     } = script;
     let mut path = std::env::temp_dir();
     path.push(format!("par-mux-render-{tag}-{}.sock", std::process::id()));
@@ -1695,9 +1699,23 @@ fn fake_daemon(
                 std::thread::sleep(*delay);
             }
             let ok = !failing.contains(trimmed) && !failing.contains(&wildcard);
-            writer
-                .write_all(crate::mux::emit_block(number, &reply, ok).as_bytes())
-                .ok();
+            // A scripted fence reply always answers ok: the block's
+            // closing line carries the `gen=<N>` flag exactly as the
+            // daemon's replay reply does (card 01a205ba).
+            let block = match gen_replies
+                .get(trimmed)
+                .or_else(|| gen_replies.get(&wildcard))
+                .cloned()
+            {
+                Some((body, generation)) => crate::mux::emit_block_flags(
+                    number,
+                    &body,
+                    true,
+                    &format!("1 gen={generation}"),
+                ),
+                None => crate::mux::emit_block(number, &reply, ok),
+            };
+            writer.write_all(block.as_bytes()).ok();
             writer.flush().ok();
         }
     });

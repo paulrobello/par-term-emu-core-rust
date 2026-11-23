@@ -544,7 +544,7 @@ impl Session {
     /// One daemon push. Returns false only on `%exit`.
     fn handle_event(&mut self, event: &TmuxNotification, status_dirty: &mut StatusDirty) -> bool {
         match event {
-            TmuxNotification::Output { pane_id, data } if *pane_id == self.pane => {
+            TmuxNotification::Output { pane_id, data, .. } if *pane_id == self.pane => {
                 self.emulator.feed(data);
                 let mut stdout = std::io::stdout().lock();
                 let _ = write_all_blocking(&mut stdout, data);

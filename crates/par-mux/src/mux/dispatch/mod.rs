@@ -15,7 +15,7 @@
 //! broadcast sinks this module calls into.
 
 use crate::mux::command::{list_commands_body, MuxCommand, ResizeAdjustment, SendKeysPayload};
-use crate::mux::emit::{emit, emit_block};
+use crate::mux::emit::{emit, emit_block, emit_block_flags};
 use crate::mux::foreground::ProcessTable;
 use crate::mux::ids::{AnyTarget, PaneId, SessionId, Target, WindowId, WorkspaceId};
 use crate::mux::layout::SplitDirection;
@@ -140,6 +140,20 @@ impl Outcome {
     fn ok(ctx: &Ctx<'_>, body: &str) -> Self {
         Self {
             reply: emit_block(ctx.command_number, body, true),
+            notifications: Vec::new(),
+            issuer_only: Vec::new(),
+            layout_changed: Vec::new(),
+            succeeded: true,
+        }
+    }
+
+    /// [`Self::ok`] with non-default closing flags — the replay reply's
+    /// `gen=<N>` fence token (card 01a205ba) rides the closing line,
+    /// never the body: the body is the seed byte stream every consumer
+    /// feeds to an emulator verbatim.
+    fn ok_flags(ctx: &Ctx<'_>, body: &str, flags: &str) -> Self {
+        Self {
+            reply: emit_block_flags(ctx.command_number, body, true, flags),
             notifications: Vec::new(),
             issuer_only: Vec::new(),
             layout_changed: Vec::new(),

@@ -281,13 +281,28 @@ impl TmuxControlParser {
         }
 
         let pane_id = parts[0].to_string();
-        let data = if parts.len() > 1 {
-            Self::unescape_output(parts[1])
-        } else {
-            Vec::new()
+        // The optional `gen=<u64>` second token (card 01a205ba): the chunk's
+        // damage generation, stamped by a same-vintage daemon for the attach
+        // client's replay fence. Recognized only when the token after the
+        // pane id is exactly `gen=` + digits; output data that itself begins
+        // with such text misparses (accepted — the same-binary pairing is
+        // the deployment model, docs/MUX.md).
+        let (generation, data) = match parts.get(1) {
+            None => (None, Vec::new()),
+            Some(rest) => {
+                let (token, data) = rest.split_once(' ').unwrap_or((rest, ""));
+                match token.strip_prefix("gen=").map(str::parse::<u64>) {
+                    Some(Ok(generation)) => (Some(generation), Self::unescape_output(data)),
+                    _ => (None, Self::unescape_output(rest)),
+                }
+            }
         };
 
-        Some(TmuxNotification::Output { pane_id, data })
+        Some(TmuxNotification::Output {
+            pane_id,
+            generation,
+            data,
+        })
     }
 
     /// `%pane-damage <pane_id> <generation> [<start>-<end>…]` — the damage

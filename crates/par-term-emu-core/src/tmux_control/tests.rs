@@ -68,11 +68,69 @@ fn test_parse_output() {
     assert_eq!(notifications.len(), 1);
 
     match &notifications[0] {
-        TmuxNotification::Output { pane_id, data } => {
+        TmuxNotification::Output { pane_id, data, .. } => {
             assert_eq!(pane_id, "%1");
             assert_eq!(data, b"Hello World");
         }
         _ => panic!("Expected Output notification"),
+    }
+}
+
+/// Card 01a205ba: the optional `gen=` token parses to the Output
+/// generation only when it is exactly `gen=` + digits; a malformed or
+/// absent token leaves it `None` with the rest parsed as data (old
+/// behavior).
+#[test]
+fn test_parse_output_generation_token() {
+    let mut parser = TmuxControlParser::new(true);
+
+    let notifications = parser.parse(b"%output %3 gen=42 hello\n");
+    assert_eq!(notifications.len(), 1);
+    match &notifications[0] {
+        TmuxNotification::Output {
+            pane_id,
+            generation,
+            data,
+        } => {
+            assert_eq!(pane_id, "%3");
+            assert_eq!(*generation, Some(42));
+            assert_eq!(data, b"hello");
+        }
+        _ => panic!("Expected Output notification"),
+    }
+
+    // The empty-data form: the token rides with nothing after it.
+    let notifications = parser.parse(b"%output %3 gen=7\n");
+    match &notifications[0] {
+        TmuxNotification::Output {
+            generation, data, ..
+        } => {
+            assert_eq!(*generation, Some(7));
+            assert!(data.is_empty());
+        }
+        _ => panic!("Expected Output notification"),
+    }
+
+    // Malformed forms degrade to no generation, token as data:
+    let notifications = parser.parse(b"%output %3 gen=abc hello\n");
+    match &notifications[0] {
+        TmuxNotification::Output {
+            generation, data, ..
+        } => {
+            assert_eq!(*generation, None);
+            assert_eq!(data, b"gen=abc hello");
+        }
+        whole => panic!("Expected Output notification, got {whole:?}"),
+    }
+
+    // A pane whose output itself starts with `gen=<digits>` misparses —
+    // the documented residual ambiguity (docs/MUX.md).
+    let notifications = parser.parse(b"%output %3 gen=9 not gen data\n");
+    match &notifications[0] {
+        TmuxNotification::Output { generation, .. } => {
+            assert_eq!(*generation, Some(9));
+        }
+        whole => panic!("Expected Output notification, got {whole:?}"),
     }
 }
 
@@ -146,7 +204,7 @@ fn test_parse_output_then_damage_adjacent() {
     assert_eq!(notifications.len(), 3);
     assert!(matches!(
         &notifications[0],
-        TmuxNotification::Output { pane_id, data }
+        TmuxNotification::Output { pane_id, data, .. }
             if pane_id == "%3" && data == b"hello"
     ));
     assert!(matches!(
@@ -169,7 +227,7 @@ fn test_parse_output_single_space() {
     assert_eq!(notifications.len(), 1);
 
     match &notifications[0] {
-        TmuxNotification::Output { pane_id, data } => {
+        TmuxNotification::Output { pane_id, data, .. } => {
             assert_eq!(pane_id, "%1");
             assert_eq!(data, b" ", "Space character should be preserved in output");
         }
@@ -185,7 +243,7 @@ fn test_parse_output_trailing_spaces() {
     assert_eq!(notifications.len(), 1);
 
     match &notifications[0] {
-        TmuxNotification::Output { pane_id, data } => {
+        TmuxNotification::Output { pane_id, data, .. } => {
             assert_eq!(pane_id, "%1");
             assert_eq!(data, b"text   ", "Trailing spaces should be preserved");
         }
@@ -201,7 +259,7 @@ fn test_parse_output_crlf_line_ending() {
     assert_eq!(notifications.len(), 1);
 
     match &notifications[0] {
-        TmuxNotification::Output { pane_id, data } => {
+        TmuxNotification::Output { pane_id, data, .. } => {
             assert_eq!(pane_id, "%1");
             assert_eq!(data, b"a", "CR should be stripped from line ending");
         }
@@ -217,7 +275,7 @@ fn test_parse_output_single_space_crlf() {
     assert_eq!(notifications.len(), 1);
 
     match &notifications[0] {
-        TmuxNotification::Output { pane_id, data } => {
+        TmuxNotification::Output { pane_id, data, .. } => {
             assert_eq!(pane_id, "%1");
             assert_eq!(data, b" ", "Space should be preserved with CRLF ending");
         }
@@ -498,6 +556,7 @@ fn test_notification_type() {
     assert_eq!(
         TmuxNotification::Output {
             pane_id: "%1".to_string(),
+            generation: None,
             data: vec![]
         }
         .notification_type(),
@@ -870,6 +929,7 @@ fn parse_only_notifications_decode_their_fields() {
             "%output %1",
             N::Output {
                 pane_id: "%1".into(),
+                generation: None,
                 data: Vec::new(),
             },
         ),

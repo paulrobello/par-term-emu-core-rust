@@ -166,7 +166,15 @@ impl PtySession {
                         // bump after the grid write (see end of the write-guard block)
                         // closes that window.
                         let old_gen = update_generation.fetch_add(1, Ordering::SeqCst);
-                        debug::log_generation_change(old_gen, old_gen + 1, "PTY read");
+                        // The chunk's apply stamp (card 01a205ba): the value
+                        // this read's pre-bump produced. The bump happens
+                        // BEFORE the write guard below, which is what makes
+                        // an export-time read of the counter fence-coherent:
+                        // an export blocked on the guard reads the stamp of
+                        // the chunk being applied, one taken after the guard
+                        // drops reads past it.
+                        let stamp_gen = old_gen + 1;
+                        debug::log_generation_change(old_gen, stamp_gen, "PTY read");
 
                         // Feed terminal output to coprocesses
                         {
@@ -351,7 +359,7 @@ impl PtySession {
                         {
                             let damage_callback_guard = output_damage_callback.lock().clone();
                             if let Some(ref callback) = damage_callback_guard {
-                                callback(&buffer[..n], damage_gen, &damage_ranges);
+                                callback(&buffer[..n], damage_gen, stamp_gen, &damage_ranges);
                             } else {
                                 let callback_guard = output_callback.lock();
                                 if let Some(ref callback) = *callback_guard {

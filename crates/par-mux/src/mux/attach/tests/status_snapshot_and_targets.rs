@@ -216,6 +216,7 @@ fn two_session_query(
         Ok(crate::mux::client::Reply {
             body: body.lines().map(str::to_string).collect(),
             ok: true,
+            generation: None,
         })
     }
 }
@@ -307,6 +308,7 @@ fn picked_target_stays_out_of_the_way() {
         Ok(crate::mux::client::Reply {
             body: vec!["$0: only".to_string()],
             ok: true,
+            generation: None,
         })
     };
     assert_eq!(
@@ -331,6 +333,7 @@ fn prefer_default_workspace_picks_the_default_workspaces_session() {
             Ok(crate::mux::client::Reply {
                 body: body.lines().map(str::to_string).collect(),
                 ok: true,
+                generation: None,
             })
         },
         None,
@@ -360,6 +363,7 @@ fn prefer_default_workspace_falls_back_to_the_first_workspace() {
             Ok(crate::mux::client::Reply {
                 body: body.lines().map(str::to_string).collect(),
                 ok: true,
+                generation: None,
             })
         },
         None,
@@ -387,6 +391,7 @@ fn prefer_default_workspace_keeps_the_single_workspace_rule() {
                 Ok(crate::mux::client::Reply {
                     body: body.lines().map(str::to_string).collect(),
                     ok: true,
+                    generation: None,
                 })
             },
             None,

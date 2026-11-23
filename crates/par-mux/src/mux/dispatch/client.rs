@@ -167,7 +167,16 @@ fn replay_pane_screen(ctx: &Ctx<'_>, pane: PaneId, graphics: bool) -> Outcome {
         Some(target) => {
             let terminal = target.terminal();
             let terminal = terminal.read();
-            Outcome::ok(ctx, &replay_reply_body(&terminal, graphics))
+            // The export-time apply stamp rides the closing line's flags,
+            // not the body: the body is the seed byte stream (card
+            // 01a205ba). The pre-guard per-chunk bump on the same counter
+            // is what makes this read fence-coherent with the `%output`
+            // stamps.
+            Outcome::ok_flags(
+                ctx,
+                &replay_reply_body(&terminal, graphics),
+                &format!("1 gen={}", target.apply_generation()),
+            )
         }
         None => Outcome::err(ctx, &format!("no such pane: {pane}")),
     }

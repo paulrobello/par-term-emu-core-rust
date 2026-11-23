@@ -38,10 +38,18 @@ pub enum TmuxNotification {
     },
 
     /// Pane output data
-    /// Arguments: pane_id, output_data (octal-escaped for control chars)
+    /// Arguments: pane_id, \[`gen=<N>`\] output_data
+    /// (octal-escaped for control chars)
     Output {
         /// Pane id (e.g. `%1`).
         pane_id: String,
+        /// The pane terminal's damage generation after those bytes applied —
+        /// the replay fence (card 01a205ba). A chunk stamped at or before a
+        /// replay reply's export generation was already on the replayed
+        /// screen, so the client drops it instead of applying it a second
+        /// time. `None` from a pre-fence emitter; a `gen=` token that is not
+        /// fully digits parses as output data instead (old behavior).
+        generation: Option<u64>,
         /// Raw output bytes (control characters decoded).
         data: Vec<u8>,
     },

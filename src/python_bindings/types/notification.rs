@@ -215,7 +215,8 @@ impl From<&crate::tmux_control::TmuxNotification> for PyTmuxNotification {
             Begin { timestamp => timestamp: copy, command_number => command_number: copy, flags => flags: own };
             End { timestamp => timestamp: copy, command_number => command_number: copy, flags => flags: own };
             Error { timestamp => timestamp: copy, command_number => command_number: copy, flags => flags: own };
-            Output { pane_id => pane_id: own, data => data: own };
+            Output { pane_id => pane_id: own, data => data: own,
+                     generation => damage_generation: opt };
             PaneModeChanged { pane_id => pane_id: own };
             WindowPaneChanged { window_id => window_id: own, pane_id => pane_id: own };
             WindowClose { window_id => window_id: own };
@@ -500,6 +501,7 @@ mod tests {
             },
             TmuxNotification::Output {
                 pane_id: "p-output".to_string(),
+                generation: None,
                 data: b"out-data".to_vec(),
             },
             TmuxNotification::PaneModeChanged {

@@ -114,6 +114,10 @@ impl WindowSession {
             return;
         };
         self.held.remove(&pane);
+        // A respawned pane runs a fresh terminal with a fresh generation
+        // chain — its old replay fence describes a screen that no longer
+        // exists (card 01a205ba).
+        self.output_fences.remove(&pane);
         if self.renderer.layout().iter().any(|r| r.pane == pane) {
             if !self.pending.respawned.contains(&pane) {
                 self.pending.respawned.push(pane);

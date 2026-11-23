@@ -953,7 +953,7 @@ impl WindowSession {
     fn defer_seed_events(&mut self, events: Vec<TmuxNotification>) {
         for event in events {
             match event {
-                TmuxNotification::Output { pane_id, data }
+                TmuxNotification::Output { pane_id, data, .. }
                 | TmuxNotification::ExtendedOutput { pane_id, data, .. } => {
                     // Card 01a19947: the daemon enqueues the seed reply
                     // under the clients lock with the output-epoch
@@ -976,8 +976,23 @@ impl WindowSession {
         }
     }
 
-    pub(super) fn feed_pane(&mut self, pane_id: &str, data: &[u8]) {
+    pub(super) fn feed_pane(&mut self, pane_id: &str, data: &[u8], generation: Option<u64>) {
         if let Some(n) = pane_id.strip_prefix('%').and_then(|n| n.parse().ok()) {
+            // The replay fence (card 01a205ba): the daemon's sink dispatch
+            // can lag its grid apply, so a chunk stamped at or before the
+            // replay's export generation arrives after the reply while its
+            // bytes already sit on the replayed screen — re-applying it
+            // holes the grid with mixed-era content. `None` (a pre-fence
+            // daemon) feeds as always.
+            if let (Some(g), Some(&fence)) = (generation, self.output_fences.get(&n)) {
+                if g <= fence {
+                    super::trace_input(format_args!(
+                        "drop pane %{n} {} bytes (gen {g} <= replay fence {fence})",
+                        data.len()
+                    ));
+                    return;
+                }
+            }
             super::trace_input(format_args!("feed pane %{n} {} bytes", data.len()));
             let pushed = self.renderer.feed_output(n, data);
             if pushed > 0 {
@@ -1021,6 +1036,19 @@ impl WindowSession {
                     Ok(reply) if reply.ok => {
                         let bytes = reply.body.join("\n").into_bytes();
                         self.renderer.feed_replay(id, &bytes);
+                        // The reply's export-time generation fences this
+                        // pane's feed (card 01a205ba); a reply without one
+                        // (a pre-fence daemon) proves no coverage, so the
+                        // feed stays unfenced rather than trusting a stale
+                        // fence.
+                        match reply.generation {
+                            Some(generation) => {
+                                self.output_fences.insert(id, generation);
+                            }
+                            None => {
+                                self.output_fences.remove(&id);
+                            }
+                        }
                         replayed = true;
                         break;
                     }

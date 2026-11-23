@@ -36,8 +36,19 @@ pub fn escape_output(bytes: &[u8]) -> String {
 /// client blocks waiting for it.
 pub fn emit(notification: &TmuxNotification) -> String {
     match notification {
-        TmuxNotification::Output { pane_id, data } => {
-            format!("%output {} {}\n", pane_id, escape_output(data))
+        TmuxNotification::Output {
+            pane_id,
+            generation,
+            data,
+        } => {
+            // The `gen=` token rides only when set: a pre-fence emitter
+            // (or an unparsed hand-constructed notification) emits the
+            // tmux shape unchanged. Residual ambiguity: pane output that
+            // itself starts with `gen=<digits>` misparses on the receiving
+            // side (same-binary pairing is the deployment model,
+            // docs/MUX.md).
+            let tail = generation.map_or_else(String::new, |g| format!(" gen={g}"));
+            format!("%output {pane_id}{tail} {}\n", escape_output(data))
         }
         TmuxNotification::OutputDamage {
             pane_id,
@@ -271,6 +282,15 @@ pub fn emit(notification: &TmuxNotification) -> String {
 /// `%end` on success or `%error` on failure. `command_number` ties the reply to
 /// the request and must match across the opening and closing lines.
 pub fn emit_block(command_number: u32, body: &str, ok: bool) -> String {
+    emit_block_flags(command_number, body, ok, "1")
+}
+
+/// [`emit_block`] with non-default closing flags. The replay reply's
+/// export-time damage generation rides here — ` gen=<N>` on the closing
+/// line, never in the body: the body is the seed byte stream, and every
+/// consumer (the attach client, par-term) feeds it to an emulator
+/// verbatim (card 01a205ba).
+pub fn emit_block_flags(command_number: u32, body: &str, ok: bool, flags: &str) -> String {
     let timestamp = now_secs();
     let mut out = String::new();
     out.push_str(&emit(&TmuxNotification::Begin {
@@ -288,7 +308,7 @@ pub fn emit_block(command_number: u32, body: &str, ok: bool) -> String {
         TmuxNotification::End {
             timestamp,
             command_number,
-            flags: "1".to_string(),
+            flags: flags.to_string(),
         }
     } else {
         TmuxNotification::Error {
@@ -319,17 +339,53 @@ mod tests {
     fn output_notification_round_trips() {
         let original = TmuxNotification::Output {
             pane_id: "%3".to_string(),
+            generation: None,
             data: b"hello".to_vec(),
         };
         let parsed = round_trip(&original);
         assert_eq!(parsed.len(), 1, "one line in, one notification out");
         match &parsed[0] {
-            TmuxNotification::Output { pane_id, data } => {
+            TmuxNotification::Output { pane_id, data, .. } => {
                 assert_eq!(pane_id, "%3");
                 assert_eq!(data, b"hello");
             }
             other => panic!("expected Output, got {other:?}"),
         }
+    }
+
+    /// Card 01a205ba: the `gen=` token round-trips through the real
+    /// parser with full equality (present and absent), and the absent
+    /// form emits the exact pre-fence wire shape.
+    #[test]
+    fn output_generation_round_trips() {
+        let original = TmuxNotification::Output {
+            pane_id: "%1".to_string(),
+            generation: Some(42),
+            data: b"payload with space".to_vec(),
+        };
+        let line = emit(&original);
+        assert!(
+            line.starts_with("%output %1 gen=42 payload with space\n"),
+            "the generation token precedes the data: {line:?}"
+        );
+        let parsed = round_trip(&original);
+        assert_eq!(
+            parsed,
+            vec![original],
+            "full equality through the real parser"
+        );
+
+        let unfenced = TmuxNotification::Output {
+            pane_id: "%1".to_string(),
+            generation: None,
+            data: b"plain".to_vec(),
+        };
+        assert_eq!(
+            emit(&unfenced),
+            "%output %1 plain\n",
+            "the pre-fence wire shape, unchanged"
+        );
+        assert_eq!(round_trip(&unfenced), vec![unfenced]);
     }
 
     /// Card 01a19ca4: the damage line renders `%pane-damage %N <generation>
@@ -377,6 +433,7 @@ mod tests {
         let payload = b"\x1b[31mred\x1b[0m\r\n".to_vec();
         let original = TmuxNotification::Output {
             pane_id: "%0".to_string(),
+            generation: None,
             data: payload.clone(),
         };
         let parsed = round_trip(&original);
@@ -463,11 +520,13 @@ mod tests {
             },
             TmuxNotification::Output {
                 pane_id: "%1".to_string(),
+                generation: None,
                 data: Vec::new(),
             },
             // A single space of data: separator space plus data space on the wire.
             TmuxNotification::Output {
                 pane_id: "%1".to_string(),
+                generation: None,
                 data: b" ".to_vec(),
             },
             TmuxNotification::PaneModeChanged {

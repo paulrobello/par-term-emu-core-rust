@@ -777,9 +777,9 @@ impl Connection {
                 pane.exit_code()
                     .map_or_else(|| " exited=?".to_string(), |code| format!(" exited={code}"))
             });
-            let seed_item = |seed: &str, cols: usize, rows: usize| {
+            let seed_item = |seed: &str, cols: usize, rows: usize, generation: u64| {
                 let body = format!(
-                    "pane {pane_id} {cols}x{rows}{}\n{seed}",
+                    "pane {pane_id} {cols}x{rows}{} gen={generation}\n{seed}",
                     exited.as_deref().unwrap_or_default()
                 );
                 format!(
@@ -804,23 +804,35 @@ impl Connection {
             // macos runner: a load-slowed export lost markers that raced
             // it while the check compared two equal post-export loads.)
             let before = self.output_epoch.load(std::sync::atomic::Ordering::Acquire);
-            let (seed, (cols, rows)) = {
+            // The export-time apply stamp rides the seed (the pane-stream
+            // consumer's fence anchor, card 01a205ba); captured in the SAME
+            // terminal read as the export so the pair cannot split across a
+            // raced chunk.
+            let (seed, (cols, rows), generation) = {
                 let terminal = pane.terminal();
                 let term = terminal.read();
-                (term.export_screen_restore_sequence(), term.size())
+                (
+                    term.export_screen_restore_sequence(),
+                    term.size(),
+                    pane.apply_generation(),
+                )
             };
             let (seed, _clients) = stabilize_seed_export(
-                (seed, (cols, rows)),
+                (seed, (cols, rows), generation),
                 before,
                 || {
                     let terminal = pane.terminal();
                     let term = terminal.read();
-                    (term.export_screen_restore_sequence(), term.size())
+                    (
+                        term.export_screen_restore_sequence(),
+                        term.size(),
+                        pane.apply_generation(),
+                    )
                 },
                 &self.output_epoch,
                 &self.clients,
             );
-            let item = seed_item(&seed.0, (seed.1).0, (seed.1).1);
+            let item = seed_item(&seed.0, (seed.1).0, (seed.1).1, seed.2);
             match self.tx.try_send(item) {
                 Ok(()) => pane_id,
                 Err(_) => return Flow::Close,
@@ -908,16 +920,33 @@ impl Connection {
         // since keeps the first reply — an error block, whose ordering is
         // irrelevant.
         let (reply, _clients) = match terminal {
-            Some((_id, terminal)) => stabilize_seed_export(
-                reply,
-                before,
-                || {
-                    let term = terminal.read();
-                    emit_block(command_number, &replay_reply_body(&term, graphics), true)
-                },
-                &self.output_epoch,
-                &self.clients,
-            ),
+            Some((id, terminal)) => {
+                let tree = Arc::clone(&self.tree);
+                stabilize_seed_export(
+                    reply,
+                    before,
+                    || {
+                        // The stamp reads the pane's apply counter fresh on
+                        // every raced attempt, under the same guard nesting
+                        // the dispatch path uses (tree, then terminal read)
+                        // so the value cannot trail the exported grid.
+                        let tree = tree.lock();
+                        let stamp = tree.pane(id).map_or(0, |pane| pane.apply_generation());
+                        let term = terminal.read();
+                        crate::mux::emit_block_flags(
+                            command_number,
+                            &replay_reply_body(&term, graphics),
+                            true,
+                            // Same rule as the dispatch's first export: the
+                            // stamp is read alongside the body, and rides
+                            // the flags, not the body.
+                            &format!("1 gen={stamp}"),
+                        )
+                    },
+                    &self.output_epoch,
+                    &self.clients,
+                )
+            }
             None => (reply, self.clients.lock()),
         };
         match self.tx.try_send(reply) {

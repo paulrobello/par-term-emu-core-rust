@@ -1352,7 +1352,7 @@ fn saw_pane_exited(client: &par_mux::mux::MuxClient, deadline: Duration) -> bool
             .recv_timeout(Duration::from_millis(100))
         {
             Ok(par_term_emu_core::tmux_control::TmuxNotification::PaneExited { .. }) => {
-                return true
+                return true;
             }
             Ok(_) | Err(crossbeam_channel::RecvTimeoutError::Timeout) => {}
             Err(crossbeam_channel::RecvTimeoutError::Disconnected) => return false,
@@ -1557,10 +1557,11 @@ fn passthrough_flood_round_trip(shape: HostShape) {
     let mut daemon_bytes = Vec::new();
     let deadline = Instant::now() + Duration::from_secs(30);
     while marked_region(&daemon_bytes, START, END).is_none() && Instant::now() < deadline {
-        if let Ok(par_term_emu_core::tmux_control::TmuxNotification::Output { pane_id, data }) =
-            observer
-                .notifications()
-                .recv_timeout(Duration::from_millis(100))
+        if let Ok(par_term_emu_core::tmux_control::TmuxNotification::Output {
+            pane_id, data, ..
+        }) = observer
+            .notifications()
+            .recv_timeout(Duration::from_millis(100))
         {
             if pane_id == pane {
                 daemon_bytes.extend_from_slice(&data);
@@ -1699,6 +1700,7 @@ fn flood_short_lines_do_not_evict_a_lagging_observer() {
             Ok(par_term_emu_core::tmux_control::TmuxNotification::Output {
                 pane_id: seen,
                 ref data,
+                ..
             }) if seen == pane && data.windows(END.len()).any(|w| w == END) => break,
             Ok(_) | Err(crossbeam_channel::RecvTimeoutError::Timeout) => {}
             Err(crossbeam_channel::RecvTimeoutError::Disconnected) => {
@@ -1740,6 +1742,7 @@ fn flood_short_lines_do_not_evict_a_lagging_observer() {
                     if let par_term_emu_core::tmux_control::TmuxNotification::Output {
                         pane_id: seen,
                         data,
+                        ..
                     } = notification
                     {
                         if seen == pane {

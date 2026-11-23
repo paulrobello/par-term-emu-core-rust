@@ -436,6 +436,13 @@ pub struct Reply {
     pub body: Vec<String>,
     /// `true` for `%end`, `false` for `%error`.
     pub ok: bool,
+    /// The replay fence (card 01a205ba): a successful refresh-client
+    /// replay reply carries its export-time damage generation in the
+    /// closing line's flags (`gen=<N>`), so a client drops every pane
+    /// chunk stamped at or before it instead of re-applying bytes the
+    /// replay already painted. `None` on an error close and from a
+    /// pre-fence daemon.
+    pub generation: Option<u64>,
 }
 
 impl Drop for MuxClient {
@@ -498,9 +505,18 @@ fn reader_loop(
             Some((kind @ (Framing::End | Framing::Error), number)) if matches!(open, Some((open_number, _)) if open_number == number) =>
             {
                 let (_, body) = open.take().expect("the guard matched an open block");
+                // The closing line's trailing tokens are the daemon's flag
+                // space: `gen=<N>` (the replay fence) rides there (card
+                // 01a205ba).
+                let generation = line
+                    .split_whitespace()
+                    .skip(3)
+                    .find_map(|token| token.strip_prefix("gen="))
+                    .and_then(|digits| digits.parse().ok());
                 let reply = Reply {
                     body,
                     ok: kind == Framing::End,
+                    generation,
                 };
                 if reply_tx.send(reply).is_err() {
                     break;
@@ -1108,6 +1124,7 @@ mod tests {
                     "%begin 1 9 1".to_string(),
                 ],
                 ok: true,
+                generation: None,
             },
             "mismatched framing numbers are content"
         );
@@ -1118,6 +1135,7 @@ mod tests {
                 .expect("the pre-reply notification"),
             TmuxNotification::Output {
                 pane_id: "%1".to_string(),
+                generation: None,
                 data: b"hi\n".to_vec(),
             }
         );
@@ -1128,6 +1146,7 @@ mod tests {
             Reply {
                 body: vec!["no such pane: %9".to_string()],
                 ok: false,
+                generation: None,
             }
         );
 

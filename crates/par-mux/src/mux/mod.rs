@@ -68,7 +68,7 @@ pub use command::{parse_command, MuxCommand};
 /// `&crossbeam_channel::Receiver` (card 01a19d78): draining it must not
 /// require declaring crossbeam-channel in the embedder's own manifest.
 pub use crossbeam_channel;
-pub use emit::{emit, emit_block, escape_output};
+pub use emit::{emit, emit_block, emit_block_flags, escape_output};
 pub use ids::{
     AnyTarget, IdAllocator, PaneId, ParseIdError, SessionId, Target, WindowId, WorkspaceId,
 };

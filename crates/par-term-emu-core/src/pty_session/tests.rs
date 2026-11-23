@@ -1938,7 +1938,7 @@ type DamageChunk = (Vec<u8>, u64, Vec<(u32, u32)>);
 fn collect_damage_chunks() -> (Arc<Mutex<Vec<DamageChunk>>>, OutputDamageCallback) {
     let chunks: Arc<Mutex<Vec<DamageChunk>>> = Arc::new(Mutex::new(Vec::new()));
     let sink = Arc::clone(&chunks);
-    let callback: OutputDamageCallback = Arc::new(move |data, generation, ranges| {
+    let callback: OutputDamageCallback = Arc::new(move |data, generation, _stamp, ranges| {
         sink.lock()
             .push((data.to_vec(), generation, ranges.to_vec()));
     });

@@ -3616,8 +3616,10 @@ fn pane_output_sink_emits_the_damage_line_adjacent_and_suppresses_when_unchanged
     ));
 
     // First chunk: generation advanced (never-forwarded sentinel), so the
-    // pair rides one push.
-    sink(b"hello", 5, &[(0, 0)]);
+    // pair rides one push. Chunks arrive as (bytes, damage generation,
+    // apply stamp, ranges) since card 01a205ba; the %output stamp is the
+    // apply value, the %pane-damage line keeps the damage generation.
+    sink(b"hello", 5, 5, &[(0, 0)]);
     let line = rx
         .recv_timeout(std::time::Duration::from_secs(2))
         .expect("first push");
@@ -3633,7 +3635,7 @@ fn pane_output_sink_emits_the_damage_line_adjacent_and_suppresses_when_unchanged
 
     // Second chunk: empty ranges, SAME generation (nothing changed) ->
     // suppressed.
-    sink(b"", 5, &[]);
+    sink(b"", 5, 6, &[]);
     let line = rx
         .recv_timeout(std::time::Duration::from_secs(2))
         .expect("second push");
@@ -3644,7 +3646,7 @@ fn pane_output_sink_emits_the_damage_line_adjacent_and_suppresses_when_unchanged
 
     // Third chunk: empty ranges, advanced generation (a positional-only
     // change, e.g. a cursor move) -> the generation-only form.
-    sink(b"", 6, &[]);
+    sink(b"", 6, 7, &[]);
     let line = rx
         .recv_timeout(std::time::Duration::from_secs(2))
         .expect("third push");
@@ -3654,7 +3656,7 @@ fn pane_output_sink_emits_the_damage_line_adjacent_and_suppresses_when_unchanged
     );
 
     // Fourth chunk: non-empty ranges within one generation -> emitted.
-    sink(b"x", 6, &[(2, 2)]);
+    sink(b"x", 6, 8, &[(2, 2)]);
     let line = rx
         .recv_timeout(std::time::Duration::from_secs(2))
         .expect("fourth push");

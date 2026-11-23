@@ -188,7 +188,7 @@ pub(crate) fn pane_output_sink(
     clients: &Clients,
     pane_id: PaneId,
     epoch: &OutputEpoch,
-) -> impl Fn(&[u8], u64, &[(u32, u32)]) + Send + Sync + 'static {
+) -> impl Fn(&[u8], u64, u64, &[(u32, u32)]) + Send + Sync + 'static {
     let sinks = Arc::clone(clients);
     let epoch = Arc::clone(epoch);
     // The last damage generation this sink forwarded. `u64::MAX` is the
@@ -196,13 +196,19 @@ pub(crate) fn pane_output_sink(
     // which keeps the chain conservative — a consumer that missed earlier
     // chunks sees a present generation and scans nothing stale.
     let last_generation = Arc::new(std::sync::atomic::AtomicU64::new(u64::MAX));
-    move |bytes: &[u8], generation: u64, ranges: &[(u32, u32)]| {
+    move |bytes: &[u8], generation: u64, stamp: u64, ranges: &[(u32, u32)]| {
         epoch.fetch_add(1, std::sync::atomic::Ordering::Release);
         let last = last_generation.swap(generation, std::sync::atomic::Ordering::AcqRel);
         let advanced = generation != last;
         let pane = pane_id.to_string();
         let line = emit(&TmuxNotification::Output {
             pane_id: pane.clone(),
+            // The chunk's apply stamp (card 01a205ba) — the client's replay
+            // fence anchor: the reader bumps it BEFORE the terminal write
+            // guard, which is what makes an export-time read of the same
+            // counter fence-coherent — a stamp at or before the reply's
+            // fence is provably already on the replayed screen.
+            generation: Some(stamp),
             data: bytes.to_vec(),
         });
         if !ranges.is_empty() || advanced {
