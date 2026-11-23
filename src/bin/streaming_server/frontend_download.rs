@@ -222,11 +222,38 @@ fn check_web_root_replaceable(web_root: &Path, force: bool) -> Result<()> {
     Ok(())
 }
 
+/// Redirects followed per request (SEC-003); GitHub's release CDN needs one or two.
+const MAX_REDIRECTS: usize = 5;
+
+/// Pure redirect decision (SEC-003): follow only HTTPS targets and stop after
+/// [`MAX_REDIRECTS`], matching the `--proto =https --proto-redir =https`
+/// posture of the curl path in `self_update.rs`. Cross-host HTTPS hops stay
+/// allowed because release assets redirect to GitHub's CDN.
+fn redirect_allowed(target_scheme: &str, redirects_so_far: usize) -> Result<(), &'static str> {
+    if target_scheme != "https" {
+        Err("refusing redirect to a non-HTTPS URL")
+    } else if redirects_so_far >= MAX_REDIRECTS {
+        Err("too many redirects")
+    } else {
+        Ok(())
+    }
+}
+
+fn https_only_redirect_policy() -> reqwest::redirect::Policy {
+    reqwest::redirect::Policy::custom(|attempt| {
+        match redirect_allowed(attempt.url().scheme(), attempt.previous().len()) {
+            Ok(()) => attempt.follow(),
+            Err(reason) => attempt.error(reason),
+        }
+    })
+}
+
 /// Download and extract the web frontend from GitHub releases
 pub async fn download_frontend(version: &str, web_root: &str, force: bool) -> Result<()> {
     let client = reqwest::Client::builder()
         .user_agent("par-term-streamer")
         .timeout(Duration::from_secs(60))
+        .redirect(https_only_redirect_policy())
         .build()
         .context("Failed to create HTTP client")?;
 
@@ -613,6 +640,43 @@ mod tests {
         verify_archive_sha256(b"abc", ABC_SHA256).expect("matching digest must pass");
         let err = verify_archive_sha256(b"abd", ABC_SHA256).expect_err("tampered bytes must fail");
         assert!(format!("{:#}", err).contains("SHA-256 mismatch"));
+    }
+
+    #[test]
+    fn redirect_policy_is_https_only_and_bounded() {
+        assert!(redirect_allowed("https", 0).is_ok());
+        assert!(redirect_allowed("https", MAX_REDIRECTS - 1).is_ok());
+        assert!(redirect_allowed("https", MAX_REDIRECTS).is_err());
+        assert!(redirect_allowed("http", 0).is_err());
+        assert!(redirect_allowed("ftp", 0).is_err());
+    }
+
+    /// Wired end to end: a real client built with the policy refuses an
+    /// HTTP redirect target.
+    #[tokio::test]
+    async fn client_refuses_redirect_to_plain_http() {
+        use std::io::{Read, Write};
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let addr = listener.local_addr().unwrap();
+        std::thread::spawn(move || {
+            if let Ok((mut stream, _)) = listener.accept() {
+                let mut buf = [0u8; 1024];
+                let _ = stream.read(&mut buf);
+                let _ = stream.write_all(
+                    b"HTTP/1.1 302 Found\r\nLocation: http://127.0.0.1:1/x\r\nContent-Length: 0\r\n\r\n",
+                );
+            }
+        });
+        let client = reqwest::Client::builder()
+            .redirect(https_only_redirect_policy())
+            .build()
+            .unwrap();
+        let err = client
+            .get(format!("http://{addr}/start"))
+            .send()
+            .await
+            .expect_err("redirect to http must be refused");
+        assert!(err.is_redirect(), "{err:?}");
     }
 
     #[test]
