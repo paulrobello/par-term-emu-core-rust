@@ -154,9 +154,11 @@ def test_write_releases_gil_while_pty_write_blocks():
     started = time.monotonic()
 
     def probe():
-        # The fixed short sleep returns by reacquiring the GIL, so the
-        # timestamp below is the measurement.
-        time.sleep(0.2)
+        # Each poll tick returns by reacquiring the GIL, so the timestamp
+        # below is the measurement: a GIL-holding write delays the tick that
+        # observes the 0.2 s mark.
+        probe_began = time.monotonic()
+        wait_for(lambda: time.monotonic() - probe_began >= 0.2, timeout=5.0)
         probe_ran_at.append(time.monotonic() - started)
 
     thread = threading.Thread(target=probe, daemon=True)
