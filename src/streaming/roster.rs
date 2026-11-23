@@ -19,6 +19,12 @@ pub fn parse_agents_output(raw: &str) -> Vec<AgentEntry> {
 // AgentEntry's v0.72 activity/presence stats widened the size gap the lint
 // measures; the delta lives for the length of one cache merge, so boxing
 // would buy nothing.
+//
+// Static size (measured with `size_of`, 64-bit, 2026-11-22): `RosterDelta` is
+// 224 bytes, the same as `AgentEntry` (`Upsert`'s payload), so the enum adds no
+// tag overhead (`Release` is a bare `u32`, 4 bytes, and the tag rides a niche).
+// Every `Release` still moves 224 bytes. Whether boxing `Upsert` pays is a
+// measurement question at production roster scale, not settled here.
 #[allow(clippy::large_enum_variant)]
 #[derive(Debug, Clone, PartialEq)]
 pub enum RosterDelta {

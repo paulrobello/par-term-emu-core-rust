@@ -653,26 +653,37 @@ impl StreamSessionState {
         // Mouse tracking mode
         let mouse_mode = terminal.mouse_mode();
         if mouse_mode != MouseMode::Off {
-            let mode_name = match mouse_mode {
-                MouseMode::X10 => "mouse_x10",
-                MouseMode::Normal => "mouse_normal",
-                MouseMode::ButtonEvent => "mouse_button_event",
-                MouseMode::AnyEvent => "mouse_any_event",
-                MouseMode::Off => unreachable!(),
-            };
-            messages.push(ServerMessage::mode_changed(mode_name.to_string(), true));
+            match mouse_mode {
+                MouseMode::X10 => Some("mouse_x10"),
+                MouseMode::Normal => Some("mouse_normal"),
+                MouseMode::ButtonEvent => Some("mouse_button_event"),
+                MouseMode::AnyEvent => Some("mouse_any_event"),
+                MouseMode::Off => {
+                    crate::debug_error!("STREAMING", "mouse mode changed to Off during mode sync");
+                    None
+                }
+            }
+            .into_iter()
+            .for_each(|name| messages.push(ServerMessage::mode_changed(name.to_string(), true)));
         }
 
         // Mouse encoding (if not default)
         let mouse_encoding = terminal.mouse_encoding();
         if mouse_encoding != MouseEncoding::Default {
-            let encoding_name = match mouse_encoding {
-                MouseEncoding::Utf8 => "mouse_utf8",
-                MouseEncoding::Sgr => "mouse_sgr",
-                MouseEncoding::Urxvt => "mouse_urxvt",
-                MouseEncoding::Default => unreachable!(),
-            };
-            messages.push(ServerMessage::mode_changed(encoding_name.to_string(), true));
+            match mouse_encoding {
+                MouseEncoding::Utf8 => Some("mouse_utf8"),
+                MouseEncoding::Sgr => Some("mouse_sgr"),
+                MouseEncoding::Urxvt => Some("mouse_urxvt"),
+                MouseEncoding::Default => {
+                    crate::debug_error!(
+                        "STREAMING",
+                        "mouse encoding changed to Default during mode sync"
+                    );
+                    None
+                }
+            }
+            .into_iter()
+            .for_each(|name| messages.push(ServerMessage::mode_changed(name.to_string(), true)));
         }
 
         // Bracketed paste mode (DECSET 2004)
