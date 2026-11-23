@@ -15,12 +15,12 @@
 //!
 //! Layout of this file, top to bottom:
 //!
-//! - [`TerminalAccess`]: the trait both wrappers implement. Every macro below
+//! - `TerminalAccess`: the trait both wrappers implement. Every macro below
 //!   reaches the terminal only through `term_ref()` (read) or `term_mut()`
 //!   (write), which is why one macro body serves both classes.
 //! - [`WordSelectionBounds`], [`ScrollbackCell`]: shared return-type aliases.
 //! - The `impl_*` macros, in source order (table below).
-//! - [`PixelResize`] plus the `pub(crate) use { ... }` block at the bottom,
+//! - `PixelResize` plus the `pub(crate) use { ... }` block at the bottom,
 //!   which re-exports every macro so callers write
 //!   `crate::python_bindings::common::impl_terminal_X!(Ty)` (ARC-117; the
 //!   macros are not `#[macro_export]`).
@@ -54,7 +54,7 @@
 //! | `impl_terminal_file_transfer` | file-transfer API: `get_active_transfers`, `get_transfer`, `take_completed_transfer`, `cancel_file_transfer` |
 //! | `impl_terminal_exports` | `export_text`, `export_styled`, `export_html`, `export_asciicast`, animation ticks, keyboard-flag stack, `get_line`, `get_char`, `create_snapshot` |
 //! | `impl_terminal_screenshot_methods` | `screenshot`, `screenshot_to_file`, `screenshot_config`, `screenshot_to_file_config` (QA-004) |
-//! | `impl_terminal_resize_pixels` | `resize_pixels`, taking the per-class docstring as a macro argument and delegating to [`PixelResize`] |
+//! | `impl_terminal_resize_pixels` | `resize_pixels`, taking the per-class docstring as a macro argument and delegating to `PixelResize` |
 //!
 //! Adding a shared method: put it in the macro whose row above matches, add
 //! its Python docstring there, and regenerate the stubs (`make stubs`). Adding
@@ -125,7 +125,7 @@ macro_rules! impl_repr {
 }
 
 /// Emit a small set of simple read-only getters for `$ty`, using
-/// [`TerminalAccess::term_ref`]. Validates the shared-method macro pattern
+/// `TerminalAccess::term_ref`. Validates the shared-method macro pattern
 /// (ARC-003/QA-001); the same shape scales to the full duplicated set.
 macro_rules! impl_terminal_simple_getters {
     ($ty:ty) => {
@@ -193,7 +193,7 @@ macro_rules! impl_terminal_simple_getters {
 }
 
 /// Emit a batch of read-only query/state getters for `$ty`, using
-/// [`TerminalAccess::term_ref`]. (ARC-003/QA-001 scaling batch 1.)
+/// `TerminalAccess::term_ref`. (ARC-003/QA-001 scaling batch 1.)
 macro_rules! impl_terminal_query_getters {
     ($ty:ty) => {
         #[pymethods]
@@ -1463,7 +1463,7 @@ macro_rules! impl_terminal_recording {
 }
 
 /// Emit cell / color / line query methods for `$ty`. (ARC-003/QA-001 batch:
-/// cell & line queries.) All read-only, using [`TerminalAccess::term_ref`].
+/// cell & line queries.) All read-only, using `TerminalAccess::term_ref`.
 macro_rules! impl_terminal_cell_line_queries {
     ($ty:ty) => {
         #[pymethods]
@@ -2602,7 +2602,7 @@ pub(crate) fn render_snapshot_detached(
 /// `screenshot`/`screenshot_to_file`/`screenshot_config`/
 /// `screenshot_to_file_config` were duplicated verbatim across
 /// `PyTerminal` and `PyPtyTerminal`; both now share this macro, which
-/// reaches the terminal through [`TerminalAccess::term_ref`] — the same
+/// reaches the terminal through `TerminalAccess::term_ref` — the same
 /// axis the other shared-method macros abstract. When `bold_brightening`
 /// or `background_color` are not given, the terminal's own theme values
 /// are used (both docstrings already documented that default).
@@ -2904,7 +2904,7 @@ pub(crate) trait PixelResize {
 }
 
 /// Emit the `resize_pixels` pymethod for `$ty` once: the Python signature and
-/// the shared dimension check, delegating to [`PixelResize`]. The docstring
+/// the shared dimension check, delegating to `PixelResize`. The docstring
 /// is passed per type so each class keeps its own wording.
 macro_rules! impl_terminal_resize_pixels {
     ($ty:ty, $(#[$doc:meta])*) => {

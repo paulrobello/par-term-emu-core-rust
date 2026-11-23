@@ -59,6 +59,8 @@ PY_PATTERNS = (re.compile(r'os\.environ(?:\.get)?[\(\[]\s*"([A-Z][A-Z0-9_]*)"'),
 # "<NAME>" in its file (after test stripping) or the entry is stale.
 EXTRA_READS: dict[str, str] = {
     "PAR_MUX_CONTROL": "crates/par-mux/src/mux/pane.rs",  # session-env grant (ENH-039), compared by name
+    # compile-time read via env!(), baked by crates/par-mux/build.rs into mux::build_stamp()
+    "PAR_TERM_CORE_BUILD_SHA": "crates/par-mux/src/mux/mod.rs",
 }
 
 # Reads that are not this project's knobs, each with a reason. An entry
