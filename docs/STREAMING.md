@@ -104,7 +104,7 @@ graph TB
         PTY[PTY Session]
         Term[Terminal Emulator]
         Server[Streaming Server]
-        Broadcast[Broadcaster]
+        Broadcast[Session broadcaster loop]
     end
 
     subgraph "Transport Layer"
@@ -1643,17 +1643,8 @@ config = StreamingConfig(
 
 The server supports multiple concurrent viewers of the same terminal session:
 
-**Broadcaster Architecture:**
-```rust
-// Server manages multiple clients
-pub struct Broadcaster {
-    clients: Arc<RwLock<HashMap<Uuid, Client>>>,
-    max_clients: usize,
-}
-
-// Broadcast to all clients
-broadcaster.broadcast(ServerMessage::output(data)).await;
-```
+**Broadcast Architecture:**
+Each session owns its client set and runs one output broadcaster loop (`StreamSessionState::output_broadcaster_loop`) that batches pane output and fans it out to that session's clients. There is no server-wide broadcaster type; `StreamingServer::broadcast_all` sends a message to every session's clients.
 
 **Client Limit:**
 Configure maximum concurrent clients:

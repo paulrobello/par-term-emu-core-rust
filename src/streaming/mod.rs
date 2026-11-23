@@ -50,10 +50,6 @@ pub mod proto;
 pub mod client;
 
 #[cfg(feature = "streaming")]
-#[allow(deprecated)]
-pub mod broadcaster;
-
-#[cfg(feature = "streaming")]
 pub mod server;
 
 #[cfg(feature = "streaming")]
@@ -102,10 +98,6 @@ pub mod py_convert;
 // Re-export main types
 pub use error::{Result, StreamingError};
 pub use protocol::{ClientMessage, ConnectedBuilder, EventType, ServerMessage};
-
-#[cfg(feature = "streaming")]
-#[allow(deprecated)]
-pub use broadcaster::Broadcaster;
 
 #[cfg(feature = "streaming")]
 pub use client::Client;

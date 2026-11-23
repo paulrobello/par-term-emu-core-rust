@@ -364,7 +364,6 @@ The main terminal emulator that ties everything together, organized into submodu
   - `proto_golden_tests.rs` - Golden wire test: pins every message variant's encoded bytes and decoded value against `testdata/proto_golden.txt`
   - `terminal.pb.rs` - Generated protobuf types (from `proto/terminal.proto` via `build.rs`; do not edit by hand)
   - `py_convert.rs` - Python dict conversion helpers shared by the streaming bindings
-  - `broadcaster.rs` - Multi-client broadcast support
   - `auth_hash.rs` - htpasswd-format hash verification (bcrypt, apr1/MD5-crypt, `{SHA}`) for HTTP Basic Auth (SEC-003)
   - `inline_image.rs` - Bridges a terminal's `GraphicsAdded` events to size-bounded `InlineImage` frames (the announce carries an id, the pixels are fetched once), and `apply_inline_image` ingests a received frame into a mirroring `Terminal`'s graphics store
   - `metrics.rs` + `metrics/` - Server metrics behind two gates: the `otel` cargo feature (without it, `metrics/stub.rs` compiles an identical-API no-op) and the runtime switch `--otel-enabled` / `PAR_TERM_STREAMER_OTEL_ENABLED`; `metrics/otel.rs` binds the instruments to the global OTLP meter provider. The shared OTLP layer (protocol grammar, header parsing, provider/exporter init) lives once in the `par-term-emu-core` member (`otel.rs` + `otel/`) behind its own `otel` feature — the streamer and par-mux copies are thin per-binary config on top of it (ARC-001)
