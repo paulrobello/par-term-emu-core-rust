@@ -250,7 +250,7 @@ If `ws=` were placed **before** `source=`, an old core parser would still find `
 - `crates/par-mux/src/mux/tree/mod.rs` (`workspace_of_pane`, test)
 - `crates/par-mux/src/mux/hooks/report.rs`, `crates/par-mux/src/mux/hooks/tests.rs`
 - `crates/par-mux/src/mux/scrape.rs`
-- `crates/par-mux/src/mux/attach/status.rs`, `crates/par-mux/src/mux/attach/render/mod.rs`, `crates/par-mux/src/mux/attach/render/tests/session.rs`
+- `crates/par-mux/src/mux/attach/status.rs`, `crates/par-mux/src/mux/attach/render/mod.rs`, `crates/par-mux/src/mux/attach/render/tests/session.rs` <!-- doc-path: example -->
 - `crates/par-mux/tests/mux_hooks.rs`, `crates/par-mux/tests/mux_agents.rs`
 - `src/python_bindings/types/notification.rs`, `python/par_term_emu_core_rust/_native.pyi` (generated), `docs/API_REFERENCE.md`
 - `docs/MUX.md`, `CHANGELOG.md`

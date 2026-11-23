@@ -45,8 +45,8 @@ because nothing catches divergence.
 ## Files to touch
 
 `crates/par-mux/integrations/package.json` (new), `vitest.config.ts` (new),
-`extensions/test/host.ts` (new), `extensions/agent-state-core.test.ts` (new),
-`extensions/par-mux-agent-state.test.ts`, `extensions/par-mux-omp-agent-state.test.ts` (new),
+`extensions/test/host.ts` (new), `extensions/agent-state-core.test.ts` (new), <!-- doc-path: example -->
+`extensions/par-mux-agent-state.test.ts`, `extensions/par-mux-omp-agent-state.test.ts` (new), <!-- doc-path: example -->
 `Makefile` (target + gate legs), `.github/workflows/ci.yml` (install + test leg),
 `CLAUDE.md` (bootstrap note), `docs/MUX.md` (one line under development).
 

@@ -42,8 +42,8 @@ Introduce one private builder, `StatusFacts`, that both paths fill, row by row, 
 - **Related types.** `RefreshRows { workspaces: Option<Vec<(String, String, bool)>> }` (`:62-65`) carries the roster to the side panel. The agents field is `Vec<(u32, String, String, String)>` (`:104-108`), and ARC-140 replaces it with `RosterEntry`.
 - **Tests that must stay green**, unchanged in assertion content:
   - `status.rs` unit tests (`mod tests` `:745+`): `apply_snapshot_fills_the_same_state_as_the_legacy_queries` (`:805`), `apply_snapshot_ignores_an_unknown_row_kind` (`:823`), `apply_snapshot_without_an_owner_is_session_gone` (`:837`), `apply_snapshot_with_a_bad_header_is_query` (`:854`), `payload_patches_update_agents_and_window_names` (`:868`), plus the `compose_*` suite.
-  - `attach/tests.rs`: `passthrough_status_refresh_uses_client_snapshot_when_advertised`, `passthrough_status_refresh_keeps_the_legacy_round_without_the_feature`, `passthrough_status_snapshot_refusal_falls_back_to_legacy` (`~:2741-2860`).
-  - `render/tests/session.rs`: `snapshot_refresh_is_one_round_trip` (`:2338`), `legacy_refresh_still_runs_without_the_feature` (`:2393`), `sidebar_agents_section_groups_by_workspace` (`:2277`).
+  - `attach/tests.rs`: `passthrough_status_refresh_uses_client_snapshot_when_advertised`, `passthrough_status_refresh_keeps_the_legacy_round_without_the_feature`, `passthrough_status_snapshot_refusal_falls_back_to_legacy` (`~:2741-2860`). <!-- doc-path: example -->
+  - `render/tests/session.rs`: `snapshot_refresh_is_one_round_trip` (`:2338`), `legacy_refresh_still_runs_without_the_feature` (`:2393`), `sidebar_agents_section_groups_by_workspace` (`:2277`). <!-- doc-path: example -->
   - `tests/mux_agents.rs`: `client_snapshot_matches_the_individual_queries` (`:436`), which compares the live daemon's two shapes.
 
 ## Implementation

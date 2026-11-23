@@ -55,7 +55,7 @@ This card adds a reply-continuation queue. A command is written, its reply handl
   Today's chord tests call e.g. `session.route_plain(..)` and then assert immediately on recorded lines and session state, because the replies were synchronous.
 - **Suites that must stay green**:
   - `render/tests/{mod,session,chords}.rs` (157 `#[test]`), whose assertions must be adapted only by inserting `settle()`;
-  - `attach/tests.rs` (passthrough; it does not use the queue but shares `MuxClient`);
+  - `attach/tests.rs` (passthrough; it does not use the queue but shares `MuxClient`); <!-- doc-path: example -->
   - `crates/par-mux/tests/mux_attach.rs` `render_mode_*` (PTY end-to-end);
   - the `client.rs` unit tests for abandoned-reply accounting (`grep -n abandoned crates/par-mux/src/mux/client.rs`).
 
@@ -132,7 +132,7 @@ This card adds a reply-continuation queue. A command is written, its reply handl
 
 ### Tests (added across phases 2–4, in `render/tests/`)
 19. Add `fn settle(session: &mut WindowSession, conn: &mut AttachConn)` to `tests/mod.rs`. In phase 2 it loops `conn.poll_replies()`, and from phase 3 on it loops `session.dispatch_replies(conn)`, in both cases with a 5 ms sleep until `conn.outstanding() == 0`. From phase 3 it also waits until `session.pending_cmds` is empty. It has a 5 s deadline and panics with the outstanding count when that passes. Insert `settle(&mut session, &mut conn)` after the routing call in every chord, menu, picker and click test whose assertions now depend on a continuation. Do not change assertion contents.
-20. **New test `slow_daemon_does_not_block_key_forwarding`** (`tests/session.rs`). The fake daemon, like the real one, handles lines in order and sleeps before each delayed reply, so the assertion is about the *client* returning, not about daemon arrival order.
+20. **New test `slow_daemon_does_not_block_key_forwarding`** (`tests/session.rs`). The fake daemon, like the real one, handles lines in order and sleeps before each delayed reply, so the assertion is about the *client* returning, not about daemon arrival order. <!-- doc-path: example -->
     - Script `delays` with `"select-pane -t %2"` → 2 s. Route a sidebar-row click to pane 2 (the `sidebar_agent_row_click_focuses_the_pane` setup) and time it. Then route the plain bytes `b"abc"` through `route_stdin_bytes` and time that too, with `Instant`.
     - Assert that each routing call returns in < 200 ms.
     - Then `settle`. Assert that the recorded lines contain `select-pane -t %2`, then the click's `pane-info`, then `send-keys -t … -H 61 62 63`, in that order.
