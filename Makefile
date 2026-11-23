@@ -1153,7 +1153,7 @@ proto-rust:
 	@echo "Note: This requires protoc to be installed"
 	cargo build --features streaming,regenerate-proto --no-default-features
 	@# Find and copy the generated file to source tree
-	@GENERATED=$$(find target -name "terminal.rs" -path "*/par-term-emu-core-rust-*/out/*" -newer proto/terminal.proto 2>/dev/null | head -1); \
+	@GENERATED=$$(find target -name "terminal.rs" -path "*/par-term-emu-core-rust*/out/*" -newer proto/terminal.proto 2>/dev/null | head -1); \
 	if [ -n "$$GENERATED" ]; then \
 		cp "$$GENERATED" src/streaming/terminal.pb.rs; \
 		echo "Copied generated code to src/streaming/terminal.pb.rs"; \

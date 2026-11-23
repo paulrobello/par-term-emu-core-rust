@@ -7,15 +7,21 @@ package terminal;
 
 // RGB color (0-255 per channel)
 message Color {
+  // Red channel (0-255)
   uint32 r = 1;
+  // Green channel (0-255)
   uint32 g = 2;
+  // Blue channel (0-255)
   uint32 b = 3;
 }
 
 // Terminal theme with 16 ANSI colors
 message ThemeInfo {
+  // Theme name
   string name = 1;
+  // Default background color
   Color background = 2;
+  // Default foreground color
   Color foreground = 3;
   repeated Color normal = 4;   // 8 colors (indices 0-7)
   repeated Color bright = 5;   // 8 colors (indices 8-15)
@@ -23,33 +29,61 @@ message ThemeInfo {
 
 // Event types for subscription
 enum EventType {
+  // Unspecified; never sent
   EVENT_TYPE_UNSPECIFIED = 0;
+  // Subscribe to output events
   EVENT_TYPE_OUTPUT = 1;
+  // Subscribe to cursor events
   EVENT_TYPE_CURSOR = 2;
+  // Subscribe to bell events
   EVENT_TYPE_BELL = 3;
+  // Subscribe to title events
   EVENT_TYPE_TITLE = 4;
+  // Subscribe to resize events
   EVENT_TYPE_RESIZE = 5;
+  // Subscribe to cwd events
   EVENT_TYPE_CWD = 6;
+  // Subscribe to trigger events
   EVENT_TYPE_TRIGGER = 7;
+  // Subscribe to action events
   EVENT_TYPE_ACTION = 8;
+  // Subscribe to mode events
   EVENT_TYPE_MODE = 9;
+  // Subscribe to graphics events
   EVENT_TYPE_GRAPHICS = 10;
+  // Subscribe to hyperlink events
   EVENT_TYPE_HYPERLINK = 11;
+  // Subscribe to user var events
   EVENT_TYPE_USER_VAR = 12;
+  // Subscribe to progress bar events
   EVENT_TYPE_PROGRESS_BAR = 13;
+  // Subscribe to badge events
   EVENT_TYPE_BADGE = 14;
+  // Subscribe to selection events
   EVENT_TYPE_SELECTION = 15;
+  // Subscribe to clipboard events
   EVENT_TYPE_CLIPBOARD = 16;
+  // Subscribe to shell events
   EVENT_TYPE_SHELL = 17;
+  // Subscribe to system stats events
   EVENT_TYPE_SYSTEM_STATS = 18;
+  // Subscribe to zone events
   EVENT_TYPE_ZONE = 19;
+  // Subscribe to environment events
   EVENT_TYPE_ENVIRONMENT = 20;
+  // Subscribe to remote host events
   EVENT_TYPE_REMOTE_HOST = 21;
+  // Subscribe to sub shell events
   EVENT_TYPE_SUB_SHELL = 22;
+  // Subscribe to snapshot events
   EVENT_TYPE_SNAPSHOT = 23;
+  // Subscribe to file transfer events
   EVENT_TYPE_FILE_TRANSFER = 24;
+  // Subscribe to upload request events
   EVENT_TYPE_UPLOAD_REQUEST = 25;
+  // Subscribe to screen cleared events
   EVENT_TYPE_SCREEN_CLEARED = 26;
+  // Subscribe to pointer shape events
   EVENT_TYPE_POINTER_SHAPE = 27;
 }
 
@@ -57,70 +91,126 @@ enum EventType {
 // Server -> Client Messages
 // =============================================================================
 
+// Envelope for every server-to-client message
 message ServerMessage {
+  // The wrapped message
   oneof message {
+    // Output payload
     Output output = 1;
+    // Resize payload
     Resize resize = 2;
+    // Title payload
     Title title = 3;
+    // Connected payload
     Connected connected = 4;
+    // Refresh payload
     Refresh refresh = 5;
+    // Cursor position payload
     CursorPosition cursor = 6;
+    // Bell payload
     Bell bell = 7;
+    // Error payload
     Error error = 8;
+    // Shutdown payload
     Shutdown shutdown = 9;
+    // Reply to a ping
     Pong pong = 10;
+    // Cwd changed payload
     CwdChanged cwd_changed = 11;
+    // Trigger matched payload
     TriggerMatched trigger_matched = 12;
+    // Action notify payload
     ActionNotify action_notify = 13;
+    // Action mark line payload
     ActionMarkLine action_mark_line = 14;
+    // Mode changed payload
     ModeChanged mode_changed = 15;
+    // Graphics added payload
     GraphicsAdded graphics_added = 16;
+    // Hyperlink added payload
     HyperlinkAdded hyperlink_added = 17;
+    // User var changed payload
     UserVarChanged user_var_changed = 18;
+    // Progress bar changed payload
     ProgressBarChanged progress_bar_changed = 19;
+    // Badge changed payload
     BadgeChanged badge_changed = 20;
+    // Selection changed payload
     SelectionChanged selection_changed = 21;
+    // Clipboard sync payload
     ClipboardSync clipboard_sync = 22;
+    // Shell integration event payload
     ShellIntegrationEvent shell_integration_event = 23;
+    // System stats payload
     SystemStats system_stats = 24;
+    // Zone opened payload
     ZoneOpened zone_opened = 25;
+    // Zone closed payload
     ZoneClosed zone_closed = 26;
+    // Zone scrolled out payload
     ZoneScrolledOut zone_scrolled_out = 27;
+    // Environment changed payload
     EnvironmentChanged environment_changed = 28;
+    // Remote host transition payload
     RemoteHostTransition remote_host_transition = 29;
+    // Sub shell detected payload
     SubShellDetected sub_shell_detected = 30;
+    // Semantic snapshot data payload
     SemanticSnapshotData semantic_snapshot = 31;
+    // File transfer started payload
     FileTransferStarted file_transfer_started = 32;
+    // File transfer progress payload
     FileTransferProgress file_transfer_progress = 33;
+    // File transfer completed payload
     FileTransferCompleted file_transfer_completed = 34;
+    // File transfer failed payload
     FileTransferFailed file_transfer_failed = 35;
+    // Upload requested payload
     UploadRequested upload_requested = 36;
+    // Screen cleared payload
     ScreenCleared screen_cleared = 37;
+    // Agent roster payload
     AgentRoster agent_roster = 38;
+    // Agent state changed payload
     AgentStateChanged agent_state_changed = 39;
+    // Pointer shape changed payload
     PointerShapeChanged pointer_shape_changed = 40;
+    // Pane size status payload
     PaneSizeStatus pane_size_status = 41;
+    // Viewer presence payload
     ViewerPresence viewer_presence = 42;
+    // Inline image payload
     InlineImage inline_image = 43;
+    // Upload started payload
     UploadStarted upload_started = 44;
+    // Upload finished payload
     UploadFinished upload_finished = 45;
+    // Mux tree snapshot payload
     MuxTreeSnapshot mux_tree_snapshot = 46;
+    // Pane process state payload
     PaneProcessState pane_process_state = 47;
+    // Pane created payload
     PaneCreated pane_created = 48;
   }
 }
 
 // Effective pane size and componentwise constraint owners.
 message PaneSizeStatus {
+  // Width in character columns
   uint32 cols = 1;
+  // Height in character rows
   uint32 rows = 2;
+  // Viewer constraining the column count, when any
   optional string column_viewer = 3;
+  // Viewer constraining the row count, when any
   optional string row_viewer = 4;
 }
 
 // Full replacement viewer set, including the receiving connection.
 message ViewerPresence {
+  // Number of attached viewers
   uint32 count = 1;
+  // Identifiers of the attached viewers
   repeated string viewers = 2;
 }
 
@@ -159,21 +249,28 @@ message Output {
 
 // Terminal resize notification
 message Resize {
+  // Width in character columns
   uint32 cols = 1;
+  // Height in character rows
   uint32 rows = 2;
 }
 
 // Terminal title change
 message Title {
+  // New terminal title
   string title = 1;
 }
 
 // Initial connection handshake
 message Connected {
+  // Width in character columns
   uint32 cols = 1;
+  // Height in character rows
   uint32 rows = 2;
   optional bytes initial_screen = 3;  // ANSI styled screen content
+  // Session identifier assigned to this connection
   string session_id = 4;
+  // Active terminal theme
   optional ThemeInfo theme = 5;
   optional string badge = 6;              // Current badge text
   optional float faint_text_alpha = 7;    // Dim text alpha (0.0-1.0)
@@ -191,15 +288,20 @@ message Connected {
 
 // Full screen refresh response
 message Refresh {
+  // Width in character columns
   uint32 cols = 1;
+  // Height in character rows
   uint32 rows = 2;
   bytes screen_content = 3;           // ANSI styled screen content
 }
 
 // Cursor position update
 message CursorPosition {
+  // Zero-based column
   uint32 col = 1;
+  // Zero-based row
   uint32 row = 2;
+  // Whether the cursor is visible
   bool visible = 3;
 }
 
@@ -208,48 +310,70 @@ message Bell {}
 
 // CWD change notification (OSC 7)
 message CwdChanged {
+  // Previous working directory, when known
   optional string old_cwd = 1;
+  // New working directory
   string new_cwd = 2;
+  // Host name
   optional string hostname = 3;
+  // User name
   optional string username = 4;
+  // Unix epoch milliseconds
   optional uint64 timestamp = 5;
   optional bool is_local = 6;  // Server-computed locality (SEC-128 rule); absent = pre-feature sender
 }
 
 // Trigger pattern matched
 message TriggerMatched {
+  // Id of the trigger that fired
   uint64 trigger_id = 1;
+  // Zero-based row
   uint32 row = 2;
+  // Zero-based column
   uint32 col = 3;
+  // Zero-based column where the match ends
   uint32 end_col = 4;
+  // Matched text
   string text = 5;
+  // Regex capture groups
   repeated string captures = 6;
+  // Unix epoch milliseconds
   uint64 timestamp = 7;
 }
 
 // Trigger action result: notification
 message ActionNotify {
+  // Id of the trigger that fired
   uint64 trigger_id = 1;
+  // Title text
   string title = 2;
+  // Notification body
   string message = 3;
 }
 
 // Trigger action result: mark/bookmark a line
 message ActionMarkLine {
+  // Id of the trigger that fired
   uint64 trigger_id = 1;
+  // Row to mark
   uint32 row = 2;
+  // Optional label for the mark
   optional string label = 3;
+  // Optional highlight color
   optional Color color = 4;
 }
 
 // Error notification
 message Error {
+  // Human-readable error message
   string message = 1;
+  // Optional machine-readable error code
   optional string code = 2;
 }
 
 // Server shutdown notification
 message Shutdown {
+  // Why the server is shutting down
   string reason = 1;
 }
 
@@ -316,9 +440,13 @@ message BadgeChanged {
 
 // Selection changed
 message SelectionChanged {
+  // Zero-based start column; absent when cleared
   optional uint32 start_col = 1;
+  // Zero-based start row; absent when cleared
   optional uint32 start_row = 2;
+  // Zero-based end column; absent when cleared
   optional uint32 end_col = 3;
+  // Zero-based end row; absent when cleared
   optional uint32 end_row = 4;
   optional string text = 5;             // Selected text content
   string mode = 6;                      // "chars", "line", "block"
@@ -328,6 +456,7 @@ message SelectionChanged {
 // Clipboard sync event (OSC 52)
 message ClipboardSync {
   string operation = 1;                 // "set", "get_response"
+  // Clipboard text
   string content = 2;
   optional string target = 3;           // "clipboard", "primary", "select"
 }
@@ -337,119 +466,179 @@ message ShellIntegrationEvent {
   string event_type = 1;               // "prompt_start", "command_start", "command_executed", "command_finished"
   optional string command = 2;          // The command text (for command_start)
   optional int32 exit_code = 3;         // Exit code (for command_finished)
+  // Unix epoch milliseconds
   optional uint64 timestamp = 4;
   optional uint64 cursor_line = 5;     // Absolute cursor line (scrollback_len + cursor_row) at marker time
 }
 
 // CPU statistics
 message CpuStats {
+  // Overall CPU usage, 0-100
   double overall_usage_percent = 1;
+  // Number of physical cores
   uint32 physical_core_count = 2;
+  // Usage per logical core, 0-100
   repeated double per_core_usage_percent = 3;
+  // CPU brand string
   optional string brand = 4;
+  // CPU frequency in MHz
   optional uint64 frequency_mhz = 5;
 }
 
 // Memory statistics
 message MemoryStats {
+  // Total physical memory in bytes
   uint64 total_bytes = 1;
+  // Used physical memory in bytes
   uint64 used_bytes = 2;
+  // Available physical memory in bytes
   uint64 available_bytes = 3;
+  // Total swap in bytes
   uint64 swap_total_bytes = 4;
+  // Used swap in bytes
   uint64 swap_used_bytes = 5;
 }
 
 // Individual disk statistics
 message DiskStats {
+  // Device name
   string name = 1;
+  // Mount point path
   string mount_point = 2;
+  // Total capacity in bytes
   uint64 total_bytes = 3;
+  // Available capacity in bytes
   uint64 available_bytes = 4;
+  // Disk kind (e.g. SSD, HDD)
   string kind = 5;
+  // File system type
   string file_system = 6;
+  // Whether the disk is removable
   bool is_removable = 7;
 }
 
 // Network interface statistics
 message NetworkInterfaceStats {
+  // Interface name
   string name = 1;
+  // Bytes received since the last sample
   uint64 received_bytes = 2;
+  // Bytes transmitted since the last sample
   uint64 transmitted_bytes = 3;
+  // Total bytes received
   uint64 total_received_bytes = 4;
+  // Total bytes transmitted
   uint64 total_transmitted_bytes = 5;
+  // Packets received since the last sample
   uint64 packets_received = 6;
+  // Packets transmitted since the last sample
   uint64 packets_transmitted = 7;
+  // Receive errors since the last sample
   uint64 errors_received = 8;
+  // Transmit errors since the last sample
   uint64 errors_transmitted = 9;
 }
 
 // System load averages
 message LoadAverage {
+  // One-minute load average
   double one_minute = 1;
+  // Five-minute load average
   double five_minutes = 2;
+  // Fifteen-minute load average
   double fifteen_minutes = 3;
 }
 
 // Combined system resource statistics
 message SystemStats {
+  // CPU statistics
   optional CpuStats cpu = 1;
+  // Memory statistics
   optional MemoryStats memory = 2;
+  // Per-disk statistics
   repeated DiskStats disks = 3;
+  // Per-interface network statistics
   repeated NetworkInterfaceStats networks = 4;
+  // System load averages
   optional LoadAverage load_average = 5;
+  // Host name
   optional string hostname = 6;
+  // Operating system name
   optional string os_name = 7;
+  // Operating system version
   optional string os_version = 8;
+  // Kernel version
   optional string kernel_version = 9;
+  // System uptime in seconds
   optional uint64 uptime_secs = 10;
+  // Unix epoch milliseconds
   optional uint64 timestamp = 11;
 }
 
 // Zone opened (prompt, command, or output block started)
 message ZoneOpened {
+  // Zone identifier
   uint64 zone_id = 1;
   string zone_type = 2;    // "prompt", "command", "output"
+  // Absolute row (scrollback-inclusive) where the zone starts
   uint64 abs_row_start = 3;
 }
 
 // Zone closed (prompt, command, or output block ended)
 message ZoneClosed {
+  // Zone identifier
   uint64 zone_id = 1;
+  // Zone kind
   string zone_type = 2;
+  // Absolute row (scrollback-inclusive) where the zone starts
   uint64 abs_row_start = 3;
+  // Absolute row (scrollback-inclusive) where the zone ends
   uint64 abs_row_end = 4;
+  // Process exit code
   optional int32 exit_code = 5;
 }
 
 // Zone evicted from scrollback
 message ZoneScrolledOut {
+  // Zone identifier
   uint64 zone_id = 1;
+  // Zone kind
   string zone_type = 2;
 }
 
 // Environment variable changed
 message EnvironmentChanged {
+  // Environment variable name
   string key = 1;
+  // New value
   string value = 2;
+  // Previous value, when one existed
   optional string old_value = 3;
 }
 
 // Remote host transition detected
 message RemoteHostTransition {
+  // New host name
   string hostname = 1;
+  // New user name, when known
   optional string username = 2;
+  // Previous host name, when known
   optional string old_hostname = 3;
+  // Previous user name, when known
   optional string old_username = 4;
 }
 
 // Sub-shell detected
 message SubShellDetected {
+  // Shell nesting depth
   uint64 depth = 1;
+  // Shell name, when known
   optional string shell_type = 2;
 }
 
 // Semantic snapshot of terminal state (JSON-encoded)
 message SemanticSnapshotData {
+  // JSON-encoded semantic snapshot
   string snapshot_json = 1;
 }
 
@@ -463,25 +652,45 @@ message SnapshotRequest {
 // Client -> Server Messages
 // =============================================================================
 
+// Envelope for every client-to-server message
 message ClientMessage {
+  // The wrapped message
   oneof message {
+    // Input payload
     Input input = 1;
+    // Client resize payload
     ClientResize resize = 2;
+    // Ping payload
     Ping ping = 3;
+    // Request refresh payload
     RequestRefresh refresh = 4;
+    // Subscribe payload
     Subscribe subscribe = 5;
+    // Mouse input payload
     MouseInput mouse = 6;
+    // Focus change payload
     FocusChange focus = 7;
+    // Paste input payload
     PasteInput paste = 8;
+    // Selection request payload
     SelectionRequest selection = 9;
+    // Clipboard request payload
     ClipboardRequest clipboard = 10;
+    // Snapshot request payload
     SnapshotRequest snapshot_request = 11;
+    // Viewer identity payload
     ViewerIdentity viewer_identity = 12;
+    // Upload begin payload
     UploadBegin upload_begin = 13;
+    // Upload chunk payload
     UploadChunk upload_chunk = 14;
+    // Upload commit payload
     UploadCommit upload_commit = 15;
+    // Upload abort payload
     UploadAbort upload_abort = 16;
+    // Mux tree request payload
     MuxTreeRequest mux_tree_request = 17;
+    // Pane create request payload
     PaneCreateRequest pane_create_request = 18;
   }
 }
@@ -491,22 +700,29 @@ message ClientMessage {
 // hierarchy is the parent link: sessions nest in their workspace, windows
 // in their session, panes in their window, in tree order.
 message MuxTreeSnapshot {
+  // All workspaces in the daemon
   repeated MuxTreeWorkspace workspaces = 1;
 }
 
 // One workspace: `+N` id, the daemon's active-workspace marker.
 message MuxTreeWorkspace {
+  // Identifier
   string id = 1;
+  // Name
   string name = 2;
   bool active = 3;                // the daemon's active workspace
+  // Sessions in the workspace
   repeated MuxTreeSession sessions = 4;
 }
 
 // One session: `$N` id, its workspace's active-session marker.
 message MuxTreeSession {
+  // Identifier
   string id = 1;
+  // Name
   string name = 2;
   bool active = 3;                // its workspace's active session
+  // Windows in the session
   repeated MuxTreeWindow windows = 4;
 }
 
@@ -516,10 +732,13 @@ message MuxTreeSession {
 // geometry pre-parsed into per-pane rectangles so a client needs no
 // layout-string parser.
 message MuxTreeWindow {
+  // Identifier
   string id = 1;
+  // Name
   string name = 2;
   bool active = 3;                // its session's current window
   string layout = 4;              // full unzoomed tmux layout string
+  // Panes in the window
   repeated MuxTreePane panes = 5;
 }
 
@@ -529,12 +748,17 @@ message MuxTreeWindow {
 // same vocabulary the pane_process_state event uses ("running"/"exited";
 // "" from a pre-lifecycle producer reads as running).
 message MuxTreePane {
+  // Identifier
   string id = 1;
   string title = 2;               // effective pane title ("" when none)
   bool active = 3;                // its window's active pane
+  // Pane width in columns
   uint32 cols = 4;
+  // Pane height in rows
   uint32 rows = 5;
+  // Column offset of the pane within its window
   uint32 x = 6;
+  // Row offset of the pane within its window
   uint32 y = 7;
   string process_state = 8;       // "running" | "exited" ("" = legacy producer)
   optional int32 exit_code = 9;   // the captured status while exited
@@ -585,6 +809,7 @@ message PaneCreated {
 
 // Declare web/mobile presence kind. Defaults to web until declared.
 message ViewerIdentity {
+  // Viewer kind (e.g. the client application)
   string kind = 1;
 }
 
@@ -616,7 +841,9 @@ message Input {
 
 // Client requests terminal resize
 message ClientResize {
+  // Requested width in columns
   uint32 cols = 1;
+  // Requested height in rows
   uint32 rows = 2;
 }
 
@@ -628,6 +855,7 @@ message RequestRefresh {}
 
 // Client subscribes to specific event types
 message Subscribe {
+  // Event types to subscribe to
   repeated EventType events = 1;
 }
 
@@ -637,30 +865,41 @@ message Subscribe {
 // button (0 left-held, 3 buttonless); the server normalizes it with an
 // idempotent `| 32` before encoding (0→32, 3→35; 32/35 pass unchanged).
 message MouseInput {
+  // Zero-based column
   uint32 col = 1;
+  // Zero-based row
   uint32 row = 2;
   uint32 button = 3;                   // raw SGR bits: 0=left, 1=middle, 2=right, 3=none; +32 motion, +64 wheel
+  // Shift modifier held
   bool shift = 4;
+  // Ctrl modifier held
   bool ctrl = 5;
+  // Alt modifier held
   bool alt = 6;
   string event_type = 7;               // "press", "release", "move", "scroll"
 }
 
 // Focus change from client
 message FocusChange {
+  // Whether the client gained focus
   bool focused = 1;
 }
 
 // Paste input from client
 message PasteInput {
+  // Pasted text
   string content = 1;
 }
 
 // Selection request from client
 message SelectionRequest {
+  // Zero-based start column
   uint32 start_col = 1;
+  // Zero-based start row
   uint32 start_row = 2;
+  // Zero-based column where the match ends
   uint32 end_col = 3;
+  // Zero-based end row
   uint32 end_row = 4;
   string mode = 5;                     // "chars", "line", "block", "word", "clear"
 }
@@ -675,47 +914,64 @@ message ClipboardRequest {
 // A client upload began staging daemon-side (upload_id keys the matching
 // upload_finished)
 message UploadStarted {
+  // Server-assigned upload identifier
   uint64 upload_id = 1;
 }
 
 // An upload settled: committed (path set), failed or aborted (error set;
 // a failed commit leaves the materialized file in place and says where)
 message UploadFinished {
+  // Server-assigned upload identifier
   uint64 upload_id = 1;
+  // Destination path on success
   optional string path = 2;
+  // Failure reason; absent on success
   optional string error = 3;
 }
 
 // File transfer started (download or upload)
 message FileTransferStarted {
+  // Transfer identifier
   uint64 id = 1;
+  // Transfer direction ("upload" or "download")
   string direction = 2;
+  // File name, when known
   optional string filename = 3;
+  // Total size in bytes, when known
   optional uint64 total_bytes = 4;
 }
 
 // File transfer progress update
 message FileTransferProgress {
+  // Transfer identifier
   uint64 id = 1;
+  // Bytes transferred so far
   uint64 bytes_transferred = 2;
+  // Total size in bytes, when known
   optional uint64 total_bytes = 3;
 }
 
 // File transfer completed successfully
 message FileTransferCompleted {
+  // Transfer identifier
   uint64 id = 1;
+  // File name, when known
   optional string filename = 2;
+  // Final size in bytes
   uint64 size = 3;
 }
 
 // File transfer failed
 message FileTransferFailed {
+  // Transfer identifier
   uint64 id = 1;
+  // Failure reason
   string reason = 2;
 }
 
 // Upload requested by terminal application
 message UploadRequested {
+  // Requested upload format
   string format = 1;
 }
 
@@ -745,11 +1001,13 @@ message AgentEntry {
 
 // Full roster snapshot (pane-id ascending), pushed once per client connect.
 message AgentRoster {
+  // Current agent roster entries
   repeated AgentEntry agents = 1;
 }
 
 // One roster delta: upsert `agent`, or remove when `released` is true.
 message AgentStateChanged {
+  // The upserted (or released) roster entry
   AgentEntry agent = 1;
   bool released = 2;  // true → remove; only pane_id is set
 }

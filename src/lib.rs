@@ -59,13 +59,10 @@
 // DOC-128: every public item is documented; `make lint-check` fails on a new
 // undocumented one (clippy runs with -D warnings).
 //
-// `missing_docs` allow-list (scaffolding to shrink; never add a crate-wide
-// allow). Every `#[allow(missing_docs)]` in the tree must be listed here.
-//
-//   src/streaming/proto.rs  `pb` module   ~217 hits (2026-09-30 count)
-//       Generated prost output (`terminal.pb.rs`); regeneration would discard
-//       hand-written docs. The wire contract lives in proto/terminal.proto.
-//       Next slice: emit docs from the .proto comments, then drop the allow.
+// There is no `#[allow(missing_docs)]` left in the tree. The generated prost
+// output (`src/streaming/terminal.pb.rs`) is documented from the leading
+// comments in proto/terminal.proto: document every message, field, enum value
+// and oneof there, then `make proto-rust` (ARC-009).
 #![warn(missing_docs)]
 
 // ARC-007 O2: the terminal core lives in the `par-term-emu-core` workspace
