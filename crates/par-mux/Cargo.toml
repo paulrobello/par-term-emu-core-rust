@@ -106,9 +106,9 @@ tempfile = { workspace = true }
 # root crate's dev-dependency.
 opentelemetry_sdk = { workspace = true, features = ["testing"] }
 # tests/mux_attach.rs drives the attach client through a real PTY.
-portable-pty = "0.9.0"
+portable-pty = { workspace = true }
 # pane.rs unit test: a PNG round-trip through the kitty retention path.
-image = { version = "0.25.10", default-features = false, features = ["png"] }
+image = { workspace = true }
 
 [features]
 default = []

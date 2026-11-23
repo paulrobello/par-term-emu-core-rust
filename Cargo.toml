@@ -17,12 +17,14 @@ exclude = ["fuzz"]
 base64 = "0.23"
 clap = { version = "4.6.1", features = ["derive", "env"] }
 flate2 = "1.1.9"
+image = { version = "0.25.10", default-features = false, features = ["bmp", "ff", "gif", "ico", "jpeg", "png", "pnm", "qoi", "tga", "tiff", "webp", "color_quant"] }
 interprocess = "2.4.2"
 libc = "0.2.186"
 log = "0.4"
 opentelemetry = { version = "0.33", default-features = false }
 opentelemetry_sdk = { version = "0.33", default-features = false, features = ["metrics"] }
 parking_lot = "0.13"
+portable-pty = "0.9.0"
 pyo3 = "0.30"
 regex = "1.12.3"
 serde = { version = "1.0.228", features = ["derive"] }
