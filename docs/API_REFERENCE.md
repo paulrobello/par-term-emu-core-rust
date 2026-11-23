@@ -2268,7 +2268,6 @@ StreamingConfig(
 - `kitty_file_media: str` - Kitty graphics file-media mode applied to every session terminal (SEC-101): `"temp_only"` (default) allows only a spec-named temp file, `"all"` also permits `t=f` reads of arbitrary paths, `"off"` refuses both. PTY output is untrusted
 - `allow_pane_create: bool` - Let writable clients create real panes on the backing mux daemon (`pane_create_request`, default False; fail-closed). A request may carry an optional `name` (≤ 64 bytes, no control characters; otherwise refused with `pane_create_failed`), which names the created window
 - `csp_connect_origins: list[str] | None` - Opt-in HTTPS origins appended to the CSP's connect-src so a custom web root can fetch public APIs directly; each value must be the strict `https://host[:port]` form, anything else raises ValueError naming the origin (default None; `blob:` is baseline in connect-src)
-- `csp_connect_origins: list[str] | None` - Opt-in HTTPS origins appended to the CSP's connect-src so a custom web root can fetch public APIs directly; each value must be the strict `https://host[:port]` form, anything else raises ValueError naming the origin (default None; the ENH-059 policy stays byte-identical)
 - `tls_enabled: bool` - Check if TLS is configured (read-only)
 
 ### TLS Methods
