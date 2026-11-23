@@ -66,6 +66,16 @@ pub(crate) struct CompletedKittyApc<'a> {
     pub payload: &'a [u8],
 }
 
+/// Discard an APC payload that overflowed [`MAX_KITTY_APC_BYTES`], logging it.
+fn drop_oversized_apc(apc_buffer: &mut Vec<u8>) {
+    crate::debug_error!(
+        "APC",
+        "Kitty APC payload exceeded {} bytes and was dropped",
+        MAX_KITTY_APC_BYTES
+    );
+    apc_buffer.clear();
+}
+
 /// Drives the APC pre-filter for one input chunk.
 ///
 /// `data` is the raw incoming byte slice. Bytes that are NOT part of an
@@ -177,7 +187,7 @@ pub(crate) fn feed<F>(
                     // 8-bit ST: terminate Kitty APC.
                     on_kitty(
                         CompletedKittyApc {
-                            payload: apc_buffer.as_slice(),
+                            payload: apc_buffer,
                         },
                         passthrough.len(),
                     );
@@ -196,7 +206,7 @@ pub(crate) fn feed<F>(
                     // 7-bit ST: terminate Kitty APC.
                     on_kitty(
                         CompletedKittyApc {
-                            payload: apc_buffer.as_slice(),
+                            payload: apc_buffer,
                         },
                         passthrough.len(),
                     );
@@ -227,12 +237,7 @@ pub(crate) fn feed<F>(
                 }
                 0x9c => {
                     // 8-bit ST: drop the oversized APC whole and start clean.
-                    crate::debug_error!(
-                        "APC",
-                        "Kitty APC payload exceeded {} bytes and was dropped",
-                        MAX_KITTY_APC_BYTES
-                    );
-                    apc_buffer.clear();
+                    drop_oversized_apc(apc_buffer);
                     *state = ApcFilterState::Outside;
                 }
                 // Everything else is discarded until the terminator.
@@ -241,12 +246,7 @@ pub(crate) fn feed<F>(
             ApcFilterState::KittyApcOverflowSawEsc => match byte {
                 b'\\' | 0x9c => {
                     // ST: drop the oversized APC whole and start clean.
-                    crate::debug_error!(
-                        "APC",
-                        "Kitty APC payload exceeded {} bytes and was dropped",
-                        MAX_KITTY_APC_BYTES
-                    );
-                    apc_buffer.clear();
+                    drop_oversized_apc(apc_buffer);
                     *state = ApcFilterState::Outside;
                 }
                 0x1b => {

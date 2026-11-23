@@ -79,47 +79,7 @@ impl Terminal {
                 self.handle_csi_cursor(action, params, intermediates);
             }
             'J' | 'K' | 'X' => {
-                let grid = if self.alt_screen_active {
-                    &mut self.alt_grid
-                } else {
-                    &mut self.grid
-                };
-                erase::handle_csi_erase(
-                    grid,
-                    &mut self.graphics.graphics_store,
-                    &mut self.events,
-                    self.attrs.bg,
-                    (self.cursor.col, self.cursor.row),
-                    action,
-                    params,
-                );
-                // xterm parity: a right-part erase kills the wrap state.
-                // ClearRight (EL 0, and ECH which routes through it) ends
-                // with LineClrWrapped + ResetWrap — "with the right part
-                // cleared, we can't be wrapping"; ClearLine (EL 2) resets
-                // the pending wrap; ClearLeft (EL 1) clears neither.
-                let right_erase = match action {
-                    'X' => Some(true),
-                    'K' => match params
-                        .iter()
-                        .next()
-                        .and_then(|p| p.first())
-                        .copied()
-                        .unwrap_or(0)
-                    {
-                        0 => Some(true),
-                        2 => Some(false),
-                        _ => None,
-                    },
-                    _ => None,
-                };
-                if let Some(clear_row_flag) = right_erase {
-                    self.pending_wrap = false;
-                    if clear_row_flag {
-                        let row = self.cursor.row;
-                        self.active_grid_mut().set_line_wrapped(row, false);
-                    }
-                }
+                self.handle_csi_erase_dispatch(action, params);
             }
             'S' | 'T' => {
                 self.handle_csi_scroll(action, params, intermediates);
@@ -203,30 +163,15 @@ impl Terminal {
             'L' | 'M' | '@' => {
                 self.handle_csi_edit(action, params, intermediates);
             }
-            'P' => {
-                // P with # is XTPUSHCOLORS; bare P is DCH (delete chars)
-                if intermediates.contains(&b'#') {
-                    color_stack::handle_xtpushcolors(&mut self.theme, params);
-                } else {
-                    self.handle_csi_edit(action, params, intermediates);
-                }
+            'P' if !intermediates.contains(&b'#') => {
+                // Bare P is DCH (delete chars)
+                self.handle_csi_edit(action, params, intermediates);
             }
-            'Q' => {
-                // Q with # is XTPOPCOLORS; bare Q is unused
-                if intermediates.contains(&b'#') {
-                    color_stack::handle_xtpopcolors(&mut self.theme, params);
-                } else {
-                    log_unsupported_csi(action);
-                }
-            }
-            'R' => {
-                // R with # is XTREPORTCOLORS; bare R is the CPR reply an
-                // application would echo, not something we act on
-                if intermediates.contains(&b'#') {
-                    color_stack::handle_xtreportcolors(&self.theme, &mut self.response_buffer);
-                } else {
-                    log_unsupported_csi(action);
-                }
+            'P' | 'Q' | 'R' => {
+                // With #: XTPUSHCOLORS / XTPOPCOLORS / XTREPORTCOLORS. Bare Q
+                // is unused and bare R is the CPR reply an application would
+                // echo, not something we act on.
+                self.handle_csi_color_stack(action, params, intermediates);
             }
             'p' => {
                 // p can be DECSCL (with "), DECSTR (with !), or DECRQM (with $)
@@ -256,6 +201,66 @@ impl Terminal {
             _ => {
                 log_unsupported_csi(action);
             }
+        }
+    }
+
+    /// ED / EL / ECH: erase through the grid handler, then apply the xterm
+    /// wrap-state rules for right-part erases.
+    fn handle_csi_erase_dispatch(&mut self, action: char, params: &Params) {
+        let grid = if self.alt_screen_active {
+            &mut self.alt_grid
+        } else {
+            &mut self.grid
+        };
+        erase::handle_csi_erase(
+            grid,
+            &mut self.graphics.graphics_store,
+            &mut self.events,
+            self.attrs.bg,
+            (self.cursor.col, self.cursor.row),
+            action,
+            params,
+        );
+        // xterm parity: a right-part erase kills the wrap state.
+        // ClearRight (EL 0, and ECH which routes through it) ends
+        // with LineClrWrapped + ResetWrap — "with the right part
+        // cleared, we can't be wrapping"; ClearLine (EL 2) resets
+        // the pending wrap; ClearLeft (EL 1) clears neither.
+        let right_erase = match action {
+            'X' => Some(true),
+            'K' => match params
+                .iter()
+                .next()
+                .and_then(|p| p.first())
+                .copied()
+                .unwrap_or(0)
+            {
+                0 => Some(true),
+                2 => Some(false),
+                _ => None,
+            },
+            _ => None,
+        };
+        if let Some(clear_row_flag) = right_erase {
+            self.pending_wrap = false;
+            if clear_row_flag {
+                let row = self.cursor.row;
+                self.active_grid_mut().set_line_wrapped(row, false);
+            }
+        }
+    }
+
+    /// The `CSI # P/Q/R` color-stack sequences; anything without the `#`
+    /// intermediate is unsupported.
+    fn handle_csi_color_stack(&mut self, action: char, params: &Params, intermediates: &[u8]) {
+        if !intermediates.contains(&b'#') {
+            log_unsupported_csi(action);
+            return;
+        }
+        match action {
+            'P' => color_stack::handle_xtpushcolors(&mut self.theme, params),
+            'Q' => color_stack::handle_xtpopcolors(&mut self.theme, params),
+            _ => color_stack::handle_xtreportcolors(&self.theme, &mut self.response_buffer),
         }
     }
 

@@ -30,6 +30,27 @@ pub fn escape_output(bytes: &[u8]) -> String {
     out
 }
 
+/// The optional trailing `source=`, `ws=` and `msg=` tokens of an
+/// `%agent-state-changed` line, in wire order (see the field comments at the
+/// call site for the compatibility reasoning behind that order).
+fn agent_state_tail(source: &str, ws: &str, msg: &str) -> String {
+    let mut tail = String::new();
+    if !source.is_empty() {
+        tail.push_str(&format!(" source={source}"));
+    }
+    if !ws.is_empty() {
+        tail.push_str(&format!(" ws={ws}"));
+    }
+    if !msg.is_empty() {
+        use base64::Engine as _;
+        tail.push_str(&format!(
+            " msg={}",
+            base64::engine::general_purpose::STANDARD.encode(msg.as_bytes())
+        ));
+    }
+    tail
+}
+
 /// Render one notification as a control-mode line, newline-terminated.
 ///
 /// Control mode is line-based: every line must carry its terminator or the
@@ -163,20 +184,7 @@ pub fn emit(notification: &TmuxNotification) -> String {
             // key=value contract), and the reason rides the standard
             // base64 of the whitespace-collapsed text — one whitespace-free
             // token, any text.
-            let mut tail = String::new();
-            if !source.is_empty() {
-                tail.push_str(&format!(" source={source}"));
-            }
-            if !ws.is_empty() {
-                tail.push_str(&format!(" ws={ws}"));
-            }
-            if !msg.is_empty() {
-                use base64::Engine as _;
-                tail.push_str(&format!(
-                    " msg={}",
-                    base64::engine::general_purpose::STANDARD.encode(msg.as_bytes())
-                ));
-            }
+            let tail = agent_state_tail(source, ws, msg);
             format!("%agent-state-changed {pane_id} {agent} {state}{tail}\n")
         }
         // No provenance token by construction: a release can only come from
