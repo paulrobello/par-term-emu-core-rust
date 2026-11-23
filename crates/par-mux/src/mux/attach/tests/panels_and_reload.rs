@@ -339,6 +339,7 @@ fn reload_chord_rebinds_prefix_and_sends_reload_config() {
         resize_mode: false,
         flash: None,
         paste: PasteTracker::default(),
+        output_fence: None,
     };
     // A config naming a new prefix (C-a) and a moved reload chord
     // (C-a C-s): the rebind is pure over the parsed file, so the test

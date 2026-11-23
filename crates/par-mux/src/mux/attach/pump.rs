@@ -14,6 +14,8 @@ impl Session {
     /// emulator verbatim; its tracked cursor becomes the pane's truth the
     /// status draw re-places.
     pub(super) fn resync(&mut self) {
+        // A refused replay must not leave the previous pane's fence armed.
+        self.output_fence = None;
         // The shown pane is the window's active pane daemon-side: the
         // seen rule views a window's active pane, and the size report
         // below names the whole window. An explicit `-t %N` attach and
@@ -61,6 +63,11 @@ impl Session {
         // absolute CUP re-places the host cursor regardless.
         let bytes = reply.body.join("\n").into_bytes();
         self.emulator.feed(&bytes);
+        // The reply's export-time generation fences the pane's feed (card
+        // 01a20644); a reply without one (a pre-fence daemon) proves no
+        // coverage, so the feed stays unfenced rather than trusting a
+        // stale fence.
+        self.output_fence = reply.generation;
         let mut stdout = std::io::stdout().lock();
         // Clear before the replay: a switch lands here too, and the new
         // pane's screen must not mix with the previous pane's leftovers
@@ -75,6 +82,25 @@ impl Session {
             let _ = write_all_blocking(&mut stdout, b"\n");
         }
         let _ = stdout.flush();
+    }
+
+    /// Whether the replay already painted a chunk stamped `generation`:
+    /// the daemon's sink dispatch can lag its grid apply, so a chunk
+    /// stamped at or before the replay's export generation arrives after
+    /// the reply while its bytes sit on the replayed screen. `None` on
+    /// either side (a pre-fence daemon) feeds as always.
+    pub(super) fn replay_covers(&self, generation: Option<u64>) -> bool {
+        let (Some(generation), Some(fence)) = (generation, self.output_fence) else {
+            return false;
+        };
+        let covered = generation <= fence;
+        if covered {
+            render::trace_input(format_args!(
+                "drop pane {} (gen {generation} <= replay fence {fence})",
+                self.pane
+            ));
+        }
+        covered
     }
 
     /// Re-read the status-line state. Against a daemon advertising

@@ -31,6 +31,7 @@ fn prefix_router_detaches_forwards_and_sends_literal_prefix() {
         resize_mode: false,
         flash: None,
         paste: PasteTracker::default(),
+        output_fence: None,
     };
     // Plain bytes forward when the pane is live.
     assert!(!session.route_bytes(b"hello"));
@@ -73,6 +74,7 @@ fn dead_pane_takes_no_stdin_bytes_but_prefix_keys_still_route() {
         resize_mode: false,
         flash: None,
         paste: PasteTracker::default(),
+        output_fence: None,
     };
     assert!(
         !session.route_bytes(b"typed while dead"),
@@ -121,6 +123,7 @@ fn status_line_names_the_respawn_chord_when_the_pane_is_dead() {
         resize_mode: false,
         flash: None,
         paste: PasteTracker::default(),
+        output_fence: None,
     };
     let line = session.status_line();
     assert!(
@@ -178,6 +181,7 @@ fn resync_feeds_the_shadow_the_restore_stream_verbatim() {
         resize_mode: false,
         flash: None,
         paste: PasteTracker::default(),
+        output_fence: None,
     };
     session.resync();
     let cursor = session.emulator.terminal().cursor();
@@ -227,6 +231,7 @@ fn resync_size_reports_the_target_window_before_the_replay() {
         resize_mode: false,
         flash: None,
         paste: PasteTracker::default(),
+        output_fence: None,
     };
     session.resync();
     // The connect-time handshake sends its own target-less size report
@@ -322,6 +327,7 @@ fn status_draw_places_the_cursor_at_the_tracked_cell() {
         resize_mode: false,
         flash: None,
         paste: PasteTracker::default(),
+        output_fence: None,
     };
 
     // Replay that parks the cursor (CUP row 3 col 8), then a %output
@@ -408,6 +414,7 @@ fn status_draw_keeps_the_cursor_inside_the_content_region_after_a_scroll() {
         resize_mode: false,
         flash: None,
         paste: PasteTracker::default(),
+        output_fence: None,
     };
     // First draw fits the shadow to the host grid's pane geometry.
     let _ = session.status_draw_bytes(24, 80);
@@ -454,6 +461,7 @@ fn status_draw_tracks_the_frozen_cell_when_the_pane_is_dead() {
         resize_mode: false,
         flash: None,
         paste: PasteTracker::default(),
+        output_fence: None,
     };
     session.emulator.feed(b"\x1b[5;3H");
     let bytes = session.status_draw_bytes(24, 80);
@@ -505,6 +513,7 @@ fn respawn_chord_resumes_forwarding_after_revival() {
         resize_mode: false,
         flash: None,
         paste: PasteTracker::default(),
+        output_fence: None,
     };
     // The fake daemon answers every unknown command with an ok empty
     // block, so respawn-pane succeeds and clears the dead flag.
@@ -530,7 +539,7 @@ fn respawn_chord_resumes_forwarding_after_revival() {
 
 /// A Session for routing tests only: its connection is a closed
 /// channel pair, so sends fail silently (routing logic does not care).
-fn test_dead_conn(tag: &str) -> conn::AttachConn {
+pub(super) fn test_dead_conn(tag: &str) -> conn::AttachConn {
     let path = test_socket(&format!("deadconn-{tag}"));
     let _ = std::fs::remove_file(&path);
     // connect() fails without a listener, which is exactly the "dead"

@@ -398,6 +398,11 @@ struct Session {
     /// burst since session start — output flowing again is what proved
     /// the flood passed.
     settling: bool,
+    /// The replay fence (card 01a20644): the damage generation the last
+    /// [`Session::resync`] replay covered (`gen=<N>` on the reply's
+    /// closing flag). `%output` chunks stamped at or before it are
+    /// dropped; cleared by an unfenced replay and by `%pane-respawned`.
+    output_fence: Option<u64>,
     /// The detach prefix byte.
     prefix: u8,
     /// The prefix byte arrived; the next stdin byte is the command key.
@@ -534,6 +539,7 @@ impl Session {
             resize_mode: false,
             flash: None,
             paste: PasteTracker::default(),
+            output_fence: None,
         };
         session.resync();
         session.refresh_status();
@@ -544,7 +550,14 @@ impl Session {
     /// One daemon push. Returns false only on `%exit`.
     fn handle_event(&mut self, event: &TmuxNotification, status_dirty: &mut StatusDirty) -> bool {
         match event {
-            TmuxNotification::Output { pane_id, data, .. } if *pane_id == self.pane => {
+            TmuxNotification::Output {
+                pane_id,
+                data,
+                generation,
+            } if *pane_id == self.pane => {
+                if self.replay_covers(*generation) {
+                    return true;
+                }
                 self.emulator.feed(data);
                 let mut stdout = std::io::stdout().lock();
                 let _ = write_all_blocking(&mut stdout, data);
@@ -566,6 +579,7 @@ impl Session {
             }
             TmuxNotification::PaneRespawned { pane_id } if *pane_id == self.pane => {
                 self.exited = None;
+                self.output_fence = None;
                 status_dirty.mark();
             }
             TmuxNotification::PaneTitleChanged { pane_id, title } if *pane_id == self.pane => {

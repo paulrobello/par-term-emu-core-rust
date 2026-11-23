@@ -7,6 +7,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+- **mux: passthrough attach fences replayed output by damage generation** (card 01a20644, `crates/par-mux/src/mux/attach/{mod,pump}.rs`): the resync replay reply's `gen=` flag is recorded as a fence and `%output` chunks stamped at or before it are dropped (traced), so a replay-covered chunk arriving after the reply no longer double-applies onto the shadow emulator and host screen. An unfenced reply (pre-fence daemon) and `%pane-respawned` clear the fence.
+
 ## [0.88.0] - 2026-11-23
 
 ### Added

@@ -173,6 +173,7 @@ fn kill_of_the_last_pane_engages_the_dead_guard() {
         resize_mode: false,
         flash: None,
         paste: PasteTracker::default(),
+        output_fence: None,
     };
     session.drawn_size = Some((80, 24));
     assert!(!session.route_bytes(&[0x02, b'x']));

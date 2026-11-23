@@ -19,6 +19,7 @@ mod management_chords;
 mod panels_and_reload;
 mod passthrough_switching;
 mod prefix_and_resync;
+mod replay_fence;
 mod status_snapshot_and_targets;
 mod targets;
 
@@ -224,6 +225,7 @@ fn management_session(tag: &str) -> (std::sync::mpsc::Receiver<(String, String)>
         resize_mode: false,
         flash: None,
         paste: PasteTracker::default(),
+        output_fence: None,
     };
     // A status draw writes to the process stdout; in tests that is
     // the captured harness. Idle both flags so route_bytes's tail
@@ -310,6 +312,7 @@ fn scripted_passthrough(
         resize_mode: false,
         flash: None,
         paste: PasteTracker::default(),
+        output_fence: None,
     };
     let _: Vec<String> = rx.try_iter().collect();
     (rx, session)
@@ -342,5 +345,6 @@ fn passthrough_session(conn: conn::AttachConn, window: &str, pane: &str) -> Sess
         resize_mode: false,
         flash: None,
         paste: PasteTracker::default(),
+        output_fence: None,
     }
 }

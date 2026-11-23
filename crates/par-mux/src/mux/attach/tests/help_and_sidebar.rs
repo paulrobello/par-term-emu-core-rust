@@ -107,6 +107,7 @@ fn help_chord_advances_the_pane_past_the_dump() {
         resize_mode: false,
         flash: None,
         paste: PasteTracker::default(),
+        output_fence: None,
     };
     let expected = super::help_rows(0x02, 0x12, Default::default(), 1).len() / 2 + 1;
     session.show_help();
