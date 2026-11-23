@@ -375,7 +375,11 @@ pub(super) fn cmd_doctor(ctx: &Ctx<'_>) -> Outcome {
     let macos = cfg!(target_os = "macos");
     let daemon_pid = std::process::id() as i32;
     let responsible = crate::mux::doctor::probe_responsible_pid(daemon_pid);
-    let body = crate::mux::doctor::reply_lines(macos, daemon_pid, responsible).join("\n");
+    let team = std::env::current_exe()
+        .ok()
+        .and_then(|exe| crate::mux::doctor::probe_team_identifier(&exe));
+    let body =
+        crate::mux::doctor::reply_lines(macos, daemon_pid, responsible, team.as_deref()).join("\n");
     Outcome::ok(ctx, &body)
 }
 

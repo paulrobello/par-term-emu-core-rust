@@ -7,6 +7,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- **mux: `par-mux --cmd doctor` reports `verdict: stable-identity` for a self-responsible daemon whose binary is Developer-ID-signed** (`crates/par-mux/src/mux/doctor.rs`, `crates/par-mux/src/mux/dispatch/buffers.rs`, `crates/par-mux/tests/mux_cli.rs`, `docs/MUX.md`): the pid-strict classification reported `tainted` for exactly the shape both Macs run since the 0.87.0 fleet install (launchd job through the Par-mux.app wrapper, binary signed `com.paulrobello.par-mux` Team QMLVG482FY) — while in-pane LAN verifiably works there (minimac gateway curl 302, 2026-11-22), because the 0.85.0 signing model binds Local Network and TCC grants to the binary's stable team identity, not to a bundle ancestor. The doctor now probes `codesign -dv` on its own image (no root, one spawn) and classifies self-responsible + team-signed as `stable-identity` — grants survive restarts and reinstalls, the reply keeps the app-bundle preference, and no fix line — reserving `tainted` for the ad-hoc/unsigned pid shape it was written for. Pinned by `stable_identity_when_self_responsible_and_team_signed`; `tainted_when_self_responsible` keeps pinning the ad-hoc arm.
+
 ## [0.87.0] - 2026-11-22
 
 ### Added

@@ -2752,7 +2752,9 @@ fn cmd_doctor_reports_attribution_verdict() {
     );
     #[cfg(target_os = "macos")]
     assert!(
-        out.contains("verdict: healthy") || out.contains("verdict: tainted"),
+        out.contains("verdict: healthy")
+            || out.contains("verdict: tainted")
+            || out.contains("verdict: stable-identity"),
         "a macOS daemon always gets a real verdict: {out:?}"
     );
     #[cfg(not(target_os = "macos"))]
