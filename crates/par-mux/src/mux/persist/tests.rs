@@ -67,7 +67,6 @@ fn leftover_tmp_never_defeats_the_state() {
 /// occupied state file refuses, naming the holder's pid from the lock
 /// file; dropping the holder releases the claim.
 #[test]
-#[cfg(unix)]
 fn state_lock_refuses_a_second_holder_until_released() {
     let (_dir, target) = temp_target("state-lock");
     let first = acquire_state_lock(&target).expect("the first claim");

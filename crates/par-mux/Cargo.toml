@@ -90,12 +90,15 @@ nix = { version = "0.32", features = ["process", "term", "signal", "poll"], opti
 
 # Windows-only: UTF-16 SDDL input for the named-pipe security descriptor
 # (par-mux.md D4), and the Win32 process/token/SID calls behind the client's
-# named-pipe server-identity check (SEC-112).
+# named-pipe server-identity check (SEC-112), and the `LockFileEx` state-file
+# claim (SEC-005).
 [target.'cfg(windows)'.dependencies]
 widestring = { version = "1.2", optional = true }
 windows-sys = { version = "0.61", optional = true, features = [
     "Win32_Foundation",
     "Win32_Security",
+    "Win32_Storage_FileSystem",
+    "Win32_System_IO",
     "Win32_System_Threading",
 ] }
 
