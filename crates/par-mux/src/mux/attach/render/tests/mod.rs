@@ -16,9 +16,11 @@ use crate::mux::attach::ManagementKey;
 use par_term_emu_core::color::{Color as CoreColor, NamedColor};
 use par_term_emu_core::keyboard::TermKey;
 use par_term_emu_core::keyboard::TermKeyEvent;
+use par_term_emu_core::terminal::Terminal;
 use ratatui::buffer::CellDiffOption;
 use ratatui::style::Modifier as RtModifier;
 use std::io::BufRead as _;
+use std::io::Write as _;
 
 mod chords;
 mod copy_mode_tests;
