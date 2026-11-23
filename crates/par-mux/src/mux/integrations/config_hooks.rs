@@ -1,4 +1,4 @@
-//! droid, copilot, cursor, qwen, qodercli, devin, kimi, and mastracode
+//! droid, copilot, cursor, qwen, qodercli, devin, kimi, mastracode, and agy
 //! arms: session hooks whose registration is an entry inside one config
 //! file the agent reads, ported from herdr's integrations (Apache-2.0) onto
 //! par-mux's merge discipline. They differ only in data, so one table
@@ -20,6 +20,12 @@
 //!   rebuilt whole on every install).
 //! - mastracode: `hooks.json`, `{type, command, timeout, description}`
 //!   entries under event keys at the DOCUMENT ROOT (no `hooks` wrapper).
+//! - agy (Antigravity CLI): `~/.gemini/config/hooks.json`, one root-level
+//!   group object named `par-mux` holding flat `{type, command, timeout}`
+//!   entries under SessionStart, PreInvocation, and Stop. agy rejects the
+//!   whole file on a Claude-style `{"hooks": ...}` wrapper, so the group
+//!   is the unit par-mux owns: written whole on install, cut whole on
+//!   uninstall, every other group left byte-exact.
 //!
 //! Every entry runs the same `<runner> '<asset>' <action>` command, and
 //! every asset lives under par-mux's own config directory, as claude,
@@ -29,6 +35,7 @@ use std::fs;
 use std::io;
 use std::path::{Path, PathBuf};
 
+use jsonc_parser::common::Ranged;
 use serde_json::{json, Value as JsonValue};
 
 use super::{
@@ -53,6 +60,9 @@ enum EntryShape {
     MastracodeFlat,
     /// A marked block of `[[hooks]]` TOML tables in config.toml (kimi).
     KimiToml,
+    /// A root-level `par-mux` group of flat `{type, command, timeout}`
+    /// entries keyed by event, owned whole by par-mux (agy's hooks.json).
+    AgyGroup,
 }
 
 /// One registration an arm writes: the config-file event key, the action
@@ -338,8 +348,38 @@ const fn action_event(event: &'static str, action: &'static str) -> HookEvent {
     }
 }
 
+/// agy's lifecycle: SessionStart reports identity (and the fresh-pane
+/// idle), PreInvocation marks the turn working, Stop returns it to idle.
+/// agy's hook surface has no permission-question event, so a blocked agy
+/// reads working here and the scrape tier is the only question source.
+static AGY_EVENTS: [HookEvent; 3] = [
+    session_event("SessionStart"),
+    action_event("PreInvocation", "working"),
+    action_event("Stop", "idle"),
+];
+
+/// Antigravity CLI (`agy`): `~/.gemini/config/hooks.json`. The user-level
+/// hooks file is the only one agy loads (`antigravity-cli/settings.json`'s
+/// `hooks` key is ignored).
+pub static AGY: ConfigHookArm = ConfigHookArm {
+    agent: "agy",
+    config_dir: agy_config_dir,
+    config_file: "hooks.json",
+    events: &AGY_EVENTS,
+    shape: EntryShape::AgyGroup,
+    bootstrap: "{}\n",
+    required_root_key: None,
+    install_hint: "install the antigravity cli (agy) first",
+    asset_posix: include_str!("../../../integrations/hooks/par-mux-agy-session-hook.sh"),
+    asset_windows: include_str!("../../../integrations/hooks/par-mux-agy-session-hook.ps1"),
+};
+
+/// The root-level group name agy's hooks.json carries par-mux's entries
+/// under.
+const AGY_GROUP: &str = "par-mux";
+
 /// The arms, in the order the status surfaces list them.
-pub static CONFIG_HOOK_ARMS: [&ConfigHookArm; 8] = [
+pub static CONFIG_HOOK_ARMS: [&ConfigHookArm; 9] = [
     &DROID,
     &COPILOT,
     &CURSOR,
@@ -348,6 +388,7 @@ pub static CONFIG_HOOK_ARMS: [&ConfigHookArm; 8] = [
     &DEVIN,
     &KIMI,
     &MASTRACODE,
+    &AGY,
 ];
 
 const COPILOT_HOME_ENV_VAR: &str = "COPILOT_HOME";
@@ -413,6 +454,10 @@ fn devin_config_dir() -> io::Result<PathBuf> {
 
 fn mastracode_config_dir() -> io::Result<PathBuf> {
     Ok(home_dir()?.join(".mastracode"))
+}
+
+fn agy_config_dir() -> io::Result<PathBuf> {
+    Ok(home_dir()?.join(".gemini").join("config"))
 }
 
 /// Outcome of a config-entry hook install.
@@ -491,6 +536,9 @@ impl ConfigHookArm {
                 json!({ "type": "command", field: command, "timeoutSec": HOOK_TIMEOUT_SECS })
             }
             EntryShape::CursorFlat => json!({ "command": command }),
+            EntryShape::AgyGroup => {
+                json!({ "type": "command", "command": command, "timeout": HOOK_TIMEOUT_SECS })
+            }
             EntryShape::MastracodeFlat => json!({
                 "type": "command",
                 "command": command,
@@ -506,6 +554,9 @@ impl ConfigHookArm {
         let text = |key: &str| entry.get(key).and_then(JsonValue::as_str) == Some(command);
         match self.shape {
             EntryShape::NestedGroup | EntryShape::KimiToml => false,
+            EntryShape::AgyGroup => {
+                entry.get("type").and_then(JsonValue::as_str) == Some("command") && text("command")
+            }
             EntryShape::CopilotFlat => {
                 entry.get("type").and_then(JsonValue::as_str) == Some("command")
                     && (text("bash") || text("powershell") || text("command"))
@@ -515,6 +566,20 @@ impl ConfigHookArm {
                 entry.get("type").and_then(JsonValue::as_str) == Some("command") && text("command")
             }
         }
+    }
+
+    /// The whole `par-mux` group agy's hooks.json carries: one flat entry
+    /// per event.
+    fn agy_group(&self, hook_path: &Path) -> JsonValue {
+        let mut group = serde_json::Map::new();
+        for event in self.events {
+            let command = hook_command_with_action(hook_path, event.action);
+            group.insert(
+                event.event.to_string(),
+                json!([self.entry(&command, false)]),
+            );
+        }
+        JsonValue::Object(group)
     }
 
     /// Whether `content` already registers every event's command.
@@ -531,6 +596,15 @@ impl ConfigHookArm {
         for event in self.events {
             let command = hook_command_with_action(hook_path, event.action);
             let present = match self.shape {
+                EntryShape::AgyGroup => {
+                    let value = super::parse_serde(content, config_path)?;
+                    super::any_entry(
+                        value
+                            .get(AGY_GROUP)
+                            .and_then(|group| group.get(event.event)),
+                        &|entry| self.flat_entry_is_ours(entry, &command),
+                    )
+                }
                 EntryShape::NestedGroup => {
                     has_command(content, config_path, &command, event.event)?
                 }
@@ -629,6 +703,13 @@ impl ConfigHookArm {
                     content = rebuilt;
                 }
             }
+            EntryShape::AgyGroup => {
+                if let Some(updated) =
+                    merge_agy_group(&content, config_path, &self.agy_group(hook_path))?
+                {
+                    content = updated;
+                }
+            }
             _ => {
                 for event in self.events {
                     let command = hook_command_with_action(hook_path, event.action);
@@ -654,7 +735,9 @@ impl ConfigHookArm {
                             &self.entry(&command, windows),
                             &|entry| self.flat_entry_is_ours(entry, &command),
                         )?,
-                        EntryShape::KimiToml => unreachable!("handled above"),
+                        EntryShape::KimiToml | EntryShape::AgyGroup => {
+                            unreachable!("handled above")
+                        }
                     };
                     if let Some(updated) = merged {
                         content = updated;
@@ -697,6 +780,12 @@ impl ConfigHookArm {
                     let removed = remove_kimi_hook_block(&content);
                     if removed != content {
                         content = removed;
+                        config_changed = true;
+                    }
+                }
+                EntryShape::AgyGroup => {
+                    if let Some(updated) = unmerge_agy_group(&content, config_path)? {
+                        content = updated;
                         config_changed = true;
                     }
                 }
@@ -779,6 +868,65 @@ impl ConfigHookArm {
         }
         Ok(())
     }
+}
+
+/// Write `group` as the root-level `par-mux` property: replace its value
+/// span when the property exists, append it otherwise. Every other byte of
+/// the file is untouched. `Ok(None)` = the property already equals `group`.
+fn merge_agy_group(
+    content: &str,
+    config_path: &Path,
+    group: &JsonValue,
+) -> io::Result<Option<String>> {
+    let root = super::parse_root_object(content, config_path)?;
+    super::reject_duplicate_keys(&root, config_path)?;
+    let mut desired = super::parse_serde(content, config_path)?;
+    if desired.get(AGY_GROUP) == Some(group) {
+        return Ok(None);
+    }
+    let text = serde_json::to_string(group).expect("hook group is serializable");
+    let existing = root
+        .properties
+        .iter()
+        .find(|property| super::prop_name_text(&property.name) == Some(AGY_GROUP));
+    let updated = match existing {
+        Some(property) => {
+            let range = property.value.range();
+            format!(
+                "{}{}{}",
+                &content[..range.start],
+                text,
+                &content[range.end..]
+            )
+        }
+        None => super::append_object_property(content, &root, AGY_GROUP, &text),
+    };
+    if let Some(object) = desired.as_object_mut() {
+        object.insert(AGY_GROUP.to_string(), group.clone());
+    }
+    super::verify_update(updated, config_path, &desired).map(Some)
+}
+
+/// Cut the root-level `par-mux` property. `Ok(None)` = it is not there.
+fn unmerge_agy_group(content: &str, config_path: &Path) -> io::Result<Option<String>> {
+    let root = super::parse_root_object(content, config_path)?;
+    super::reject_duplicate_keys(&root, config_path)?;
+    let mut desired = super::parse_serde(content, config_path)?;
+    let (updated, changed) = super::apply_cuts(content, |text| {
+        let root = super::parse_root_object(text, config_path)?;
+        let present = root
+            .properties
+            .iter()
+            .any(|property| super::prop_name_text(&property.name) == Some(AGY_GROUP));
+        Ok(present.then(|| super::property_cut(&root.properties, AGY_GROUP)))
+    })?;
+    if !changed {
+        return Ok(None);
+    }
+    if let Some(object) = desired.as_object_mut() {
+        object.remove(AGY_GROUP);
+    }
+    super::verify_update(updated, config_path, &desired).map(Some)
 }
 
 // kimi's config.toml is TOML, so there is no JSON splice: herdr's
@@ -1389,7 +1537,7 @@ mod tests {
                 assert!(asset.contains("PAR_MUX_PANE_ID"), "{name}");
                 // Resume argv is per-agent: herdr's qwen/qodercli reports
                 // carry none, so their ports do not invent one.
-                let resumes = matches!(arm.agent, "droid" | "copilot" | "cursor");
+                let resumes = matches!(arm.agent, "droid" | "copilot" | "cursor" | "agy");
                 assert_eq!(
                     asset.contains("session_resume_argv"),
                     resumes,
@@ -1650,5 +1798,152 @@ mod tests {
             r#"{"hook_event_name":"SessionStart","source":"startup"}"#
         )
         .is_none());
+    }
+
+    #[test]
+    fn agy_install_writes_one_par_mux_group_of_flat_entries() {
+        let (_root, config, hook) = stage(&AGY);
+
+        let result = AGY.install_into(&config, &hook).unwrap();
+
+        assert!(result.config_changed);
+        let parsed = parse_serde(&fs::read_to_string(&config).unwrap(), &config).unwrap();
+        assert!(parsed.get("hooks").is_none(), "agy rejects a hooks wrapper");
+        let group = parsed[AGY_GROUP].as_object().expect("the par-mux group");
+        assert_eq!(group.len(), 3, "{group:?}");
+        for (event, action) in [
+            ("SessionStart", "session"),
+            ("PreInvocation", "working"),
+            ("Stop", "idle"),
+        ] {
+            let entries = group[event].as_array().expect(event);
+            assert_eq!(entries.len(), 1, "{event}");
+            assert_eq!(entries[0]["type"], "command");
+            assert_eq!(entries[0]["timeout"], HOOK_TIMEOUT_SECS);
+            assert_eq!(
+                entries[0]["command"].as_str().unwrap(),
+                hook_command_with_action(&hook, action),
+                "{event} runs the {action} action"
+            );
+        }
+        assert_eq!(fs::read_to_string(&hook).unwrap(), AGY.asset());
+    }
+
+    #[test]
+    fn agy_install_is_idempotent_and_keeps_other_groups_byte_exact() {
+        let (_root, config, hook) = stage(&AGY);
+        let user = "{\n  \"parsidion\": {\n    \"Stop\": [ { \"type\": \"command\", \"command\": \"x\" } ]\n  }\n}\n";
+        fs::write(&config, user).unwrap();
+
+        assert!(AGY.install_into(&config, &hook).unwrap().config_changed);
+        let first = fs::read_to_string(&config).unwrap();
+        assert!(first.contains(
+            "\"parsidion\": {\n    \"Stop\": [ { \"type\": \"command\", \"command\": \"x\" } ]\n  }"
+        ));
+        let again = AGY.install_into(&config, &hook).unwrap();
+        assert!(
+            !again.config_changed,
+            "second install is a byte-exact no-op"
+        );
+        assert_eq!(fs::read_to_string(&config).unwrap(), first);
+    }
+
+    #[test]
+    fn agy_uninstall_cuts_only_the_par_mux_group() {
+        let (_root, config, hook) = stage(&AGY);
+        let user = "{\n  \"parsidion\": { \"Stop\": [ { \"type\": \"command\", \"command\": \"x\" } ] }\n}\n";
+        fs::write(&config, user).unwrap();
+        AGY.install_into(&config, &hook).unwrap();
+
+        let result = AGY.uninstall_into(&config, &hook).unwrap();
+
+        assert!(result.config_changed && result.hook_removed);
+        let parsed = parse_serde(&fs::read_to_string(&config).unwrap(), &config).unwrap();
+        assert!(parsed.get(AGY_GROUP).is_none());
+        assert_eq!(parsed["parsidion"]["Stop"][0]["command"], "x");
+        assert!(!hook.exists(), "our marked asset is removed");
+
+        let again = AGY.uninstall_into(&config, &hook).unwrap();
+        assert!(!again.config_changed, "second uninstall is a no-op");
+    }
+
+    #[test]
+    fn agy_install_replaces_a_stale_par_mux_group_in_place() {
+        let (_root, config, hook) = stage(&AGY);
+        fs::write(
+            &config,
+            "{\"par-mux\": {\"Stop\": [{\"type\": \"command\", \"command\": \"old\"}]}, \"other\": {}}",
+        )
+        .unwrap();
+
+        AGY.install_into(&config, &hook).unwrap();
+
+        let parsed = parse_serde(&fs::read_to_string(&config).unwrap(), &config).unwrap();
+        assert_eq!(
+            parsed[AGY_GROUP]["Stop"][0]["command"].as_str().unwrap(),
+            hook_command_with_action(&hook, "idle"),
+            "the stale entry is replaced, not appended"
+        );
+        assert!(parsed.get("other").is_some());
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn agy_asset_reports_identity_resume_argv_and_states() {
+        let payload =
+            r#"{"conversationId":"c-1","transcriptPath":"/t/c-1.jsonl","fullyIdle":true}"#;
+        let (method, params) =
+            run_hook_request(&AGY, "session", payload).expect("a session start reports");
+        assert_eq!(method, "pane.report_agent_session");
+        assert_eq!(params["agent"], "agy");
+        assert_eq!(params["agent_session_id"], "c-1");
+        assert_eq!(params["agent_session_path"], "/t/c-1.jsonl");
+        assert_eq!(
+            params["session_resume_argv"],
+            json!(["agy", "--conversation", "c-1"])
+        );
+        assert_eq!(params["source"], "par-mux:agy");
+
+        let (method, params) = run_hook_request(&AGY, "working", payload).expect("working");
+        assert_eq!(method, "pane.report_agent");
+        assert_eq!(params["state"], "working");
+        let (_, params) = run_hook_request(&AGY, "idle", payload).expect("idle");
+        assert_eq!(params["state"], "idle");
+
+        // Background work still running: the Stop is not an idle.
+        assert!(run_hook_request(
+            &AGY,
+            "idle",
+            r#"{"conversationId":"c-1","fullyIdle":false}"#
+        )
+        .is_none());
+        assert!(
+            run_hook_request(&AGY, "session", r#"{}"#).is_none(),
+            "no id"
+        );
+        assert!(
+            run_hook_request(&AGY, "done", payload).is_none(),
+            "unknown action"
+        );
+    }
+
+    /// agy reads the hook's stdout as JSON, so the reporter prints `{}`
+    /// even when it is inert (outside a par-mux pane).
+    #[test]
+    #[cfg(unix)]
+    fn agy_asset_prints_an_empty_json_object_outside_a_pane() {
+        use std::process::{Command, Stdio};
+        let dir = tempfile::tempdir().expect("temp dir");
+        let script = dir.path().join("hook.sh");
+        fs::write(&script, AGY.asset_posix).unwrap();
+        let output = Command::new("sh")
+            .arg(&script)
+            .arg("session")
+            .env_remove("PAR_MUX_ENV")
+            .stdin(Stdio::null())
+            .output()
+            .expect("runs the hook");
+        assert_eq!(String::from_utf8_lossy(&output.stdout).trim(), "{}");
+        assert!(output.status.success());
     }
 }

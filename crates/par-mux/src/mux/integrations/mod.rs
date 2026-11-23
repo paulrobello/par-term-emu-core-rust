@@ -47,7 +47,7 @@ mod hook_entries;
 mod muse;
 
 pub use config_hooks::{
-    ConfigHookArm, ConfigHookInstall, ConfigHookUninstall, CONFIG_HOOK_ARMS, COPILOT, CURSOR,
+    ConfigHookArm, ConfigHookInstall, ConfigHookUninstall, AGY, CONFIG_HOOK_ARMS, COPILOT, CURSOR,
     DEVIN, DROID, KIMI, MASTRACODE, QODERCLI, QWEN,
 };
 
@@ -99,7 +99,7 @@ pub fn heal_hook_assets() {
 /// Read-only install state of one agent session hook. Never writes anything.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct AgentHookStatus {
-    /// The agent name (claude, codex, grok, muse, droid, copilot, cursor).
+    /// The agent name (claude, codex, grok, muse, droid, copilot, cursor, agy, ...).
     pub agent: String,
     /// Whether the session hook is registered in the agent config.
     pub installed: bool,
@@ -1614,6 +1614,15 @@ mod tests {
         assert_eq!(failed, vec!["stale: boom".to_string()]);
     }
 
+    /// agy rides the shared hook table, so the status surfaces (and the
+    /// settings dialog rows built from them) grade it like every arm, and
+    /// its PATH probe is the `agy` binary itself.
+    #[test]
+    fn hook_status_lists_agy_and_probes_its_own_binary() {
+        assert!(hook_status().iter().any(|hook| hook.agent == "agy"));
+        assert_eq!(probe_binary_name("agy"), "agy");
+    }
+
     /// `claude-mod` probes the `claude` binary; every other arm probes
     /// its own name. The probe finds an executable file in a PATH dir,
     /// platform-spelled (`.exe` on Windows).
@@ -1675,7 +1684,15 @@ mod tests {
     /// out-of-date detection alone.
     #[test]
     fn every_bundled_asset_carries_a_parseable_version() {
-        let assets: [(&str, &str); 18] = [
+        let assets: [(&str, &str); 20] = [
+            (
+                "agy sh",
+                include_str!("../../../integrations/hooks/par-mux-agy-session-hook.sh"),
+            ),
+            (
+                "agy ps1",
+                include_str!("../../../integrations/hooks/par-mux-agy-session-hook.ps1"),
+            ),
             (
                 "droid sh",
                 include_str!("../../../integrations/hooks/par-mux-droid-session-hook.sh"),

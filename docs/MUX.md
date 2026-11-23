@@ -913,7 +913,7 @@ An **aggregate bound** sits above the per-client budget (ARC-008): once the clie
 
 par-mux owns the integrations that report agent state into the daemon:
 the claude, codex, grok, muse, droid, copilot, cursor, qwen, qodercli,
-kimi, devin, and mastracode session hooks
+kimi, devin, mastracode, and agy session hooks
 (script assets written under the par-mux config directory and registered in
 each agent own config — a merge that preserves the user entries, comments,
 and formatting) and the pi/omp agent-state extensions (a file drop into each
@@ -928,7 +928,7 @@ They are embedded in the binary and driven by five one-shot flags, none of
 which starts or contacts a daemon:
 
 ```text
-par-mux --install-agent-hooks            Install the claude/codex/grok/muse/droid/copilot/cursor/qwen/qodercli/kimi/devin/mastracode session hooks
+par-mux --install-agent-hooks            Install the claude/codex/grok/muse/droid/copilot/cursor/qwen/qodercli/kimi/devin/mastracode/agy session hooks
 par-mux --uninstall-agent-hooks          Remove them (config entries first, then the assets)
 par-mux --agent-hooks-status              One "<agent> installed|absent" line per agent, plus the asset's version currency when installed (v2, `v1 → v2 outdated`, `asset missing`)
 par-mux --integration-status              The same grammar for EVERY bundled asset: hook, extension, and skill lines
@@ -971,7 +971,7 @@ what makes even a wrong-pane tier-3 pick safe to restore.
 The droid, copilot, cursor, qwen, qodercli, kimi, devin, and mastracode
 arms are ports of herdr's integrations (Apache-2.0), each entries in the
 agent's own config file whose reporter sends `pane.report_agent_session`
-on session start:
+on session start. The agy arm (below the table) is par-mux's own:
 
 | Agent | Config file (override env) | Entry |
 | --- | --- | --- |
@@ -983,6 +983,9 @@ on session start:
 | kimi (Kimi Code) | `~/.kimi-code/config.toml` (`KIMI_CODE_HOME`) | a marked block of 12 `[[hooks]]` TOML tables appended after the user's content (rebuilt whole on install, cut on uninstall; two events carry `^AskUserQuestion$` tool matchers); commands run the `session`/`working`/`blocked`/`idle` actions |
 | devin (Devin CLI) | `$XDG_CONFIG_HOME/devin/config.json` (else `~/.config/devin`; `%APPDATA%\devin` on Windows) | nested `hooks.<Event>` groups under six lifecycle events, every command the `session` action |
 | mastracode (MastraCode) | `~/.mastracode/hooks.json` (none) | `{type, command, timeout(ms), description}` entries under event keys at the DOCUMENT root, one action per lifecycle event (11 events) |
+| agy (Antigravity CLI) | `~/.gemini/config/hooks.json` (none) | one root-level `par-mux` group of flat `{type, command, timeout}` entries under `SessionStart` (session), `PreInvocation` (working), `Stop` (idle); the group is rewritten whole on install and cut whole on uninstall, every other group byte-exact |
+
+agy is Google's Antigravity CLI (successor to Gemini CLI). Its hooks live only in `~/.gemini/config/hooks.json` (the `hooks` key of `antigravity-cli/settings.json` is never loaded), the file takes group-keyed objects with no Claude-style `{"hooks": ...}` wrapper (a wrapper rejects the whole file), and the reporter reads agy's camelCase payload (`conversationId`, `transcriptPath`, `fullyIdle`) and prints `{}` on stdout, since agy reads hook results from stdout JSON. SessionStart reports identity with `session_resume_argv` `agy --conversation <id>` plus the fresh-pane idle, PreInvocation reports `working`, and Stop reports `idle` unless the payload says `fullyIdle` is false. agy has no permission-question hook event, so `question` comes only from the scrape tier, and the bundled `agy` pattern set ships a spinner-line `working` rule with no question rule until an approval screen is captured. Without hooks installed, a pane running `agy` still enrolls from its process tree on the scrape tick (idle fallback, aliases `antigravity`, `antigravity-cli`).
 
 Their hooks report identity (droid, copilot, and cursor plus herdr's resume
 invocation as `session_resume_argv`: `droid --resume <id>`,
@@ -1403,7 +1406,7 @@ Structural rules (`crates/par-mux/src/mux/scrape.rs`):
 - **`contains` matches case-insensitively** (herdr parity): needles lowercase at compile and the region text at match, so real-cased agent chrome ("Do you want to proceed?") hits rules authored in lowercase. `regex`/`line_regex` stay case-sensitive as written — make them `(?i)` explicitly when they must fold.
 - **Every pattern list is ALL-of** (herdr parity): a `contains`, `regex`, or `line_regex` list holds when every entry matches (`line_regex` per pattern needs at least one matching line, not one line matching all). A rule carrying two patterns where only one is present does not fire.
 
-Patterns ship bundled (`include_str!` from `crates/par-mux/src/mux/patterns/{claude,codex,grok,muse,droid,copilot,cursor,kimi,qwen,qodercli,devin,gemini,amp}.toml`; copilot also answers to `github-copilot`/`ghcs`, cursor to `cursor-agent`). gemini and amp are pattern-only ports (herdr ships no hook installer for them); mastracode has no upstream manifest. A local override file shadows the bundled set for its agent:
+Patterns ship bundled (`include_str!` from `crates/par-mux/src/mux/patterns/{claude,codex,grok,muse,droid,copilot,cursor,kimi,qwen,qodercli,devin,gemini,amp,agy}.toml`; copilot also answers to `github-copilot`/`ghcs`, cursor to `cursor-agent`). gemini and amp are pattern-only ports (herdr ships no hook installer for them); mastracode has no upstream manifest. A local override file shadows the bundled set for its agent:
 
 ```text
 <state_dir>/par-mux/agent-patterns/<agent>.toml

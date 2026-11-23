@@ -700,7 +700,7 @@ enum AgentHookAction {
 /// The bulk flag's arm table: the four bespoke installers, then every
 /// [`par_mux::mux::integrations::CONFIG_HOOK_ARMS`] entry. `Install`
 /// arms carry the stdout detail, `Uninstall` arms the one-word outcome.
-fn agent_hook_arms(action: &AgentHookAction) -> [(&'static str, Arm); 12] {
+fn agent_hook_arms(action: &AgentHookAction) -> [(&'static str, Arm); 13] {
     use par_mux::mux::integrations as integ;
     match action {
         AgentHookAction::Install => [
@@ -765,6 +765,7 @@ fn agent_hook_arms(action: &AgentHookAction) -> [(&'static str, Arm); 12] {
             ("devin", || config_hook_install(&integ::DEVIN)),
             ("kimi", || config_hook_install(&integ::KIMI)),
             ("mastracode", || config_hook_install(&integ::MASTRACODE)),
+            ("agy", || config_hook_install(&integ::AGY)),
         ],
         AgentHookAction::Uninstall => [
             ("claude", || {
@@ -793,6 +794,7 @@ fn agent_hook_arms(action: &AgentHookAction) -> [(&'static str, Arm); 12] {
             ("devin", || config_hook_uninstall(&integ::DEVIN)),
             ("kimi", || config_hook_uninstall(&integ::KIMI)),
             ("mastracode", || config_hook_uninstall(&integ::MASTRACODE)),
+            ("agy", || config_hook_uninstall(&integ::AGY)),
         ],
     }
 }
