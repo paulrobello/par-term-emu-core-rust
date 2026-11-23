@@ -854,9 +854,12 @@ The former **`csp-allow-blob-connect`** (env `PAR_TERM_CSP_ALLOW_BLOB_CONNECT`, 
 
 The sibling **`csp-connect-origins`** (streamer option `--csp-connect-origins`, env `PAR_TERM_CSP_CONNECT_ORIGINS`, another `PAR_TERM_*` variable; Python `StreamingConfig(csp_connect_origins=[…])`) appends HTTPS origins to the CSP's `connect-src` so a custom web root can `fetch()` public APIs directly (the requesting deployment uses weather endpoints that return permissive CORS headers). Comma-separated or repeat the flag; each value must be the strict `https://host[:port]` source-expression form — path, query, fragment, userinfo, non-HTTPS schemes, and malformed ports are rejected at startup naming the value (the same validator also guards the Python binding). Default unset keeps the ENH-059 policy byte-identical; set, `connect-src` gains exactly the supplied origins after the existing tokens and nothing else in the policy moves (including `frame-ancestors 'none'`). Requested by mux-xr (card 01a1d798).
 
+**`enable-system-stats`** (streamer option `--enable-system-stats`, env `PAR_TERM_ENABLE_SYSTEM_STATS`, Python `StreamingConfig(enable_system_stats=…)`) is off by default. When on, the `/stats` WebSocket endpoint and `system_stats` events expose host inventory to every client allowed to connect: hostname, OS version, disk mount points and network interface names, along with CPU, memory and load figures. The endpoint is gated by the server's origin check and, when an API key is configured, its API-key auth, so enable it only on a server whose clients you trust with that inventory.
+
 | Variable | Read by | Default | Purpose |
 |----------|---------|---------|---------|
 | `DEBUG_LEVEL` | Rust debug logger and the Python `debug` module | `0` (off) | Log verbosity `0`-`4` (off, error, info, debug, trace); logs go to the system temp directory |
+| `PAR_TERM_CORE_BUILD_SHA` | `par-mux` build script (`crates/par-mux/build.rs`), compile time | set by the build | Build identity baked into `mux::build_stamp()` and shown by `par-mux --cmd version`: the short git sha (plus `-dirty` for uncommitted changes), or `src-<digest>` from a crates.io tarball. Not a runtime setting, so exporting it has no effect |
 | `PAR_TERM_REPLY_XTWINOPS` | `PtyTerminal`/`PtySession` construction (read once) | replies on | `0` or `false` suppresses XTWINOPS (`CSI t`) query replies |
 | `SHELL` | Default shell lookup (Unix) | `/bin/bash` | Shell for `spawn_shell()` |
 | `COMSPEC` | Default shell lookup (Windows) | `cmd.exe` | Shell for `spawn_shell()` on Windows |
