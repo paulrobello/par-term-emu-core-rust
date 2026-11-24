@@ -68,6 +68,18 @@ pub(super) fn command(
     line: &str,
     timeout: Duration,
 ) -> io::Result<Vec<String>> {
+    command_with_generation(writer, reader, line, timeout).map(|(body, _)| body)
+}
+
+/// [`command`], plus the reply's closing-flag generation (`gen=<N>` on the
+/// `%end` line — the replay fence the seed replies carry, card 01a205ba).
+/// `None` when the closing line carried no token (a pre-fence daemon).
+pub(super) fn command_with_generation(
+    writer: &mut LocalStream,
+    reader: &MuxLines,
+    line: &str,
+    timeout: Duration,
+) -> io::Result<(Vec<String>, Option<u64>)> {
     writeln!(writer, "{line}")?;
     writer.flush()?;
     let deadline = Instant::now() + timeout;
@@ -92,7 +104,13 @@ pub(super) fn command(
         if next.starts_with("%begin") {
             body = Some(Vec::new());
         } else if body.is_some() && next.starts_with("%end") {
-            return Ok(body.unwrap_or_default());
+            // The closing flags ride the %end line's tail (`%end <ts> <n>
+            // [flags]`): the replay fence is the `gen=` token there.
+            let generation = next
+                .split_whitespace()
+                .find_map(|token| token.strip_prefix("gen="))
+                .and_then(|value| value.parse().ok());
+            return Ok((body.unwrap_or_default(), generation));
         } else if body.is_some() && next.starts_with("%error") {
             return Err(io::Error::other(format!(
                 "{line:?} failed: {}",

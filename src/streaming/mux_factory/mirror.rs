@@ -2,7 +2,10 @@
 //! viewer-status protocol, the seed (screen replay plus graphics
 //! placements), and the `workspace-active` follow that re-seeds in place.
 
-use super::control::{command, parse_cwd_token, parse_cwdhost_token, parse_pane_info, MuxLines};
+use super::control::{
+    command, command_with_generation, parse_cwd_token, parse_cwdhost_token, parse_pane_info,
+    MuxLines,
+};
 use super::lifecycle::{debug_log_active_workspace, query_active_workspace_pane};
 use super::stream::forward;
 use crate::mux::{connect_local_stream, LocalStream};
@@ -76,6 +79,31 @@ pub(super) struct MirrorLink {
     /// and the dedupe state for cwd-change broadcasts.
     pub(super) cwd: Mutex<Option<(String, Option<String>)>>,
     pub(super) session: RwLock<Option<std::sync::Weak<StreamSessionState>>>,
+    /// The replay fence (card 01a20beb): the seed reply's export-time
+    /// damage generation (`gen=<N>` on its closing flags). A `%output`
+    /// chunk stamped at or before it was already on the replayed screen,
+    /// so the drain drops it — the daemon's fan-out can dispatch a
+    /// pre-reply-stamped chunk after the reply, and applying it would
+    /// double-feed the seeded screen. `None` (pre-fence daemon, or an
+    /// unfenced re-seed) feeds as always. Every re-seed re-arms it from
+    /// the new seed reply, exactly the attach pump's resync shape.
+    pub(super) output_fence: Mutex<Option<u64>>,
+}
+
+impl MirrorLink {
+    /// Whether the seed replay already painted a chunk stamped
+    /// `generation` — the mirror's form of the attach pump's
+    /// `replay_covers`: the daemon's fan-out dispatch can lag its grid
+    /// apply, so a chunk stamped at or before the replay's export
+    /// generation arrives after the reply while its bytes sit on the
+    /// replayed screen. `None` on either side (a pre-fence daemon) feeds
+    /// as always.
+    pub(super) fn replay_covers(&self, generation: Option<u64>) -> bool {
+        let (Some(generation), Some(fence)) = (generation, *self.output_fence.lock()) else {
+            return false;
+        };
+        generation <= fence
+    }
 }
 
 impl MirrorLink {
@@ -278,21 +306,27 @@ pub(super) fn query_viewer_status(link: &MirrorLink) -> io::Result<()> {
 /// placements, so a mirror's `Connected.graphics` replays images placed
 /// before attach. An `%error` first line means an older daemon rejected
 /// the unknown flag: retry the plain form, which seeds screen-only,
-/// exactly the pre-`-G` behavior.
+/// exactly the pre-`-G` behavior. The reply's closing-flag generation
+/// rides with the lines (the replay fence, card 01a20beb); `None` when
+/// the daemon pre-dates the fence.
 pub(super) fn seed_reply(
     writer: &mut LocalStream,
     reader: &MuxLines,
     pane: u32,
     timeout: Duration,
-) -> io::Result<Vec<String>> {
-    let reply = command(
+) -> io::Result<(Vec<String>, Option<u64>)> {
+    let reply = command_with_generation(
         writer,
         reader,
         &format!("refresh-client -t %{pane} -G"),
         timeout,
     )?;
-    if reply.first().is_some_and(|line| line.starts_with("%error")) {
-        return command(
+    if reply
+        .0
+        .first()
+        .is_some_and(|line| line.starts_with("%error"))
+    {
+        return command_with_generation(
             writer,
             reader,
             &format!("refresh-client -t %{pane}"),
@@ -317,6 +351,10 @@ struct WorkspaceTarget {
     screen: String,
     /// The seed's graphics placements, ingested after the screen replay.
     graphics: Vec<SeedGraphicFrame>,
+    /// The seed reply's closing-flag generation — the replay fence the
+    /// re-seed arms (card 01a20beb). `None` feeds unfenced (pre-fence
+    /// daemon) until the next seeded re-seed.
+    generation: Option<u64>,
 }
 
 /// One graphics placement the seed carried: the daemon's store entry in
@@ -491,7 +529,7 @@ fn resolve_workspace_target(
         .ok_or_else(|| io::Error::other(format!("bad pane-info reply {info:?}")))?;
     let status_line = info.first().cloned().unwrap_or_default();
     let seed = seed_reply(&mut writer, &reader, pane, timeout)?;
-    let (screen, graphics) = split_graphics_seed(&seed);
+    let (screen, graphics) = split_graphics_seed(&seed.0);
     Ok(Some(WorkspaceTarget {
         session,
         pane,
@@ -501,6 +539,7 @@ fn resolve_workspace_target(
         status_line,
         screen,
         graphics,
+        generation: seed.1,
     }))
 }
 
@@ -536,6 +575,13 @@ fn apply_workspace_target(
         batches.push(term.process_deferred(target.screen.as_bytes()));
         term.drain_responses();
         ingested = ingest_graphics_seed(&mut term, &target.graphics);
+        // The re-seed's export generation re-arms the fence: chunks the
+        // daemon stamped at or before this replay are on the screen just
+        // applied, and their late fan-out dispatch must not double-feed
+        // the mirror (card 01a20beb). The drain thread runs this apply
+        // (both re-seed paths are notification arms), so the write
+        // serializes with the feed checks.
+        *link.output_fence.lock() = target.generation;
     }
     {
         // The re-seed replaced the store: pane attribution follows it, so
@@ -626,7 +672,7 @@ pub(super) fn reseed_after_respawn(
             .ok_or_else(|| io::Error::other(format!("bad pane-info reply {info:?}")))?;
         let status_line = info.first().cloned().unwrap_or_default();
         let seed = seed_reply(&mut writer, &reader, pane, timeout)?;
-        let (screen, graphics) = split_graphics_seed(&seed);
+        let (screen, graphics) = split_graphics_seed(&seed.0);
         Ok(WorkspaceTarget {
             session: String::new(),
             pane,
@@ -636,6 +682,7 @@ pub(super) fn reseed_after_respawn(
             status_line,
             screen,
             graphics,
+            generation: seed.1,
         })
     })();
     match result {

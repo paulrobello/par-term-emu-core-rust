@@ -250,7 +250,7 @@ impl SessionFactory for MuxSessionFactory {
         }
         let seed = seed_reply(&mut writer, &reader, pane, timeout)
             .map_err(|e| fail("refresh-client -t", e))?;
-        let (screen, seed_graphics) = split_graphics_seed(&seed);
+        let (screen, seed_graphics) = split_graphics_seed(&seed.0);
         terminal.process(screen.as_bytes());
         // The daemon's pane answers terminal queries itself; the mirror's
         // copies would double every reply.
@@ -305,6 +305,7 @@ impl SessionFactory for MuxSessionFactory {
                 let host = parse_cwdhost_token(line);
                 Some((cwd, host))
             })),
+            output_fence: Mutex::new(seed.1),
         });
         spawn_drain(
             Arc::clone(&link),

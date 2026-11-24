@@ -281,9 +281,11 @@ impl Drain {
             // pane must not survive the retarget that happened
             // mid-batch.
             TmuxNotification::Output {
-                pane_id: id, data, ..
+                pane_id: id,
+                data,
+                generation,
             } if id == live_pane_id(&self.link, &mut self.pane_guard_buf) => {
-                self.on_output(&id, &data, queue);
+                self.on_output(&id, &data, generation, queue);
             }
             TmuxNotification::LayoutChange {
                 window_id,
@@ -345,13 +347,28 @@ impl Drain {
     /// Apply one `%output` to the mirror terminal and forward it, with its
     /// adjacent `%pane-damage` when the daemon sent one.
     ///
+    /// The replay fence (card 01a20beb) is checked FIRST: a chunk stamped
+    /// at or before the seed reply's export generation is already on the
+    /// replayed screen — the daemon's fan-out can dispatch it after the
+    /// reply — so neither apply nor forward it. Unstamped chunks
+    /// (pre-fence daemon) feed as always.
+    ///
     /// The damage line is the VERY next line (one fan-out write). Peek at
     /// the queue's front: this pane's `%pane-damage` is parsed through the
     /// same parser and consumed here; anything else stays for the next
     /// iteration. An unpaired damage notification is dropped by the
     /// dispatcher's `_` arm - its `%output` already applied, and absent
     /// fields just mean scan.
-    fn on_output(&mut self, id: &str, data: &[u8], queue: &mut VecDeque<String>) {
+    fn on_output(
+        &mut self,
+        id: &str,
+        data: &[u8],
+        generation: Option<u64>,
+        queue: &mut VecDeque<String>,
+    ) {
+        if self.link.replay_covers(generation) {
+            return;
+        }
         let rx = &self.reader.rx;
         let damage = take_adjacent_damage(&mut self.parser, queue, id, |timeout| {
             rx.recv_timeout(timeout)
@@ -744,6 +761,7 @@ mod tests {
             process: Mutex::new(None),
             cwd: Mutex::new(None),
             session: RwLock::new(None),
+            output_fence: Mutex::new(None),
         })
     }
 
@@ -831,6 +849,7 @@ mod tests {
             status: Mutex::new(None),
             process: Mutex::new(None),
             cwd: Mutex::new(None),
+            output_fence: Mutex::new(None),
             session: RwLock::new(None),
         });
         let (tx, mut rx) = tokio::sync::mpsc::channel(2);
@@ -1131,6 +1150,57 @@ mod tests {
                 ("\x1b[1mx".to_string(), Some(43), vec![]),
                 ("tail".to_string(), None, vec![]),
             ]
+        );
+    }
+
+    // --- the replay fence (card 01a20beb) -------------------------------
+
+    /// The mixed-era leak the fence exists for: the seed reply covers gen N
+    /// and a chunk the daemon stamped gen <= N can be DISPATCHED after the
+    /// reply (fan-out runs after the pane lock drops). The drain must drop
+    /// it - applying it would double-feed the seeded screen - while chunks
+    /// stamped after the fence, and unstamped chunks from a pre-fence
+    /// daemon, feed as always.
+    #[test]
+    fn a_chunk_stamped_at_or_before_the_seed_fence_is_dropped() {
+        let mut h = DrainHarness::start();
+        *h.link.output_fence.lock() = Some(7);
+        h.run(&[
+            "%output %1 gen=7 already-on-screen",
+            "%output %1 gen=6 older",
+            "%output %1 gen=8 fresh",
+            "%output %1 unstamped",
+        ]);
+        assert_eq!(
+            h.chunks(),
+            vec![
+                ("fresh".to_string(), None, vec![]),
+                ("unstamped".to_string(), None, vec![]),
+            ],
+            "covered chunks are neither applied nor forwarded"
+        );
+        let content = h.link.terminal.read().content();
+        assert!(
+            content.contains("fresh") && content.contains("unstamped"),
+            "post-fence output feeds the mirror: {content:?}"
+        );
+        assert!(
+            !content.contains("already-on-screen") && !content.contains("older"),
+            "the replayed screen must not be double-fed: {content:?}"
+        );
+    }
+
+    /// A link whose seed reply carried no `gen=` (pre-fence daemon) feeds
+    /// stamped chunks too: no fence means no coverage claim.
+    #[test]
+    fn an_unfenced_link_feeds_stamped_chunks() {
+        let mut h = DrainHarness::start();
+        assert_eq!(*h.link.output_fence.lock(), None);
+        h.run(&["%output %1 gen=3 stamped"]);
+        assert_eq!(
+            h.chunks(),
+            vec![("stamped".to_string(), None, vec![])],
+            "no fence on the link: the chunk feeds"
         );
     }
 
