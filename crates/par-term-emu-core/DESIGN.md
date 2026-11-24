@@ -157,6 +157,11 @@ streaming (`src/streaming/`), the C FFI (`src/ffi.rs`) and the screenshot
 renderer all bind to the one flat struct, so any new field or method on it
 has a blast radius across every consumer and every binding surface.
 
+Owner decision 2026-11-23: the pyclass-migration watch (audit cycle
+2026-11-06, watch card 01a1b40864df) is retired — the flat Python surface is
+permanent, additive-only via new dedicated pyclasses per API area (parsight
+decision 133). No structured migration will be planned.
+
 That is the standing reason the freeze must never be relaxed:
 `make api-surface-check` (method-count baselines for the flat `Terminal` and
 `PtyTerminal` Python classes), `make terminal-fields-check` (field-count
