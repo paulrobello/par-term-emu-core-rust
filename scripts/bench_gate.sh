@@ -61,7 +61,7 @@ build_current_binary() { # $1 = destination
         > "$WORK/build.json" 2> "$WORK/build.log" || {
             cat "$WORK/build.log" >&2
             echo "bench_gate: cargo bench --no-run failed" >&2
-            exit 2
+            return 2
         }
     local bin
     bin="$(python3 - "$WORK/build.json" <<'PY'
@@ -82,7 +82,7 @@ PY
     )"
     if [[ -z "$bin" || ! -x "$bin" ]]; then
         echo "bench_gate: could not locate the bench binary artifact" >&2
-        exit 2
+        return 2
     fi
     cp "$bin" "$dest"
     echo "bench_gate: built $(git -C "$REPO_DIR" rev-parse --short HEAD) -> $dest"
@@ -104,7 +104,7 @@ run_round() { # $1 = who (base|head), $2 = binary, $3 = round number
 
 HEAD_SHA="$(git -C "$REPO_DIR" rev-parse HEAD)"
 ORIG_REF="$(git -C "$REPO_DIR" symbolic-ref -q --short HEAD || git -C "$REPO_DIR" rev-parse HEAD)"
-build_current_binary "$WORK/bench-head"
+build_current_binary "$WORK/bench-head" || exit 2
 
 # Fetch the baseline tag from origin when missing locally; absence anywhere
 # means first-run bootstrap (establish the tag, no compare).
@@ -120,8 +120,22 @@ BOOTSTRAP=0
 if [[ -n "$BASE_SHA" && "$BASE_SHA" != "$HEAD_SHA" ]]; then
     echo "bench_gate: comparing HEAD $HEAD_SHA against baseline $BASE_SHA ($TAG)"
     git -C "$REPO_DIR" checkout --quiet --detach "$BASE_SHA"
-    build_current_binary "$WORK/bench-base"
-    git -C "$REPO_DIR" checkout --quiet --force "$ORIG_REF"
+    if ! build_current_binary "$WORK/bench-base"; then
+        git -C "$REPO_DIR" checkout --quiet --force "$ORIG_REF"
+        if grep -q "does not contain this feature: bench" "$WORK/build.log"; then
+            # The baseline predates the bench feature gating (95739811):
+            # nothing comparable exists at that commit, so re-bootstrap onto
+            # the current regime instead of failing every tick until the tag
+            # catches up.
+            echo "bench_gate: baseline predates the bench feature — bootstrap run (establishes the baseline, no compare)"
+            BOOTSTRAP=1
+            cp "$WORK/bench-head" "$WORK/bench-base"
+        else
+            exit 2
+        fi
+    else
+        git -C "$REPO_DIR" checkout --quiet --force "$ORIG_REF"
+    fi
 elif [[ -z "$BASE_SHA" ]]; then
     BOOTSTRAP=1
     echo "bench_gate: no $TAG tag found — bootstrap run (establishes the baseline, no compare)"
