@@ -7,6 +7,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- **par-mux: restore launches resumed agents with their full original arguments** (card 01a20bde, `crates/par-mux/src/mux/agent_resume.rs`, `crates/par-mux/src/mux/dispatch/agents.rs`, `crates/par-mux/src/mux/persist/{format,save,restore}.rs`): a restore now composes the agent's ORIGINAL launch argv with a resume shape rebuilt from the persisted session, instead of re-running the hook's minimal resume invocation. `agent-start` persists the typed words under `agent_launch_argv` metadata, the save carries them as a new `PersistPane.agent_launch_argv` field (verbatim JSON argv, serde-defaulted so older files restore unchanged), and restore composes them — stripping resume-shaped arguments (`--resume`/`-r`/`--continue`/`-c`, the codex/muse `resume` subcommand, `--conversation`, `--session`, `=`-joined forms) and appending the per-agent-table shape built from the claim's session id/path. Panes the daemon never launched itself fall back to the historical chain (hook-reported argv verbatim, then the table); a wrapper program (`-x`), a parse failure, or a shapeless agent degrades the same way, and a direct-spawn pane composes from a quote-aware parse (`parse_shell_words`) of its persisted command. Pinned by `compose_keeps_launch_flags_and_appends_the_session_resume`, `compose_strips_the_old_resume_shape_from_the_launch`, `compose_handles_the_subcommand_agents`, `restore_composes_the_typed_launch_argv_with_the_session_resume`, `restore_composes_from_the_persisted_spawn_command_for_direct_spawns`, `a_malformed_launch_argv_degrades_to_the_historical_chain`, and `the_launch_argv_round_trips_through_a_second_save`.
+
 ## [0.89.0] - 2026-11-23
 
 ### Changed

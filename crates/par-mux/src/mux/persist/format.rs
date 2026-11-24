@@ -431,6 +431,20 @@ pub struct PersistPane {
         serde(default, skip_serializing_if = "std::ops::Not::not")
     )]
     pub restore_start_command: bool,
+    /// The agent's ORIGINAL launch arguments, verbatim JSON argv — the
+    /// typed words an `agent-start` sent the pane (the `[daemon.agent-append]`
+    /// words excluded; config re-derives and dedupes them at restore), so a
+    /// restore composes the resume from what the agent was actually launched
+    /// with instead of the hook's minimal resume shape. Only meaningful with
+    /// a persisted `agent_session`; restore parses it (a malformed string
+    /// degrades to the historical chain) and gates on the program word
+    /// naming the claimed agent before trusting the tail. Skipped when
+    /// absent and defaulted on load.
+    #[cfg_attr(
+        feature = "serde",
+        serde(default, skip_serializing_if = "Option::is_none")
+    )]
+    pub agent_launch_argv: Option<String>,
 }
 
 /// The agent-session identity hooks write into pane metadata, persisted so

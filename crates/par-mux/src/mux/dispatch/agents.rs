@@ -316,6 +316,17 @@ pub(super) fn cmd_agent_start(
             );
         }
         target.set_metadata("agent", kind);
+        // The typed words survive the session: restore composes the pane's
+        // resume from them (the launch arguments the agent was started
+        // with), with the resume shape itself rebuilt from the persisted
+        // session. The append words ride from config at restore time.
+        if let Ok(json) = serde_json::to_string(
+            &std::iter::once(program.as_deref().unwrap_or(kind))
+                .chain(args.iter().map(String::as_str))
+                .collect::<Vec<_>>(),
+        ) {
+            target.set_metadata("agent_launch_argv", &json);
+        }
     }
     // `{name}` expands to the pane cwd's basename — the shell's `$PWD`
     // stem, what an alias's `$(basename "$PWD")` sees. A pane with no

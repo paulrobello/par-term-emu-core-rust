@@ -231,6 +231,170 @@ fn id_or_path_ref(session: &PersistAgentSession) -> Option<String> {
     non_empty(session.session_path.as_deref()).or_else(|| non_empty(session.session_id.as_deref()))
 }
 
+/// Compose a restore argv from the agent's ORIGINAL launch arguments: every
+/// flag it was launched with survives, the resume-shaped arguments are
+/// stripped, and a fresh resume shape is appended, built from the persisted
+/// session (the table for covered agents, the hook-reported argv otherwise).
+/// `None` leaves the restore to the historical chain — a launch whose
+/// program is not the agent itself (a supervised wrapper, an alias binary),
+/// an agent neither table nor hook can shape, or an empty launch.
+pub fn compose_restore_argv(
+    launch: &[String],
+    session: &PersistAgentSession,
+) -> Option<Vec<String>> {
+    let (program, rest) = launch.split_first()?;
+    if program_basename(program).as_deref() != Some(session.agent.as_str()) {
+        return None;
+    }
+    let rest = strip_resume_args(rest, &session.agent);
+    // The resume shape minus its program token: the composed argv keeps the
+    // ORIGINAL program word (a full path the agent was launched with), and
+    // only the ref-carrying tail comes from the session.
+    let tail = match resume_argv(&session.agent, session) {
+        Some(shape) => Some(shape[1..].to_vec()),
+        // Agents outside the table resume through their hook-reported argv,
+        // whose ref IS the persisted session identity (identity re-keys
+        // clear it at save), so it is "built based on the session" too.
+        None => session
+            .resume_argv
+            .as_deref()
+            .and_then(|raw| serde_json::from_str::<Vec<String>>(raw).ok())
+            .filter(|shape| shape.len() >= 2 && !shape[1..].iter().any(String::is_empty))
+            .map(|shape| shape[1..].to_vec()),
+    }?;
+    let mut composed = vec![program.clone()];
+    composed.extend(rest);
+    composed.extend(tail);
+    Some(composed)
+}
+
+/// Strip the resume-shaped arguments from an agent's launch arguments,
+/// leaving every other flag in place. Token-level, per agent: the shapes
+/// mirror [`resume_argv`]'s table (a separate value argument, a subcommand,
+/// or an `=`-joined flag), and a value-taking shape consumes the following
+/// token only when it does not itself start with `-`.
+fn strip_resume_args(args: &[String], agent: &str) -> Vec<String> {
+    // The resume shapes this agent's CLI carries: (flag, takes a value).
+    // `--flag=value` forms of the same names strip whole regardless.
+    let shapes: &[(&str, bool)] = match agent {
+        "claude" => &[
+            ("--resume", true),
+            ("-r", true),
+            ("--continue", false),
+            ("-c", false),
+        ],
+        "grok" => &[("--resume", true), ("-r", true)],
+        "agy" => &[("--conversation", true)],
+        "pi" => &[("--session", true)],
+        // omp's verified shape is `=`-joined; the space form is stripped
+        // anyway so a hand-written `omp --resume id` launch cannot leak it.
+        "omp" => &[("--resume", true)],
+        "cursor-agent" | "copilot" | "droid" => &[("--resume", true), ("-r", true)],
+        _ => &[],
+    };
+    // Subcommand agents: `codex resume <id>`, `muse resume <id|--last>` —
+    // the shape leads the arguments rather than flagging them.
+    let subcommand = matches!(agent, "codex" | "muse");
+    let mut kept = Vec::with_capacity(args.len());
+    let mut iter = args.iter().peekable();
+    if subcommand && iter.peek().map(|token| token.as_str()) == Some("resume") {
+        iter.next();
+        // The ref, or `--last` for muse: consumed with the subcommand.
+        iter.next_if(|token| !token.starts_with('-') || token.as_str() == "--last");
+    }
+    while let Some(token) = iter.next() {
+        let (name, value) = match token.split_once('=') {
+            Some((name, value)) if name.starts_with("--") => (name, Some(value)),
+            _ => (token.as_str(), None),
+        };
+        let shape = shapes.iter().find(|(flag, _)| *flag == name);
+        match shape {
+            Some((_, takes_value)) if value.is_some() => {} // `--flag=value`: whole token
+            Some((_, true)) => {
+                iter.next_if(|next| !next.starts_with('-')); // consume the value token
+            }
+            Some((_, false)) => {} // valueless flag: strip alone
+            None => kept.push(token.clone()),
+        }
+    }
+    kept
+}
+
+/// Split a shell command string into words the way `sh` would: whitespace
+/// between words, single and double quotes grouping, backslash escaping
+/// outside quotes. `None` on an unterminated quote — an untrusted string
+/// that cannot be parsed cleanly must degrade the caller to its fallback,
+/// not mis-split a quoted argument into flag-looking tokens.
+pub(crate) fn parse_shell_words(cmd: &str) -> Option<Vec<String>> {
+    let mut words = Vec::new();
+    let mut word = String::new();
+    let mut in_word = false;
+    let mut chars = cmd.chars().peekable();
+    while let Some(ch) = chars.next() {
+        match ch {
+            ' ' | '\t' | '\n' => {
+                if in_word {
+                    words.push(std::mem::take(&mut word));
+                    in_word = false;
+                }
+            }
+            '\'' => {
+                in_word = true;
+                loop {
+                    match chars.next() {
+                        Some('\'') => break,
+                        Some(inner) => word.push(inner),
+                        None => return None,
+                    }
+                }
+            }
+            '"' => {
+                in_word = true;
+                loop {
+                    match chars.next() {
+                        Some('"') => break,
+                        Some('\\') => match chars.next() {
+                            // Inside double quotes a backslash escapes only
+                            // `$ ` \" \\ and newline; anything else keeps both.
+                            Some(c @ ('$' | '`' | '"' | '\\')) => word.push(c),
+                            Some('\n') => {}
+                            Some(other) => {
+                                word.push('\\');
+                                word.push(other);
+                            }
+                            None => return None,
+                        },
+                        Some(inner) => word.push(inner),
+                        None => return None,
+                    }
+                }
+            }
+            '\\' => {
+                let escaped = chars.next()?;
+                in_word = true;
+                word.push(escaped);
+            }
+            other => {
+                in_word = true;
+                word.push(other);
+            }
+        }
+    }
+    if in_word {
+        words.push(word);
+    }
+    Some(words)
+}
+
+/// The invocation word a launch's program resolves to for the agent-kind
+/// gate: basename, `.exe` stripped, lowercased — the same normalization
+/// [`crate::mux::persist::restore::agent_of_invocation`] applies.
+fn program_basename(program: &str) -> Option<String> {
+    let lowered = program.rsplit(['/', '\\']).next()?.to_ascii_lowercase();
+    let base = lowered.strip_suffix(".exe").unwrap_or(&lowered);
+    Some(base.to_string())
+}
+
 /// Empty strings read as absent — a hand-edited state file must not produce
 /// an argv with an empty ref argument.
 fn non_empty(value: Option<&str>) -> Option<String> {
@@ -494,6 +658,162 @@ mod tests {
     }
 
     // --- the [daemon.agent-append] ride-along ---
+
+    // --- composing the original launch args with a session-built resume ---
+
+    fn launch(parts: &[&str]) -> Vec<String> {
+        parts.iter().map(|part| part.to_string()).collect()
+    }
+
+    #[test]
+    fn compose_keeps_launch_flags_and_appends_the_session_resume() {
+        let s = session("claude", Some("abc-123"), None);
+        assert_eq!(
+            compose_restore_argv(
+                &launch(&[
+                    "claude",
+                    "--dangerously-skip-permissions",
+                    "--model",
+                    "opus"
+                ]),
+                &s
+            ),
+            argv(&[
+                "claude",
+                "--dangerously-skip-permissions",
+                "--model",
+                "opus",
+                "--resume",
+                "abc-123"
+            ])
+        );
+    }
+
+    #[test]
+    fn compose_strips_the_old_resume_shape_from_the_launch() {
+        // The launch itself was a resume (a previously restored pane); its
+        // ref is stale and the persisted session's is current.
+        let s = session("claude", Some("new-id"), None);
+        assert_eq!(
+            compose_restore_argv(
+                &launch(&[
+                    "claude",
+                    "--resume",
+                    "old-id",
+                    "--dangerously-skip-permissions"
+                ]),
+                &s
+            ),
+            argv(&[
+                "claude",
+                "--dangerously-skip-permissions",
+                "--resume",
+                "new-id"
+            ])
+        );
+    }
+
+    #[test]
+    fn compose_strips_short_flags_and_continue() {
+        let s = session("claude", Some("id-1"), None);
+        assert_eq!(
+            compose_restore_argv(&launch(&["claude", "-r", "old", "-c"]), &s),
+            argv(&["claude", "--resume", "id-1"])
+        );
+    }
+
+    #[test]
+    fn compose_strips_eq_joined_resume_flags() {
+        let omp = session("omp", Some("s-1"), None);
+        assert_eq!(
+            compose_restore_argv(&launch(&["omp", "--resume=old", "--foo"]), &omp),
+            argv(&["omp", "--foo", "--resume=s-1"])
+        );
+        let claude = session("claude", Some("id-1"), None);
+        assert_eq!(
+            compose_restore_argv(&launch(&["claude", "--resume=old"]), &claude),
+            argv(&["claude", "--resume", "id-1"])
+        );
+    }
+
+    #[test]
+    fn compose_handles_the_subcommand_agents() {
+        let codex = session("codex", Some("c-1"), None);
+        assert_eq!(
+            compose_restore_argv(
+                &launch(&["codex", "resume", "old", "--profile", "main"]),
+                &codex
+            ),
+            argv(&["codex", "--profile", "main", "resume", "c-1"])
+        );
+        let muse = session("muse", None, None);
+        assert_eq!(
+            compose_restore_argv(&launch(&["muse", "resume", "--last", "--foo"]), &muse),
+            argv(&["muse", "--foo", "resume", "--last"])
+        );
+    }
+
+    #[test]
+    fn compose_falls_back_to_the_hook_shape_for_tableless_agents() {
+        // cursor-agent is outside the resume table; its hook-reported argv
+        // (the persisted session identity) shapes the resume tail instead.
+        let s = reported(
+            session("cursor-agent", None, None),
+            r#"["cursor-agent","--resume","hook-id"]"#,
+        );
+        assert_eq!(
+            compose_restore_argv(&launch(&["cursor-agent", "--foo"]), &s),
+            argv(&["cursor-agent", "--foo", "--resume", "hook-id"])
+        );
+    }
+
+    #[test]
+    fn compose_bails_for_a_wrapper_program_or_unknown_agent() {
+        // A supervised wrapper (program != agent) and an agent neither the
+        // table nor the hook can shape leave the composition to None: the
+        // restore falls through to the historical chain.
+        let wrapper = session("claude", Some("id-9"), None);
+        assert_eq!(
+            compose_restore_argv(&launch(&["my-wrapper.sh", "claude"]), &wrapper),
+            None
+        );
+        // A hook shape that is only the program word carries no tail to
+        // resume with: unusable, so None.
+        let unknown = reported(session("kimi", None, None), r#"["kimi"]"#);
+        assert_eq!(
+            compose_restore_argv(&launch(&["kimi", "--foo"]), &unknown),
+            None
+        );
+        assert_eq!(compose_restore_argv(&[], &wrapper), None);
+    }
+
+    #[test]
+    fn compose_prefers_the_table_shape_when_the_table_has_the_agent() {
+        // claude is table-covered: the shape is built from the persisted
+        // session ref, not the hook argv's — even when both exist.
+        let s = reported(
+            session("claude", Some("claim-id"), None),
+            r#"["claude","--resume","hook-id"]"#,
+        );
+        assert_eq!(
+            compose_restore_argv(&launch(&["claude", "--foo"]), &s),
+            argv(&["claude", "--foo", "--resume", "claim-id"])
+        );
+    }
+
+    #[test]
+    fn parse_shell_words_splits_quotes_and_escapes() {
+        assert_eq!(
+            parse_shell_words("claude --model 'opus plan' \"x y\" z"),
+            Some(argv(&["claude", "--model", "opus plan", "x y", "z"]).unwrap())
+        );
+        assert_eq!(
+            parse_shell_words(r"claude 'it'\''s' b"),
+            Some(argv(&["claude", "it's", "b"]).unwrap())
+        );
+        assert_eq!(parse_shell_words("claude 'unterminated"), None);
+        assert_eq!(parse_shell_words("claude trailing \\"), None);
+    }
 
     #[test]
     fn append_words_expand_name_and_skip_present_tokens() {

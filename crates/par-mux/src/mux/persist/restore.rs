@@ -325,29 +325,48 @@ fn spawn_restored_pane(
             .as_ref()
             .filter(|_| !pane.dead)
             .map(|agent_session| {
-                resume_invocation(agent_session).map(|argv| {
-                    let argv = crate::mux::agent_resume::argv_with_agent_append(
-                        argv,
-                        &agent_session.agent,
-                        agent_append,
-                        pane.cwd.as_deref(),
-                        pane.id,
-                    );
-                    // The continuation turn: a configured, agent-supported
-                    // prompt rides as the trailing positional so the resumed
-                    // session starts working instead of idling at its prompt.
-                    match crate::mux::agent_resume::resume_prompt(
-                        agent_session,
-                        agent_resume_prompt,
-                    ) {
-                        Some(prompt) => {
-                            let mut argv = argv;
-                            argv.push(prompt);
-                            argv
+                // The arguments the agent was launched with: the persisted
+                // typed words (agent-start) first, else a quote-aware parse
+                // of the pane's persisted command (a direct agent spawn).
+                // The composition gates itself on the program word naming
+                // the claimed agent, and every failure — no launch to
+                // parse, a wrapper program, an agent neither the table nor
+                // the hook can shape — degrades to the historical chain.
+                let launch = pane
+                    .agent_launch_argv
+                    .as_deref()
+                    .and_then(|raw| serde_json::from_str::<Vec<String>>(raw).ok())
+                    .or_else(|| {
+                        spawn_command.and_then(crate::mux::agent_resume::parse_shell_words)
+                    });
+                let composed = launch.as_deref().and_then(|launch| {
+                    crate::mux::agent_resume::compose_restore_argv(launch, agent_session)
+                });
+                composed
+                    .or_else(|| resume_invocation(agent_session))
+                    .map(|argv| {
+                        let argv = crate::mux::agent_resume::argv_with_agent_append(
+                            argv,
+                            &agent_session.agent,
+                            agent_append,
+                            pane.cwd.as_deref(),
+                            pane.id,
+                        );
+                        // The continuation turn: a configured, agent-supported
+                        // prompt rides as the trailing positional so the resumed
+                        // session starts working instead of idling at its prompt.
+                        match crate::mux::agent_resume::resume_prompt(
+                            agent_session,
+                            agent_resume_prompt,
+                        ) {
+                            Some(prompt) => {
+                                let mut argv = argv;
+                                argv.push(prompt);
+                                argv
+                            }
+                            None => argv,
                         }
-                        None => argv,
-                    }
-                })
+                    })
             })
             .and_then(|argv| argv)
     };
@@ -426,6 +445,13 @@ fn spawn_restored_pane(
     }
     if let Some(title) = &pane.user_title {
         created.set_user_title(title);
+    }
+    // The persisted launch words ride back onto the pane's metadata, so the
+    // next save re-persists them and composition survives a second restart
+    // (the same verbatim passthrough the claim's resume argv uses — a
+    // malformed string stays raw rather than being silently dropped).
+    if let Some(raw) = pane.agent_launch_argv.as_deref() {
+        created.set_metadata("agent_launch_argv", raw);
     }
     // A re-restored pane keeps a cwd floor too: its spawn cwd is the
     // persisted cwd the restore just used (None only when the state had

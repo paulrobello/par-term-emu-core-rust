@@ -157,6 +157,7 @@ struct PaneCapture {
     spawn_command: Option<String>,
     user_title: Option<String>,
     agent_session: Option<PersistAgentSession>,
+    agent_launch_argv: Option<String>,
     child_pid: Option<u32>,
     agent_env: std::sync::Arc<parking_lot::Mutex<Option<crate::mux::pane::AgentEnvSnapshot>>>,
     dead: bool,
@@ -293,6 +294,7 @@ impl PersistCapture {
                                     spawn_command: pane.spawn_command,
                                     user_title: pane.user_title,
                                     agent_session: pane.agent_session,
+                                    agent_launch_argv: pane.agent_launch_argv,
                                     cwd: pane
                                         .parts
                                         .cwd()
@@ -398,6 +400,7 @@ impl MuxTree {
                         spawn_command: pane.spawn_command().map(str::to_string),
                         user_title: pane.user_title().map(str::to_string),
                         agent_session: agent_session_from_metadata(pane.metadata()),
+                        agent_launch_argv: pane.metadata().get("agent_launch_argv").cloned(),
                         child_pid: pane.child_pid(),
                         agent_env: pane.agent_env_capture_handle(),
                         dead: pane.dead(),

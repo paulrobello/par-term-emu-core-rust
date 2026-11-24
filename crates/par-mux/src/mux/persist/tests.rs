@@ -634,6 +634,116 @@ fn an_agent_cwd_directs_the_resume_spawn_into_it() {
     );
 }
 
+/// Paul, 2026-11-23: restore passes an agent ALL the arguments it was
+/// launched with, except the resume — that is rebuilt from the persisted
+/// session. The typed words (agent-start) compose with the session-built
+/// shape.
+#[test]
+fn restore_composes_the_typed_launch_argv_with_the_session_resume() {
+    let (tree, pane_id) = tree_with_metadata(&[
+        ("agent", "claude"),
+        ("agent_session_id", "s-1"),
+        (
+            "agent_launch_argv",
+            r#"["claude","--dangerously-skip-permissions"]"#,
+        ),
+    ]);
+    // capture_with_table(None): the fixed-table seam keeps every claim
+    // (the real table would prove the `sleep` child not-claude and drop it).
+    let state = tree.collect_persist_capture().capture_with_table(None);
+    let pane = &state.sessions[0].windows[0].panes[0];
+    assert_eq!(
+        pane.agent_launch_argv.as_deref(),
+        Some(r#"["claude","--dangerously-skip-permissions"]"#),
+        "the typed words ride the save"
+    );
+    let factory = RecordingFactory::default();
+    let _restored =
+        MuxTree::from_persist_state(&state, Box::new(factory.clone())).expect("restores");
+    let cmd = factory.command_for(pane_id).expect("spawn recorded");
+    assert!(
+        cmd.contains("'--dangerously-skip-permissions'") && cmd.contains("'--resume' 's-1'"),
+        "composed argv carries the launch flag and the session-built resume: {cmd}"
+    );
+}
+
+/// A direct-spawn agent pane (the daemon holds only the shell string)
+/// composes from a quote-aware parse of the persisted spawn command.
+#[test]
+fn restore_composes_from_the_persisted_spawn_command_for_direct_spawns() {
+    let (tree, pane_id) = tree_with_metadata(&[("agent", "claude"), ("agent_session_id", "s-1")]);
+    let mut state = tree.collect_persist_capture().capture_with_table(None);
+    let pane = &mut state.sessions[0].windows[0].panes[0];
+    pane.spawn_command = Some("claude --dangerously-skip-permissions --model 'opus plan'".into());
+    pane.agent_session = Some(super::format::PersistAgentSession {
+        agent: "claude".to_string(),
+        session_id: Some("s-1".to_string()),
+        session_path: None,
+        source: None,
+        resume_argv: None,
+        agent_pid: None,
+        agent_cwd: None,
+        state: None,
+        state_source: None,
+        message: None,
+        env: None,
+    });
+    let factory = RecordingFactory::default();
+    let _restored =
+        MuxTree::from_persist_state(&state, Box::new(factory.clone())).expect("restores");
+    let cmd = factory.command_for(pane_id).expect("spawn recorded");
+    assert!(
+        cmd.contains("'--dangerously-skip-permissions'")
+            && cmd.contains("'opus plan'")
+            && cmd.contains("'--resume' 's-1'"),
+        "spawn-command parse composes launch args + rebuilt resume: {cmd}"
+    );
+}
+
+/// Every failure of the composition — a malformed persisted argv, an agent
+/// outside the table and hook-less — degrades to the historical chain
+/// (hook-reported argv verbatim, then the per-agent table), never a dead
+/// pane.
+#[test]
+fn a_malformed_launch_argv_degrades_to_the_historical_chain() {
+    let (tree, pane_id) = tree_with_metadata(&[
+        ("agent", "claude"),
+        ("agent_session_id", "s-1"),
+        ("agent_launch_argv", "not json"),
+    ]);
+    let state = tree.collect_persist_capture().capture_with_table(None);
+    let factory = RecordingFactory::default();
+    let _restored =
+        MuxTree::from_persist_state(&state, Box::new(factory.clone())).expect("restores");
+    let cmd = factory.command_for(pane_id).expect("spawn recorded");
+    assert!(
+        cmd.contains("'claude'") && cmd.contains("'--resume' 's-1'"),
+        "the historical chain still resumes: {cmd}"
+    );
+}
+
+/// The launch words round-trip: a restored pane's metadata carries them,
+/// so the next save re-persists them and composition survives restarts.
+#[test]
+fn the_launch_argv_round_trips_through_a_second_save() {
+    let (tree, _pane_id) = tree_with_metadata(&[
+        ("agent", "claude"),
+        ("agent_session_id", "s-1"),
+        ("agent_launch_argv", r#"["claude","--foo"]"#),
+    ]);
+    let state = tree.collect_persist_capture().capture_with_table(None);
+    let factory = RecordingFactory::default();
+    let restored =
+        MuxTree::from_persist_state(&state, Box::new(factory.clone())).expect("restores");
+    let second = restored.collect_persist_capture().capture_with_table(None);
+    let pane = &second.sessions[0].windows[0].panes[0];
+    assert_eq!(
+        pane.agent_launch_argv.as_deref(),
+        Some(r#"["claude","--foo"]"#),
+        "the passthrough re-persists the typed words"
+    );
+}
+
 /// A worktree deleted between save and restore (branch merged, tree
 /// removed) degrades to the pane's own cwd — the session re-lands in its
 /// checkout instead of a vanished directory or $HOME.
