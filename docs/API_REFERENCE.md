@@ -2243,6 +2243,7 @@ StreamingConfig(
     kitty_file_media: str = "temp_only",
     allow_pane_create: bool = False,
     csp_connect_origins: list[str] | None = None,
+    allow_legacy_password_hashes: bool = False,
 )
 ```
 
@@ -2268,6 +2269,7 @@ StreamingConfig(
 - `kitty_file_media: str` - Kitty graphics file-media mode applied to every session terminal (SEC-101): `"temp_only"` (default) allows only a spec-named temp file, `"all"` also permits `t=f` reads of arbitrary paths, `"off"` refuses both. PTY output is untrusted
 - `allow_pane_create: bool` - Let writable clients create real panes on the backing mux daemon (`pane_create_request`, default False; fail-closed). A request may carry an optional `name` (≤ 64 bytes, no control characters; otherwise refused with `pane_create_failed`), which names the created window
 - `csp_connect_origins: list[str] | None` - Opt-in HTTPS origins appended to the CSP's connect-src so a custom web root can fetch public APIs directly; each value must be the strict `https://host[:port]` form, anything else raises ValueError naming the origin (default None; `blob:` is baseline in connect-src)
+- `allow_legacy_password_hashes: bool` - Accept legacy `{SHA}`/`$apr1$` htpasswd hashes for Basic Auth (SEC-002, default False = refused outright, indistinguishable from a wrong password on the wire). Opt-in verifies them with a loud once-per-process deprecation warning; removal targeted 0.91.0. bcrypt hashes are always accepted
 - `tls_enabled: bool` - Check if TLS is configured (read-only)
 
 ### TLS Methods
