@@ -212,6 +212,9 @@ par-mux-install:
 	cargo install --path crates/par-mux --bin par-mux --features mux-bin,attach --force
 	@bash scripts/sign-installed-artifact.sh com.paulrobello.par-mux "$(HOME)/.cargo/bin/par-mux"
 
+fleet-par-mux-update: ## Update par-mux on minimac + lenny1/2/6 from a release and restart the daemons (TAG=v0.89.0; FLEET_HOSTS overrides the host list)
+	bash scripts/fleet_update_par_mux.sh $(TAG)
+
 par-mux-uninstall:
 	cargo uninstall par-mux
 
