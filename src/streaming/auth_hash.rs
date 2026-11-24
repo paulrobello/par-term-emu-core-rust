@@ -180,10 +180,66 @@ pub fn legacy_hash_format(hash: &str) -> Option<&'static str> {
     }
 }
 
+/// Warn once per process so the deprecation/refusal notice cannot be
+/// re-spammed by repeated authentication attempts against a legacy hash.
+static LEGACY_NOTICE_EMITTED: std::sync::atomic::AtomicBool =
+    std::sync::atomic::AtomicBool::new(false);
+
+/// Emit the SEC-002 legacy-hash notice once per process. `refused` selects
+/// the wording: refusal by default (gate closed) versus deprecation (gate
+/// explicitly opened).
+fn emit_legacy_notice(refused: bool) {
+    use std::sync::atomic::Ordering;
+    if LEGACY_NOTICE_EMITTED.swap(true, Ordering::Relaxed) {
+        return;
+    }
+    if refused {
+        log::warn!(
+            "Legacy htpasswd hash format ({{SHA}}/$1$/$apr1$) credential refused: these \
+             formats are refused by default since the 0.89-era SEC-002 follow-up. \
+             Regenerate the hash with bcrypt (`htpasswd -nB`) or opt in via \
+             StreamingConfig.allow_legacy_password_hashes to keep verifying it."
+        );
+    } else {
+        log::warn!(
+            "DEPRECATION: legacy htpasswd hash format ({{SHA}}/$1$/$apr1$) accepted via the \
+             explicit StreamingConfig.allow_legacy_password_hashes opt-in. Support is \
+             deprecated and will be removed two minor releases after the default refusal \
+             landed; regenerate the hash with bcrypt (`htpasswd -nB`)."
+        );
+    }
+}
+
+/// Verify a password against any supported htpasswd-format hash, with the
+/// SEC-002 legacy-format gate.
+///
+/// bcrypt hashes are always verified. `{SHA}`, `$1$`, and `$apr1$` hashes
+/// are refused outright (return `false`) when `allow_legacy` is `false` —
+/// the library default, matching the standalone streamer's startup refusal —
+/// and verified with a loud deprecation warning when it is `true`.
+///
+/// Returns `false` for an unrecognized format (never panics). All
+/// comparisons are constant-time.
+pub fn verify_htpasswd_hash_gated(hash: &str, password: &str, allow_legacy: bool) -> bool {
+    let is_legacy = legacy_hash_format(hash).is_some();
+    if is_legacy && !allow_legacy {
+        emit_legacy_notice(true);
+        return false;
+    }
+    if is_legacy {
+        emit_legacy_notice(false);
+    }
+    verify_htpasswd_hash(hash, password)
+}
+
 /// Verify a password against any supported htpasswd-format hash.
 ///
 /// Dispatches on the hash prefix. Returns `false` for an unrecognized format
 /// (never panics). All comparisons are constant-time.
+///
+/// This function accepts legacy `{SHA}`/`$1$`/`$apr1$` hashes unconditionally;
+/// prefer [`verify_htpasswd_hash_gated`] for anything reachable from network
+/// authentication paths (SEC-002).
 pub fn verify_htpasswd_hash(hash: &str, password: &str) -> bool {
     if hash.starts_with("$2a$")
         || hash.starts_with("$2b$")
@@ -266,6 +322,55 @@ mod tests {
         let bcrypt_hash = bcrypt::hash("pw", 4).unwrap();
         assert_eq!(legacy_hash_format(&bcrypt_hash), None);
         assert_eq!(legacy_hash_format("plaintext-or-unknown"), None);
+    }
+
+    /// SEC-002: the gated dispatch refuses every legacy arm when the gate is
+    /// closed (the library default) — even with the correct password.
+    #[test]
+    fn test_gated_refuses_legacy_formats_by_default() {
+        for legacy in [
+            "{SHA}W6ph5Mm5Pz8GgiULbPgzG37mj9g=",
+            "$apr1$salt$Xxd1irWT9ycqoYxGFn4cb.",
+            "$1$salt$qJH7.N4xYta3aEG/dfqo/0",
+        ] {
+            assert!(
+                !verify_htpasswd_hash_gated(legacy, "password", false),
+                "legacy hash must be refused with the gate closed: {legacy}"
+            );
+            assert!(
+                !verify_htpasswd_hash_gated(legacy, "wrong-password", false),
+                "refusal must not depend on the password: {legacy}"
+            );
+        }
+    }
+
+    /// SEC-002: the explicit opt-in verifies the same vectors the ungated
+    /// dispatch accepts; bcrypt is unaffected by the gate in both states.
+    #[test]
+    fn test_gated_accepts_legacy_on_opt_in_and_bcrypt_always() {
+        for legacy in [
+            "{SHA}W6ph5Mm5Pz8GgiULbPgzG37mj9g=",
+            "$apr1$salt$Xxd1irWT9ycqoYxGFn4cb.",
+            "$1$salt$qJH7.N4xYta3aEG/dfqo/0",
+        ] {
+            assert!(
+                verify_htpasswd_hash_gated(legacy, "password", true),
+                "opt-in must verify the legacy hash: {legacy}"
+            );
+            assert!(!verify_htpasswd_hash_gated(legacy, "nope", true));
+        }
+        let hashed = bcrypt::hash("gate-ignored-password", 4).unwrap();
+        assert!(verify_htpasswd_hash_gated(
+            &hashed,
+            "gate-ignored-password",
+            false
+        ));
+        assert!(verify_htpasswd_hash_gated(
+            &hashed,
+            "gate-ignored-password",
+            true
+        ));
+        assert!(!verify_htpasswd_hash_gated(&hashed, "wrong", false));
     }
 
     #[test]

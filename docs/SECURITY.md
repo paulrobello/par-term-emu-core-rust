@@ -960,8 +960,19 @@ connected client can execute arbitrary commands as the user running the server.
   deployments that cannot regenerate yet. A cleartext password logs a
   startup warning; prefer a bcrypt hash from `htpasswd -nB <user>`.
   `--require-bcrypt` (`PAR_TERM_REQUIRE_BCRYPT`) refuses to start unless the
-  credential is a bcrypt hash, rejecting cleartext too. The library-level
-  `verify_htpasswd_hash` still verifies every format for embedders.
+  credential is a bcrypt hash, rejecting cleartext too.
+- **Library-path legacy-hash gate** (`StreamingConfig.allow_legacy_password_hashes`,
+  SEC-002): the streaming server rejects HTTP Basic Auth credentials checked
+  against a legacy `{SHA}` / `$1$` / `$apr1$` hash by default, matching the
+  standalone streamer's startup refusal — an embedder's server no longer
+  accepts weak legacy hashes without an explicit opt-in. bcrypt hashes and
+  cleartext passwords are unaffected. With the flag set to `true`, legacy
+  hashes verify but the first use logs a loud deprecation warning naming the
+  removal plan: support ends two minor releases after the default refusal
+  landed (refusal ships in 0.89.0; removal targeted for 0.91.0). The Python
+  `StreamingConfig` exposes the same kwarg/property; Rust embedders wanting
+  the pre-0.89 behavior call `verify_htpasswd_hash` (or
+  `HttpBasicAuthConfig::verify_with_policy(.., true)`) directly.
 - **Default**: auth is **disabled**. The binary binds to `127.0.0.1` by
   default; a non-loopback bind with no authentication **refuses to start**
   (SEC-002) unless `--allow-unauthenticated`

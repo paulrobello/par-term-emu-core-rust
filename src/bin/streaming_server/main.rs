@@ -707,6 +707,9 @@ fn build_config(
         kitty_file_media: args.kitty_file_media,
         allow_pane_create: args.allow_pane_create,
         csp_connect_origins: args.csp_connect_origins.clone(),
+        // SEC-002: --allow-legacy-hash must keep working once the library
+        // gate defaults to closed, so the CLI opt-in drives the config flag.
+        allow_legacy_password_hashes: args.allow_legacy_hash,
     }
 }
 

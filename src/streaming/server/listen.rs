@@ -27,6 +27,7 @@ impl StreamingServer {
             api_key: self.config.api_key.clone(),
             http_basic_auth: self.config.http_basic_auth.clone(),
             allow_api_key_in_query: self.config.allow_api_key_in_query,
+            allow_legacy_password_hashes: self.config.allow_legacy_password_hashes,
         };
         let auth_throttle = Arc::clone(&self.auth_throttle);
         let api_routes = if auth_config.is_configured() {
@@ -284,6 +285,7 @@ impl StreamingServer {
             self.config.http_basic_auth.clone(),
             self.config.allowed_origins.clone(),
             self.config.allow_api_key_in_query,
+            self.config.allow_legacy_password_hashes,
             Arc::clone(&self.auth_throttle),
             Some(addr),
         );

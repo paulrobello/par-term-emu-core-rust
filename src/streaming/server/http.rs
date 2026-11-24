@@ -39,6 +39,7 @@ pub(super) fn build_ws_header_callback(
     basic_auth: Option<HttpBasicAuthConfig>,
     allowed_origins: Option<Vec<String>>,
     allow_api_key_in_query: bool,
+    allow_legacy_password_hashes: bool,
     auth_throttle: Arc<Mutex<AuthFailureThrottle>>,
     peer: Option<std::net::SocketAddr>,
 ) -> (
@@ -75,6 +76,7 @@ pub(super) fn build_ws_header_callback(
                 api_key.as_deref(),
                 basic_auth.as_ref(),
                 allow_api_key_in_query,
+                allow_legacy_password_hashes,
             )
         {
             // Record the failure into the shared throttle (SEC-004). The
@@ -243,7 +245,11 @@ pub(super) async fn api_auth_middleware(
                 ) {
                     if let Ok(credentials_str) = String::from_utf8(decoded) {
                         if let Some((username, password)) = credentials_str.split_once(':') {
-                            if basic_config.verify(username, password) {
+                            if basic_config.verify_with_policy(
+                                username,
+                                password,
+                                auth_config.allow_legacy_password_hashes,
+                            ) {
                                 return next.run(req).await;
                             }
                         }
@@ -751,6 +757,7 @@ pub(super) fn validate_ws_handshake_auth(
     api_key: Option<&str>,
     basic_auth: Option<&HttpBasicAuthConfig>,
     allow_api_key_in_query: bool,
+    allow_legacy_password_hashes: bool,
 ) -> bool {
     use subtle::ConstantTimeEq;
 
@@ -810,7 +817,11 @@ pub(super) fn validate_ws_handshake_auth(
                 ) {
                     if let Ok(credentials_str) = String::from_utf8(decoded) {
                         if let Some((username, password)) = credentials_str.split_once(':') {
-                            if basic_config.verify(username, password) {
+                            if basic_config.verify_with_policy(
+                                username,
+                                password,
+                                allow_legacy_password_hashes,
+                            ) {
                                 return true;
                             }
                         }

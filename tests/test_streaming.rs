@@ -814,6 +814,7 @@ mod streaming_tests {
                 kitty_file_media: par_term_emu_core_rust::graphics::kitty::FileMediaMode::default(),
                 allow_pane_create: false,
                 csp_connect_origins: None,
+                allow_legacy_password_hashes: false,
             };
 
             assert_eq!(config.max_clients, 50);
@@ -893,6 +894,7 @@ mod streaming_tests {
                 api_key: None,
                 http_basic_auth: None,
                 allow_api_key_in_query: false,
+                allow_legacy_password_hashes: false,
             };
             assert!(!config.is_configured());
         }
@@ -903,6 +905,7 @@ mod streaming_tests {
                 api_key: Some("key".to_string()),
                 http_basic_auth: None,
                 allow_api_key_in_query: false,
+                allow_legacy_password_hashes: false,
             };
             assert!(config.is_configured());
         }
@@ -916,6 +919,7 @@ mod streaming_tests {
                     "pass".to_string(),
                 )),
                 allow_api_key_in_query: false,
+                allow_legacy_password_hashes: false,
             };
             assert!(config.is_configured());
         }
@@ -929,6 +933,7 @@ mod streaming_tests {
                     "pass".to_string(),
                 )),
                 allow_api_key_in_query: false,
+                allow_legacy_password_hashes: false,
             };
             assert!(config.is_configured());
         }

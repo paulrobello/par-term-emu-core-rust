@@ -608,6 +608,7 @@ async fn test_auth_middleware_basic_auth_401_carries_challenge() {
             "secret".to_string(),
         )),
         allow_api_key_in_query: false,
+        allow_legacy_password_hashes: false,
     })
     .await;
     assert_eq!(res.status(), axum::http::StatusCode::UNAUTHORIZED);
@@ -625,6 +626,7 @@ async fn test_auth_middleware_api_key_only_401_has_no_challenge() {
         api_key: Some("key".to_string()),
         http_basic_auth: None,
         allow_api_key_in_query: false,
+        allow_legacy_password_hashes: false,
     })
     .await;
     assert_eq!(res.status(), axum::http::StatusCode::UNAUTHORIZED);
@@ -660,6 +662,7 @@ async fn test_auth_middleware_query_api_key_percent_decoded() {
             api_key: Some("s3cr&t=k%y+".to_string()),
             http_basic_auth: None,
             allow_api_key_in_query: true,
+            allow_legacy_password_hashes: false,
         },
         Arc::new(Mutex::new(AuthFailureThrottle::default())),
         "/ok?api_key=s3cr%26t%3Dk%25y%2B",
@@ -673,6 +676,7 @@ async fn test_auth_middleware_query_api_key_percent_decoded() {
             api_key: Some("s3cr&t=k%y+".to_string()),
             http_basic_auth: None,
             allow_api_key_in_query: true,
+            allow_legacy_password_hashes: false,
         },
         Arc::new(Mutex::new(AuthFailureThrottle::default())),
         "/ok?api_key=s3cr&t=k%y+",
@@ -687,7 +691,13 @@ fn test_validate_ws_handshake_auth_query_api_key_percent_decoded() {
         .uri("ws://127.0.0.1:8099/ws?api_key=a%26b%3Dc")
         .body(())
         .expect("static request parts are valid");
-    assert!(validate_ws_handshake_auth(&req, Some("a&b=c"), None, true));
+    assert!(validate_ws_handshake_auth(
+        &req,
+        Some("a&b=c"),
+        None,
+        true,
+        false
+    ));
 }
 
 // ─── Static-route Host allowlist (2026-11-06 audit SEC-003) ────────────────
@@ -829,6 +839,7 @@ async fn test_auth_middleware_failures_escalate_throttle_counter() {
         api_key: Some("key".to_string()),
         http_basic_auth: None,
         allow_api_key_in_query: false,
+        allow_legacy_password_hashes: false,
     };
     for _ in 0..3 {
         let res = auth_middleware_response(auth_config.clone(), Arc::clone(&throttle), "/ok").await;
@@ -1505,6 +1516,7 @@ async fn test_auth_middleware_401_logs_peer_and_path_without_query() {
         api_key: Some("expected-key".to_string()),
         http_basic_auth: None,
         allow_api_key_in_query: true,
+        allow_legacy_password_hashes: false,
     };
     let throttle = Arc::new(Mutex::new(AuthFailureThrottle::default()));
     let app = Router::new()
@@ -1551,6 +1563,7 @@ fn test_ws_handshake_callback_401_logs_peer_and_path() {
         Some("expected-key".to_string()),
         None,
         None,
+        false,
         false,
         Arc::new(Mutex::new(AuthFailureThrottle::default())),
         Some("198.51.100.9:5555".parse().expect("literal socket address")),

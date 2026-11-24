@@ -129,6 +129,21 @@ def test_streaming_config_custom():
     assert config.default_read_only is True
 
 
+def test_streaming_config_allow_legacy_password_hashes_roundtrip():
+    """SEC-002: the legacy-hash opt-in kwarg defaults False and round-trips."""
+    config = StreamingConfig()
+    assert config.allow_legacy_password_hashes is False
+
+    config = StreamingConfig(allow_legacy_password_hashes=True)
+    assert config.allow_legacy_password_hashes is True
+
+    config = StreamingConfig()
+    config.allow_legacy_password_hashes = True
+    assert config.allow_legacy_password_hashes is True
+    config.allow_legacy_password_hashes = False
+    assert config.allow_legacy_password_hashes is False
+
+
 def test_streaming_config_setters():
     """Test streaming configuration setters."""
     config = StreamingConfig()

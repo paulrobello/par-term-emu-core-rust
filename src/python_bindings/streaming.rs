@@ -35,7 +35,7 @@ impl Clone for PyStreamingConfig {
 #[pymethods]
 impl PyStreamingConfig {
     #[new]
-    #[pyo3(signature = (max_clients=1000, send_initial_screen=true, keepalive_interval=30, default_read_only=false, initial_cols=0, initial_rows=0, enable_http=false, web_root="./web_term", max_clients_per_session=0, input_rate_limit_bytes_per_sec=0, enable_system_stats=false, system_stats_interval_secs=5, api_key=None, allow_api_key_in_query=false, allowed_origins=None, kitty_file_media="temp_only", allow_pane_create=false, csp_connect_origins=None))]
+    #[pyo3(signature = (max_clients=1000, send_initial_screen=true, keepalive_interval=30, default_read_only=false, initial_cols=0, initial_rows=0, enable_http=false, web_root="./web_term", max_clients_per_session=0, input_rate_limit_bytes_per_sec=0, enable_system_stats=false, system_stats_interval_secs=5, api_key=None, allow_api_key_in_query=false, allowed_origins=None, kitty_file_media="temp_only", allow_pane_create=false, csp_connect_origins=None, allow_legacy_password_hashes=false))]
     #[allow(
         clippy::too_many_arguments,
         reason = "Python keyword arguments, one per StreamingConfig field; a struct would change the Python API"
@@ -59,6 +59,7 @@ impl PyStreamingConfig {
         kitty_file_media: &str,
         allow_pane_create: bool,
         csp_connect_origins: Option<Vec<String>>,
+        allow_legacy_password_hashes: bool,
     ) -> PyResult<Self> {
         let kitty_file_media = crate::graphics::kitty::FileMediaMode::from_name(kitty_file_media)
             .ok_or_else(|| {
@@ -99,6 +100,7 @@ impl PyStreamingConfig {
                 kitty_file_media,
                 allow_pane_create,
                 csp_connect_origins,
+                allow_legacy_password_hashes,
             },
         })
     }
@@ -205,6 +207,39 @@ impl PyStreamingConfig {
     #[setter]
     fn set_allow_pane_create(&mut self, allow_pane_create: bool) {
         self.inner.allow_pane_create = allow_pane_create;
+    }
+
+    /// Get whether legacy htpasswd password hashes are accepted for auth
+    ///
+    /// Only applies to Rust-configured HTTP Basic Auth (the Python binding
+    /// does not expose Basic Auth credentials); bcrypt is always accepted.
+    ///
+    /// Returns:
+    ///     bool: True if {SHA}/$1$/$apr1$ hashes may verify (default False)
+    ///
+    /// Example:
+    ///     >>> config = StreamingConfig()
+    ///     >>> config.allow_legacy_password_hashes
+    ///     False
+    ///     >>> config.allow_legacy_password_hashes = True
+    ///     >>> config.allow_legacy_password_hashes
+    ///     True
+    #[getter]
+    fn allow_legacy_password_hashes(&self) -> bool {
+        self.inner.allow_legacy_password_hashes
+    }
+
+    /// Set whether legacy htpasswd password hashes are accepted for auth
+    ///
+    /// Args:
+    ///     allow_legacy_password_hashes (bool): True to let HTTP Basic Auth
+    ///         verify legacy htpasswd hashes ({SHA}, $1$, $apr1$); False
+    ///         (the default) refuses them outright. Enabling logs a loud
+    ///         deprecation warning on first use; support is scheduled for
+    ///         removal two minor releases after the default refusal landed.
+    #[setter]
+    fn set_allow_legacy_password_hashes(&mut self, allow_legacy_password_hashes: bool) {
+        self.inner.allow_legacy_password_hashes = allow_legacy_password_hashes;
     }
 
     /// Get the opt-in HTTPS origins appended to the CSP's connect-src

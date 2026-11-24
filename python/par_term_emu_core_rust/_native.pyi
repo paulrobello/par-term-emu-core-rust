@@ -3926,6 +3926,7 @@ class StreamingConfig:
         kitty_file_media: Any = "temp_only",
         allow_pane_create: Any = False,
         csp_connect_origins: Any = None,
+        allow_legacy_password_hashes: Any = False,
     ) -> None: ...
     @property
     def allow_api_key_in_query(self) -> Any:
@@ -3944,6 +3945,26 @@ class StreamingConfig:
         """
     @allow_api_key_in_query.setter
     def allow_api_key_in_query(self, value: Any) -> None: ...
+    @property
+    def allow_legacy_password_hashes(self) -> Any:
+        """Get whether legacy htpasswd password hashes are accepted for auth
+
+        Only applies to Rust-configured HTTP Basic Auth (the Python binding
+        does not expose Basic Auth credentials); bcrypt is always accepted.
+
+        Returns:
+            bool: True if {SHA}/$1$/$apr1$ hashes may verify (default False)
+
+        Example:
+            >>> config = StreamingConfig()
+            >>> config.allow_legacy_password_hashes
+            False
+            >>> config.allow_legacy_password_hashes = True
+            >>> config.allow_legacy_password_hashes
+            True
+        """
+    @allow_legacy_password_hashes.setter
+    def allow_legacy_password_hashes(self, value: Any) -> None: ...
     @property
     def allow_pane_create(self) -> Any:
         """Get whether clients may create panes on the backing mux daemon

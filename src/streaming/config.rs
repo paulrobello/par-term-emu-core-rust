@@ -308,16 +308,29 @@ impl HttpBasicAuthConfig {
         }
     }
 
-    /// Verify a password against this config
-    ///
-    /// Both checks always run to completion and are combined at the end
-    /// (SEC-008): returning early on a username mismatch would skip the
-    /// expensive hash verification for every wrong username while running it
-    /// for the correct one, letting an attacker enumerate valid usernames by
-    /// timing responses. When the username does not match and the password is
-    /// stored as a hash, the bcrypt work runs against a fixed dummy hash so
-    /// the amount of work is identical either way.
+    /// Verify a password against this config with the default (strict)
+    /// legacy-hash policy: legacy htpasswd hashes (`{SHA}`/`$1$`/`$apr1$`)
+    /// are refused — the library default, matching the standalone
+    /// streamer's startup refusal (SEC-002). bcrypt and cleartext are
+    /// unaffected.
     pub fn verify(&self, username: &str, password: &str) -> bool {
+        self.verify_with_policy(username, password, false)
+    }
+
+    /// Verify a password against this config with an explicit legacy-hash
+    /// policy (SEC-002): when `allow_legacy` is `false` (the default
+    /// everywhere), Basic Auth credentials checked against a `{SHA}`,
+    /// `$1$`, or `$apr1$` hash are rejected outright; `true` restores
+    /// verification with a loud deprecation warning. bcrypt hashes verify
+    /// in both states. Both checks always run to completion and are
+    /// combined at the end (SEC-008): returning early on a username
+    /// mismatch would skip the expensive hash verification for every wrong
+    /// username while running it for the correct one, letting an attacker
+    /// enumerate valid usernames by timing responses. When the username
+    /// does not match and the password is stored as a hash, the bcrypt
+    /// work runs against a fixed dummy hash so the amount of work is
+    /// identical either way.
+    pub fn verify_with_policy(&self, username: &str, password: &str, allow_legacy: bool) -> bool {
         use subtle::ConstantTimeEq;
         let user_ok = bool::from(username.as_bytes().ct_eq(self.username.as_bytes()));
         let pass_ok = match &self.password {
@@ -326,13 +339,18 @@ impl HttpBasicAuthConfig {
             }
             PasswordConfig::Hash(hash) => {
                 // Verify htpasswd-format hashes (bcrypt / apr1 / md5crypt / {SHA})
-                // using maintained RustCrypto crates — see `auth_hash`.
+                // using maintained RustCrypto crates — see `auth_hash`. The
+                // legacy gate applies only to the legacy arms (SEC-002).
                 let target = if user_ok {
                     hash.as_str()
                 } else {
                     DUMMY_BCRYPT_HASH
                 };
-                crate::streaming::auth_hash::verify_htpasswd_hash(target, password)
+                crate::streaming::auth_hash::verify_htpasswd_hash_gated(
+                    target,
+                    password,
+                    allow_legacy,
+                )
             }
         };
         user_ok & pass_ok
@@ -408,6 +426,16 @@ pub struct StreamingConfig {
     /// time; `None` (default) keeps the policy byte-identical to the
     /// ENH-059 baseline.
     pub csp_connect_origins: Option<Vec<String>>,
+    /// Accept legacy htpasswd hash formats for HTTP Basic Auth (SEC-002).
+    ///
+    /// `{SHA}` (unsalted SHA-1), `$1$`, and `$apr1$` (MD5-crypt) are cheap
+    /// to brute-force offline. When `false` (the default, matching the
+    /// standalone streamer's startup refusal), Basic Auth credentials
+    /// verified against such a hash are rejected outright; bcrypt hashes
+    /// are unaffected. When `true`, they verify but each first use logs a
+    /// loud deprecation warning naming the removal plan: support ends two
+    /// minor releases after the default refusal landed.
+    pub allow_legacy_password_hashes: bool,
 }
 
 /// Redacting `Debug` (SEC-009): mirrors the derived output field-for-field
@@ -447,6 +475,10 @@ impl std::fmt::Debug for StreamingConfig {
             .field("kitty_file_media", &self.kitty_file_media)
             .field("allow_pane_create", &self.allow_pane_create)
             .field("csp_connect_origins", &self.csp_connect_origins)
+            .field(
+                "allow_legacy_password_hashes",
+                &self.allow_legacy_password_hashes,
+            )
             .finish()
     }
 }
@@ -477,6 +509,7 @@ impl Default for StreamingConfig {
             kitty_file_media: crate::graphics::kitty::FileMediaMode::default(),
             allow_pane_create: false,
             csp_connect_origins: None,
+            allow_legacy_password_hashes: false,
         }
     }
 }
@@ -493,6 +526,11 @@ pub struct ApiAuthConfig {
     pub http_basic_auth: Option<HttpBasicAuthConfig>,
     /// Whether to allow API key in query parameters
     pub allow_api_key_in_query: bool,
+    /// SEC-002 legacy-hash gate mirrored from [`StreamingConfig`]: when
+    /// `false` (default), Basic Auth credentials checked against a legacy
+    /// htpasswd hash (`{SHA}`/`$1$`/`$apr1$`) are rejected; `true` restores
+    /// verification with a deprecation warning.
+    pub allow_legacy_password_hashes: bool,
 }
 
 #[cfg(feature = "streaming")]
@@ -743,6 +781,54 @@ mod tests {
         assert!(auth.verify("admin", "secret123"));
         assert!(!auth.verify("admin", "wrongpass"));
     }
+
+    /// SEC-002: legacy htpasswd hashes are refused by default on the library
+    /// path (parity with the standalone streamer's startup refusal); the
+    /// explicit opt-in verifies them; bcrypt and cleartext are unaffected by
+    /// the gate in both states.
+    #[tokio::test]
+    async fn test_verify_legacy_hash_gate() {
+        let legacy_vectors = [
+            "{SHA}W6ph5Mm5Pz8GgiULbPgzG37mj9g=",
+            "$apr1$salt$Xxd1irWT9ycqoYxGFn4cb.",
+            "$1$salt$qJH7.N4xYta3aEG/dfqo/0",
+        ];
+        for legacy in legacy_vectors {
+            let auth = HttpBasicAuthConfig::with_hash("admin".to_string(), legacy.to_string());
+            // Default (verify / verify_with_policy(false)): refused outright,
+            // even with the correct password.
+            assert!(
+                !auth.verify("admin", "password"),
+                "legacy hash must refuse by default: {legacy}"
+            );
+            assert!(!auth.verify("admin", "wrong-password"));
+            assert!(!auth.verify_with_policy("admin", "password", false));
+            // Opt-in: verifies the correct password, rejects a wrong one.
+            assert!(auth.verify_with_policy("admin", "password", true));
+            assert!(!auth.verify_with_policy("admin", "nope", true));
+            // Wrong username still refuses under the opt-in (SEC-008).
+            assert!(!auth.verify_with_policy("root", "password", true));
+        }
+
+        let hashed = bcrypt::hash("gate-ignores-bcrypt", 4).unwrap();
+        let auth = HttpBasicAuthConfig::with_hash("admin".to_string(), hashed);
+        assert!(auth.verify("admin", "gate-ignores-bcrypt"));
+        assert!(auth.verify_with_policy("admin", "gate-ignores-bcrypt", false));
+        assert!(auth.verify_with_policy("admin", "gate-ignores-bcrypt", true));
+
+        let clear =
+            HttpBasicAuthConfig::with_password("admin".to_string(), "clear-pass".to_string());
+        assert!(clear.verify("admin", "clear-pass"));
+        assert!(clear.verify_with_policy("admin", "clear-pass", true));
+    }
+
+    /// SEC-002: the StreamingConfig field defaults to false (strict), so
+    /// existing configurations get the refusal without any code change.
+    #[tokio::test]
+    async fn test_streaming_config_default_allow_legacy_password_hashes_false() {
+        let config = StreamingConfig::default();
+        assert!(!config.allow_legacy_password_hashes);
+    }
     #[tokio::test]
     async fn test_http_basic_auth_hash_wrong_username_runs_dummy_verify() {
         // SEC-008: a wrong username with a hashed password must still return
@@ -848,6 +934,7 @@ mod tests {
             api_key: None,
             http_basic_auth: None,
             allow_api_key_in_query: false,
+            allow_legacy_password_hashes: false,
         };
         assert!(!config.is_configured());
     }
@@ -857,6 +944,7 @@ mod tests {
             api_key: Some("test-key".to_string()),
             http_basic_auth: None,
             allow_api_key_in_query: false,
+            allow_legacy_password_hashes: false,
         };
         assert!(config.is_configured());
     }
@@ -869,6 +957,7 @@ mod tests {
                 "secret".to_string(),
             )),
             allow_api_key_in_query: false,
+            allow_legacy_password_hashes: false,
         };
         assert!(config.is_configured());
     }
@@ -881,6 +970,7 @@ mod tests {
                 "secret".to_string(),
             )),
             allow_api_key_in_query: true,
+            allow_legacy_password_hashes: false,
         };
         assert!(config.is_configured());
     }
@@ -890,6 +980,7 @@ mod tests {
             api_key: None,
             http_basic_auth: None,
             allow_api_key_in_query: true,
+            allow_legacy_password_hashes: false,
         };
         // Even if allow_api_key_in_query is true, no auth is configured
         assert!(!config.is_configured());
