@@ -109,7 +109,7 @@ def collect_caps() -> list[dict]:
             else:
                 render = humanize(m.group("name"), value)
             line = text[: m.start()].count("\n") + 1
-            rel = path.relative_to(ROOT)
+            rel = path.relative_to(ROOT).as_posix()
             caps.append(
                 {
                     "name": m.group("name"),
