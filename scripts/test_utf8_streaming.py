@@ -3,6 +3,23 @@
 Test UTF-8 character handling in streaming
 """
 
+# STALE GATE (2026-11-25 script audit): JSON-era streaming test client.
+# The streamer's wire protocol is now protobuf (src/streaming/protocol/ ->
+# proto/terminal.proto); the server's first frame is a binary protobuf
+# `Connected` message, so json.loads(await ws.recv()) fails with
+# UnicodeDecodeError and the old broad except exits 0 anyway. Gated so a
+# run cannot be mistaken for a live signal; rewrite against the protobuf
+# protocol or remove via the follow-up kanban card filed 2026-11-25.
+import sys
+
+print(
+    "STALE: this helper predates the protobuf streaming protocol; its JSON "
+    "client cannot decode the server's protobuf frames. See the kanban "
+    "follow-up card (2026-11-25 script audit).",
+    file=sys.stderr,
+)
+sys.exit(1)
+
 import asyncio
 import json
 

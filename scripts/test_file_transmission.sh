@@ -1,8 +1,25 @@
 #!/bin/bash
 
 # Test Kitty graphics file transmission
+#
+# STALE GATE (2026-11-25 script audit): this helper predates par-term's
+# current kitty integration and is retired rather than runnable:
+#   - Test 2 announces a file transmission it never performs (nothing is
+#     ever written to par-term's stdin).
+#   - Its assertions grep par-term logs for "KITTY_DEBUG: Action: Transmit",
+#     a string that no longer exists anywhere in par-term's source.
+# Running it builds both repos and then always reports "No Transmit action
+# found". Gated here so nobody mistakes a run for a live signal; rewrite or
+# remove via the follow-up kanban card filed 2026-11-25.
 
 set -e
+
+echo "STALE: test_file_transmission.sh is gated (2026-11-25 script audit)."
+echo "  It predates par-term's current kitty integration: the announced"
+echo "  transmission step was never implemented and the log format it greps"
+echo "  (KITTY_DEBUG: Action: Transmit) no longer exists in par-term."
+echo "  See the kanban follow-up card before rewriting or removing it."
+exit 1
 
 echo "=== Kitty Graphics File Transmission Test ==="
 echo ""
