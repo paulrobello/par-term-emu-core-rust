@@ -1206,6 +1206,23 @@ adversary:
   for short PTY fragments, ~128 MiB for full-size lines, at the same
   4096-line count), and the fragment shape evicted a modestly lagging
   observer mid-flood.
+- **Client-side notification queue (`CLIENT_NOTIFICATION_QUEUE_BYTES`,
+  SEC-012):** the client library's queue behind
+  `MuxClient::notifications` — parsed notifications read off the socket
+  but not yet taken by the consumer — is byte-budgeted at the same 8 MiB
+  as the daemon's per-client broadcast queue, with an item backstop
+  (`CLIENT_NOTIFICATION_QUEUE_MAX_ITEMS`, derived as budget/16 like the
+  daemon's own queue, binding only if the byte ledger undercounts). Past either cap the
+  reader stops forwarding and closes the connection: the consumer sees
+  `Disconnected`/`ConnectionAborted`, rides the documented
+  reconnect-and-requery heal, and the queue is freed. A silent drop is
+  never the policy — notifications are a pane's byte stream, where a
+  dropped `%output` chunk corrupts the pane without any signal. The
+  daemon never sees this queue (the client reader drains the socket
+  whatever the consumer does), so the daemon-side eviction rule cannot
+  bound it; this bound does. The queued bytes are accounted from each
+  notification's heap payload capacity plus its fixed size, so the bound
+  covers real memory, not a proxy.
 
 ### Debug Logging
 
@@ -1459,6 +1476,9 @@ sections; the numbers live here.
 | Constant | Value | Location | Bounds |
 |----------|-------|----------|--------|
 | `MAX_REPLY_LINE_BYTES` | 4 MiB | `crates/par-mux/src/mux/client.rs:33` | Bytes accumulated from one daemon reply or notification line before the client closes the connection. |
+| `CLIENT_NOTIFICATION_QUEUE_BYTES` | 8 MiB | `crates/par-mux/src/mux/client.rs:45` | Bytes of parsed daemon notifications queued for a client's consumer before the reader closes the connection. |
+| `MIN_NOTIFICATION_BYTES` | 16 | `crates/par-mux/src/mux/client.rs:53` | Smallest per-item size credited by the client notification queue's byte ledger (daemon `MIN_BROADCAST_LINE_BYTES` parity). |
+| `CLIENT_NOTIFICATION_QUEUE_MAX_ITEMS` | `CLIENT_NOTIFICATION_QUEUE_BYTES / MIN_NOTIFICATION_BYTES` | `crates/par-mux/src/mux/client.rs:66` | Parsed notification items queued per client before the reader closes the connection (backstop to the CLIENT_NOTIFICATION_QUEUE_BYTES budget). |
 | `NOTIFICATION_TITLE_MAX` | 80 | `crates/par-mux/src/mux/command/buffers.rs:186` | Characters of a `show-notification` title (herdr's 80); longer is truncated. |
 | `NOTIFICATION_BODY_MAX` | 240 | `crates/par-mux/src/mux/command/buffers.rs:189` | Characters of a `show-notification` body (herdr's 240); longer is truncated. |
 | `MAX_CLIENT_COLS` | 1,000 | `crates/par-mux/src/mux/command/mod.rs:1025` | Columns a par-mux client may report for a window grid (`refresh-client -C`). |

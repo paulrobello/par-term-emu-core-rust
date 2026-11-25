@@ -908,6 +908,34 @@ Eviction is by **queue budget only** — intended, and deliberately unlike tmux,
 
 An **aggregate bound** sits above the per-client budget (ARC-008): once the clients' summed queue byte counters cross 16 MiB, the push evicts the client holding the DEEPEST queue — the stalled one — while the live ones keep draining. Only a queue at a quarter of the per-client budget (2 MiB) can be the victim, so an aggregate that crosses the cap through many shallow queues is read as a healthy crowd, not a stall, and nobody is evicted. The counters are the fan-out's successful pushes minus the client writer's drained lines — an approximation of the channel length a stall bound can afford (reply lines are uncounted; a drain lags its push; a client that leaves stops counting). Crossing the bound takes a genuine multi-client stall. Pinned by `the_aggregate_cap_evicts_the_deepest_queue` and `the_aggregate_cap_spares_shallow_queues`.
 
+### The client's own notification queue (SEC-012)
+
+The budgets above bound the daemon's memory; the client library has its own
+queue behind `MuxClient::notifications` — the parsed notifications its reader
+has pulled off the socket but the consumer has not taken yet. The daemon never
+sees this queue (the client reader drains the socket whatever the consumer
+does), so the daemon's eviction rule cannot bound it, and it carries its own
+bound mirroring the daemon's rule: byte-budgeted at
+`CLIENT_NOTIFICATION_QUEUE_BYTES` (8 MiB, heap payload capacities counted per
+notification) with an item backstop
+(`CLIENT_NOTIFICATION_QUEUE_MAX_ITEMS`, derived budget/16 exactly like the
+daemon's `CLIENT_QUEUE_MAX_ITEMS`, so it binds only if the byte ledger ever
+undercounts). Past either cap the reader stops forwarding and CLOSES the
+connection — the daemon's own policy for a client that stops draining: the
+consumer observes `ConnectionAborted` on its next command and `Disconnected`
+on the receiver, the same shape an eviction produces, and the queue is freed.
+The disconnect (never a silent drop) is deliberate: notifications are a pane's
+byte stream, where a silently dropped `%output` chunk corrupts the stream
+without any signal a consumer could act on, while a disconnect is observable
+and rides the reconnect-and-requery heal every closed-socket consumer already
+performs. A consumer that keeps draining stays connected and keeps FIFO order.
+Pinned by `byte_saturation_with_a_stalled_consumer_closes_the_connection`,
+`a_tiny_notification_flood_stays_connected`,
+`draining_restores_the_byte_budget_and_fifo_survives`,
+`an_overlarge_payload_overflows_alone_and_capacity_is_accounted`, and
+`notification_overflows_pins_both_bounds` (all in
+`crates/par-mux/src/mux/client.rs`).
+
 
 ## Agent-State Integrations
 

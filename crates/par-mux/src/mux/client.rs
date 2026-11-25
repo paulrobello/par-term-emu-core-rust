@@ -32,6 +32,41 @@ const CLIENT_READER_POLL: Duration = Duration::from_millis(200);
 /// instead of growing this process without bound.
 /// cap: Bytes accumulated from one daemon reply or notification line before the client closes the connection.
 const MAX_REPLY_LINE_BYTES: usize = 4 * 1024 * 1024;
+/// Per-client notification queue byte budget (SEC-012), the client-side
+/// mirror of the daemon's `CLIENT_QUEUE_BYTES`. The reader thread drains the
+/// socket whatever the consumer is doing, so a frontend that stalls (a
+/// modal, a hung plugin) would otherwise let this queue grow with every
+/// `%output` line for as long as the stall lasts. Past the budget the
+/// connection is CLOSED, the same policy the daemon applies to a client
+/// that stops draining (tmux's own rule): a silent drop-oldest queue would
+/// tear holes in a pane byte stream the consumer cannot detect, while a
+/// disconnect surfaces as `ConnectionAborted` — a state the consumer can
+/// see and resync from.
+/// cap: Bytes of parsed daemon notifications queued for a client's consumer before the reader closes the connection.
+const CLIENT_NOTIFICATION_QUEUE_BYTES: usize = 8 * 1024 * 1024;
+
+/// The smallest per-item size credited by the queue's byte ledger,
+/// mirroring the daemon's `MIN_BROADCAST_LINE_BYTES`. Every parsed
+/// `TmuxNotification` accounts strictly more than this (the enum's inline
+/// size alone exceeds 16 bytes), so the byte budget always binds before
+/// the item backstop for real notifications.
+/// cap: Smallest per-item size credited by the client notification queue's byte ledger (daemon `MIN_BROADCAST_LINE_BYTES` parity).
+const MIN_NOTIFICATION_BYTES: usize = 16;
+
+/// The notification queue's item bound, a backstop to the byte budget,
+/// derived like the daemon's `CLIENT_QUEUE_MAX_ITEMS`: budget over the
+/// smallest accounted item. The two bounds coincide by construction, so
+/// this binds only if the byte ledger ever undercounts. Safe to derive
+/// because the queue channel is crossbeam's unbounded list flavor, which
+/// allocates lazily in 32-slot chunks — the same allocation model as the
+/// daemon's std `SyncSender`; the same derivation over crossbeam's
+/// `bounded` Array flavor would preallocate tens of MiB in every client,
+/// which is what forced a small literal there. Overflow closes the
+/// connection like the byte budget.
+/// cap: Parsed notification items queued per client before the reader closes the connection (backstop to the CLIENT_NOTIFICATION_QUEUE_BYTES budget).
+const CLIENT_NOTIFICATION_QUEUE_MAX_ITEMS: usize =
+    CLIENT_NOTIFICATION_QUEUE_BYTES / MIN_NOTIFICATION_BYTES;
+
 /// How long `connect_or_spawn_at` keeps retrying after spawning a daemon.
 const SPAWN_CONNECT_DEADLINE: Duration = Duration::from_secs(10);
 
@@ -384,17 +419,25 @@ impl MuxClient {
     ///
     /// The receiver type is [`crate::mux::crossbeam_channel`] (re-exported
     /// from the `mux` module so embedders need no crossbeam-channel
-    /// manifest entry).
+    /// manifest entry). The queue behind it is bounded (SEC-012): past
+    /// `CLIENT_NOTIFICATION_QUEUE_BYTES` (8 MiB) of queued notifications
+    /// (heap capacities counted) the reader CLOSES THE CONNECTION — the daemon's
+    /// own policy for a client that stops draining — instead of dropping
+    /// queued notifications silently or growing without bound. A consumer
+    /// that keeps draining stays connected and keeps FIFO order; a stalled
+    /// consumer gets a visible `ConnectionAborted` on its next
+    /// [`MuxClient::send`] and `Disconnected` on this receiver, which is
+    /// the resync signal.
     pub fn notifications(&self) -> &crossbeam_channel::Receiver<TmuxNotification> {
         &self.notifications_rx
     }
 
     /// Stop queueing pushed notifications: from now on the reader drops
     /// them as they arrive. For a caller that only reads replies (the
-    /// `par-mux --cmd` client) — the channel is unbounded, so an unread
-    /// queue grows with every `%output` line for as long as a command
-    /// such as `wait-output` stays parked. The socket is still read in
-    /// full, so the daemon never sees this client back up.
+    /// `par-mux --cmd` client) — an unread queue would spend its whole
+    /// budget on output the caller will never look at, for as long as a
+    /// command such as `wait-output` stays parked. The socket is still
+    /// read in full, so the daemon never sees this client back up.
     pub fn discard_notifications(&self) {
         self.discard_notifications.store(true, Ordering::Relaxed);
         while self.notifications_rx.try_recv().is_ok() {}
@@ -459,6 +502,139 @@ impl Drop for MuxClient {
     }
 }
 
+/// The sole producer's ledger of queued notification sizes (SEC-012). The
+/// consumer only ever pops the channel head, so between syncs the ledger
+/// can only OVERSTATE the queue — a consumer pop that has landed since the
+/// last [`NotificationLedger::sync`] — and an overstatement trips the cap
+/// slightly early, never late. It therefore needs no lock with the
+/// consumer: `sync` trims its head to the channel's `len()` before each
+/// push and the running total is exact again.
+#[derive(Default)]
+struct NotificationLedger {
+    sizes: VecDeque<usize>,
+    bytes: usize,
+}
+
+impl NotificationLedger {
+    /// Trim the ledger head to a snapshot of the queue's item count. Every
+    /// pop is a head pop (crossbeam is FIFO), so the trim is the exact
+    /// correction.
+    fn sync(&mut self, queued: usize) {
+        while self.sizes.len() > queued {
+            match self.sizes.pop_front() {
+                Some(size) => self.bytes = self.bytes.saturating_sub(size),
+                None => break,
+            }
+        }
+    }
+
+    /// The ledger half of one successful push.
+    fn record_push(&mut self, size: usize) {
+        self.sizes.push_back(size);
+        self.bytes += size;
+    }
+}
+
+/// True when admitting one more notification of `size` bytes with `queued`
+/// items already in the channel would pass either queue bound: the byte
+/// budget (which an oversized single notification passes by itself, since
+/// the ledger total is never negative) or the item backstop. Exhaustive
+/// over both bounds so no third rule can grow later unnoticed.
+fn notification_overflows(ledger_bytes: usize, size: usize, queued: usize) -> bool {
+    ledger_bytes + size > CLIENT_NOTIFICATION_QUEUE_BYTES
+        || queued + 1 > CLIENT_NOTIFICATION_QUEUE_MAX_ITEMS
+}
+
+/// Rough in-memory size of one notification: its fixed size plus the heap
+/// capacity of every payload it carries. Only the queue byte budget
+/// consumes this, so precision is unnecessary, and overestimation is the
+/// safe direction for a memory bound — it drops slightly earlier than the
+/// true usage would require. Exhaustive over the enum, so a new
+/// `TmuxNotification` variant fails to compile here until its payloads are
+/// accounted.
+fn notification_bytes(notification: &TmuxNotification) -> usize {
+    use TmuxNotification as N;
+
+    let cap = |s: &String| s.capacity();
+    std::mem::size_of_val(notification)
+        + match notification {
+            N::Begin { flags, .. } | N::End { flags, .. } | N::Error { flags, .. } => cap(flags),
+            N::Output { pane_id, data, .. } | N::ExtendedOutput { pane_id, data, .. } => {
+                cap(pane_id) + data.capacity()
+            }
+            N::OutputDamage {
+                pane_id, ranges, ..
+            } => cap(pane_id) + ranges.capacity() * std::mem::size_of::<(u32, u32)>(),
+            N::PaneModeChanged { pane_id }
+            | N::Pause { pane_id }
+            | N::Continue { pane_id }
+            | N::PaneRespawned { pane_id } => cap(pane_id),
+            N::WindowPaneChanged { window_id, pane_id } => cap(window_id) + cap(pane_id),
+            N::WindowClose { window_id }
+            | N::UnlinkedWindowClose { window_id }
+            | N::UnlinkedWindowAdd { window_id } => cap(window_id),
+            N::SessionWindowChanged {
+                session_id,
+                window_id,
+            } => cap(session_id) + cap(window_id),
+            N::WindowAdd {
+                window_id,
+                window_layout,
+                window_visible_layout,
+                window_raw_flags,
+            }
+            | N::LayoutChange {
+                window_id,
+                window_layout,
+                window_visible_layout,
+                window_raw_flags,
+            } => {
+                cap(window_id)
+                    + cap(window_layout)
+                    + cap(window_visible_layout)
+                    + cap(window_raw_flags)
+            }
+            N::WindowRenamed { window_id, name } | N::UnlinkedWindowRenamed { window_id, name } => {
+                cap(window_id) + cap(name)
+            }
+            N::SessionChanged { session_id, name } | N::SessionRenamed { session_id, name } => {
+                cap(session_id) + cap(name)
+            }
+            N::ClientSessionChanged {
+                client,
+                session_id,
+                name,
+            } => cap(client) + cap(session_id) + cap(name),
+            N::ClientDetached { client } | N::ClientAttached { client } => cap(client),
+            N::ClientLeft {
+                client,
+                session_id,
+                window_id,
+            } => {
+                cap(client) + session_id.as_ref().map_or(0, cap) + window_id.as_ref().map_or(0, cap)
+            }
+            N::PaneExited { pane_id, .. } => cap(pane_id),
+            N::AgentStateChanged {
+                pane_id,
+                agent,
+                state,
+                source,
+                ws,
+                msg,
+            } => cap(pane_id) + cap(agent) + cap(state) + cap(source) + cap(ws) + cap(msg),
+            N::AgentReleased { pane_id, agent } | N::AgentTelemetryChanged { pane_id, agent } => {
+                cap(pane_id) + cap(agent)
+            }
+            N::PaneTitleChanged { pane_id, title } => cap(pane_id) + cap(title),
+            N::SubscriptionChanged { name, value } => cap(name) + cap(value),
+            N::PasteBufferChanged { name } | N::PasteBufferDeleted { name } => cap(name),
+            N::Notification { title, body } => cap(title) + cap(body),
+            N::Unknown { line } => cap(line),
+            N::TerminalOutput { data } => data.capacity(),
+            N::SessionsChanged | N::WorkspacesChanged | N::ConfigChanged | N::Exit => 0,
+        }
+}
+
 /// Split one connection's byte stream into reply blocks and notifications.
 fn reader_loop(
     stream: LocalStream,
@@ -471,6 +647,9 @@ fn reader_loop(
     let mut parser = TmuxControlParser::new(true);
     // The open reply block: its command number and body so far.
     let mut open: Option<(u32, Vec<String>)> = None;
+    // The SEC-012 ledger: the sole producer's running total of the queue's
+    // accounted bytes, resynced before every push.
+    let mut ledger = NotificationLedger::default();
     loop {
         if closed.load(Ordering::Relaxed) {
             break;
@@ -532,13 +711,35 @@ fn reader_loop(
                     let mut framed = line.clone().into_bytes();
                     framed.push(b'\n');
                     let mut forwarded = true;
-                    for notification in parser.parse(&framed) {
+                    'notifications: for notification in parser.parse(&framed) {
                         if discard.load(Ordering::Relaxed) {
                             continue;
                         }
-                        if notification_tx.send(notification).is_err() {
+                        // SEC-012: the queue is bounded and overflow
+                        // disconnects, like the daemon's rule. The ledger
+                        // can only overstate between syncs (the consumer
+                        // pops heads), so the check never underestimates.
+                        let size = notification_bytes(&notification);
+                        ledger.sync(notification_tx.len());
+                        if notification_overflows(ledger.bytes, size, notification_tx.len()) {
+                            log::warn!(
+                                "par-mux client: notification queue exceeded its budget \
+                                 ({CLIENT_NOTIFICATION_QUEUE_BYTES} bytes / \
+                                 {CLIENT_NOTIFICATION_QUEUE_MAX_ITEMS} items); \
+                                 closing the connection"
+                            );
                             forwarded = false;
+                            break 'notifications;
                         }
+                        // The queue bounds above mean the channel never
+                        // fills: try_send only fails when the consumer is
+                        // gone, which ends the reader like any other dead
+                        // channel.
+                        if notification_tx.try_send(notification).is_err() {
+                            forwarded = false;
+                            break 'notifications;
+                        }
+                        ledger.record_push(size);
                     }
                     if !forwarded {
                         break;
@@ -1157,15 +1358,17 @@ mod tests {
     }
 
     /// A reply-only client under a stream of pushed output: with
-    /// `discard_notifications` none of the thousands of `%output` lines
-    /// sent ahead of the reply is queued (the reader handles every line
-    /// before the block that follows them), while a default client queues
-    /// them all — the control that proves the count measures the channel.
+    /// `discard_notifications` none of the `%output` lines sent ahead of
+    /// the reply is queued (the reader handles every line before the
+    /// block that follows them), while a default client queues them all —
+    /// the control that proves the count measures the channel. PUSHED
+    /// stays under both queue bounds so the keeping client is never
+    /// disconnected mid-control by the SEC-012 bound it is not testing.
     #[cfg(unix)]
     #[test]
     fn discarded_notifications_are_never_queued() {
         use std::io::{BufRead as _, Write as _};
-        const PUSHED: usize = 5000;
+        const PUSHED: usize = 800;
         let (dir, socket) = temp_socket("discard.sock");
         let listener = bind_local_listener(&socket).expect("bind");
         let server = std::thread::spawn(move || {
@@ -1503,5 +1706,251 @@ mod tests {
         assert_eq!(body, vec!["no such pane: %9".to_string()]);
         server.join().expect("server thread");
         drop(dir);
+    }
+
+    /// A stalled consumer cannot pin unbounded memory: once the queued
+    /// notifications pass [`CLIENT_NOTIFICATION_QUEUE_BYTES`] the reader
+    /// closes the connection — the daemon's own eviction rule — so the
+    /// pending command reports `ConnectionAborted` instead of a reply, the
+    /// receiver drains to `Disconnected`, and what was queued before the
+    /// trip keeps its FIFO order (nothing was dropped to make room).
+    #[cfg(unix)]
+    #[test]
+    fn byte_saturation_with_a_stalled_consumer_closes_the_connection() {
+        use std::io::{BufRead as _, Write as _};
+        let (dir, socket) = temp_socket("queue-overflow");
+        let listener = bind_local_listener(&socket).expect("bind");
+        let server = std::thread::spawn(move || {
+            let stream = listener.accept().expect("accept");
+            let mut writer = stream.try_clone().expect("clone");
+            let mut lines = std::io::BufReader::new(stream).lines();
+            assert_eq!(lines.next().unwrap().unwrap(), "flood");
+            let payload = "x".repeat(64 * 1024);
+            // 160 x 64 KiB accounted bytes is well past the 8 MiB budget;
+            // the client consumer never drains during the flood.
+            for n in 0..160u32 {
+                if writeln!(writer, "%output %{n} {payload}").is_err() {
+                    break;
+                }
+            }
+            let _ = writer.write_all(b"%begin 1 1 1\ncompleted\n%end 1 1 1\n");
+            let _ = writer.flush();
+            drop(lines);
+        });
+
+        let mut client = MuxClient::connect(&socket).expect("connect");
+        let err = client
+            .send_checked_timeout("flood", Duration::from_secs(5))
+            .expect_err("the saturated queue must abort the pending command");
+        assert_eq!(
+            err.kind(),
+            io::ErrorKind::ConnectionAborted,
+            "overflow must surface as a disconnect, not a reply: {err}"
+        );
+        // The pre-trip prefix stays queued in order — overflow dropped
+        // nothing.
+        let queued: Vec<String> = client
+            .notifications()
+            .try_iter()
+            .map(|notification| match notification {
+                TmuxNotification::Output { pane_id, .. } => pane_id,
+                other => panic!("unexpected notification: {other:?}"),
+            })
+            .collect();
+        assert!(
+            !queued.is_empty() && queued.len() < 160,
+            "the queue must hold a bounded prefix of the flood: {} items",
+            queued.len()
+        );
+        for (index, pane_id) in queued.iter().enumerate() {
+            assert_eq!(pane_id, &format!("%{index}"), "FIFO prefix order");
+        }
+        assert_eq!(
+            client.notifications().try_recv(),
+            Err(crossbeam_channel::TryRecvError::Disconnected),
+            "the reader dropped its sender on the overflow"
+        );
+        drop(client);
+        server.join().expect("server thread");
+        drop(dir);
+    }
+
+    /// The item backstop must never bind before the byte budget: a flood
+    /// of tiny notifications, far past the ~1100 undrained notifications
+    /// the `window_add_replay_recovers_a_session_lost_to_ring_eviction`
+    /// mux_daemon suite queues, stays connected — every parsed notification
+    /// accounts more than [`MIN_NOTIFICATION_BYTES`] of ledger bytes, so
+    /// the byte budget governs first and the count backstop is defense in
+    /// depth against a ledger bug only.
+    #[cfg(unix)]
+    #[test]
+    fn a_tiny_notification_flood_stays_connected() {
+        use std::io::{BufRead as _, Write as _};
+        const PUSHED: usize = 1100;
+        let (dir, socket) = temp_socket("queue-flood-alive");
+        let listener = bind_local_listener(&socket).expect("bind");
+        let server = std::thread::spawn(move || {
+            let stream = listener.accept().expect("accept");
+            let mut writer = stream.try_clone().expect("clone");
+            let mut lines = std::io::BufReader::new(stream).lines();
+            assert_eq!(lines.next().unwrap().unwrap(), "flood");
+            for n in 0..PUSHED as u32 {
+                if writeln!(writer, "%output %9 l{n}\\012").is_err() {
+                    break;
+                }
+            }
+            let _ = writer.write_all(b"%begin 1 1 1\ncompleted\n%end 1 1 1\n");
+            let _ = writer.flush();
+            drop(lines);
+        });
+
+        let mut client = MuxClient::connect(&socket).expect("connect");
+        let reply = client
+            .send_checked_timeout("flood", Duration::from_secs(5))
+            .expect("a tiny-notification flood must not disconnect the client");
+        assert!(reply.ok);
+        let queued = client.notifications().try_iter().count();
+        assert_eq!(queued, PUSHED, "every flood line was parsed and queued");
+        drop(client);
+        server.join().expect("server thread");
+        drop(dir);
+    }
+
+    /// The overflow predicate, pinned at both boundaries: the item
+    /// backstop derives from the byte budget (daemon parity) and binds
+    /// only past the full item count; the byte budget binds exactly at
+    /// its boundary — a push landing on the budget stays open, one byte
+    /// past overflows.
+    #[test]
+    fn notification_overflows_pins_both_bounds() {
+        assert_eq!(
+            CLIENT_NOTIFICATION_QUEUE_MAX_ITEMS,
+            CLIENT_NOTIFICATION_QUEUE_BYTES / MIN_NOTIFICATION_BYTES,
+            "the item backstop derives from the byte budget (daemon parity)"
+        );
+        assert!(
+            notification_overflows(
+                0,
+                MIN_NOTIFICATION_BYTES,
+                CLIENT_NOTIFICATION_QUEUE_MAX_ITEMS
+            ),
+            "the MAX_ITEMS-th push must overflow regardless of byte size"
+        );
+        assert!(
+            !notification_overflows(
+                0,
+                MIN_NOTIFICATION_BYTES,
+                CLIENT_NOTIFICATION_QUEUE_MAX_ITEMS - 1
+            ),
+            "the last slot under the item bound stays open for tiny notifications"
+        );
+        assert!(
+            !notification_overflows(
+                CLIENT_NOTIFICATION_QUEUE_BYTES - MIN_NOTIFICATION_BYTES,
+                MIN_NOTIFICATION_BYTES,
+                0
+            ),
+            "a push landing exactly on the byte budget stays open"
+        );
+        assert!(
+            notification_overflows(
+                CLIENT_NOTIFICATION_QUEUE_BYTES - MIN_NOTIFICATION_BYTES + 1,
+                MIN_NOTIFICATION_BYTES,
+                0
+            ),
+            "one byte past the byte budget overflows"
+        );
+    }
+
+    /// A consumer that drains resets the ledger's byte budget: after a
+    /// full drain the next pushes are admitted again (no false overflow
+    /// from a stale total) and FIFO order holds across the drain boundary.
+    #[cfg(unix)]
+    #[test]
+    fn draining_restores_the_byte_budget_and_fifo_survives() {
+        use std::io::{BufRead as _, Write as _};
+        let (dir, socket) = temp_socket("queue-drain");
+        let listener = bind_local_listener(&socket).expect("bind");
+        let server = std::thread::spawn(move || {
+            let stream = listener.accept().expect("accept");
+            let mut writer = stream.try_clone().expect("clone");
+            let mut lines = std::io::BufReader::new(stream).lines();
+            let payload = "y".repeat(64 * 1024);
+            for phase in 0..2u32 {
+                assert_eq!(lines.next().unwrap().unwrap(), format!("wave-{phase}"));
+                // Half the budget per wave: enough that a ledger that never
+                // synced would overflow by the second wave.
+                for n in 0..64u32 {
+                    writeln!(writer, "%output p{phase}-%{n} {payload}").unwrap();
+                }
+                let _ = writer
+                    .write_all(format!("%begin 1 {phase} 1\nok\n%end 1 {phase} 1\n").as_bytes());
+            }
+        });
+
+        let mut client = MuxClient::connect(&socket).expect("connect");
+        let mut seen = Vec::new();
+        for phase in 0..2u32 {
+            let reply = client
+                .send_checked_timeout(&format!("wave-{phase}"), Duration::from_secs(5))
+                .expect("a draining consumer keeps the connection alive");
+            assert!(reply.ok);
+            while let Ok(notification) = client.notifications().recv_timeout(Duration::from_secs(5))
+            {
+                if let TmuxNotification::Output { pane_id, .. } = notification {
+                    let last = pane_id == format!("p{phase}-%63");
+                    seen.push(pane_id);
+                    if last {
+                        break;
+                    }
+                }
+            }
+        }
+        assert_eq!(seen.len(), 128, "every notification of both waves");
+        for (index, pane_id) in seen.iter().enumerate() {
+            let phase = index / 64;
+            assert_eq!(
+                pane_id,
+                &format!("p{phase}-%{}", index % 64),
+                "FIFO across the drain boundary"
+            );
+        }
+        drop(client);
+        server.join().expect("server thread");
+        drop(dir);
+    }
+
+    /// A single notification whose accounted size alone passes the byte
+    /// budget closes the connection by the same rule as a slow
+    /// accumulation, and the accounting itself counts heap capacities
+    /// (`String::capacity`, `Vec::capacity`), not just the enum's
+    /// fixed size.
+    #[test]
+    fn an_overlarge_payload_overflows_alone_and_capacity_is_accounted() {
+        // 9 MiB capacity in one payload: over the 8 MiB budget with an
+        // empty ledger, so the oversized-single-notification rule is the
+        // byte rule at ledger_bytes = 0.
+        let oversized = TmuxNotification::Output {
+            pane_id: "%1".to_string(),
+            generation: None,
+            data: vec![b'z'; CLIENT_NOTIFICATION_QUEUE_BYTES + 1024],
+        };
+        let size = notification_bytes(&oversized);
+        assert!(
+            size >= CLIENT_NOTIFICATION_QUEUE_BYTES + 1024,
+            "the Vec's heap capacity must count toward the budget: {size}"
+        );
+        assert!(
+            notification_overflows(0, size, 0),
+            "a single over-budget notification overflows on an empty queue"
+        );
+        // Below the budget: a few 64 KiB outputs fit — the accounting must
+        // not trip early either.
+        let modest = TmuxNotification::Output {
+            pane_id: "%1".to_string(),
+            generation: None,
+            data: vec![b'z'; 64 * 1024],
+        };
+        assert!(!notification_overflows(0, notification_bytes(&modest), 0));
     }
 }
