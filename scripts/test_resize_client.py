@@ -1,87 +1,65 @@
 #!/usr/bin/env python3
 """
-Test client for terminal resize functionality
+Test client for terminal resize functionality against the par-term-streamer
+(protobuf wire protocol; run the server as `par-term-streamer --port 8080`).
+
+Rewritten 2026-11-25 from the JSON-era client: the server's frames are
+protobuf ServerMessage messages (proto/terminal.proto), hand-encoded in
+`_ws_pb_test_common.py`.
 """
 
-# STALE GATE (2026-11-25 script audit): JSON-era streaming test client.
-# The streamer's wire protocol is now protobuf (src/streaming/protocol/ ->
-# proto/terminal.proto); the server's first frame is a binary protobuf
-# `Connected` message, so json.loads(await ws.recv()) fails with
-# UnicodeDecodeError and the old broad except exits 0 anyway. Gated so a
-# run cannot be mistaken for a live signal; rewrite against the protobuf
-# protocol or remove via the follow-up kanban card filed 2026-11-25.
+import asyncio
 import sys
 
-print(
-    "STALE: this helper predates the protobuf streaming protocol; its JSON "
-    "client cannot decode the server's protobuf frames. See the kanban "
-    "follow-up card (2026-11-25 script audit).",
-    file=sys.stderr,
-)
-sys.exit(1)
-
-import asyncio
-import json
+sys.path.insert(0, __file__.rsplit("/", 1)[0])
 
 import websockets  # type: ignore
+from _ws_pb_test_common import (
+    SM_RESIZE,
+    STREAMER_WS_URL,
+    encode_client_message_resize,
+    parse_resize,
+    recv_connected,
+    recv_server_frame,
+)
 
 
-async def test_resize():
-    uri = "ws://127.0.0.1:8080"
-    print(f"Connecting to {uri}...")
+async def test_resize() -> bool:
+    print(f"Connecting to {STREAMER_WS_URL}...")
 
+    async with websockets.connect(STREAMER_WS_URL) as websocket:
+        connected = await recv_connected(websocket)
+        print(f"Connected! Initial size: {connected.cols}x{connected.rows}")
+
+        print("\n[Sending] Resize to 120x30")
+        await websocket.send(encode_client_message_resize(120, 30))
+
+        # The server reports the applied size in a Resize ServerMessage; skip
+        # other members (output reflow etc.) until it arrives.
+        while True:
+            field, payload = await recv_server_frame(websocket)
+            if field == SM_RESIZE:
+                cols, rows = parse_resize(payload)
+                print(f"\n[Received] Resize: {cols}x{rows}")
+                break
+
+        if (cols, rows) != (120, 30):
+            print(f"✗ Resize not applied: got {cols}x{rows}, expected 120x30")
+            return False
+        return True
+
+
+async def main() -> int:
     try:
-        async with websockets.connect(uri) as websocket:
-            print("Connected!")
-
-            # Receive initial connection message
-            msg = await websocket.recv()
-            data = json.loads(msg)
-            print(
-                f"\n[Initial] Type: {data.get('type')}, Size: {data.get('cols')}x{data.get('rows')}"
-            )
-
-            # Send resize to 120x30
-            print("\n[Sending] Resize to 120x30")
-            resize_msg = json.dumps({"type": "resize", "cols": 120, "rows": 30})
-            await websocket.send(resize_msg)
-
-            # Wait a moment
-            await asyncio.sleep(0.2)
-
-            # Send a command to see output
-            print("[Sending] Command: 'tput cols; tput lines'")
-            await websocket.send(
-                json.dumps({"type": "input", "data": "tput cols; tput lines\n"})
-            )
-
-            # Receive output
-            print("\n[Waiting for output...]")
-            for i in range(20):
-                try:
-                    msg = await asyncio.wait_for(websocket.recv(), timeout=0.1)
-                    data = json.loads(msg)
-                    if data.get("type") == "output":
-                        output = data.get("data", "")
-                        print(f"[Output] {output!r}")
-                except TimeoutError:
-                    continue
-
-            # Send another resize to 80x24
-            print("\n[Sending] Resize to 80x24")
-            resize_msg = json.dumps({"type": "resize", "cols": 80, "rows": 24})
-            await websocket.send(resize_msg)
-
-            await asyncio.sleep(0.2)
-
-            print("\n[Test complete]")
-
-    except Exception as e:  # noqa: BLE001
-        print(f"Error: {e}")
-        import traceback
-
-        traceback.print_exc()
+        ok = await test_resize()
+    except Exception as exc:  # noqa: BLE001
+        print(f"\n✗ Resize test failed: {exc}", file=sys.stderr)
+        return 1
+    if not ok:
+        return 1
+    print("\n✓ Resize works")
+    return 0
 
 
 if __name__ == "__main__":
-    asyncio.run(test_resize())
+    sys.exit(asyncio.run(main()))

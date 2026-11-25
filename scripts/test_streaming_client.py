@@ -1,82 +1,66 @@
 #!/usr/bin/env python3
 """
-Simple WebSocket client to test bidirectional streaming
+Simple WebSocket client to test bidirectional streaming against the
+par-term-streamer (protobuf wire protocol; run the server as
+`par-term-streamer --port 8080`).
+
+Rewritten 2026-11-25 from the JSON-era client: the server's frames are
+protobuf ServerMessage messages (proto/terminal.proto), hand-encoded in
+`_ws_pb_test_common.py`.
 """
 
-# STALE GATE (2026-11-25 script audit): JSON-era streaming test client.
-# The streamer's wire protocol is now protobuf (src/streaming/protocol/ ->
-# proto/terminal.proto); the server's first frame is a binary protobuf
-# `Connected` message, so json.loads(await ws.recv()) fails with
-# UnicodeDecodeError and the old broad except exits 0 anyway. Gated so a
-# run cannot be mistaken for a live signal; rewrite against the protobuf
-# protocol or remove via the follow-up kanban card filed 2026-11-25.
+import asyncio
 import sys
 
-print(
-    "STALE: this helper predates the protobuf streaming protocol; its JSON "
-    "client cannot decode the server's protobuf frames. See the kanban "
-    "follow-up card (2026-11-25 script audit).",
-    file=sys.stderr,
-)
-sys.exit(1)
-
-import asyncio
-import json
+sys.path.insert(0, __file__.rsplit("/", 1)[0])
 
 import websockets  # type: ignore
+from _ws_pb_test_common import (
+    STREAMER_WS_URL,
+    collect_output_until,
+    encode_client_message_input,
+    recv_connected,
+)
 
 
-async def test_streaming():
-    uri = "ws://127.0.0.1:8080"
-    print(f"Connecting to {uri}...")
+async def test_streaming() -> bool:
+    print(f"Connecting to {STREAMER_WS_URL}...")
 
+    async with websockets.connect(STREAMER_WS_URL) as websocket:
+        print("Connected!")
+
+        connected = await recv_connected(websocket)
+        print("\n[Received] Connected")
+        print(f"  Size: {connected.cols}x{connected.rows}")
+        print(f"  Session ID: {connected.session_id}")
+        print(f"  Client ID: {connected.client_id}")
+        if connected.initial_screen is not None:
+            print(f"  Initial screen: {len(connected.initial_screen)} chars")
+            print(f"  Screen preview: {connected.initial_screen[:100]!r}")
+
+        print("\n[Sending] Input: 'echo hello\\n'")
+        await websocket.send(encode_client_message_input(b"echo hello\n"))
+
+        seen = await collect_output_until(websocket, "hello")
+        if seen is None:
+            print("\n✗ No output containing 'hello' came back")
+            return False
+        print(f"\n[Received] Output echo ({len(seen)} chars accumulated)")
+        print(f"  Last chunk preview: {seen[-120:]!r}")
+        return True
+
+
+async def main() -> int:
     try:
-        async with websockets.connect(uri) as websocket:
-            print("Connected!")
-
-            # Receive initial connection message
-            msg = await websocket.recv()
-            data = json.loads(msg)
-            print(f"\n[Received] Type: {data.get('type')}")
-            if data.get("type") == "connected":
-                print(f"  Size: {data.get('cols')}x{data.get('rows')}")
-                print(f"  Client ID: {data.get('client_id')}")
-                if "screen" in data:
-                    print(f"  Initial screen: {len(data['screen'])} chars")
-                    print(f"  Screen preview: {data['screen'][:100]!r}")
-
-            # Send a simple command: "echo hello"
-            print("\n[Sending] Input: 'echo hello\\n'")
-            input_msg = json.dumps({"type": "input", "data": "echo hello\n"})
-            await websocket.send(input_msg)
-
-            # Receive output for up to 5 seconds
-            print("\n[Waiting for output...]")
-            output_count = 0
-            try:
-                # Wait up to 5 seconds for output messages
-                for i in range(50):  # 5 seconds worth of 100ms intervals
-                    try:
-                        msg = await asyncio.wait_for(websocket.recv(), timeout=0.1)
-                        data = json.loads(msg)
-                        if data.get("type") == "output":
-                            output = data.get("data", "")
-                            print(f"[Output {output_count + 1}] {output!r}")
-                            output_count += 1
-                    except TimeoutError:
-                        # No message in this interval, continue waiting
-                        continue
-            except Exception as e:  # noqa: BLE001
-                print(f"[Error receiving] {e}")
-
-            print("\n[Test complete]")
-
-    except Exception as e:  # noqa: BLE001
-        print(f"Error: {e}")
-        import traceback
-
-        traceback.print_exc()
+        ok = await test_streaming()
+    except Exception as exc:  # noqa: BLE001
+        print(f"\n✗ Streaming test failed: {exc}", file=sys.stderr)
+        return 1
+    if not ok:
+        return 1
+    print("\n✓ Bidirectional streaming works")
+    return 0
 
 
 if __name__ == "__main__":
-    asyncio.run(test_streaming())
+    sys.exit(asyncio.run(main()))

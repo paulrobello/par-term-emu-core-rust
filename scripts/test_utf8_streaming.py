@@ -1,93 +1,72 @@
 #!/usr/bin/env python3
 """
-Test UTF-8 character handling in streaming
+Test UTF-8 character handling in streaming against the par-term-streamer
+(protobuf wire protocol; run the server as `par-term-streamer --port 8080`).
+
+Rewritten 2026-11-25 from the JSON-era client: the server's frames are
+protobuf ServerMessage messages (proto/terminal.proto), hand-encoded in
+`_ws_pb_test_common.py`.
 """
 
-# STALE GATE (2026-11-25 script audit): JSON-era streaming test client.
-# The streamer's wire protocol is now protobuf (src/streaming/protocol/ ->
-# proto/terminal.proto); the server's first frame is a binary protobuf
-# `Connected` message, so json.loads(await ws.recv()) fails with
-# UnicodeDecodeError and the old broad except exits 0 anyway. Gated so a
-# run cannot be mistaken for a live signal; rewrite against the protobuf
-# protocol or remove via the follow-up kanban card filed 2026-11-25.
+import asyncio
 import sys
 
-print(
-    "STALE: this helper predates the protobuf streaming protocol; its JSON "
-    "client cannot decode the server's protobuf frames. See the kanban "
-    "follow-up card (2026-11-25 script audit).",
-    file=sys.stderr,
-)
-sys.exit(1)
-
-import asyncio
-import json
+sys.path.insert(0, __file__.rsplit("/", 1)[0])
 
 import websockets  # type: ignore
+from _ws_pb_test_common import (
+    STREAMER_WS_URL,
+    collect_output_until,
+    encode_client_message_input,
+    recv_connected,
+)
+
+# (input command, needle that must echo back)
+TEST_COMMANDS: list[tuple[str, str]] = [
+    ("echo 'Hello World'", "Hello World"),
+    ("echo 'Café résumé naïve'", "Café"),
+    ("echo '你好世界'", "你好世界"),
+    ("echo '🚀 🎉 ✨'", "🚀"),
+    ("echo 'Ünïcödé — mixed: Ω δ Ψ'", "Ünïcödé"),
+    ("echo 'line1\nline2'", "line2"),
+]
 
 
-async def test_utf8():
-    uri = "ws://127.0.0.1:8080"
-    print(f"Connecting to {uri}...")
+async def test_utf8() -> list[str]:
+    print(f"Connecting to {STREAMER_WS_URL}...")
+    failures: list[str] = []
 
+    async with websockets.connect(STREAMER_WS_URL) as websocket:
+        await recv_connected(websocket)
+        print("Connected!")
+
+        for command, needle in TEST_COMMANDS:
+            print(f"\n[Sending] {command!r}  (expecting {needle!r})")
+            await websocket.send(encode_client_message_input(command.encode() + b"\n"))
+            seen = await collect_output_until(websocket, needle)
+            if seen is not None:
+                print(f"  ✓ echoed ({len(seen)} chars accumulated)")
+            else:
+                print("  ✗ needle not found in echoed output")
+                failures.append(command)
+
+    return failures
+
+
+async def main() -> int:
     try:
-        async with websockets.connect(uri) as websocket:
-            print("Connected!")
-
-            # Receive initial connection message
-            msg = await websocket.recv()
-            data = json.loads(msg)
-            print(
-                f"\n[Initial] Type: {data.get('type')}, Size: {data.get('cols')}x{data.get('rows')}"
-            )
-
-            # Test various UTF-8 characters
-            test_commands = [
-                ("echo 'Hello World'", "Basic ASCII"),
-                ("echo 'Café résumé naïve'", "Latin extended (accents)"),
-                ("echo '你好世界'", "Chinese characters"),
-                ("echo '🚀 🎉 ✨'", "Emojis"),
-                ("echo 'Привет мир'", "Cyrillic"),
-                ("echo 'مرحبا بالعالم'", "Arabic"),
-                ("echo '日本語テスト'", "Japanese"),
-            ]
-
-            for cmd, description in test_commands:
-                print(f"\n[Testing] {description}: {cmd}")
-
-                # Send command
-                await websocket.send(json.dumps({"type": "input", "data": cmd + "\n"}))
-
-                # Collect output for this command
-                outputs = []
-                for _ in range(30):  # Wait up to 3 seconds
-                    try:
-                        msg = await asyncio.wait_for(websocket.recv(), timeout=0.1)
-                        data = json.loads(msg)
-                        if data.get("type") == "output":
-                            outputs.append(data.get("data", ""))
-                    except TimeoutError:
-                        break
-
-                # Print collected output
-                full_output = "".join(outputs)
-                print(f"[Output] {full_output!r}")
-
-                # Check if our test string appears in output
-                test_str = cmd.split("'")[1] if "'" in cmd else cmd
-                if test_str in full_output:
-                    print("✅ UTF-8 preserved correctly")
-                else:
-                    print("❌ UTF-8 may be corrupted")
-
-            print("\n[Test complete]")
-
-    except Exception as e:  # noqa: BLE001
-        print(f"Error: {e}")
-        import traceback
-
-        traceback.print_exc()
+        failures = await test_utf8()
+    except Exception as exc:  # noqa: BLE001
+        print(f"\n✗ UTF-8 streaming test failed: {exc}", file=sys.stderr)
+        return 1
+    if failures:
+        print(
+            f"\n✗ {len(failures)}/{len(TEST_COMMANDS)} commands failed to echo: {failures}"
+        )
+        return 1
+    print(f"\n✓ All {len(TEST_COMMANDS)} UTF-8 commands echoed correctly")
+    return 0
 
 
 if __name__ == "__main__":
-    asyncio.run(test_utf8())
+    sys.exit(asyncio.run(main()))
