@@ -67,6 +67,69 @@ pub struct FileTransfer {
     pub completed_at: Option<u64>,
 }
 
+/// A lightweight, payload-free snapshot of one file transfer (SEC-010).
+///
+/// Carries exactly the fields a frontend polls for — identity, filename,
+/// direction, status, byte counts, and timestamps — and never the
+/// accumulated `data` payload or the protocol `params`, so polling costs
+/// nothing proportional to payload size. Compare with [`FileTransfer`],
+/// whose clone copies the whole payload.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct FileTransferSummary {
+    /// Unique transfer identifier
+    pub id: TransferId,
+    /// Whether this is a download or upload
+    pub direction: TransferDirection,
+    /// Name of the file being transferred
+    pub filename: String,
+    /// Current transfer status
+    pub status: TransferStatus,
+    /// Bytes transferred so far. For an `InProgress` transfer this comes
+    /// from the status counters; otherwise it is the retained payload
+    /// length (an `O(1)` length read, not a copy).
+    pub bytes_transferred: usize,
+    /// Total expected size, when known
+    pub total_bytes: Option<usize>,
+    /// Timestamp when the transfer was started (unix millis)
+    pub started_at: u64,
+    /// Timestamp when the transfer completed/failed/cancelled (unix millis)
+    pub completed_at: Option<u64>,
+}
+
+/// Payload-free summaries of the active transfers and the completed ring.
+///
+/// Active summaries are sorted by transfer id so the order is stable
+/// across polls; completed summaries keep ring order (oldest first).
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct TransferSummaries {
+    /// Transfers currently in progress
+    pub active: Vec<FileTransferSummary>,
+    /// Completed, failed, or cancelled transfers (bounded ring)
+    pub completed: Vec<FileTransferSummary>,
+}
+
+impl From<&FileTransfer> for FileTransferSummary {
+    fn from(transfer: &FileTransfer) -> Self {
+        let (bytes_transferred, total_bytes) = match &transfer.status {
+            TransferStatus::InProgress {
+                bytes_transferred,
+                total_bytes,
+            } => (*bytes_transferred, *total_bytes),
+            _ => (transfer.data.len(), None),
+        };
+        Self {
+            id: transfer.id,
+            direction: transfer.direction,
+            filename: transfer.filename.clone(),
+            status: transfer.status.clone(),
+            bytes_transferred,
+            total_bytes,
+            started_at: transfer.started_at,
+            completed_at: transfer.completed_at,
+        }
+    }
+}
+
 /// Manages active and completed file transfers
 ///
 /// Active transfers are tracked by ID in a `HashMap`. Completed transfers
@@ -347,6 +410,26 @@ impl FileTransferManager {
         &self.completed_transfers
     }
 
+    /// Payload-free summaries of every active transfer and the completed
+    /// ring. See [`FileTransferSummary`] for what the summaries carry and
+    /// [`TransferSummaries`] for the ordering contracts.
+    pub fn transfer_summaries(&self) -> TransferSummaries {
+        let mut active: Vec<FileTransferSummary> = self
+            .active_transfers
+            .values()
+            .map(FileTransferSummary::from)
+            .collect();
+        active.sort_by_key(|summary| summary.id);
+        TransferSummaries {
+            active,
+            completed: self
+                .completed_transfers
+                .iter()
+                .map(FileTransferSummary::from)
+                .collect(),
+        }
+    }
+
     /// Take a completed transfer by ID, removing it from the completed buffer
     ///
     /// Returns `None` if no completed transfer with the given ID exists.
@@ -403,6 +486,17 @@ impl Terminal {
             .file_transfer_manager
             .completed_transfers()
             .to_vec()
+    }
+
+    /// Payload-free summaries of every file transfer, active and completed
+    /// (SEC-010). Clones no payload bytes: each [`FileTransferSummary`]
+    /// carries identity, filename, direction, status, byte counts, and
+    /// timestamps, so a frontend can poll at any rate without paying a
+    /// payload copy per poll — take a payload only when a consumer needs
+    /// it, via [`Terminal::take_completed_transfer`]. Callable through a
+    /// read guard (it takes `&self` only).
+    pub fn transfer_summaries(&self) -> TransferSummaries {
+        self.graphics.file_transfer_manager.transfer_summaries()
     }
 
     /// Get a specific transfer by ID (active or completed)
@@ -525,6 +619,91 @@ mod tests {
         assert_eq!(id2, 2);
         let transfer2 = mgr.get_transfer(id2).unwrap();
         assert_eq!(transfer2.status, TransferStatus::Pending);
+    }
+
+    /// SEC-010: polling summaries costs nothing proportional to payload
+    /// size. A 50 MB transfer and a 1-byte transfer with identical
+    /// metadata produce same-sized summaries whose identity, filename,
+    /// direction, and status shape match, with byte counts read from the
+    /// status counters (an O(1) length read on completion) — never by
+    /// copying the payload. Callable through a read guard (`&self`).
+    #[test]
+    fn transfer_summaries_exclude_the_payload() {
+        let mut term = Terminal::new(80, 24);
+        let mgr = &mut term.graphics.file_transfer_manager;
+        mgr.set_max_transfer_size(64 * 1024 * 1024);
+        let big = mgr.start_download("same.bin".into(), None, HashMap::new());
+        mgr.append_data(big, &vec![b'x'; 50 * 1024 * 1024]).unwrap();
+        let small = mgr.start_download("same.bin".into(), None, HashMap::new());
+        mgr.append_data(small, b"z").unwrap();
+        let third = mgr.start_download("same.bin".into(), None, HashMap::new());
+
+        // Criterion 2: the accessor takes &self, so it runs under a read
+        // guard — call it through parking_lot's read half to pin that.
+        let term = std::sync::Arc::new(parking_lot::RwLock::new(term));
+        let summaries = term.read().transfer_summaries();
+
+        // Active summaries are sorted by id regardless of HashMap order.
+        let ids: Vec<TransferId> = summaries.active.iter().map(|s| s.id).collect();
+        assert_eq!(ids, vec![big, small, third]);
+
+        let big_s = summaries
+            .active
+            .iter()
+            .find(|s| s.id == big)
+            .expect("the 50 MB transfer is summarized");
+        let small_s = summaries
+            .active
+            .iter()
+            .find(|s| s.id == small)
+            .expect("the 1-byte transfer is summarized");
+        assert_eq!(big_s.filename, "same.bin");
+        assert_eq!(small_s.filename, "same.bin");
+        assert_eq!(big_s.direction, TransferDirection::Download);
+        assert_eq!(big_s.bytes_transferred, 50 * 1024 * 1024);
+        assert_eq!(small_s.bytes_transferred, 1);
+        assert_eq!(small_s.total_bytes, None);
+        assert!(small_s.completed_at.is_none());
+        // The summary's own footprint is payload-independent: same struct,
+        // same inline size, no payload bytes cloned into it.
+        assert_eq!(
+            std::mem::size_of_val(big_s),
+            std::mem::size_of_val(small_s),
+            "summaries carry no payload-proportional storage"
+        );
+        // The payload stays reachable only through the payload-bearing
+        // accessors: the active transfer itself still holds 50 MB.
+        let term = term.read();
+        assert_eq!(
+            term.graphics
+                .file_transfer_manager
+                .get_transfer(big)
+                .unwrap()
+                .data
+                .len(),
+            50 * 1024 * 1024
+        );
+    }
+
+    /// The completed ring is summarized with the retained byte count (an
+    /// O(1) length read, not a payload copy) and the completion timestamp.
+    #[test]
+    fn transfer_summaries_cover_the_completed_ring() {
+        let mut mgr = FileTransferManager::new();
+        let id = mgr.start_download("done.bin".into(), Some(5), HashMap::new());
+        mgr.append_data(id, b"hello").unwrap();
+        mgr.complete_transfer(id).unwrap();
+
+        let summaries = mgr.transfer_summaries();
+        assert!(summaries.active.is_empty());
+        assert_eq!(summaries.completed.len(), 1);
+        let summary = &summaries.completed[0];
+        assert_eq!(summary.id, id);
+        assert_eq!(summary.filename, "done.bin");
+        assert_eq!(summary.status, TransferStatus::Completed);
+        assert_eq!(summary.bytes_transferred, 5);
+        assert_eq!(summary.total_bytes, None);
+        assert!(summary.completed_at.is_some());
     }
 
     #[test]

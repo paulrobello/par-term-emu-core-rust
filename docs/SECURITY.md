@@ -1529,9 +1529,9 @@ sections; the numbers live here.
 | `MAX_CLIPBOARD_CONTENT_SIZE` | 10 MiB | `crates/par-term-emu-core/src/terminal/clipboard.rs:6` | Clipboard content bytes accepted from an OSC 52 sequence. |
 | `MAX_TERMINAL_EVENTS` | 10,000 | `crates/par-term-emu-core/src/terminal/event_broker.rs:20` | Unpolled terminal events retained from processed output. |
 | `MAX_BELL_EVENTS` | 1,024 | `crates/par-term-emu-core/src/terminal/event_broker.rs:27` | Undrained bell events retained from processed output. |
-| `DEFAULT_MAX_TRANSFER_SIZE` | 50 MiB | `crates/par-term-emu-core/src/terminal/file_transfer.rs:97` | Bytes accepted for one file-transfer payload. |
-| `DEFAULT_MAX_COMPLETED` | 32 | `crates/par-term-emu-core/src/terminal/file_transfer.rs:101` | Completed transfers retained from client file-transfer requests. |
-| `DEFAULT_MAX_ACTIVE_TRANSFERS` | 8 | `crates/par-term-emu-core/src/terminal/file_transfer.rs:105` | Concurrent in-progress downloads from client file-transfer requests. |
+| `DEFAULT_MAX_TRANSFER_SIZE` | 50 MiB | `crates/par-term-emu-core/src/terminal/file_transfer.rs:160` | Bytes accepted for one file-transfer payload. |
+| `DEFAULT_MAX_COMPLETED` | 32 | `crates/par-term-emu-core/src/terminal/file_transfer.rs:164` | Completed transfers retained from client file-transfer requests. |
+| `DEFAULT_MAX_ACTIVE_TRANSFERS` | 8 | `crates/par-term-emu-core/src/terminal/file_transfer.rs:168` | Concurrent in-progress downloads from client file-transfer requests. |
 | `MAX_RESPONSE_BYTES` | 64 KiB | `crates/par-term-emu-core/src/terminal/mod.rs:82` | Undrained device-query response bytes retained from processed output. |
 | `MAX_CLIPBOARD_CONTENT_SIZE` | 10 MiB | `crates/par-term-emu-core/src/terminal/mod.rs:147` | Clipboard content bytes accepted from an OSC 52 sequence. |
 | `MAX_BOOKMARKS` | 1,000 | `crates/par-term-emu-core/src/terminal/semantic_snapshot.rs:543` | Bookmark entries retained for one terminal session. |
