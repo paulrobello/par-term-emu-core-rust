@@ -836,7 +836,7 @@ def main() -> int:
         stale = [
             str(p.relative_to(REPO))
             for p, text in ((PI_ASSET, pi), (OMP_ASSET, omp))
-            if p.read_text() != text
+            if p.read_text(encoding="utf-8") != text
         ]
         if stale:
             for name in stale:
@@ -846,8 +846,8 @@ def main() -> int:
         print("extensions: committed assets match the template")
         return 0
 
-    PI_ASSET.write_text(pi)
-    OMP_ASSET.write_text(omp)
+    PI_ASSET.write_text(pi, encoding="utf-8")
+    OMP_ASSET.write_text(omp, encoding="utf-8")
     print(f"wrote {PI_ASSET.relative_to(REPO)}")
     print(f"wrote {OMP_ASSET.relative_to(REPO)}")
     return 0

@@ -243,7 +243,7 @@ def write_links(changelog: Path, text: str, root: Path) -> str:
         )
     new_text = "".join(lines)
     if new_text != text:
-        changelog.write_text(new_text)
+        changelog.write_text(new_text, encoding="utf-8")
     return new_text
 
 
@@ -350,7 +350,7 @@ def check(
     root: Path, base: str | None, head: str | None, structure: bool = True
 ) -> int:
     changelog = root / "CHANGELOG.md"
-    text = changelog.read_text()
+    text = changelog.read_text(encoding="utf-8")
     checked, derived_base, derived_head, _ = derive_checked_section(text, root)
     base = base or derived_base
     head = head or derived_head
@@ -423,13 +423,13 @@ def self_test() -> int:
     with tempfile.TemporaryDirectory() as tmp:
         root = Path(tmp)
         git(root, "init", "-q")
-        (root / "base.txt").write_text("base\n")
+        (root / "base.txt").write_text("base\n", encoding="utf-8")
         git(root, "add", "-A")
         git(root, "commit", "-q", "-m", "initial")
         git(root, "tag", "v0.1.0")
 
         def commit(msg: str, body: str = "") -> str:
-            (root / "f.txt").write_text(msg + "\n")
+            (root / "f.txt").write_text(msg + "\n", encoding="utf-8")
             git(root, "add", "-A")
             args = ["commit", "-q", "-m", msg]
             if body:
@@ -449,7 +449,7 @@ def self_test() -> int:
         # derivation (script's parent's parent) resolves to the repo root.
         script_copy = root / "scripts" / "check_release_notes.py"
         script_copy.parent.mkdir(exist_ok=True)
-        script_copy.write_text(script.read_text())
+        script_copy.write_text(script.read_text(encoding="utf-8"))
         changelog.write_text(
             "# Changelog\n\n## [0.2.0]\n\n### Added\n"
             f"- sha cited (`{sha_cited[:7]}`)\n"
@@ -555,7 +555,7 @@ def self_test() -> int:
         )
 
         print("scenario: clean CHANGELOG shape passes the structure lint")
-        changelog.write_text(clean)
+        changelog.write_text(clean, encoding="utf-8")
         r = run_in_root()
         expect(r.returncode == 0, "exit 0 on a clean shape", r.stdout + r.stderr)
         expect(not structure_lines(r.stdout), "no STRUCTURE line", r.stdout)
@@ -584,7 +584,7 @@ def self_test() -> int:
         ]
         for label, old, new, needle in mutations:
             print(f"scenario: structure rule bites ({label})")
-            changelog.write_text(clean.replace(old, new, 1))
+            changelog.write_text(clean.replace(old, new, 1), encoding="utf-8")
             r = run_in_root()
             expect(r.returncode == 1, f"{label}: exit 1", r.stdout + r.stderr)
             expect(
@@ -601,9 +601,9 @@ def self_test() -> int:
             r.stdout + r.stderr,
         )
         expect(
-            link_line in changelog.read_text().splitlines(),
+            link_line in changelog.read_text(encoding="utf-8").splitlines(),
             "write-fixes-link: [Unreleased] compares from v0.2.0",
-            changelog.read_text(),
+            changelog.read_text(encoding="utf-8"),
         )
 
         print("scenario: bullet outside any ### subsection")
@@ -663,7 +663,7 @@ def main() -> None:
         if args.write:
             write_links(
                 root / "CHANGELOG.md",
-                (root / "CHANGELOG.md").read_text(),
+                (root / "CHANGELOG.md").read_text(encoding="utf-8"),
                 root,
             )
         status = check(root, args.base, args.head, structure=not args.no_structure)

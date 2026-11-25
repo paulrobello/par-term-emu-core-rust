@@ -141,7 +141,7 @@ def parse_stub(
     dict[str, list[tuple[str, bool]]],
 ]:
     """Return ({class: {method: params}}, {class: property names}, {module function: params})."""
-    tree = ast.parse(path.read_text())
+    tree = ast.parse(path.read_text(encoding="utf-8"))
     classes: dict[str, dict[str, list[tuple[str, bool]]]] = {}
     properties: dict[str, set[str]] = {}
     functions: dict[str, list[tuple[str, bool]]] = {}
@@ -234,7 +234,9 @@ def iter_doc_lines(path: Path):
     in_fence = False
     module_funcs = False
     h3_class_restore = None
-    for lineno, line in enumerate(path.read_text().splitlines(), start=1):
+    for lineno, line in enumerate(
+        path.read_text(encoding="utf-8").splitlines(), start=1
+    ):
         if FENCE.match(line):
             in_fence = not in_fence
             continue

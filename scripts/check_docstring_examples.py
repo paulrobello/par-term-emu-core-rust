@@ -38,7 +38,7 @@ DOC_RE = re.compile(r"^(\s*)///(?: (.*))?$")
 
 def scan_file(path: Path) -> tuple[list[dict[str, Any]], int, list[str]]:
     """Return (example blocks, count of documented pymethods with Example, missing names)."""
-    lines = path.read_text().splitlines()
+    lines = path.read_text(encoding="utf-8").splitlines()
     examples: list[dict[str, Any]] = []
     covered = 0
     missing: list[str] = []

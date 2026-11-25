@@ -102,7 +102,7 @@ def fail(msg: str) -> NoReturn:
 
 def read(root: Path, rel: str) -> str:
     try:
-        return (root / rel).read_text()
+        return (root / rel).read_text(encoding="utf-8")
     except OSError as exc:
         fail(f"parsed nothing from {rel}: cannot read ({exc})")
 
@@ -246,7 +246,7 @@ def collect_problems(root: Path) -> tuple[list[str], dict[str, int]]:
     for path in stale_phrase_files(root):
         rel = path.relative_to(root)
         try:
-            text = path.read_text()
+            text = path.read_text(encoding="utf-8")
         except OSError as exc:
             fail(f"parsed nothing from {rel}: cannot read ({exc})")
         for lineno, line in enumerate(text.splitlines(), 1):
@@ -351,7 +351,7 @@ def run_self_test(root: Path) -> int:
             dst_root = Path(td)
             copy_inputs(root, dst_root)
             target = dst_root / rel
-            target.write_text(mutate(target.read_text()))
+            target.write_text(mutate(target.read_text(encoding="utf-8")))
             problems, _ = collect_problems(dst_root)
         if not problems:
             fail(f"self-test: {label} passed — the gate missed the injected drift")

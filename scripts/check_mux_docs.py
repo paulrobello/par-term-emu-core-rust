@@ -144,8 +144,8 @@ def read(root: Path, rel: str) -> str:
             files = [d / "mod.rs"] + sorted(
                 f for f in d.glob("*.rs") if f.name not in ("mod.rs", "tests.rs")
             )
-            return "\n".join(f.read_text() for f in files)
-        return (root / rel).read_text()
+            return "\n".join(f.read_text(encoding="utf-8") for f in files)
+        return (root / rel).read_text(encoding="utf-8")
     except OSError as exc:
         fail(f"parsed nothing from {rel}: cannot read ({exc})")
 
@@ -489,7 +489,7 @@ def never_sent_production_hits(root: Path, type_map: dict[str, str]) -> list[str
             )
         needle = f"TmuxNotification::{variant}"
         for path in sources:
-            if needle in strip_test_modules(path.read_text()):
+            if needle in strip_test_modules(path.read_text(encoding="utf-8")):
                 hits.append(f"{path.relative_to(root)} ({needle})")
     return hits
 
@@ -888,7 +888,7 @@ def run_self_test(root: Path) -> int:
             dst_root = Path(td)
             copy_inputs(root, dst_root)
             target = dst_root / rel
-            target.write_text(mutate(target.read_text()))
+            target.write_text(mutate(target.read_text(encoding="utf-8")))
             problems, _ = collect_problems(dst_root)
         if not problems:
             fail(f"self-test: {label} passed — the gate missed the injected drift")
@@ -900,7 +900,7 @@ def run_self_test(root: Path) -> int:
     with tempfile.TemporaryDirectory() as td:
         dst_root = Path(td)
         copy_inputs(root, dst_root)
-        (dst_root / MAIN_RS).write_text("fn main() {}\n")
+        (dst_root / MAIN_RS).write_text("fn main() {}\n", encoding="utf-8")
         try:
             collect_problems(dst_root)
         except SystemExit as exc:
@@ -918,7 +918,7 @@ def run_self_test(root: Path) -> int:
     with tempfile.TemporaryDirectory() as td:
         dst_root = Path(td)
         copy_inputs(root, dst_root)
-        (dst_root / ROSTER_RS).write_text("fn roster_row() {}\n")
+        (dst_root / ROSTER_RS).write_text("fn roster_row() {}\n", encoding="utf-8")
         try:
             collect_problems(dst_root)
         except SystemExit as exc:
@@ -951,7 +951,7 @@ def run_self_test(root: Path) -> int:
             dst_root = Path(td)
             copy_inputs(root, dst_root)
             target = dst_root / "crates/par-mux/src/mux/command/mod.rs"
-            target.write_text(target.read_text() + append)
+            target.write_text(target.read_text(encoding="utf-8") + append)
             problems, _ = collect_problems(dst_root)
         return problems
 
