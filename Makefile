@@ -6,7 +6,7 @@
         pre-commit-run pre-commit-update deploy \
         proto-generate proto-rust proto-typescript proto-clean \
         web-install web-dev web-build web-build-static web-start web-clean web-open test-web \
-        streamer-build streamer-build-release streamer-run streamer-run-auth streamer-run-http streamer-run-macro streamer-install \
+        streamer-build streamer-build-release streamer-run streamer-run-auth streamer-run-http streamer-run-macro streamer-install streamer-install-mux \
         stubs stub-check stub-drift \
         grind-start grind-start-anthropic grind-start-zai grind-start-grok grind-start-codex grind-start-omp grind-stop grind-clean-logs
 
@@ -135,6 +135,7 @@ help:
 	@echo "  streamer-run-http     - Build and run with HTTP server (serves web_term)"
 	@echo "  streamer-run-macro    - Build and run with macro playback demo"
 	@echo "  streamer-install      - Install streaming server to ~/.cargo/bin"
+	@echo "  streamer-install-mux  - Install mux-enabled streaming server (mirrors par-mux panes)"
 	@echo ""
 	@echo "Protocol Buffers (requires protoc installed):"
 	@echo "  proto-generate    - Generate protobuf code for Rust and TypeScript"
@@ -199,9 +200,9 @@ python-install:
 # Everything this repo installs: the python extension, the par-mux binary
 # (the daemon and the attach TUI are one binary; attach adds the ratatui
 # client), and the streaming server.
-install: python-install par-mux-install streamer-install
+install: python-install par-mux-install streamer-install-mux
 	@echo ""
-	@echo "Installed: python extension, par-mux (daemon + attach TUI), par-term-streamer."
+	@echo "Installed: python extension, par-mux (daemon + attach TUI), par-term-streamer (mux-enabled)."
 
 uninstall: python-uninstall par-mux-uninstall streamer-uninstall
 
@@ -1136,6 +1137,28 @@ streamer-install: streamer-build-release
 	@echo "Run it with:"
 	@echo "  par-term-streamer --help"
 	@echo "  par-term-streamer --port 8099"
+	@echo ""
+
+# The mux track compiles the cfg(mux) mux_factory bridge (streamer mirrors
+# par-mux panes) and fixes the binary's self-update track to the
+# `par-term-streamer-mux-` release assets, so a plain-streamer install can
+# never update into it (or vice versa). help/--version output is identical
+# between the tracks, so the guard greps the installed binary for a string
+# from the feature-gated bridge module — structurally present only in mux builds.
+streamer-install-mux:
+	@echo "======================================================================"
+	@echo "  Installing Streaming Server (mux-enabled)"
+	@echo "======================================================================"
+	@echo ""
+	cargo install --path . --bin par-term-streamer --no-default-features --features streaming-bin,mux --force
+	@bash scripts/sign-installed-artifact.sh com.paulrobello.par-term-streamer "$(HOME)/.cargo/bin/par-term-streamer"
+	@strings "$(HOME)/.cargo/bin/par-term-streamer" | grep -q "mux_factory" || { echo "ERROR: installed streamer lacks the mux bridge (plain build?)" >&2; exit 1; }
+	@echo ""
+	@echo "======================================================================"
+	@echo "  Installation Complete!"
+	@echo "======================================================================"
+	@echo ""
+	@echo "The mux-enabled streaming server has been installed to ~/.cargo/bin"
 	@echo ""
 
 # ============================================================================
