@@ -3,18 +3,154 @@
 
 use super::*;
 use crate::terminal::ObserverDispatchBatch;
+use std::sync::mpsc::{Receiver, SyncSender};
 
-/// The shared handles one PTY input write needs — writer, terminal, and
+/// Capacity of the per-session input queue: the number of `write` chunks a
+/// caller may run ahead of the tty before backpressure blocks it. 16 chunks
+/// of 64 KiB caps the queue at 1 MiB per session.
+const INPUT_QUEUE_CHUNKS: usize = 16;
+
+/// Per-session background input writer (card 01a218f2). `PtySession::write`
+/// and [`PtyInputHandle::write`] enqueue onto a bounded channel instead of
+/// blocking on the tty round trip under the writer mutex; a dedicated
+/// thread drains it into the PTY under the same writer mutex the reader
+/// thread's query forwarding and `get_writer()` consumers use, so all tty
+/// input stays mutually serialized. Input recording happens at enqueue
+/// time, synchronous on the caller thread under the recording-flag gate —
+/// the exact recording semantics the pre-queue code had (after
+/// `stop_recording()` returns, every `write` that returned `Ok` before it
+/// is in the recording; byte-exact). A tty write failure latches a sticky
+/// error that the next `write` reports; the thread keeps consuming
+/// (discarding) so senders never block on a broken tty.
+pub(super) struct InputWriterQueue {
+    sender: Mutex<Option<SyncSender<Vec<u8>>>>,
+    error: Arc<Mutex<Option<String>>>,
+    thread: Mutex<Option<std::thread::JoinHandle<()>>>,
+    terminal: Arc<RwLock<Terminal>>,
+    recording: Arc<AtomicBool>,
+}
+
+impl InputWriterQueue {
+    /// Create the queue and start its drain thread over the PTY writer.
+    /// Called from `spawn`; `writer` is the same handle the reader thread
+    /// and `get_writer()` consumers share.
+    pub(super) fn start(
+        writer: Arc<Mutex<Box<dyn Write + Send>>>,
+        terminal: Arc<RwLock<Terminal>>,
+        recording: Arc<AtomicBool>,
+    ) -> Self {
+        let (sender, receiver) = std::sync::mpsc::sync_channel(INPUT_QUEUE_CHUNKS);
+        let error: Arc<Mutex<Option<String>>> = Arc::new(Mutex::new(None));
+        let thread_error = Arc::clone(&error);
+        let spawned = std::thread::Builder::new()
+            .name("pty-input-writer".into())
+            .spawn(move || input_writer_thread(receiver, writer, thread_error));
+        if let Err(e) = spawned.as_ref() {
+            debug::log(
+                debug::DebugLevel::Error,
+                "PTY_INPUT",
+                &format!("input writer thread spawn failed: {e}"),
+            );
+        }
+        Self {
+            sender: Mutex::new(Some(sender)),
+            error,
+            thread: Mutex::new(spawned.ok()),
+            terminal,
+            recording,
+        }
+    }
+
+    /// Close the queue's own sender clone and join the drain thread with a
+    /// bounded timeout — the drop/restart counterpart of the reader
+    /// thread's 2 s join. Channel closure + drain of pending bytes exits
+    /// the thread; a thread still blocked in `write_all` on a live tty is
+    /// detached (the master close that follows fails it fast).
+    pub(super) fn shutdown(&self) {
+        *self.sender.lock() = None;
+        let handle = self.thread.lock().take();
+        if let Some(handle) = handle {
+            let deadline = std::time::Instant::now() + std::time::Duration::from_secs(2);
+            while !handle.is_finished() && std::time::Instant::now() < deadline {
+                std::thread::sleep(std::time::Duration::from_millis(10));
+            }
+            if handle.is_finished() {
+                let _ = handle.join();
+            } else {
+                debug::log(
+                    debug::DebugLevel::Info,
+                    "PTY_INPUT",
+                    "input writer thread did not finish within 2s, detaching",
+                );
+            }
+        }
+    }
+
+    /// Enqueue `data` for the drain thread. Backpressure: blocks while
+    /// [`INPUT_QUEUE_CHUNKS`] chunks are pending. A latched tty failure is
+    /// reported sticky; a failed enqueue reports the latched error or, if
+    /// the drain thread is gone without one, a generic `IoError`.
+    pub(super) fn write(&self, data: &[u8]) -> Result<(), PtyError> {
+        if let Some(err) = self.error.lock().clone() {
+            return Err(PtyError::IoError(std::io::Error::other(err)));
+        }
+        // Record at enqueue time, synchronous on the caller — the flag
+        // gate means the exclusive Terminal lock is paid only while a
+        // recording is actually running (card 01a218f2 criterion 2).
+        if self.recording.load(Ordering::SeqCst) {
+            self.terminal.write().record_input(data);
+        }
+        let send_result = self.sender.lock().as_ref().map(|s| s.send(data.to_vec()));
+        match send_result {
+            None | Some(Err(_)) => {
+                let latched = self.error.lock().clone();
+                return Err(input_writer_gone_error(latched));
+            }
+            Some(Ok(())) => {}
+        }
+        Ok(())
+    }
+}
+
+/// Build the error for a failed enqueue — the latched tty failure when one
+/// exists, otherwise a generic "drain thread is gone" `IoError`.
+fn input_writer_gone_error(latched: Option<String>) -> PtyError {
+    PtyError::IoError(std::io::Error::other(
+        latched.unwrap_or_else(|| "PTY input writer thread is gone".into()),
+    ))
+}
+
+/// The drain loop: FIFO order, tty-only work, sticky error latch with
+/// discard-on-error so senders never block on a broken tty.
+fn input_writer_thread(
+    receiver: Receiver<Vec<u8>>,
+    writer: Arc<Mutex<Box<dyn Write + Send>>>,
+    error: Arc<Mutex<Option<String>>>,
+) {
+    while let Ok(data) = receiver.recv() {
+        if error.lock().is_some() {
+            continue;
+        }
+        let result = {
+            let mut w = writer.lock();
+            w.write_all(&data).and_then(|()| w.flush())
+        };
+        if let Err(e) = result {
+            *error.lock() = Some(e.to_string());
+        }
+    }
+}
+
+/// The shared handles one PTY input write needs — the input queue and the
 /// liveness flag — cloned out of a session so the write can happen with no
 /// broader lock held. [`PtyInputHandle::write`] mirrors
-/// [`PtySession::write`] exactly: same liveness check, same input recording,
-/// same errors.
+/// [`PtySession::write`] exactly: same liveness check, same input
+/// recording, same errors.
 #[cfg(feature = "mux")]
 #[derive(Clone)]
 #[doc(hidden)]
 pub struct PtyInputHandle {
-    writer: Arc<Mutex<Box<dyn Write + Send>>>,
-    terminal: Arc<RwLock<Terminal>>,
+    queue: Arc<InputWriterQueue>,
     running: Arc<AtomicBool>,
 }
 
@@ -22,50 +158,24 @@ pub struct PtyInputHandle {
 impl PtyInputHandle {
     /// Write input bytes to the PTY — [`PtySession::write`] without
     /// `&mut self`, for a caller holding a broader lock (the mux
-    /// dispatcher's tree mutex) that must release it before a write that
-    /// can block once the PTY buffer fills.
+    /// dispatcher's tree mutex) that must release it before a write.
     ///
     /// # Arguments
     /// * `data` - Bytes to write to the PTY
     ///
     /// # Returns
-    /// `Ok(())` after a successful write and flush; the same errors as
-    /// [`PtySession::write`] — `NotStartedError` when the session is not
-    /// running, `IoError` when the write or flush fails.
+    /// `Ok(())` once the bytes are enqueued for the drain thread (not yet
+    /// necessarily on the tty); the same errors as [`PtySession::write`] —
+    /// `NotStartedError` when the session is not running, `IoError` for a
+    /// latched tty failure (sticky, may report one call after the failing
+    /// write) or a gone drain thread.
     #[doc(hidden)]
     pub fn write(&self, data: &[u8]) -> Result<(), PtyError> {
         if !self.running.load(Ordering::SeqCst) {
             return Err(PtyError::NotStartedError);
         }
-        write_input(Some(&*self.writer), &self.terminal, data)
+        self.queue.write(data)
     }
-}
-
-/// The input write shared by [`PtySession::write`] and
-/// [`PtyInputHandle::write`], after each has checked liveness: log, record
-/// the input for session recording, then write and flush to the PTY. A
-/// missing writer is `NotStartedError`, reported after the input is
-/// recorded.
-pub(super) fn write_input(
-    writer: Option<&Mutex<Box<dyn Write + Send>>>,
-    terminal: &RwLock<Terminal>,
-    data: &[u8],
-) -> Result<(), PtyError> {
-    debug::log_pty_write(data);
-
-    // Record input for session recording
-    {
-        let mut term = terminal.write();
-        term.record_input(data);
-    }
-
-    let Some(writer) = writer else {
-        return Err(PtyError::NotStartedError);
-    };
-    let mut w = writer.lock();
-    w.write_all(data).map_err(PtyError::IoError)?;
-    w.flush().map_err(PtyError::IoError)?;
-    Ok(())
 }
 
 /// Pixel extent of `cells` cells at `cell_px` pixels each, saturated to the
@@ -189,13 +299,31 @@ impl PtySession {
 
     /// Write data to the PTY (send to the child process)
     ///
+    /// The bytes are enqueued onto the session's bounded input queue; a
+    /// dedicated thread writes them to the tty in FIFO order, so a large
+    /// upload (or any write the kernel backpressures) never blocks this
+    /// call on the tty round trip (card 01a218f2). `write` blocks only
+    /// while 16 chunks are pending — the backpressure window — and takes
+    /// no Terminal lock when recording is off (when recording is on, the
+    /// enqueue-time `record_input` takes the lock, exactly like the
+    /// pre-queue code).
+    ///
     /// # Arguments
     /// * `data` - Bytes to write
+    ///
+    /// # Errors
+    /// [`PtyError::NotStartedError`] when the session is not running.
+    /// [`PtyError::IoError`] for a tty write failure — sticky, and may
+    /// report one call after the failing write (the enqueue-time call
+    /// returns `Ok` and the failure is latched for the next call).
     pub fn write(&mut self, data: &[u8]) -> Result<(), PtyError> {
         if !self.is_running() {
             return Err(PtyError::NotStartedError);
         }
-        write_input(self.writer.as_deref(), &self.terminal, data)
+        let Some(queue) = &self.input_queue else {
+            return Err(PtyError::NotStartedError);
+        };
+        queue.write(data)
     }
 
     /// Write a string to the PTY (convenience method)
@@ -207,18 +335,18 @@ impl PtySession {
     }
 
     #[cfg(feature = "mux")]
-    /// The input path detached from `&mut self`: writer, terminal, and
+    /// The input path detached from `&mut self`: the input queue and the
     /// liveness flag as shared handles, so a caller holding a broader lock
     /// (the mux dispatcher's tree mutex) can clone them under the lock,
-    /// release it, and only then write — `write_all` blocks once the PTY
-    /// buffer fills (QA-225). `None` when the session has no PTY writer
+    /// release it, and only then write — the enqueue blocks only on the
+    /// queue's backpressure window, never on the tty round trip (QA-225,
+    /// card 01a218f2). `None` when the session has no PTY input queue
     /// (never spawned), the same [`PtyError::NotStartedError`] condition
     /// [`PtySession::write`] reports.
     #[doc(hidden)]
     pub fn input_handle(&self) -> Option<PtyInputHandle> {
         Some(PtyInputHandle {
-            writer: self.writer.as_ref()?.clone(),
-            terminal: Arc::clone(&self.terminal),
+            queue: self.input_queue.as_ref()?.clone(),
             running: Arc::clone(&self.running),
         })
     }

@@ -2279,3 +2279,176 @@ fn resize_without_a_pty_resizes_the_grid() {
         assert_eq!(term.read().size(), (120, 40));
     }
 }
+
+/// Card 01a218f2 criterion 2 probe: a recording-off write must not need the
+/// exclusive Terminal lock. The test holds the Terminal write lock while
+/// the write lands; the old code took `terminal.write()` before the tty
+/// write and would have blocked until the holder released.
+#[cfg(unix)]
+#[test]
+fn write_without_recording_needs_no_terminal_write_lock() {
+    use std::sync::mpsc;
+    use std::time::{Duration, Instant};
+
+    let mut session = new_test_session(80, 24, 100);
+    session.spawn("cat", &[]).expect("spawn cat");
+
+    let term = Arc::clone(&session.terminal);
+    let holder = std::thread::spawn(move || {
+        let _guard = term.write();
+        std::thread::sleep(Duration::from_millis(400));
+    });
+    // Deterministic: wait until the holder actually owns the write lock
+    // (try_write fails exactly then), so the write below always races a
+    // held lock.
+    let deadline = Instant::now() + Duration::from_secs(2);
+    while session.terminal.try_write().is_some() {
+        assert!(Instant::now() < deadline, "lock holder never acquired");
+        std::thread::sleep(Duration::from_millis(2));
+    }
+
+    let (tx, rx) = mpsc::channel();
+    std::thread::spawn(move || {
+        let mut session = session;
+        let result = session.write(b"probe\n");
+        tx.send(result).expect("probe channel");
+    });
+    let result = rx
+        .recv_timeout(Duration::from_secs(3))
+        .expect("write blocked on the Terminal lock while recording was off");
+    result.expect("write with held Terminal lock");
+    holder.join().expect("holder");
+}
+
+/// Card 01a218f2 criterion 3, input half: recording stays byte-exact when
+/// enabled — writes land in the recording as Input events with the exact
+/// bytes, in write order, even though the write call only enqueues.
+#[cfg(unix)]
+#[test]
+fn write_records_input_exactly_when_enabled() {
+    let mut session = new_test_session(80, 24, 100);
+    session.spawn("cat", &[]).expect("spawn cat");
+    session.terminal_write().start_recording(Some("t".into()));
+
+    session.write(b"echo one\r").expect("write 1");
+    session.write(b"echo two\r").expect("write 2");
+
+    let rec = session
+        .terminal_write()
+        .stop_recording()
+        .expect("recording active");
+    let inputs: Vec<&[u8]> = rec
+        .events
+        .iter()
+        .filter(|e| e.event_type == crate::terminal::RecordingEventType::Input)
+        .map(|e| e.data.as_slice())
+        .collect();
+    assert_eq!(
+        inputs,
+        vec![b"echo one\r".as_slice(), b"echo two\r".as_slice()]
+    );
+}
+
+/// The recording flag the session captured stays THE terminal's flag:
+/// start/stop via the Terminal flips the session's copy (the PTY input
+/// gate reads this exact cell), and a RIS mid-recording must not orphan
+/// the shared Arc (the old whole-struct swap would have).
+#[test]
+fn recording_flag_identity_survives_ris_and_start_stop() {
+    let session = new_test_session(80, 24, 100);
+    let captured = session.recording_flag.clone();
+
+    session.terminal_write().start_recording(None);
+    assert!(captured.load(Ordering::SeqCst), "flag parity on start");
+
+    // RIS replaces the whole Terminal (`*self = fresh`); the swap must
+    // preserve the flag Arc's identity.
+    session.terminal_write().process(b"\x1bc");
+    let after_ris = session.terminal.read().recording_flag();
+    assert!(
+        Arc::ptr_eq(&captured, &after_ris),
+        "RIS orphaned the shared recording flag Arc"
+    );
+    assert!(
+        session.terminal.read().is_recording(),
+        "recording must survive RIS"
+    );
+
+    session.terminal_write().stop_recording();
+    assert!(!captured.load(Ordering::SeqCst), "flag parity on stop");
+}
+
+/// Input reaches the child in FIFO enqueue order across chunk boundaries.
+#[cfg(unix)]
+#[test]
+fn input_queue_delivers_chunks_in_fifo_order() {
+    use std::time::{Duration, Instant};
+
+    let mut session = new_test_session(80, 24, 100);
+    session.spawn("cat", &[]).expect("spawn cat");
+
+    let chunks: Vec<String> = (0..8).map(|i| format!("CHUNK{i:02}-END\n")).collect();
+    for chunk in &chunks {
+        session.write(chunk.as_bytes()).expect("enqueue");
+    }
+    // Drain time is bounded: 8 tiny chunks with echo on land in
+    // milliseconds; poll the terminal content for the last chunk, then
+    // verify full order.
+    let deadline = Instant::now() + Duration::from_secs(5);
+    loop {
+        let text = session.export_text();
+        if text.contains("CHUNK07-END") {
+            break;
+        }
+        assert!(Instant::now() < deadline, "chunks never reached the child");
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    let text = session.export_text();
+    let mut search_from = 0;
+    for chunk in &chunks {
+        let at = text[search_from..]
+            .find(chunk)
+            .unwrap_or_else(|| panic!("chunk {chunk} out of order"));
+        search_from += at + chunk.len();
+    }
+}
+
+/// A tty write failure latches a sticky error: the enqueue-time call may
+/// return `Ok` (the drain thread fails asynchronously), but the next write
+/// reports the failure and the queue keeps consuming (no blocked senders).
+/// `shutdown()` afterwards leaves the queue refusing writes.
+#[test]
+fn input_queue_latches_tty_errors_sticky() {
+    struct AlwaysFail;
+    impl Write for AlwaysFail {
+        fn write(&mut self, _buf: &[u8]) -> std::io::Result<usize> {
+            Err(std::io::Error::other("injected tty failure"))
+        }
+        fn flush(&mut self) -> std::io::Result<()> {
+            Err(std::io::Error::other("injected tty failure"))
+        }
+    }
+    let session = new_test_session(80, 24, 100);
+    let queue = InputWriterQueue::start(
+        Arc::new(Mutex::new(Box::new(AlwaysFail))),
+        Arc::clone(&session.terminal),
+        Arc::clone(&session.recording_flag),
+    );
+
+    let _ = queue.write(b"first");
+    // One drain iteration later the latch is set for certain.
+    std::thread::sleep(std::time::Duration::from_millis(50));
+    let err = queue
+        .write(b"second")
+        .expect_err("sticky latched failure expected");
+    assert!(
+        err.to_string().contains("injected tty failure"),
+        "unexpected error: {err}"
+    );
+
+    queue.shutdown();
+    assert!(
+        queue.write(b"third").is_err(),
+        "writes after shutdown must fail"
+    );
+}

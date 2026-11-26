@@ -32,7 +32,10 @@ test-threads = 8
 # unaffected.
 # (exact full-name form: `test()` regex forms `=~`/`/…/` matched nothing
 # on nextest 0.9.151 — measured 2026-11-13)
-default-filter = 'not (test(render_latency::click_latency_harness_records_click_to_action_ms_at_load_shapes))'
+# The pty_input_throughput A/B measurement (kanban 01a218f2) is a second
+# such harness: ~600 s of real-PTY upload measurement (3 interleaved
+# 512 MiB round pairs), load-sensitive, run with --ignored manually.
+default-filter = 'not (test(render_latency::click_latency_harness_records_click_to_action_ms_at_load_shapes) or test(pty_input_throughput::new_path_beats_old_path_10x_under_read_lock_contention))'
 
 # The chords test is legitimately long, not wedged: ~123s in isolation
 # (several waits consume most of their 10s deadline), which straddles the

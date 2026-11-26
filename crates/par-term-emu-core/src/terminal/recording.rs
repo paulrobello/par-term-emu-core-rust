@@ -5,6 +5,8 @@
 use base64::Engine as _;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::Arc;
 
 /// Recording format type
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -102,13 +104,17 @@ impl Terminal {
             duration: 0,
             created_at: crate::text_utils::unix_millis(),
         });
-        self.recording_state.is_recording = true;
+        self.recording_state
+            .is_recording
+            .store(true, Ordering::SeqCst);
         self.recording_state.recording_start_time = crate::text_utils::unix_millis();
     }
 
     /// Stop recording terminal session
     pub fn stop_recording(&mut self) -> Option<RecordingSession> {
-        self.recording_state.is_recording = false;
+        self.recording_state
+            .is_recording
+            .store(false, Ordering::SeqCst);
         let mut session = self.recording_state.recording_session.take()?;
         session.duration =
             crate::text_utils::unix_millis() - self.recording_state.recording_start_time;
@@ -117,7 +123,7 @@ impl Terminal {
 
     /// Record an event
     pub fn record_event(&mut self, event_type: RecordingEventType, data: Vec<u8>) {
-        if !self.recording_state.is_recording {
+        if !self.recording_state.is_recording.load(Ordering::SeqCst) {
             return;
         }
 
@@ -135,7 +141,18 @@ impl Terminal {
 
     /// Check if recording is active
     pub fn is_recording(&self) -> bool {
-        self.recording_state.is_recording
+        self.recording_state.is_recording.load(Ordering::SeqCst)
+    }
+
+    /// Clone of the shared recording-active flag, for lock-free checks on
+    /// hot input paths: the PTY input write (`PtySession::write`) tests
+    /// this atomic instead of taking the exclusive Terminal lock just to
+    /// discover recording is off. Turns `true` exactly when
+    /// [`Self::start_recording`] runs and `false` exactly when
+    /// [`Self::stop_recording`] does, so a flag clone never misses a
+    /// recording boundary.
+    pub fn recording_flag(&self) -> Arc<AtomicBool> {
+        Arc::clone(&self.recording_state.is_recording)
     }
 
     /// Get current recording session (if any)
@@ -313,7 +330,7 @@ impl Terminal {
 
     /// Record a resize event
     pub fn record_resize(&mut self, cols: usize, rows: usize) {
-        if !self.recording_state.is_recording {
+        if !self.recording_state.is_recording.load(Ordering::SeqCst) {
             return;
         }
 

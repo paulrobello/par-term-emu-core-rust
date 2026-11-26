@@ -142,6 +142,8 @@ use crate::graphics::GraphicsStore;
 use crate::grid::Grid;
 use crate::terminal::apc_filter::ApcFilterState;
 
+use std::sync::atomic::Ordering;
+
 const CLIPBOARD_TRUNCATION_SUFFIX: &str = " [truncated]";
 /// Hard upper limit for clipboard content (10 MB), regardless of configured max_bytes
 /// cap: Clipboard content bytes accepted from an OSC 52 sequence.
@@ -1215,7 +1217,7 @@ impl Terminal {
     /// update coalescing rather than parsed immediately.
     fn process_internal(&mut self, data: &[u8]) -> bool {
         let responses_before = self.response_buffer.len();
-        if self.recording_state.is_recording {
+        if self.recording_state.is_recording.load(Ordering::SeqCst) {
             self.record_event(RecordingEventType::Output, data.to_vec());
         }
 
@@ -1397,7 +1399,10 @@ impl Terminal {
             &mut self.badge_state.badge_format,
         );
 
-        // An in-flight recording keeps recording.
+        // An in-flight recording keeps recording. The whole-struct swap
+        // carries the shared `is_recording` flag Arc through the `*self =
+        // fresh` overwrite, so holders of `recording_flag()` clones (the
+        // PTY input gate) keep observing the live flag across RIS.
         std::mem::swap(&mut fresh.recording_state, &mut self.recording_state);
 
         // tmux control-mode flag and auto-detect survive; buffered

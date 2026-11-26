@@ -145,6 +145,13 @@ impl PtySession {
     /// This ensures the old reader thread is properly finished before we create
     /// a new PTY and reader thread. Called internally by spawn() when restarting.
     pub(super) fn cleanup_previous_session(&mut self) {
+        // Shut down the input writer queue first so the old drain thread
+        // fails fast against the closing tty (card 01a218f2); the bounded
+        // join matches the reader thread's 2 s policy.
+        if let Some(queue) = self.input_queue.take() {
+            queue.shutdown();
+        }
+
         // Close writer first to unblock any blocked reads in the old reader thread
         if let Some(writer) = self.writer.take() {
             debug::log(
@@ -495,6 +502,14 @@ impl PtySession {
         self.held_slave = held_slave;
         self.child = Some(child);
         self.writer = Some(Arc::clone(&writer));
+        // Background input writer (card 01a218f2): writes enqueue onto a
+        // bounded queue; the drain thread owns the tty write. Caller
+        // throughput is enqueue-limited, not tty-round-trip-limited.
+        self.input_queue = Some(Arc::new(InputWriterQueue::start(
+            Arc::clone(&writer),
+            Arc::clone(&self.terminal),
+            Arc::clone(&self.recording_flag),
+        )));
         self.running.store(true, Ordering::SeqCst);
         self.child_pid = child_pid;
         // A fresh record, not a cleared one: a previous reader still

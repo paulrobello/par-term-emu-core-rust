@@ -26,6 +26,7 @@ use crate::sixel;
 use crate::terminal::sequences::dcs::DcsKind;
 use std::collections::HashMap;
 use std::num::NonZeroU32;
+use std::sync::atomic::AtomicBool;
 use std::sync::Arc;
 
 /// Character set designation for G0/G1 charset slots.
@@ -262,14 +263,27 @@ impl NotificationState {
 /// Terminal replay/recording state (Feature 24).
 ///
 /// Extracted from `Terminal` for cohesion (ARC-001).
-#[derive(Default)]
 pub(crate) struct RecordingState {
     /// Current recording session
     pub(crate) recording_session: Option<RecordingSession>,
-    /// Recording active flag
-    pub(crate) is_recording: bool,
+    /// Recording active flag, shared as an `Arc<AtomicBool>` so the PTY
+    /// input path can check it with one atomic load instead of taking the
+    /// exclusive Terminal lock (see [`Terminal::recording_flag`]). The Arc
+    /// identity must stay stable for the Terminal's lifetime — the RIS
+    /// path swaps the payload fields around it.
+    pub(crate) is_recording: Arc<AtomicBool>,
     /// Recording start timestamp (for relative timing)
     pub(crate) recording_start_time: u64,
+}
+
+impl Default for RecordingState {
+    fn default() -> Self {
+        Self {
+            recording_session: None,
+            is_recording: Arc::new(AtomicBool::new(false)),
+            recording_start_time: 0,
+        }
+    }
 }
 
 /// Keyboard protocol state: Kitty flags, per-screen stacks, and modifyOtherKeys mode.

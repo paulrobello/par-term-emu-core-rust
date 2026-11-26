@@ -245,8 +245,12 @@ impl PyPtyTerminal {
 
     /// Write data to the PTY (send to the child process)
     ///
-    /// The GIL is released while the underlying write blocks, so other
-    /// Python threads keep running.
+    /// The bytes are enqueued for a background writer thread and reach the
+    /// tty in FIFO order; this call blocks only on the queue's backpressure
+    /// window (16 chunks), never on the tty round trip. The GIL is
+    /// released while the enqueue blocks, so other Python threads keep
+    /// running. A tty write failure is latched sticky and reported by a
+    /// later `write` call.
     ///
     /// Args:
     ///     data: Bytes to write
@@ -265,8 +269,7 @@ impl PyPtyTerminal {
 
     /// Write a string to the PTY (convenience method)
     ///
-    /// The GIL is released while the underlying write blocks, so other
-    /// Python threads keep running.
+    /// Same enqueue semantics as [`PtyTerminal::write`].
     ///
     /// Args:
     ///     s: String to write
@@ -871,12 +874,12 @@ impl PyPtyTerminal {
     ///     pty.kill()
     ///     ```
     fn paste(&mut self, py: pyo3::Python<'_>, content: &str) -> PyResult<()> {
-        // QA-221: PtySession::write takes terminal.write() to record input,
-        // so a read guard held across self.write() is a read-to-write
-        // self-deadlock on the parking_lot RwLock, and any guard held across
-        // the PTY write starves the reader thread while write_all can block
-        // on a full PTY buffer. Snapshot the sequences under a short lock
-        // and write with no guard held.
+        // QA-221: PtySession::write takes terminal.write() to record input
+        // WHEN a recording is running (card 01a218f2), so a read guard held
+        // across self.write() is a read-to-write self-deadlock on the
+        // parking_lot RwLock, and any guard held across the PTY write
+        // starves the reader thread. Snapshot the sequences under a short
+        // lock and write with no guard held.
         let (start, end) = {
             let terminal = self.inner.terminal();
             let term = terminal.read();

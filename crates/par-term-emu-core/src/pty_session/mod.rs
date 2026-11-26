@@ -53,6 +53,7 @@ mod reader;
 // resize I/O, terminal queries, update generation, coprocess forwarding.
 mod coprocess;
 mod io;
+use io::InputWriterQueue;
 mod lifecycle;
 mod query;
 mod updates;
@@ -154,6 +155,16 @@ pub struct PtySession {
     reader_thread: Option<JoinHandle<()>>,
     writer: Option<Arc<Mutex<Box<dyn Write + Send>>>>,
     running: Arc<AtomicBool>,
+    /// Lock-free mirror of the terminal's shared recording-active flag,
+    /// cloned from the Terminal at construction. The input write path
+    /// tests it with one atomic load and takes the exclusive Terminal
+    /// lock only when recording is actually on (card 01a218f2).
+    recording_flag: Arc<AtomicBool>,
+    /// Background input writer queue, created by `spawn`: input writes
+    /// enqueue here instead of blocking on the tty round trip under the
+    /// writer mutex (card 01a218f2). `None` before a spawn — the same
+    /// `NotStartedError` condition as a missing writer.
+    input_queue: Option<Arc<InputWriterQueue>>,
     env_vars: Vec<(String, String)>,
     cwd: Option<String>,
     cols: u16,
@@ -259,18 +270,22 @@ impl PtySession {
             .map(|v| v != "0" && v.to_lowercase() != "false")
             .unwrap_or(true);
 
+        let terminal = Arc::new(RwLock::new(Terminal::with_scrollback(
+            cols,
+            rows,
+            max_scrollback,
+        )));
+        let recording_flag = terminal.read().recording_flag();
         let session = Self {
-            terminal: Arc::new(RwLock::new(Terminal::with_scrollback(
-                cols,
-                rows,
-                max_scrollback,
-            ))),
+            terminal,
             pty_master: None,
             held_slave: None,
             child: None,
             reader_thread: None,
             writer: None,
             running: Arc::new(AtomicBool::new(false)),
+            recording_flag,
+            input_queue: None,
             env_vars: Vec::new(),
             cwd: None,
             cols: cols as u16,
@@ -320,6 +335,15 @@ impl Drop for PtySession {
         // in `read()` and only actually unblocks once the master fd / child
         // process closes below).
         self.running.store(false, Ordering::SeqCst);
+
+        // Shut down the input writer queue before the writer/master drops,
+        // so the drain thread's pending writes fail fast against a closed
+        // tty instead of blocking (card 01a218f2). Bounded join: a thread
+        // still blocked in write_all on a live tty is detached, and the
+        // master close below fails it (same policy as the reader thread).
+        if let Some(queue) = self.input_queue.take() {
+            queue.shutdown();
+        }
 
         // Force-close the writer AND the PTY master fd BEFORE waiting for the
         // reader thread (ARC-018). The reader is blocked on `read()`; combined

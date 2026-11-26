@@ -7,6 +7,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Performance
+
+- `PtySession::write` / `PtyInputHandle::write` no longer take the exclusive
+  Terminal lock per chunk and no longer block on the tty round trip under the
+  writer mutex (kanban card 01a218f2, filed by par-term). Writes now enqueue
+  onto a bounded per-session queue drained by a dedicated thread (16-chunk
+  backpressure window, ~1 MiB); input recording runs at enqueue time gated on
+  a shared atomic recording flag, so a non-recording write never serializes
+  against the reader thread or frame gathers. Error timing changed: a tty
+  write failure is latched sticky and reported by a later `write` call (the
+  enqueue-time call returns `Ok`). `PtyTerminal.write`/`write_str` (Python)
+  and the mux input-handle path inherit the new semantics; `get_writer()`
+  consumers keep synchronous direct writes.
+
 ## [0.90.0] - 2026-11-25
 
 ### Added

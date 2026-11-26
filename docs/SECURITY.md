@@ -1533,16 +1533,16 @@ sections; the numbers live here.
 | `DEFAULT_MAX_COMPLETED` | 32 | `crates/par-term-emu-core/src/terminal/file_transfer.rs:164` | Completed transfers retained from client file-transfer requests. |
 | `DEFAULT_MAX_ACTIVE_TRANSFERS` | 8 | `crates/par-term-emu-core/src/terminal/file_transfer.rs:168` | Concurrent in-progress downloads from client file-transfer requests. |
 | `MAX_RESPONSE_BYTES` | 64 KiB | `crates/par-term-emu-core/src/terminal/mod.rs:82` | Undrained device-query response bytes retained from processed output. |
-| `MAX_CLIPBOARD_CONTENT_SIZE` | 10 MiB | `crates/par-term-emu-core/src/terminal/mod.rs:147` | Clipboard content bytes accepted from an OSC 52 sequence. |
+| `MAX_CLIPBOARD_CONTENT_SIZE` | 10 MiB | `crates/par-term-emu-core/src/terminal/mod.rs:149` | Clipboard content bytes accepted from an OSC 52 sequence. |
 | `MAX_BOOKMARKS` | 1,000 | `crates/par-term-emu-core/src/terminal/semantic_snapshot.rs:543` | Bookmark entries retained for one terminal session. |
 | `MAX_DCS_BUFFER` | 65,536 | `crates/par-term-emu-core/src/terminal/sequences/dcs/mod.rs:47` | Payload bytes accumulated for one DCS sequence from terminal output. |
 | `MAX_SIXEL_DIMENSION` | 16 KiB | `crates/par-term-emu-core/src/terminal/sequences/dcs/sixel.rs:12` | Width or height accepted for a sixel raster declared in a DCS payload. |
 | `MAX_SIXEL_COLORS` | 4,096 | `crates/par-term-emu-core/src/terminal/sequences/dcs/sixel.rs:16` | Color registers accepted in a sixel palette from a DCS payload. |
 | `DEFAULT_MAX_MEMORY_BYTES` | 4 MiB | `crates/par-term-emu-core/src/terminal/snapshot_manager.rs:14` | Memory held by snapshots retained from processed terminal output. |
-| `DEFAULT_MAX_NOTIFICATIONS` | 128 | `crates/par-term-emu-core/src/terminal/state.rs:82` | Terminal notifications queued from processed escape-sequence output. |
-| `DEFAULT_MAX_CLIPBOARD_SYNC_EVENTS` | 256 | `crates/par-term-emu-core/src/terminal/state.rs:84` | Clipboard sync events queued from processed escape-sequence output. |
-| `DEFAULT_MAX_CLIPBOARD_EVENT_BYTES` | 4 KiB | `crates/par-term-emu-core/src/terminal/state.rs:86` | Bytes retained for one queued clipboard sync event. |
-| `DEFAULT_MAX_OSC_DATA_LENGTH` | 1 MiB | `crates/par-term-emu-core/src/terminal/state.rs:971` | Payload bytes accepted for one OSC sequence from terminal output. |
+| `DEFAULT_MAX_NOTIFICATIONS` | 128 | `crates/par-term-emu-core/src/terminal/state.rs:83` | Terminal notifications queued from processed escape-sequence output. |
+| `DEFAULT_MAX_CLIPBOARD_SYNC_EVENTS` | 256 | `crates/par-term-emu-core/src/terminal/state.rs:85` | Clipboard sync events queued from processed escape-sequence output. |
+| `DEFAULT_MAX_CLIPBOARD_EVENT_BYTES` | 4 KiB | `crates/par-term-emu-core/src/terminal/state.rs:87` | Bytes retained for one queued clipboard sync event. |
+| `DEFAULT_MAX_OSC_DATA_LENGTH` | 1 MiB | `crates/par-term-emu-core/src/terminal/state.rs:985` | Payload bytes accepted for one OSC sequence from terminal output. |
 | `MAX_ARCHIVE_BYTES` | 50 MiB | `src/bin/streaming_server/frontend_download.rs:34` | Bytes accepted from a downloaded web-frontend archive response. |
 | `MAX_SIDECAR_BYTES` | 1 KiB | `src/bin/streaming_server/frontend_download.rs:71` | Bytes accepted from a `.sha256` checksum sidecar response (SEC-203). |
 | `MAX_SIGNATURE_BYTES` | 4 KiB | `src/bin/streaming_server/frontend_download.rs:166` | Bytes accepted from a `.minisig` detached-signature sidecar (SEC-001). |
