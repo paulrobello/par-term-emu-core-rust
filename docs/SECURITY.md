@@ -928,6 +928,26 @@ Exposing a PTY (arbitrary shell) over WebSocket is inherently high-risk. A
 connected client can execute arbitrary commands as the user running the server.
 **Only run the streamer on trusted networks or behind proper authentication.**
 
+### Python Wheel Dependency Surface (ARC-003)
+
+Every Python wheel is built with the `streaming` feature (the `features` list
+in `pyproject.toml`'s `[tool.maturin]` section), so the streaming server's
+dependency tree (tokio, axum, rustls, bcrypt, and the digest-auth hash crates)
+is compiled into every wheel, including installs that never open a socket.
+This is the accepted posture, not an oversight:
+
+- One wheel set per platform and Python version serves all consumers.
+  Splitting the digest-auth crypto deps behind an `auth` feature was evaluated
+  and rejected for now: it would multiply the release wheel matrix (five
+  platforms x three Python versions) for a server the Python API never starts
+  — the streamer is a separate binary; linking `streaming` into a wheel only
+  compiles the code and deps, it does not open sockets.
+- The linked surface is reviewed on schedule: `deps-audit.yml` runs
+  `cargo-deny` (advisories, sources, bans) every Monday, and `make audit-deps`
+  adds the frontend and Python dependency audits on demand. A CVE in any
+  linked crate surfaces there and is remediated on the normal
+  dependency-bump train.
+
 ### Authentication
 
 - **API Key** (`--api-key` / `PAR_TERM_API_KEY`): WebSocket connections must

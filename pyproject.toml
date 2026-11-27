@@ -79,6 +79,12 @@ image = [
 # passes its own --features.
 features = [
     "pyo3/extension-module",
+    # ARC-003: `streaming` links the streamer's dependency tree (tokio, axum,
+    # rustls, bcrypt, digest-auth hashes) into every wheel. Accepted posture:
+    # one wheel set for all consumers; a split `auth` feature would multiply
+    # the release wheel matrix. Dependency CVEs are tracked by deps-audit.yml
+    # and `make audit-deps`. Full rationale: docs/SECURITY.md
+    # "Python Wheel Dependency Surface (ARC-003)".
     "streaming",
 ]
 python-source = "python"
