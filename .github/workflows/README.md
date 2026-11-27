@@ -8,14 +8,14 @@ This directory contains the GitHub Actions workflows that build, test, and publi
 |----------|------|---------|---------|
 | **Build and Deploy** | `deployment.yml` | Manual (`workflow_dispatch`) | Full release: streaming + par-mux binaries + Python wheels + sdist + web frontend → GitHub Release (Sigstore) → PyPI + crates.io |
 | **Release and Publish** | `release.yml` | Manual (`workflow_dispatch`) | Thin wrapper that dispatches `deployment.yml` on `main` |
-| **CI** | `ci.yml` | Manual (`workflow_dispatch`) | Version check + multi-OS test/lint/build gate (no publish) |
+| **CI** | `ci.yml` | Every pull request + manual (`workflow_dispatch`) | Version check + multi-OS test/lint/build gate (no publish) |
 | **Fuzz** | `fuzz.yml` | Manual (`workflow_dispatch`) + nightly schedule (`17 6 * * *`) | 10-min bounded libFuzzer run per target over every target in the matrix; crash artifacts uploaded on failure |
 | **Publish 🐍 📦 to TestPyPI** | `publish-testpypi.yml` | Manual (`workflow_dispatch`) | Build + publish to TestPyPI + verify install |
 | **Publish to crates.io** | `publish-crates.yml` | Manual (`workflow_dispatch`) | Standalone crates.io publish (idempotent; for republishing without a full release) |
 | **Claude Code** | `claude.yml` | `@claude` mention in an issue/PR comment or issue body | Run a Claude Code session on GitHub that answers the mention |
 | **Claude Code Review** | `claude-code-review.yml` | Pull request opened/synchronized | AI review comment on the PR (quality, bugs, performance, security, test coverage) |
 
-All release/CI workflows are **manual-dispatch only** — none run on push or PR. The everyday quality gate is the local pre-commit setup (`make pre-commit-run`, also enforced on commit); these workflows are run on demand.
+All release/publish workflows are **manual-dispatch only** — none of them run on push or PR. The exception is `ci.yml`, which additionally runs its cheap gates (version check, lint, FFI drift) and single-OS test/mux legs on every pull request; the full OS matrix, Windows mux, wheels, feature matrix, and xcframework stay manual. The everyday quality gate is the local pre-commit setup (`make pre-commit-run`, also enforced on commit); the release workflows are run on demand.
 
 ## The release process (`deployment.yml`)
 
