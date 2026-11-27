@@ -33,6 +33,30 @@ par-term-emu-core-rust (root shell) ---> par-mux ---> par-term-emu-core
 `par-term-emu-core` depends on nothing in the workspace. `par-mux` depends on
 core only. The root depends on both and on the derive crate.
 
+### Why the root stays the shell (ARC-007)
+
+The root deliberately concentrates five artifact roles in one package:
+workspace root, PyO3 extension (`cdylib` wheel via maturin), Rust-library
+facade (the historical `par_term_emu_core_rust::…` paths plus `prelude`),
+the `par-term-streamer` binary, and the C-FFI crate (`ffi` feature,
+`make xcframework`). This is the accepted direction (ARC-007 / ARC-106), not
+an accident of history:
+
+- Every historical path an embedder or Python consumer reaches resolves from
+  one package; no release can publish a facade without its facade.
+- The five roles share one build tree, so a release is one maturin/cargo
+  invocation per target instead of five cross-referenced publishes, and a
+  feature (e.g. `streaming`) turns on for the wheel, the binary, and the
+  library facade in one place.
+- The cost is the workspace's largest feature matrix and the
+  `check-feature-combos` + Windows cross-target gates that keep it honest;
+  that gate cost is the accepted trade.
+
+**Next seam if that cost grows**: extract `streaming` into its own workspace
+member (recorded direction from the 2026-11 audit, ARC-007). Until then,
+feature additions to the root should prefer forwarding to member features
+over new root-local code.
+
 ### Deviation from the original O2 sketch: `tmux_control` lives in core
 
 The O2 sketch put `tmux_control` with par-mux. It cannot go there: `Terminal`
