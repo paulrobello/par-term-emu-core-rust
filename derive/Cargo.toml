@@ -1,5 +1,9 @@
 [package]
 name = "par-term-emu-derive"
+# ARC-010: this crate versions INDEPENDENTLY of the workspace version train —
+# bump it only when the derive code changes, and keep the root Cargo.toml's
+# `par-term-emu-derive` dependency spec matching. Gated by
+# `make derive-version-check` (part of checkall and release-check).
 version = "0.50.0"
 edition = "2021"
 description = "Proc-macro helpers for par-term-emu-core-rust: Python bindings and streaming protobuf conversions"
