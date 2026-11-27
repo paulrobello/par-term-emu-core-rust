@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.92.0] - 2026-11-27
+
 ### Changed
 - **BREAKING: streaming clients are read-only by default.** `StreamingConfig`
   now defaults `default_read_only` to `true` (SEC-001): a loopback no-auth
