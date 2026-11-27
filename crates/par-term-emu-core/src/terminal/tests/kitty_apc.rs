@@ -96,6 +96,121 @@ fn handles_apc_split_across_process_calls() {
     assert_eq!(data.len(), 16);
 }
 
+/// Chunked transmission (m=1 continuation frames) delivered one APC frame
+/// per `process()` call — the shape a real PTY read loop produces — must
+/// retain the Kitty assembler state across the calls: the final frame
+/// dispatches with the concatenated payload, not an empty one.
+#[test]
+fn chunked_transmission_across_separate_process_calls() {
+    let mut term = Terminal::new(80, 24);
+
+    // A 2x2 RGBA image is 16 bytes: 24 base64 chars. Split at a base64
+    // block boundary (12 + 12 chars = 9 + 7 decoded bytes).
+    let pixel_data: Vec<u8> = vec![
+        255, 0, 0, 255, 0, 255, 0, 255, 0, 0, 255, 255, 255, 255, 0, 255,
+    ];
+    let b64 = base64::Engine::encode(&base64::engine::general_purpose::STANDARD, &pixel_data);
+    let (first, rest) = b64.split_at(12);
+
+    // Control: the identical transmission delivered in one process() call.
+    term.process(format!("\x1b_Ga=T,f=32,i=41,s=2,v=2,q=1;{b64}\x1b\\").as_bytes());
+    let control = term.graphics.graphics_store.get_kitty_image(41);
+    assert!(
+        control.is_some(),
+        "single-frame control must pass; the divergence under test is chunking"
+    );
+
+    // Frame 1 (a=T header frame with m=1) arrives in its own process() call.
+    term.process(format!("\x1b_Ga=T,f=32,i=42,s=2,v=2,q=1,m=1;{first}\x1b\\").as_bytes());
+    // Frame 2 (m=0 final) arrives in the next process() call.
+    term.process(format!("\x1b_Gm=0;{rest}\x1b\\").as_bytes());
+
+    let img = term.graphics.graphics_store.get_kitty_image(42);
+    let (w, h, data) = img.unwrap_or_else(|| {
+        panic!(
+            "chunked transmission across process() calls must store image 42; \
+             got none — assembler state lost across APC frames"
+        )
+    });
+    assert_eq!(w, 2);
+    assert_eq!(h, 2);
+    assert_eq!(
+        data.as_ref(),
+        pixel_data.as_slice(),
+        "assembled chunked payload must match the single-frame payload"
+    );
+}
+
+/// The spec allows other escape codes between chunks of a chunked
+/// transmission. An interleaved Kitty command — here an icat-style `a=q`
+/// capability probe — must not disturb the open transmission: it runs to
+/// its own completion while the accumulated chunks stay parked, and the
+/// final `m=0` frame still assembles the full payload. Pre-fix, the probe
+/// overwrote `action`/params on the shared parser, so the final frame
+/// dispatched the query branch and silently discarded the pixel data.
+#[test]
+fn chunked_transmission_survives_interleaved_probe() {
+    let mut term = Terminal::new(80, 24);
+
+    let pixel_data: Vec<u8> = vec![
+        255, 0, 0, 255, 0, 255, 0, 255, 0, 0, 255, 255, 255, 255, 0, 255,
+    ];
+    let b64 = base64::Engine::encode(&base64::engine::general_purpose::STANDARD, &pixel_data);
+    let (first, rest) = b64.split_at(12);
+
+    term.process(format!("\x1b_Ga=T,f=32,i=42,s=2,v=2,q=1,m=1;{first}\x1b\\").as_bytes());
+    // Capability probe while the transmission is in flight.
+    term.process(b"\x1b_Gi=42,a=q,q=1\x1b\\");
+    term.process(format!("\x1b_Gm=0;{rest}\x1b\\").as_bytes());
+
+    let (w, h, data) = term
+        .graphics
+        .graphics_store
+        .get_kitty_image(42)
+        .unwrap_or_else(|| {
+            panic!(
+                "chunked transmission must survive an interleaved a=q probe; \
+                 image 42 missing — assembler state lost across APC frames"
+            )
+        });
+    assert_eq!(w, 2);
+    assert_eq!(h, 2);
+    assert_eq!(data.as_ref(), pixel_data.as_slice());
+}
+
+/// Same contract for an interleaved `a=p` put: pre-fix, a put with an
+/// explicit `m=0` dispatched against the open transmission's parser and its
+/// reset wiped the accumulated chunks, so the final frame could never
+/// assemble them.
+#[test]
+fn chunked_transmission_survives_interleaved_put() {
+    let mut term = Terminal::new(80, 24);
+
+    let pixel_data: Vec<u8> = vec![9u8; 16];
+    let b64 = base64::Engine::encode(&base64::engine::general_purpose::STANDARD, &pixel_data);
+    let (first, rest) = b64.split_at(12);
+
+    term.process(format!("\x1b_Ga=T,f=32,i=43,s=2,v=2,q=1,m=1;{first}\x1b\\").as_bytes());
+    // Placement attempt (explicit m=0) while the transmission is in flight;
+    // pre-fix its reset wiped the parked chunks.
+    term.process(b"\x1b_Ga=p,i=43,q=1,m=0\x1b\\");
+    term.process(format!("\x1b_Gm=0;{rest}\x1b\\").as_bytes());
+
+    let (w, h, data) = term
+        .graphics
+        .graphics_store
+        .get_kitty_image(43)
+        .unwrap_or_else(|| {
+            panic!(
+                "chunked transmission must survive an interleaved a=p put; \
+                 image 43 missing — assembler state lost across APC frames"
+            )
+        });
+    assert_eq!(w, 2);
+    assert_eq!(h, 2);
+    assert_eq!(data.as_ref(), pixel_data.as_slice());
+}
+
 #[test]
 fn passes_surrounding_text_through() {
     let mut term = Terminal::new(80, 24);

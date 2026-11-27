@@ -45,6 +45,35 @@ impl KittyParser {
         self.allow_file_media = allow_file_media;
     }
 
+    /// The action a payload carries in its params section (`a=` key), via
+    /// the same mapping [`KittyAction::from_char`] applies during parse.
+    /// `None` when the payload carries no `a=` key — a bare `m=` frame, i.e.
+    /// a continuation of whatever transmission is open.
+    ///
+    /// Emitters that repeat the action key on later chunks of the same
+    /// chunked command (kitty-doom's `a=f` edits) repeat their own action,
+    /// so a payload whose action differs from the open transmission's
+    /// action is a different command arriving between that transmission's
+    /// chunks.
+    pub(crate) fn payload_action(payload: &str) -> Option<KittyAction> {
+        let params = payload
+            .split_once(';')
+            .map_or(payload, |(params, _)| params);
+        params
+            .split(',')
+            .find_map(|pair| {
+                pair.split_once('=')
+                    .filter(|(key, _)| *key == "a")
+                    .map(|(_, value)| value)
+            })
+            .and_then(|value| value.chars().next())
+            // Same mapping parse_chunk applies (unknown chars fall through
+            // to the default action), so an unknown action char compares
+            // against the open action the same way it would overwrite it
+            // during a merge.
+            .map(|c| KittyAction::from_char(c).unwrap_or_default())
+    }
+
     /// Parse a Kitty graphics payload
     ///
     /// Format: `key=value,key=value,...;base64data`

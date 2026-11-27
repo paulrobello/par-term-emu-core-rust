@@ -899,6 +899,38 @@ impl Terminal {
             }
         };
 
+        // A chunked transmission opened by an earlier frame (m=1) must
+        // survive interleaved Kitty commands: the graphics protocol allows
+        // other escape codes between chunks, and a probe (`a=q`), put
+        // (`a=p`), delete, or another header dispatched mid-transmission
+        // would otherwise overwrite this parser — corrupting or silently
+        // discarding the accumulated chunks (card 01a21eed). A payload with
+        // a DIFFERENT `a=` action parks the open transmission and runs on a
+        // fresh parser; payloads with no `a=` key (bare `m=` continuations)
+        // or the SAME action (kitty-doom's chunked `a=f` edits re-announce
+        // `a=f` on the final chunk) are the next chunk and keep merging into
+        // the open parser. Park, run the new command, then restore.
+        let new_action = KittyParser::payload_action(payload);
+        if self.kitty_parser.more_chunks
+            && new_action.is_some_and(|new| new != self.kitty_parser.action)
+        {
+            let parked = std::mem::take(&mut self.kitty_parser);
+            self.kitty_parser.retain_temp_files = parked.retain_temp_files;
+            self.kitty_parser.allow_file_media = parked.allow_file_media;
+            self.run_kitty_command(payload);
+            self.kitty_parser = parked;
+            return;
+        }
+
+        self.run_kitty_command(payload);
+    }
+
+    /// Dispatch one Kitty payload against `self.kitty_parser`: chunk
+    /// accumulation plus the completion matrix (query replies, graphic
+    /// placement, error replies, reset-on-final).
+    #[cold]
+    #[inline(never)]
+    fn run_kitty_command(&mut self, payload: &str) {
         match self.kitty_parser.parse_chunk(payload) {
             Ok(true) => {
                 // More chunks expected (m=1) — keep state, await next APC.
