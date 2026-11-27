@@ -36,9 +36,10 @@ export default function RootLayout({
   return (
     <html lang="en">
       <head>
-        {/* Font preconnects for faster font loading */}
-        <link rel="preconnect" href="https://fonts.googleapis.com" />
-        <link rel="preconnect" href="https://fonts.gstatic.com" crossOrigin="anonymous" />
+        {/* Terminal fonts are intentionally not fetched from any CDN
+            (audit SEC-006): font-family names in globals.css and the xterm
+            config act as opt-in hooks for locally installed fonts, with
+            system monospace fallbacks everywhere. */}
 
         {/* External theme file - editable without rebuild */}
         {/* eslint-disable-next-line @next/next/no-css-tags -- intentionally
@@ -54,23 +55,6 @@ export default function RootLayout({
             <link rel="preconnect" href="wss://localhost:8099" />
           </>
         )}
-
-        {/* Preload terminal fonts to avoid layout shift and font flash.
-            Loaded as a plain <link> rather than next/font: this is the app's
-            single, global root layout (no other page-specific layouts exist
-            in this tree), so the rule's "won't load on other pages" concern
-            does not apply here. */}
-        {/* eslint-disable-next-line @next/next/no-page-custom-font */}
-        <link
-          rel="preload"
-          href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;700&display=swap"
-          as="style"
-        />
-        {/* eslint-disable-next-line @next/next/no-page-custom-font */}
-        <link
-          href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;700&display=swap"
-          rel="stylesheet"
-        />
       </head>
       <body className="font-mono">
         {children}
