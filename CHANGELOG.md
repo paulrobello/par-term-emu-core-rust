@@ -7,6 +7,39 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+- **BREAKING: streaming clients are read-only by default.** `StreamingConfig`
+  now defaults `default_read_only` to `true` (SEC-001): a loopback no-auth
+  streamer grants PTY read access only. The standalone streamer takes a new
+  `--read-write` flag for the old behavior; library and Python constructors
+  honor explicit `default_read_only = false` unchanged.
+- **BREAKING: release signature verification is fail-closed (SEC-002).** The
+  self-updater and the streamer frontend download refuse releases that
+  publish no `.minisig` sidecar instead of warning and proceeding;
+  `SignatureStatus` is removed. Releases older than the first signed release
+  are unreachable from the updater by design — the next release cut MUST
+  publish `.minisig` sidecars, and the installers flip to refusal in that
+  same cut.
+- OSC 7 / OSC 1337 CurrentDir cwd tracking is opt-in: `accept_osc7` defaults
+  to `false` (SEC-005). Embedders enable it with `Terminal::set_accept_osc7(true)`;
+  par-mux panes opt in at spawn, so mux cwd persistence and respawn targeting
+  are unchanged.
+- Per-client streaming input rate limit defaults to 1 MiB/s (SEC-003); `0`
+  still disables.
+- The web frontend self-hosts its fonts: the Google Fonts and jsdelivr CDN
+  loads are gone (SEC-006), and the streamer CSP drops the corresponding
+  font/style CDN grants (recording github.com per the ENH-059 origin guard).
+
+### Added
+- `catch_unwind` panic containment on every C FFI export (QA-001): a panic
+  inside an export returns that export's sentinel instead of aborting the
+  host process; export signatures are unchanged.
+- Packaging/size gates: `package-exclude-check` (ARC-011), `terminal-event-check`
+  ratchet (ARC-012), and `web-term-freshness-check` (QA-004) join `make checkall`.
+- pillow moved to the dev dependency group (ARC-004): wheel installs no longer
+  carry the runtime hard dependency; dev environments keep it for the
+  PIL-importing tooling.
+
 ### Fixed
 - **mux: a Claude Code `/clear` no longer blanks the roster's project name.**
   Claude fires SessionEnd(reason=`clear`) at `/clear`; the shipped claude
@@ -16,6 +49,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   whose project field attributes the pane's directory, not the agent's
   claim. Pinned by `a_clear_reason_session_end_does_not_release_the_claim`
   and `a_release_keeps_the_host_probe_project`.
+- Deduped tokio-tungstenite to a single 0.29.0 in the lockfile (SEC-004); the
+  remaining sha2 duplicate is dev-graph-only (test-only minisign dev-dep chain).
+- The crates.io package no longer ships dev-tooling residue (`uv.lock`,
+  `pyrightconfig.json`, `theme.css`; `requirements-dev.txt` deleted — ARC-011
+  follow-up), and agent config dirs, `AGENTS.md`, and `AUDIT.md` are excluded
+  from the published crate.
 
 ## [0.91.0] - 2026-11-26
 
