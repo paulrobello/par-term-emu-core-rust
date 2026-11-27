@@ -88,6 +88,9 @@ exclude = [
     "pyproject.toml",
     "python/",
     "scripts/",
+    "uv.lock",
+    "pyrightconfig.json",
+    "theme.css",
 ]
 
 [lib]

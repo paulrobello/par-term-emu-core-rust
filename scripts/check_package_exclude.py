@@ -63,6 +63,9 @@ BASELINE = [
     "pyproject.toml",
     "python/",
     "scripts/",
+    "uv.lock",
+    "pyrightconfig.json",
+    "theme.css",
 ]
 
 # Path prefixes that must never appear in the packaged set. Mirrors the
@@ -84,6 +87,9 @@ FORBIDDEN_PREFIXES = [
     "CLAUDE.md",
     "Makefile",
     "pyproject.toml",
+    "uv.lock",
+    "pyrightconfig.json",
+    "theme.css",
     "images/",
     "examples/",
     "tests/",
