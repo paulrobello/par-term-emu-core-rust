@@ -194,8 +194,10 @@ impl Terminal {
 
     /// Set whether OSC 7 directory tracking sequences are accepted
     ///
-    /// When disabled, OSC 7 sequences are silently ignored.
-    /// When enabled (default), allows shell to report current working directory.
+    /// When disabled (default), OSC 7 sequences are silently ignored —
+    /// the reported cwd is remote-emitted program output (audit finding
+    /// SEC-005), so directory tracking is opt-in.
+    /// When enabled, the shell's cwd reports update the tracked directory.
     pub fn set_accept_osc7(&mut self, accept: bool) {
         self.security_state.accept_osc7 = accept;
     }

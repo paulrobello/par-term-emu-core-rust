@@ -82,6 +82,7 @@ def test_zone_closed_has_row_range() -> None:
 def test_environment_changed_cwd() -> None:
     """EnvironmentChanged fires on CWD change."""
     term = pte.Terminal(80, 24)
+    term.set_accept_osc7(True)
     term.process(b"\x1b]7;file:///home/user/project\x1b\\")
     events = term.poll_events()
     env_events = [e for e in events if e["type"] == "environment_changed"]
@@ -93,6 +94,7 @@ def test_environment_changed_cwd() -> None:
 def test_environment_changed_hostname() -> None:
     """EnvironmentChanged fires for hostname on OSC 7."""
     term = pte.Terminal(80, 24)
+    term.set_accept_osc7(True)
     term.process(b"\x1b]7;file://myhost/home/user\x1b\\")
     events = term.poll_events()
     env_events = [e for e in events if e["type"] == "environment_changed"]
@@ -104,6 +106,7 @@ def test_environment_changed_hostname() -> None:
 def test_environment_changed_old_value() -> None:
     """EnvironmentChanged includes old_value when cwd changes."""
     term = pte.Terminal(80, 24)
+    term.set_accept_osc7(True)
     term.process(b"\x1b]7;file:///home/user/dir1\x1b\\")
     term.poll_events()  # drain
     term.process(b"\x1b]7;file:///home/user/dir2\x1b\\")
@@ -130,6 +133,7 @@ def test_remote_host_transition_osc1337() -> None:
 def test_remote_host_transition_osc7() -> None:
     """RemoteHostTransition fires on OSC 7 hostname change."""
     term = pte.Terminal(80, 24)
+    term.set_accept_osc7(True)
     term.process(b"\x1b]7;file://remotehost/home/user\x1b\\")
     events = term.poll_events()
     host_events = [e for e in events if e["type"] == "remote_host_transition"]
@@ -166,6 +170,7 @@ def test_event_subscription_environment() -> None:
     """EnvironmentChanged works with subscription filtering."""
     term = pte.Terminal(80, 24)
     term.set_event_subscription(["environment_changed"])
+    term.set_accept_osc7(True)
     term.process(b"\x1b]7;file:///home/user\x1b\\")
     events = term.poll_subscribed_events()
     assert all(e["type"] == "environment_changed" for e in events)
@@ -213,6 +218,7 @@ def test_zone_scrolled_out_event() -> None:
 def test_multiple_cwd_changes_emit_multiple_events() -> None:
     """Each CWD change emits its own EnvironmentChanged event."""
     term = pte.Terminal(80, 24)
+    term.set_accept_osc7(True)
     term.process(b"\x1b]7;file:///dir1\x1b\\")
     term.process(b"\x1b]7;file:///dir2\x1b\\")
     term.process(b"\x1b]7;file:///dir3\x1b\\")

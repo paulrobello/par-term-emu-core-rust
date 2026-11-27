@@ -616,10 +616,14 @@ logged at Debug level under the `SECURITY` target.
 
 OSC 7 and iTerm2's OSC 1337 `CurrentDir` tell the emulator what the shell
 reports as its working directory, feeding the terminal's cwd API (and, in
-par-mux, a respawn-pane start-directory candidate). Acceptance is **on by
-default**; `Terminal.set_accept_osc7(False)` ignores the reports so untrusted
-output cannot seed a cwd value. A payload whose decoded path contains control
-characters is rejected regardless of the flag (SEC-117).
+par-mux, a respawn-pane start-directory candidate). Acceptance is **off by
+default** (audit finding SEC-005, defense in depth): the report is
+remote-emitted program output, so `Terminal.set_accept_osc7(True)` opts a
+host into directory tracking. The par-mux multiplexer opts in at pane
+spawn — its consumers gate the report by host (`osc7_host_is_local`),
+and the host probe never trusts pane output for the git badge. A payload
+whose decoded path contains control characters is rejected regardless of
+the flag (SEC-117).
 
 ### OSC 52 Clipboard Access
 

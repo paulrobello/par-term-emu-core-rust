@@ -934,6 +934,11 @@ fn osc7_cwd_is_captured_and_restored_panes_spawn_in_it() {
         .unwrap()
         .terminal()
         .write()
+        .set_accept_osc7(true);
+    tree.pane(pane_id)
+        .unwrap()
+        .terminal()
+        .write()
         .process(format!("\x1b]7;file://localhost{}\x1b\\", reported.display()).as_bytes());
 
     let state = tree.to_persist_state();
@@ -1007,6 +1012,7 @@ fn osc7_wins_over_the_process_cwd() {
         )
         .unwrap();
     let reported = tempfile::tempdir().unwrap();
+    pane.terminal().write().set_accept_osc7(true);
     pane.terminal()
         .write()
         .process(format!("\x1b]7;file://localhost{}\x1b\\", reported.path().display()).as_bytes());
@@ -1217,6 +1223,11 @@ fn a_save_file_without_the_cwd_field_still_loads() {
     let session = tree.new_session("old", 80, 24).unwrap();
     let window = tree.session(session).unwrap().windows[0];
     let pane_id = tree.window(window).unwrap().panes()[0];
+    tree.pane(pane_id)
+        .unwrap()
+        .terminal()
+        .write()
+        .set_accept_osc7(true);
     tree.pane(pane_id)
         .unwrap()
         .terminal()
@@ -1569,6 +1580,11 @@ fn a_dead_panes_cwd_survives_restore_for_respawn() {
         .unwrap()
         .terminal()
         .write()
+        .set_accept_osc7(true);
+    tree.pane(pane_id)
+        .unwrap()
+        .terminal()
+        .write()
         .process(b"\x1b]7;file://localhost/tmp\x1b\\");
     let state = tree.to_persist_state();
     assert_eq!(
@@ -1703,6 +1719,11 @@ fn a_dead_panes_remote_osc7_host_survives_restore() {
         .unwrap()
         .terminal()
         .write()
+        .set_accept_osc7(true);
+    tree.pane(pane_id)
+        .unwrap()
+        .terminal()
+        .write()
         .process(b"\x1b]7;file://remote-host/some/path\x1b\\");
     let state = tree.to_persist_state();
     let saved = &state.sessions[0].windows[0].panes[0];
@@ -1780,6 +1801,11 @@ fn worktree_link_persists_and_old_files_load_unlinked() {
 #[test]
 fn a_save_file_without_cwd_host_loads_as_before() {
     let (tree, pane_id) = held_dead_tree(Some(0));
+    tree.pane(pane_id)
+        .unwrap()
+        .terminal()
+        .write()
+        .set_accept_osc7(true);
     tree.pane(pane_id)
         .unwrap()
         .terminal()
@@ -2627,6 +2653,11 @@ fn a_resume_invocation_spawns_in_the_persisted_cwd() {
     let dir = tempfile::tempdir().unwrap();
     let reported = dir.path().join("repo");
     std::fs::create_dir(&reported).unwrap();
+    tree.pane(pane_id)
+        .unwrap()
+        .terminal()
+        .write()
+        .set_accept_osc7(true);
     tree.pane(pane_id)
         .unwrap()
         .terminal()

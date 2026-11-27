@@ -941,7 +941,10 @@ pub(crate) struct UnicodeConfigState {
 
 /// Security flags: OSC 7 acceptance + insecure-sequence disable (ARC-001 sub-struct)
 pub(crate) struct SecurityFlagsState {
-    /// Accept OSC 7 directory tracking sequences
+    /// Accept OSC 7 directory tracking sequences. Defaults to `false`
+    /// (audit finding SEC-005, defense in depth): the reported cwd is
+    /// remote-emitted program output, so hosts that want directory
+    /// tracking opt in with `Terminal::set_accept_osc7(true)`.
     pub(crate) accept_osc7: bool,
     /// Disable potentially insecure escape sequences
     pub(crate) disable_insecure_sequences: bool,
@@ -969,7 +972,7 @@ pub(crate) struct SecurityFlagsState {
 impl Default for SecurityFlagsState {
     fn default() -> Self {
         Self {
-            accept_osc7: true,
+            accept_osc7: false,
             disable_insecure_sequences: false,
             max_osc_data_length: DEFAULT_MAX_OSC_DATA_LENGTH,
             osc_seen_esc: false,

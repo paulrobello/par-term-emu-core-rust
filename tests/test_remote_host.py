@@ -66,6 +66,7 @@ def test_remote_host_emits_cwd_changed_event():
 def test_remote_host_preserves_cwd():
     """Test that RemoteHost does not clear existing cwd."""
     term = Terminal(80, 24)
+    term.set_accept_osc7(True)
     term.process_str("\x1b]7;file:///home/user/project\x1b\\")
     assert term.shell_integration_state().cwd == "/home/user/project"
 
@@ -85,6 +86,7 @@ def test_remote_host_empty_payload_ignored():
 def test_remote_host_overrides_osc7():
     """Test that RemoteHost overrides previously set OSC 7 hostname."""
     term = Terminal(80, 24)
+    term.set_accept_osc7(True)
     term.process_str("\x1b]7;file://server1/home/user\x1b\\")
     assert term.get_badge_session_variables().get("hostname") == "server1"
 

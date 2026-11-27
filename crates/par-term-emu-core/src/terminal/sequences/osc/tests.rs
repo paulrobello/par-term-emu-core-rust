@@ -174,8 +174,28 @@ fn test_hyperlink_uri_keeps_its_semicolons() {
 }
 
 #[test]
+fn test_osc7_ignored_by_default() {
+    // audit SEC-005: directory tracking is opt-in. A fresh terminal must
+    // ignore OSC 7 entirely until set_accept_osc7(true) opts in.
+    let mut term = Terminal::new(80, 24);
+    term.process(b"\x1b]7;file:///home/user/project\x1b\\");
+    assert!(!term.accept_osc7());
+    assert_eq!(term.shell_state.shell_integration.cwd(), None);
+    assert!(term.get_cwd_changes().is_empty());
+
+    term.set_accept_osc7(true);
+    term.process(b"\x1b]7;file:///home/user/project\x1b\\");
+    assert_eq!(
+        term.shell_state.shell_integration.cwd(),
+        Some("/home/user/project")
+    );
+}
+
+#[test]
 fn test_osc7_set_directory() {
     let mut term = Terminal::new(80, 24);
+    // audit SEC-005: OSC 7 tracking is opt-in by default; tests exercise the opt-in path
+    term.set_accept_osc7(true);
 
     // OSC 7 with file:// URL (localhost)
     term.process(b"\x1b]7;file:///home/user/project\x1b\\");
@@ -203,6 +223,8 @@ fn test_osc7_set_directory() {
 #[test]
 fn test_osc7_hostname_extraction() {
     let mut term = Terminal::new(80, 24);
+    // audit SEC-005: OSC 7 tracking is opt-in by default; tests exercise the opt-in path
+    term.set_accept_osc7(true);
 
     // file:///path - localhost implicit, hostname should be None
     term.process(b"\x1b]7;file:///home/user/project\x1b\\");
@@ -248,6 +270,8 @@ fn test_osc7_hostname_extraction() {
 #[test]
 fn test_osc7_username_and_port_and_decoding() {
     let mut term = Terminal::new(80, 24);
+    // audit SEC-005: OSC 7 tracking is opt-in by default; tests exercise the opt-in path
+    term.set_accept_osc7(true);
 
     // Username and port should be parsed, port stripped from hostname
     term.process(b"\x1b]7;file://alice@example.com:2222/home/alice/Work%20Dir\x1b\\");
@@ -292,6 +316,8 @@ fn test_osc7_username_and_port_and_decoding() {
 #[test]
 fn test_osc7_hostname_updates() {
     let mut term = Terminal::new(80, 24);
+    // audit SEC-005: OSC 7 tracking is opt-in by default; tests exercise the opt-in path
+    term.set_accept_osc7(true);
 
     // Start with remote host
     term.process(b"\x1b]7;file://server1/home/user\x1b\\");
@@ -315,6 +341,8 @@ fn test_osc7_hostname_updates() {
 #[test]
 fn test_osc7_cwd_history_records_hostname() {
     let mut term = Terminal::new(80, 24);
+    // audit SEC-005: OSC 7 tracking is opt-in by default; tests exercise the opt-in path
+    term.set_accept_osc7(true);
 
     term.process(b"\x1b]7;file://server1/home/user\x1b\\");
     term.process(b"\x1b]7;file:///home/local\x1b\\");
@@ -329,6 +357,8 @@ fn test_osc7_cwd_history_records_hostname() {
 #[test]
 fn test_osc7_emits_cwd_changed_event() {
     let mut term = Terminal::new(80, 24);
+    // audit SEC-005: OSC 7 tracking is opt-in by default; tests exercise the opt-in path
+    term.set_accept_osc7(true);
 
     term.process(b"\x1b]7;file://server1/home/user\x1b\\");
     let events = term.poll_events();
@@ -362,6 +392,8 @@ fn test_osc7_emits_cwd_changed_event() {
 #[test]
 fn test_osc1337_current_dir() {
     let mut term = Terminal::new(80, 24);
+    // audit SEC-005: OSC 7 tracking is opt-in by default; tests exercise the opt-in path
+    term.set_accept_osc7(true);
 
     term.process(b"\x1b]1337;CurrentDir=/tmp/somewhere\x07");
     assert_eq!(
@@ -390,6 +422,8 @@ fn test_osc1337_current_dir() {
 #[test]
 fn test_osc1337_current_dir_preserves_host_state() {
     let mut term = Terminal::new(80, 24);
+    // audit SEC-005: OSC 7 tracking is opt-in by default; tests exercise the opt-in path
+    term.set_accept_osc7(true);
 
     // Establish host identity via OSC 7, then change directory via 1337
     term.process(b"\x1b]7;file://server1/home/user\x1b\\");
@@ -1475,6 +1509,8 @@ fn test_remote_host_empty_hostname_ignored() {
 #[test]
 fn test_remote_host_overrides_osc7_hostname() {
     let mut term = Terminal::new(80, 24);
+    // audit SEC-005: OSC 7 tracking is opt-in by default; tests exercise the opt-in path
+    term.set_accept_osc7(true);
 
     // Set hostname via OSC 7
     term.process(b"\x1b]7;file://server1/home/user\x1b\\");
@@ -1523,6 +1559,8 @@ fn test_remote_host_loopback_addresses() {
 #[test]
 fn test_remote_host_preserves_existing_cwd() {
     let mut term = Terminal::new(80, 24);
+    // audit SEC-005: OSC 7 tracking is opt-in by default; tests exercise the opt-in path
+    term.set_accept_osc7(true);
 
     // Set cwd via OSC 7
     term.process(b"\x1b]7;file:///home/user/project\x1b\\");
@@ -1945,6 +1983,8 @@ fn test_full_zone_lifecycle() {
 #[test]
 fn test_environment_changed_on_cwd() {
     let mut term = Terminal::new(80, 24);
+    // audit SEC-005: OSC 7 tracking is opt-in by default; tests exercise the opt-in path
+    term.set_accept_osc7(true);
     term.process(b"\x1b]7;file:///home/user/project\x1b\\");
     let events = term.poll_events();
     assert!(
@@ -1963,6 +2003,8 @@ fn test_environment_changed_on_cwd() {
 #[test]
 fn test_remote_host_transition_from_osc7() {
     let mut term = Terminal::new(80, 24);
+    // audit SEC-005: OSC 7 tracking is opt-in by default; tests exercise the opt-in path
+    term.set_accept_osc7(true);
     term.process(b"\x1b]7;file://remotehost/home/user\x1b\\");
     let events = term.poll_events();
     assert!(
@@ -1998,6 +2040,8 @@ fn test_remote_host_transition_from_osc1337() {
 #[test]
 fn test_environment_changed_hostname() {
     let mut term = Terminal::new(80, 24);
+    // audit SEC-005: OSC 7 tracking is opt-in by default; tests exercise the opt-in path
+    term.set_accept_osc7(true);
     term.process(b"\x1b]7;file://myhost/home/user\x1b\\");
     let events = term.poll_events();
     assert!(
@@ -2207,6 +2251,8 @@ fn test_osc1337_multipart_restart_fails_superseded_transfer() {
 #[test]
 fn test_osc7_rejects_decoded_nul_and_control_chars() {
     let mut term = Terminal::new(80, 24);
+    // audit SEC-005: OSC 7 tracking is opt-in by default; tests exercise the opt-in path
+    term.set_accept_osc7(true);
 
     term.process(b"\x1b]7;file:///tmp/a%00b\x1b\\");
     assert_eq!(
@@ -2229,6 +2275,8 @@ fn test_osc7_rejects_decoded_nul_and_control_chars() {
 #[test]
 fn test_current_dir_rejects_control_chars() {
     let mut term = Terminal::new(80, 24);
+    // audit SEC-005: OSC 7 tracking is opt-in by default; tests exercise the opt-in path
+    term.set_accept_osc7(true);
 
     // The OSC parser cannot deliver raw C0 controls, but the handler is a
     // pub(crate) seam — it must reject them the way parse_osc7_url does.

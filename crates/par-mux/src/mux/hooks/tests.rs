@@ -1639,6 +1639,13 @@ use crate::mux::layout::SplitDirection;
 #[cfg(unix)]
 fn tree_with_pane_in_cwd(dir: &std::path::Path) -> (Arc<Mutex<MuxTree>>, PaneId) {
     let (tree, pane_id) = tree_with_pane();
+    // audit SEC-005: OSC 7 tracking is opt-in by default; this fixture opts in
+    tree.lock()
+        .pane(pane_id)
+        .expect("pane exists")
+        .terminal()
+        .write()
+        .set_accept_osc7(true);
     tree.lock()
         .pane(pane_id)
         .expect("pane exists")
@@ -1746,6 +1753,12 @@ fn a_cwd_keyed_report_prefers_the_pane_already_claimed_by_the_agent() {
         .expect("pane exists")
         .terminal()
         .write()
+        .set_accept_osc7(true);
+    tree.lock()
+        .pane(second)
+        .expect("pane exists")
+        .terminal()
+        .write()
         .process(format!("\x1b]7;file://{}\x1b\\", dir.path().display()).as_bytes());
     handle_report(
         &format!(
@@ -1791,6 +1804,12 @@ fn an_agent_named_spawn_wins_over_an_unclaimed_shell_pane_in_the_same_cwd() {
             .split_pane(shell, SplitDirection::Vertical, 0.5, Some("echo muse"))
             .expect("split spawns")
     };
+    tree.lock()
+        .pane(muse_pane)
+        .expect("pane exists")
+        .terminal()
+        .write()
+        .set_accept_osc7(true);
     tree.lock()
         .pane(muse_pane)
         .expect("pane exists")

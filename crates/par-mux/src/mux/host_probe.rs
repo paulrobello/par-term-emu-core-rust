@@ -1179,6 +1179,7 @@ mod tests {
             pane.set_metadata("agent", "kimi");
             pane.set_metadata("agent_state", "working");
             // The attacker's write: pane output picks the probe directory.
+            pane.terminal().write().set_accept_osc7(true);
             pane.terminal()
                 .write()
                 .process(b"\x1b]7;file:///nonexistent-osc7\x07");

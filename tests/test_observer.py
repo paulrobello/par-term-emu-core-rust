@@ -225,6 +225,7 @@ class TestConvenienceWrappers:
         term = Terminal(80, 24, scrollback=100)
         events: list[dict[str, str]] = []
         observer_id = on_cwd_change(term, lambda e: events.append(e))
+        term.set_accept_osc7(True)
         term.process(b"\x1b]7;file:///home/user/test\x07")
         assert any(e["type"] == "cwd_changed" for e in events)
         term.remove_observer(observer_id)

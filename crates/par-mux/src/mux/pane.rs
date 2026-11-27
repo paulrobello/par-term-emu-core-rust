@@ -1019,6 +1019,13 @@ impl ShellPaneFactory {
         if self.xterm_resize_reflow {
             session.set_xterm_resize(true);
         }
+        // Audit SEC-005 flipped the library default to refuse OSC 7; the
+        // multiplexer opts back in: pane cwd persistence, respawn targeting,
+        // and the streamer's remote-cwd marker are built on it, and every
+        // consumer of the report is host-gated downstream
+        // (`shell_integration::osc7_host_is_local`, SEC-115 probe
+        // separation). A random library embedder keeps the safe default.
+        session.terminal().write().set_accept_osc7(true);
 
         // The per-spawn cwd (a restore re-landing a pane where it left off)
         // outranks the factory-wide default.

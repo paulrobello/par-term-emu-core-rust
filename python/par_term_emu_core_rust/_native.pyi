@@ -2730,11 +2730,13 @@ class PtyTerminal:
     def set_accept_osc7(self, accept: Any) -> Any:
         """Set whether OSC 7 directory tracking sequences are accepted
 
-        When disabled, OSC 7 sequences are silently ignored.
-        When enabled (default), allows shell to report current working directory.
+        When disabled (default), OSC 7 sequences are silently ignored —
+        the reported cwd is remote-emitted program output (audit finding
+        SEC-005), so directory tracking is opt-in.
+        When enabled, the shell's cwd reports update the tracked directory.
 
         Args:
-            accept: True to accept OSC 7 (default), False to ignore
+            accept: True to accept OSC 7, False to ignore (default)
         """
     def set_allow_clipboard_read(self, allow: Any) -> Any:
         """Set whether clipboard read operations are allowed
@@ -3390,8 +3392,12 @@ class PtyTerminal:
     def write(self, data: Any) -> Any:
         """Write data to the PTY (send to the child process)
 
-        The GIL is released while the underlying write blocks, so other
-        Python threads keep running.
+        The bytes are enqueued for a background writer thread and reach the
+        tty in FIFO order; this call blocks only on the queue's backpressure
+        window (16 chunks), never on the tty round trip. The GIL is
+        released while the enqueue blocks, so other Python threads keep
+        running. A tty write failure is latched sticky and reported by a
+        later `write` call.
 
         Args:
             data: Bytes to write
@@ -3408,8 +3414,7 @@ class PtyTerminal:
     def write_str(self, s: Any) -> Any:
         """Write a string to the PTY (convenience method)
 
-        The GIL is released while the underlying write blocks, so other
-        Python threads keep running.
+        Same enqueue semantics as [`PtyTerminal::write`].
 
         Args:
             s: String to write
@@ -3911,13 +3916,13 @@ class StreamingConfig:
         max_clients: Any = 1000,
         send_initial_screen: Any = True,
         keepalive_interval: Any = 30,
-        default_read_only: Any = False,
+        default_read_only: Any = True,
         initial_cols: Any = 0,
         initial_rows: Any = 0,
         enable_http: Any = False,
         web_root: Any = "./web_term",
         max_clients_per_session: Any = 0,
-        input_rate_limit_bytes_per_sec: Any = 0,
+        input_rate_limit_bytes_per_sec: Any = 1048576,
         enable_system_stats: Any = False,
         system_stats_interval_secs: Any = 5,
         api_key: Any = None,
@@ -4041,15 +4046,17 @@ class StreamingConfig:
         """Get default read-only mode
 
         Returns:
-            bool: True if clients start in read-only mode by default
+            bool: True if clients start in read-only mode by default.
+            Defaults to True (SEC-001): new clients watch until input is
+            explicitly enabled with `default_read_only = False`.
 
         Example:
             >>> config = StreamingConfig()
             >>> config.default_read_only
-            False
-            >>> config.default_read_only = True
-            >>> config.default_read_only
             True
+            >>> config.default_read_only = False
+            >>> config.default_read_only
+            False
         """
     @default_read_only.setter
     def default_read_only(self, value: Any) -> None: ...
@@ -4132,7 +4139,8 @@ class StreamingConfig:
     def initial_rows(self, value: Any) -> None: ...
     @property
     def input_rate_limit_bytes_per_sec(self) -> Any:
-        """Get the input rate limit in bytes per second (0 = unlimited)
+        """Get the input rate limit in bytes per second (0 = unlimited).
+        Defaults to 1048576 (1 MiB/s; audit finding SEC-003).
 
         Returns:
             int: Per-client input limit in bytes/second, or 0 for unlimited
@@ -4140,7 +4148,7 @@ class StreamingConfig:
         Example:
             >>> config = StreamingConfig()
             >>> config.input_rate_limit_bytes_per_sec
-            0
+            1048576
             >>> config.input_rate_limit_bytes_per_sec = 65536
             >>> config.input_rate_limit_bytes_per_sec
             65536
@@ -8492,11 +8500,13 @@ class Terminal:
     def set_accept_osc7(self, accept: Any) -> Any:
         """Set whether OSC 7 directory tracking sequences are accepted
 
-        When disabled, OSC 7 sequences are silently ignored.
-        When enabled (default), allows shell to report current working directory.
+        When disabled (default), OSC 7 sequences are silently ignored —
+        the reported cwd is remote-emitted program output (audit finding
+        SEC-005), so directory tracking is opt-in.
+        When enabled, the shell's cwd reports update the tracked directory.
 
         Args:
-            accept: True to accept OSC 7 (default), False to ignore
+            accept: True to accept OSC 7, False to ignore (default)
         """
     def set_allow_clipboard_read(self, allow: Any) -> Any:
         """Set whether clipboard read operations are allowed

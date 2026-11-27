@@ -1993,6 +1993,8 @@ impl Drop for TempRepo {
 fn plant_osc7(h: &Harness, pane: crate::mux::ids::PaneId, dir: &std::path::Path) {
     let mut guard = h.tree.lock();
     let pane = guard.pane_mut(pane).unwrap();
+    // audit SEC-005: OSC 7 tracking is opt-in by default; this fixture opts in
+    pane.terminal().write().set_accept_osc7(true);
     let seq = format!("\x1b]7;file://localhost{}\x07", dir.display());
     pane.terminal().write().process(seq.as_bytes());
 }

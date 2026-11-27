@@ -742,11 +742,13 @@ macro_rules! impl_terminal_state_setters {
 
             /// Set whether OSC 7 directory tracking sequences are accepted
             ///
-            /// When disabled, OSC 7 sequences are silently ignored.
-            /// When enabled (default), allows shell to report current working directory.
+            /// When disabled (default), OSC 7 sequences are silently ignored —
+            /// the reported cwd is remote-emitted program output (audit finding
+            /// SEC-005), so directory tracking is opt-in.
+            /// When enabled, the shell's cwd reports update the tracked directory.
             ///
             /// Args:
-            ///     accept: True to accept OSC 7 (default), False to ignore
+            ///     accept: True to accept OSC 7, False to ignore (default)
             fn set_accept_osc7(&mut self, accept: bool) -> pyo3::PyResult<()> {
                 let mut t = $crate::python_bindings::common::TerminalAccess::term_mut(self);
                 t.set_accept_osc7(accept);

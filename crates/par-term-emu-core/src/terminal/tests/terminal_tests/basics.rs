@@ -117,6 +117,8 @@ fn test_focus_tracking() {
 #[test]
 fn test_shell_integration() {
     let mut term = Terminal::new(80, 24);
+    // audit SEC-005: OSC 7 tracking is opt-in by default; tests exercise the opt-in path
+    term.set_accept_osc7(true);
 
     // Prompt start
     term.process(b"\x1b]133;A\x07");

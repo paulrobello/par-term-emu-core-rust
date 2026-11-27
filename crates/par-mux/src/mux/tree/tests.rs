@@ -1447,6 +1447,11 @@ fn respawn_cwd_after_osc7(host: &str, dir: &std::path::Path) -> Option<PathBuf> 
         .unwrap()
         .terminal()
         .write()
+        .set_accept_osc7(true);
+    tree.pane(pane)
+        .unwrap()
+        .terminal()
+        .write()
         .process(format!("\x1b]7;file://{host}{}\x1b\\", dir.display()).as_bytes());
     assert_eq!(
         tree.pane(pane)

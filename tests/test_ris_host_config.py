@@ -89,7 +89,7 @@ PROBES: dict[str, Probe] = {
     "set_max_cwd_history": (lambda t: t.set_max_cwd_history(1), _fill_cwds),
     # Already carried by reset() (ARC-058); guarded here.
     "set_accept_osc7": (
-        lambda t: t.set_accept_osc7(False),
+        lambda t: t.set_accept_osc7(True),
         lambda t: t.accept_osc7(),
     ),
     "set_disable_insecure_sequences": (
