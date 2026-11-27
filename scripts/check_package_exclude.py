@@ -57,7 +57,6 @@ BASELINE = [
     ".parsightignore",
     ".pre-commit-config.yaml",
     "AGENTS.md",
-    "AUDIT.md",
     "CLAUDE.md",
     "Makefile",
     "pyproject.toml",
@@ -83,7 +82,6 @@ FORBIDDEN_PREFIXES = [
     ".gitattributes",
     ".gitignore",
     "AGENTS.md",
-    "AUDIT.md",
     "CLAUDE.md",
     "Makefile",
     "pyproject.toml",
@@ -222,7 +220,6 @@ def self_test() -> None:
     hits = forbidden_hits(["src/lib.rs", ".claude/settings.json", "AUDIT.md"])
     if [h for h in hits if h in (".claude/settings.json", "AUDIT.md")] != [
         ".claude/settings.json",
-        "AUDIT.md",
     ]:
         sys.exit("self-test FAILED (forbidden detection)")
     if forbidden_hits(["src/lib.rs", "docs/guide.md"]):

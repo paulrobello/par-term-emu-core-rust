@@ -82,7 +82,6 @@ exclude = [
     ".parsightignore",
     ".pre-commit-config.yaml",
     "AGENTS.md",
-    "AUDIT.md",
     "CLAUDE.md",
     "Makefile",
     "pyproject.toml",
