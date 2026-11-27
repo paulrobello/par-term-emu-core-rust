@@ -1,7 +1,7 @@
 .PHONY: help build build-release build-streaming dev-streaming app test test-rust test-rust-streaming test-python test-pty coverage coverage-html coverage-python clean install install-force python-install python-uninstall par-mux-install par-mux-uninstall streamer-uninstall uninstall dev fmt lint check \
         examples examples-basic examples-pty examples-streaming examples-all setup-venv watch test-integrations \
         typecheck clippy fmt-python lint-python lint-check checkall checkall-ci test-mux-ci test-python-streaming-ci cross-target-check check-features check-feature-combos bench pre-commit-install pre-commit-uninstall \
-        caps-table caps-table-check gen-extensions extensions-check ffi-header ffi-header-check ffi-surface-check core-version-check package-exclude-check doc-hidden-check reexports-check api-surface-check python-features-check terminal-fields-check terminal-event-check mux-docs-check mux-schema mux-schema-check completions completions-check _completions-into env-docs-check pinned-tests-check stub-docs-check doc-links-check release-check derive-version-check workflow-toolchain-check set-version version-train-check audit-deps \
+        caps-table caps-table-check gen-extensions extensions-check web-term-freshness-check ffi-header ffi-header-check ffi-surface-check core-version-check package-exclude-check doc-hidden-check reexports-check api-surface-check python-features-check terminal-fields-check terminal-event-check mux-docs-check mux-schema mux-schema-check completions completions-check _completions-into env-docs-check pinned-tests-check stub-docs-check doc-links-check release-check derive-version-check workflow-toolchain-check set-version version-train-check audit-deps \
         mux-manual-seed mux-package-check rustdoc-check \
         pre-commit-run pre-commit-update deploy \
         proto-generate proto-rust proto-typescript proto-clean \
@@ -95,6 +95,7 @@ help:
 	@echo "  caps-table-check - Fail when the docs/SECURITY.md caps table differs from the code"
 	@echo "  gen-extensions  - Regenerate the pi/omp agent-state extension assets from scripts/gen_extensions.py (ARC-002)"
 	@echo "  extensions-check - Fail when a committed extension asset differs from the template, or the renderer self-test fails"
+	@echo "  web-term-freshness-check - Fail when web_term/ is older than the web-terminal-frontend sources (QA-004)"
 	@echo "  checkall        - All quality checks (non-mutating; run 'make lint lint-python' to auto-fix)"
 	@echo "  checkall-ci     - CI-parity gate: checkall + Windows MSVC cross-checks + CI mux-test suites + the python-test,streaming combo (heavy; run before pushing)"
 	@echo "  cross-target-check - cargo check par-mux (mux-bin,attach) + par-term-emu-core + root crate (python-test,mux,ffi) for aarch64/x86_64-pc-windows-msvc, -D warnings (part of checkall-ci)"
@@ -516,6 +517,13 @@ extensions-check:
 	python3 scripts/gen_extensions.py --check
 	python3 scripts/gen_extensions.py --self-test
 
+# QA-004: web_term/ is the committed static export the streamer serves;
+# fail when a web-terminal-frontend input is newer than the committed
+# build (the remedy is a rebuild, not a commit-time copy).
+web-term-freshness-check:
+	python3 scripts/check_web_term_freshness.py --self-test
+	python3 scripts/check_web_term_freshness.py
+
 # ENH-027: generate include/terminal_core.h from src/ffi.rs. Run after any
 # #[repr(C)] type or extern "C" fn change; commit the regenerated header.
 # Requires cbindgen: cargo install cbindgen --locked
@@ -809,7 +817,7 @@ audit-deps:
 	uvx --python-preference only-system pip-audit --strict -r $$reqs; \
 	status=$$?; rm -f $$reqs; exit $$status
 
-checkall: extensions-check ffi-header-check ffi-surface-check derive-version-check core-version-check package-exclude-check workflow-toolchain-check version-train-check doc-hidden-check reexports-check api-surface-check python-features-check terminal-fields-check terminal-event-check mux-docs-check caps-table-check mux-schema-check completions-check env-docs-check otel-check mux-otel-check pinned-tests-check stub-docs-check mux-package-check rustdoc-check doc-links-check lint-check test-integrations test-rust test-rust-streaming stub-check test-python test-web
+checkall: extensions-check web-term-freshness-check ffi-header-check ffi-surface-check derive-version-check core-version-check package-exclude-check workflow-toolchain-check version-train-check doc-hidden-check reexports-check api-surface-check python-features-check terminal-fields-check terminal-event-check mux-docs-check caps-table-check mux-schema-check completions-check env-docs-check otel-check mux-otel-check pinned-tests-check stub-docs-check mux-package-check rustdoc-check doc-links-check lint-check test-integrations test-rust test-rust-streaming stub-check test-python test-web
 	@echo ""
 	@echo "======================================================================"
 	@echo "  All code quality checks passed!"
