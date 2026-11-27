@@ -109,7 +109,7 @@ from .observers import (
     on_zone_change,
 )
 
-__version__ = "0.90.0"
+__version__ = "0.91.0"
 __all__ = [
     "AmbiguousWidth",
     "Attributes",

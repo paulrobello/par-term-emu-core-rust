@@ -7,11 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-### Performance
+## [0.91.0] - 2026-11-26
 
+### Added
+- **make: `make streamer-install-mux` proves the mux bridge actually shipped** (`3c060447`, `Makefile`): the plain and mux-enabled streamer builds print identical `--help`/`--version`, so the install target greps the installed binary for a `mux_factory` string from the `cfg(mux)`-gated bridge module — the check fails the install when the mux feature did not compile in. `make install` now depends on `streamer-install-mux` instead of `streamer-install`, so the default install ships the mux-enabled streamer.
+
+### Performance
 - `PtySession::write` / `PtyInputHandle::write` no longer take the exclusive
   Terminal lock per chunk and no longer block on the tty round trip under the
-  writer mutex (kanban card 01a218f2, filed by par-term). Writes now enqueue
+  writer mutex (kanban card 01a218f2, filed by par-term, `98ec1195`). Writes now enqueue
   onto a bounded per-session queue drained by a dedicated thread (16-chunk
   backpressure window, ~1 MiB); input recording runs at enqueue time gated on
   a shared atomic recording flag, so a non-recording write never serializes
@@ -2731,7 +2735,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Unicode Support**: Full Unicode including emoji and wide characters
 - **Python Integration**: PyO3 bindings for Python 3.12+
 
-[Unreleased]: https://github.com/paulrobello/par-term-emu-core-rust/compare/v0.90.0...HEAD
+[Unreleased]: https://github.com/paulrobello/par-term-emu-core-rust/compare/v0.91.0...HEAD
+[0.91.0]: https://github.com/paulrobello/par-term-emu-core-rust/compare/v0.90.0...v0.91.0
 [0.90.0]: https://github.com/paulrobello/par-term-emu-core-rust/compare/v0.89.0...v0.90.0
 [0.89.0]: https://github.com/paulrobello/par-term-emu-core-rust/compare/vUnreleased...v0.89.0
 [0.88.0]: https://github.com/paulrobello/par-term-emu-core-rust/compare/v0.87.0...v0.88.0
