@@ -16,7 +16,7 @@ Comprehensive guide to advanced terminal emulation features in par-term-emu-core
 - [OSC 52 Clipboard Operations](#osc-52-clipboard-operations)
 - [General-Purpose File Transfer (OSC 1337)](#general-purpose-file-transfer-osc-1337)
 - [OSC 8 Hyperlinks](#osc-8-hyperlinks)
-- [Notifications (OSC 9/777)](#notifications-osc-9777)
+- [Notifications (OSC 9/777/99)](#notifications-osc-977799)
 - [Progress Bars (OSC 9;4)](#progress-bars-osc-94)
 - [Shell Integration](#shell-integration)
 - [Triggers & Automation](#triggers--automation)
@@ -625,7 +625,7 @@ if url:
 
 > **Tip:** Works in iTerm2, WezTerm, and modern terminal emulators with TUI support
 
-## Notifications (OSC 9/777)
+## Notifications (OSC 9/777/99)
 
 Desktop-style notification support for alerting users about events, completions, or errors.
 
@@ -657,6 +657,47 @@ if term.has_notifications():
     notifications = term.drain_notifications()
 ```
 
+### OSC 99 (Kitty Detailed Notifications)
+
+Kitty's desktop notification protocol adds metadata the simpler formats cannot carry: an identifier for grouping or updating, an urgency level, requested actions, chunked payloads, and optional base64 encoding.
+
+**Format:** `OSC 99 ; <metadata> ; <payload> ST` where `<metadata>` is zero or more colon-separated `key=value` pairs and `<payload>` is the title or body text.
+
+| Key | Meaning | Values |
+| --- | --- | --- |
+| `i` | Notification id (groups/updates a notification) | Any string |
+| `d` | Done flag | `1` last chunk (default), `0` more chunks follow |
+| `p` | Payload type | `title` (default), `body` |
+| `e` | Payload encoding | `0` raw (default), `1` base64 |
+| `u` | Urgency | `0` low, `1` normal (default), `2` critical |
+| `a` | Requested actions | Comma-separated, e.g. `focus,report` |
+
+Unknown metadata keys are ignored for forward compatibility. Chunked notifications accumulate: repeated sequences sharing the same `i` append their payloads to the title or body until a chunk arrives with `d=1`. If no explicit body chunk arrives, the accumulated title text is treated as the message, mirroring OSC 9/777's single-string semantics.
+
+```python
+term = Terminal(80, 24)
+
+# Simple single-chunk notification (message only)
+term.process_str("\x1b]99;;Build finished\x1b\\")
+((title, message),) = term.take_notifications()  # ('', 'Build finished')
+
+# Chunked notification: title chunk, then body chunk that completes it
+term.process_str("\x1b]99;i=build:d=0:p=title;Build Status\x1b\\")
+term.process_str("\x1b]99;i=build:d=1:p=body;Compilation successful\x1b\\")
+
+# Urgency and requested actions
+term.process_str("\x1b]99;u=2:a=focus,report;Alert\x1b\\")
+
+# Base64-encoded payload
+term.process_str("\x1b]99;e=1;SGVsbG8=\x1b\\")  # payload is "Hello"
+
+# Detailed retrieval exposes the OSC 99 metadata
+for n in term.take_notifications_detailed():
+    print(n.title, n.message, n.id, n.urgency, n.actions)
+```
+
+`take_notifications()` and `drain_notifications()` still return `(title, message)` tuples; `take_notifications_detailed()` returns `Notification` objects whose `id`, `urgency` (`"low"`, `"normal"`, `"critical"`), and `actions` fields carry the OSC 99 metadata. For OSC 9/777 notifications, `id` is `None`, `urgency` is `"normal"`, and `actions` is empty.
+
 ### Use Cases
 
 - Long-running command completion alerts
@@ -666,7 +707,7 @@ if term.has_notifications():
 - System monitoring alerts
 - Test completion notices
 
-> **Note:** Works with iTerm2, ConEmu, and other terminal emulators supporting notification protocols
+> **Note:** Works with iTerm2, ConEmu, Kitty, and other terminal emulators supporting notification protocols
 
 ## Progress Bars (OSC 9;4)
 

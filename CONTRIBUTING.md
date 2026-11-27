@@ -34,7 +34,7 @@ The only time you invoke `cargo` directly is for Rust tests, which require the `
 
 ### MSRV policy
 
-The `rust-version` in every manifest (`1.99` today) is **not a support floor** — it is a stamp of the newest stable toolchain exercised at the most recent release cut. Policy: MSRV tracks the latest stable Rust at each release cut; a release may raise it in lockstep with the maintainer's toolchain, and no effort is made to keep older toolchains compiling (the edition stays 2021 for embedding compatibility, not as a compatibility promise). Between releases, develop against the current stable; `rustup update` before reporting build failures.
+The `rust-version` in every manifest (see `Cargo.toml` for the current value) is **not a support floor** — it is a stamp of the newest stable toolchain exercised at the most recent release cut. Policy: MSRV tracks the latest stable Rust at each release cut; a release may raise it in lockstep with the maintainer's toolchain, and no effort is made to keep older toolchains compiling (the edition stays 2021 for embedding compatibility, not as a compatibility promise). Between releases, develop against the current stable; `rustup update` before reporting build failures.
 
 ## Verification
 

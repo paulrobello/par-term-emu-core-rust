@@ -2,7 +2,7 @@
 
 Comprehensive internal architecture documentation for par-term-emu-core-rust, a high-performance terminal emulator library written in Rust with Python bindings.
 
-> **Last verified against v0.87.0 (2026-11-22).** That pass covered the crate layout, the module lists, the dependency lists, and the CI summary. The banner is refreshed in a batch at each release cut, so between cuts it can trail the tree by a release. Struct layouts, module lists, and file counts drift quickly; where a section could go stale, prefer the runnable commands given over hard-coded numbers.
+> **Last verified against v0.91.0 (2026-11-27).** That pass covered the crate layout, the module lists, the dependency lists, and the CI summary. The banner is refreshed in a batch at each release cut, so between cuts it can trail the tree by a release. Struct layouts, module lists, and file counts drift quickly; where a section could go stale, prefer the runnable commands given over hard-coded numbers.
 
 ## Table of Contents
 
@@ -222,7 +222,7 @@ The main terminal emulator that ties everything together, organized into submodu
 - `event_broker.rs` - `EventBroker`: event and bell queues, observer registry, subscription filter, dispatch batches, queue cap (ARC-002)
 - `event_fields.rs` - Structured field view of a `TerminalEvent` (ARC-114)
 - `export_snapshot.rs` - Lock-light text export (ARC-004): `TextExportSnapshot` copies only the grids an export reads, so a shared lock is held for the clone, not the whole export
-- `file_transfer.rs` - File transfer tracking
+- `file_transfer.rs` - File transfer tracking (SEC-010 payload-free `transfer_summaries()` snapshots; payloads only through `get_transfer`/`take_completed_transfer`)
 - `graphics.rs` - Unified graphics (Sixel, iTerm2, Kitty)
 - `image.rs` - Inline image handling
 - `macros.rs` - `MacroEngine` service: macro recording and playback (ARC-039)
@@ -307,7 +307,7 @@ The main terminal emulator that ties everything together, organized into submodu
 - State:
   - `tree/` - the session/window/pane tree, the server's single source of truth: `mod.rs` (types and lookups), `lifecycle.rs` (creation, respawn, renames, session environment, kill cascades), `layout_ops.rs` (splits, selection, zoom, moves, resizes, and the `mutate_layout` choke point, ARC-090), `worktrees.rs` (git-worktree workspace grouping, derived from each link's repo key)
   - `layout.rs` (a window's binary split tree and its geometry), `pane.rs` (PTY panes + env contract), `persist.rs` (save format, quarantine, restore, and the named-layout store), `uploads.rs` (bounded staging for client file uploads: `upload-commit` materializes the bytes under one staging directory and bracket-pastes the file's path into the target pane)
-- Agent layer: `hooks/` (hook-report grammar: `mod.rs` dispatch, `report.rs`, `telemetry.rs`, `seen.rs` (derived `done` state), `release.rs`), `scrape.rs` (fallback state tier, patterns in `patterns/*.toml`), `agent_resume.rs`, `foreground.rs` (process-table snapshot for `pane-info cmd=` and hook-claim liveness), `host_probe.rs` (30 s disk and git host-telemetry sweep, hardened git), `win_resume.rs` (Windows resume transport), `integrations/` (the agent-state integrations: claude/codex/grok session hooks merged into config-entry agents' settings files without disturbing user bytes, plus the pi/omp extension files — installed by the `--install-agent-*`/`--heal-agent-hooks` one-shot flags; compiled only with `mux-bin`), `skill_installer.rs` (`--install-skill` writes the SKILL.md embedded from `crates/par-mux/skills/par-mux/`; compiled only with `mux-bin`)
+- Agent layer: `hooks/` (hook-report grammar: `mod.rs` dispatch, `report.rs`, `telemetry.rs`, `seen.rs` (derived `done` state), `release.rs`), `scrape.rs` (fallback state tier, patterns in `patterns/*.toml`), `agent_resume.rs`, `foreground.rs` (process-table snapshot for `pane-info cmd=` and hook-claim liveness), `host_probe.rs` (30 s disk and git host-telemetry sweep, hardened git), `win_resume.rs` (Windows resume transport), `integrations/` (the agent-state integrations: claude/codex/grok/muse session hooks merged into config-entry agents' settings files without disturbing user bytes, config-entry hooks for droid/copilot/cursor/qwen/qodercli/devin/kimi/mastracode/agy, plus the pi/omp extension files — installed by the `--install-agent-*`/`--heal-agent-hooks` one-shot flags; compiled only with `mux-bin`), `skill_installer.rs` (`--install-skill` writes the SKILL.md embedded from `crates/par-mux/skills/par-mux/`; compiled only with `mux-bin`)
 - Daemon services and client configuration:
   - `events.rs` - the durable pane lifecycle event ring (pushed notifications are lossy by design; the ring is not)
   - `git_status.rs` - the sidebar git badge's daemon-side resolver: one background `git status -sb` read per displayed chain, served from cache so the reply path never spawns git
@@ -415,7 +415,7 @@ The main terminal emulator that ties everything together, organized into submodu
 - `conformance_level.rs` - VT terminal conformance level support
   - VT100/VT220/VT320/VT420/VT520 level definitions
   - Feature compatibility management
-- `tmux_control/` - Tmux control protocol support (`notification.rs` notification taxonomy, `parser.rs` parse state machine)
+- `tmux_control/` - Tmux control protocol support (`notification.rs` notification taxonomy, `parser.rs` parse state machine, `line/` per-notification-family line parsing: `parse_line` classifies one control-mode line and dispatches to the agent/command/misc/output/session/window family modules)
   - Control mode protocol parsing (`tmux -C`)
   - Asynchronous notification handling
   - Pane output management
@@ -436,6 +436,8 @@ The main terminal emulator that ties everything together, organized into submodu
 - An `Arc<AtomicBool>` `running` flag that reflects the session’s view of whether the child is still alive.
 
 Separately, `PtySession` also holds a `parking_lot::Mutex` around the PTY writer, the output callback, and the coprocess manager — those remain plain mutexes since they don't benefit from read/write splitting.
+
+**PTY input queue (0.91.0).** `PtySession::write` and `PtyInputHandle::write` enqueue onto a bounded per-session queue (16 chunks × 64 KiB ≈ 1 MiB) drained by a dedicated thread, so a write never takes the exclusive Terminal lock per chunk or blocks on the tty round trip under the writer mutex. The drain thread writes into the PTY under the same writer mutex, so all tty input stays mutually serialized. Input recording runs at enqueue time, gated on a shared atomic flag, preserving the pre-queue recording semantics; a tty write failure latches sticky and is reported by a later `write` call (the enqueue-time call returns `Ok`). `get_writer()` consumers keep synchronous direct writes.
 
 `running` is deliberately a **best-effort** indicator:
 
@@ -1044,7 +1046,7 @@ The lists below cover the workspace as a whole. The terminal-side crates (`vte`,
 - `serde` + `serde_json` + `serde_yaml_ng` - Serialization support
 
 **Screenshot/rendering support:**
-- `image` - Image encoding/decoding (PNG, JPEG, BMP)
+- `image` - Image encoding/decoding (BMP, GIF, ICO, JPEG, PNG, PNM, QOI, TGA, TIFF, WebP)
 - `swash` - Pure Rust font rendering and text shaping with color emoji support
 
 **Streaming server dependencies (optional, feature-gated):**
@@ -1070,7 +1072,7 @@ The lists below cover the workspace as a whole. The terminal-side crates (`vte`,
 - `opentelemetry` + `opentelemetry_sdk` + `opentelemetry-otlp` - OTLP metrics export (feature `otel`, default off; the three release in lockstep, versions declared once in the workspace dependency table and compiled by the par-term-emu-core member's shared otel module)
 
 **Self-update dependencies (`par-term-emu-core` member, feature `self-update`):**
-- `sha2` + `semver` + `tempfile` - Checksum-required release download, version comparison, and atomic binary replacement for `self_update.rs`
+- `sha2` + `semver` + `tempfile` + `minisign-verify` - Checksum-required release download, version comparison, atomic binary replacement, and detached-minisign release-signature verification for `self_update.rs`
 
 **Multiplexer dependencies (`par-mux` member, optional, feature-gated):**
 - `interprocess` - Unix socket / Windows named pipe transport (`mux`)

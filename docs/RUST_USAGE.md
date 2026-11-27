@@ -14,6 +14,7 @@ A comprehensive guide for using the par-term-emu-core-rust library in pure Rust 
 - [Macro Recording and Playback](#macro-recording-and-playback)
 - [WebSocket Streaming Server](#websocket-streaming-server)
 - [Terminal Multiplexer (par-mux)](#terminal-multiplexer-par-mux)
+- [File Transfer Tracking](#file-transfer-tracking)
 - [Feature Flags](#feature-flags)
 - [Building](#building)
 - [Example Projects](#example-projects)
@@ -541,6 +542,52 @@ while let Ok(note) = client.notifications().try_recv() {
 ```
 
 The server side (`MuxServer`), the full command table, hook-report JSON contract, persistence/quarantine, and shutdown semantics are documented in [MUX.md](MUX.md).
+
+## File Transfer Tracking
+
+The `Terminal` tracks host-to-terminal file downloads and upload requests initiated by OSC 1337 sequences: `File=`/`MultipartFile=`/`FilePart=` with `inline=0` start downloads, and `RequestUpload` raises an `upload_requested` event the host answers through the response buffer. Every transfer is visible to the embedder through a small set of `Terminal` methods; the types live in `terminal::file_transfer`.
+
+A `FileTransferManager` holds in-progress transfers in a map and finished ones in a bounded ring (32 entries by default), so finished results survive several polls but never grow unbounded. Transfers exceeding the 50 MB default size cap fail, and no more than 8 transfers run at once.
+
+```rust
+use par_term_emu_core_rust::terminal::file_transfer::TransferStatus;
+use par_term_emu_core_rust::terminal::Terminal;
+
+let mut term = Terminal::new(80, 24);
+
+// Poll without copying payload bytes: FileTransferSummary carries identity,
+// filename, direction, status, byte counts, and timestamps — never `data`.
+// It takes &self, so it is callable through a read guard on a shared terminal.
+let summaries = term.transfer_summaries();
+for t in &summaries.active {
+    println!("{}: {:?} ({} bytes so far)", t.filename, t.status, t.bytes_transferred);
+}
+
+// Finished downloads stay in the completed ring until taken
+for t in summaries.completed {
+    if let Some(transfer) = term.take_completed_transfer(t.id) {
+        if transfer.status == TransferStatus::Completed {
+            std::fs::write(&transfer.filename, &transfer.data)?;
+        }
+    }
+}
+```
+
+> **Tip:** Poll `transfer_summaries()` for progress UI and call `take_completed_transfer(id)` only when a consumer needs the payload. The older `get_transfer(id)`, `get_active_transfers()`, and `get_completed_transfers()` accessors clone the accumulated `data` bytes on every call, which a frequent poller pays for on every poll.
+
+> **Note:** `transfer_summaries()` and `get_transfer()` take `&self`; `take_completed_transfer()`, `cancel_file_transfer()`, and the upload repliers take `&mut self`. Under a `parking_lot::RwLock<Terminal>`, summaries work through `read()`, payload-taking through `write()`.
+
+The remaining methods cover the rest of the lifecycle:
+
+| Method | Effect |
+|--------|--------|
+| `get_transfer(id)` | Clone of an active or completed transfer, payload included |
+| `cancel_file_transfer(id)` | Cancel an active transfer; returns `true` when it existed |
+| `send_upload_data(data)` | Answer an `upload_requested` event: writes `ok\n`, the base64-encoded `data`, and a blank line to the response buffer |
+| `cancel_upload()` | Abort a pending upload: writes Ctrl-C (0x03) to the response buffer |
+| `set_max_transfer_size(bytes)` / `get_max_transfer_size()` | Cap for one transfer payload; host configuration, survives RIS |
+
+> **Note:** The Python bindings mirror this API (`get_active_transfers()`, `take_completed_transfer()`, …) and deliver `file_transfer_started` / `file_transfer_progress` / `file_transfer_completed` / `file_transfer_failed` observer events; both are documented in [API_REFERENCE.md](API_REFERENCE.md) (File Transfer) and [STREAMING.md](STREAMING.md) (File Transfer Events).
 
 ## Feature Flags
 
