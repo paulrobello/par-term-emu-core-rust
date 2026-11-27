@@ -53,7 +53,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   re-announcements (kitty-doom's chunked `a=f`) keep merging. Pinned by
   `chunked_transmission_survives_interleaved_probe` and
   `chunked_transmission_survives_interleaved_put` (card 01a21eed, filed by
-  par-term).
+  par-term, `e1a184da`).
 - **mux: a Claude Code `/clear` no longer blanks the roster's project name.**
   Claude fires SessionEnd(reason=`clear`) at `/clear`; the shipped claude
   hook now stays silent on that reason (a re-key, not an exit —
@@ -61,12 +61,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   daemon's `clear_agent_claim` no longer wipes the host probe's sample,
   whose project field attributes the pane's directory, not the agent's
   claim. Pinned by `a_clear_reason_session_end_does_not_release_the_claim`
-  and `a_release_keeps_the_host_probe_project`.
+  and `a_release_keeps_the_host_probe_project` (`55c3615f`).
 - Deduped tokio-tungstenite to a single 0.29.0 in the lockfile (SEC-004); the
   remaining sha2 duplicate is dev-graph-only (test-only minisign dev-dep chain).
 - The crates.io package no longer ships dev-tooling residue (`uv.lock`,
   `pyrightconfig.json`, `theme.css`; `requirements-dev.txt` deleted — ARC-011
-  follow-up), and agent config dirs, `AGENTS.md`, and `AUDIT.md` are excluded
+  follow-up), and agent config dirs and `AGENTS.md` are excluded
   from the published crate.
 
 ## [0.91.0] - 2026-11-26
