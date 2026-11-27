@@ -906,6 +906,9 @@ print(f"CWD: {state.cwd}")
 ### Working Directory Tracking
 
 ```python
+# OSC 7 cwd tracking is opt-in by default (SEC-005): enable it first.
+term.set_accept_osc7(True)
+
 # Set current working directory via OSC 7
 term.process_str("\x1b]7;file:///home/user/project\x07")
 
