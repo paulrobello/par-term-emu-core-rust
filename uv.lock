@@ -240,6 +240,7 @@ image = [
 [package.dev-dependencies]
 dev = [
     { name = "maturin" },
+    { name = "pillow" },
     { name = "pre-commit" },
     { name = "pyright" },
     { name = "pytest" },
@@ -258,6 +259,7 @@ provides-extras = ["image"]
 [package.metadata.requires-dev]
 dev = [
     { name = "maturin", specifier = ">=1.16.0" },
+    { name = "pillow", specifier = ">=12.1.0" },
     { name = "pre-commit", specifier = ">=4.7.0" },
     { name = "pyright", specifier = ">=1.1.414" },
     { name = "pytest", specifier = ">=9.2.0" },
