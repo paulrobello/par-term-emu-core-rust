@@ -1456,6 +1456,71 @@ fn a_release_clears_state_identity_and_authority_and_broadcasts_the_removal() {
     );
 }
 
+/// A release keeps the host probe's project attribution: the project is
+/// the pane's own directory, not the agent's claim, so a /clear-shaped
+/// SessionEnd→release→SessionStart(clear) cycle must not blank the roster
+/// project for a probe cycle (Paul's 2026-11-27 report — every /clear
+/// blanked the side panel's project line until the next 30s sweep).
+#[test]
+fn a_release_keeps_the_host_probe_project() {
+    let (tree, pane_id) = tree_with_pane();
+    handle_report(&state_report(pane_id, "claude", "working", 1_000), &tree);
+    {
+        let mut guard = tree.lock();
+        let pane = guard.pane_mut(pane_id).expect("pane exists");
+        pane.host_telemetry = Some(crate::mux::host_probe::HostTelemetry {
+            disk_free_percent: Some(crate::mux::host_probe::Stamped {
+                value: 42,
+                sampled_at_unix_ms: 1_000,
+            }),
+            git_branch: None,
+            git_dirty: None,
+            project: Some(crate::mux::host_probe::Stamped {
+                value: "par-term-emu-core-rust".to_string(),
+                sampled_at_unix_ms: 1_000,
+            }),
+        });
+    }
+
+    let release = format!(
+        r#"{{"id":"t-2","method":"pane.release_agent","params":{{"pane_id":"{pane_id}","agent":"claude","seq":1200,"source":"par-mux:test"}}}}"#
+    );
+    let (reply, notification) = handle_report(&release, &tree);
+    assert!(reply.contains(r#""result":"ok""#), "accepted: {reply}");
+    assert_eq!(
+        notification,
+        Some(TmuxNotification::AgentReleased {
+            pane_id: pane_id.to_string(),
+            agent: "claude".to_string(),
+        }),
+        "the release itself still broadcasts"
+    );
+
+    // The full /clear cycle: the SessionStart(clear) report re-keys the
+    // claim right after the release.
+    let rekey = format!(
+        r#"{{"id":"t-3","method":"pane.report_agent_session","params":{{"pane_id":"{pane_id}","agent":"claude","seq":1300,"session_start_source":"clear","agent_session_id":"s-2","session_resume_argv":["claude","--resume","s-2"]}}}}"#
+    );
+    let (rekey_reply, _) = handle_report(&rekey, &tree);
+    assert!(
+        rekey_reply.contains(r#""result":"ok""#),
+        "re-keyed: {rekey_reply}"
+    );
+
+    let guard = tree.lock();
+    let pane = guard.pane(pane_id).expect("pane exists");
+    let project = pane
+        .host_telemetry
+        .as_ref()
+        .and_then(|telemetry| telemetry.project.as_ref())
+        .map(|stamped| stamped.value.as_str());
+    assert_eq!(
+        project,
+        Some("par-term-emu-core-rust"),
+        "the host-attributed project survives a release and re-claim"
+    );
+}
+
 /// A release naming a different agent than the pane's claim is a no-op:
 /// a stale claude hook must not wipe a live pi claim (herdr's authority
 /// match, on the label).

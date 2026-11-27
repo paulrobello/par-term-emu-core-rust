@@ -115,6 +115,15 @@ if action == "release":
     # as proof of ownership: the daemon no-ops a release whose proof does
     # not match the claimed session (a nested claude exit never owns the
     # parent claim).
+    # Claude fires SessionEnd(reason="clear") when the user runs /clear —
+    # a re-key, not an exit: the agent keeps running and
+    # SessionStart(source=clear) re-registers the claim moments later.
+    # Releasing there wiped the pane host telemetry with the claim and
+    # blanked the roster project line for a probe cycle on every /clear
+    # (the daemon clear_agent_claim; fixed to keep it on its side too).
+    reason = payload.get("reason")
+    if isinstance(reason, str) and reason == "clear":
+        raise SystemExit(0)
     params = {
         "pane_id": os.environ["PAR_MUX_PANE_ID"],
         "source": "par-mux:claude",

@@ -311,7 +311,63 @@ fn the_hook_stamps_identity_on_state_reports_and_a_proof_on_its_release() {
         root.path(),
         "top-release",
         "release",
+        r#"{"session_id":"s-parent","reason":"prompt_input_exit"}"#,
+        &sock,
+        false,
+    );
+    assert_eq!(done["code"], 0, "{done}");
+    let requests = collect_requests(&listener, 1, Duration::from_secs(3));
+    assert_eq!(requests.len(), 1, "{requests:?}");
+    let request: JsonValue = serde_json::from_str(requests[0].trim()).expect("JSON line");
+    assert_eq!(request["method"], "pane.release_agent", "{request}");
+    assert_eq!(
+        request["params"]["agent_session_id"], "s-parent",
+        "{request}"
+    );
+}
+
+/// Claude fires SessionEnd with reason "clear" when the user runs /clear
+/// (and "resume"/"fork" for the re-key fires) — those are re-keys, not
+/// exits: the agent keeps running, and SessionStart(source=clear)
+/// re-registers the SAME pane's claim moments later. A release there
+/// blanked the roster's host-probed project line for a probe cycle on
+/// every /clear (the daemon's release wipes the pane's host telemetry;
+/// Paul's 2026-11-27 report with screenshot). The release arm therefore
+/// releases on real end reasons and stays silent on "clear".
+#[cfg(unix)]
+#[test]
+fn a_clear_reason_session_end_does_not_release_the_claim() {
+    if !python3_or_skip() {
+        eprintln!("skipping: python3 is not available");
+        return;
+    }
+    let root = temp_root();
+    let hook = root.path().join("par-mux-claude-session-hook.sh");
+    fs::write(&hook, claude_hook_asset()).expect("hook asset");
+    let (listener, sock) = bind_bench_socket(root.path());
+
+    // The /clear fire: SessionEnd, reason "clear" — nothing leaves.
+    let done = run_hook_detached(
+        root.path(),
+        "clear-release",
+        "release",
         r#"{"session_id":"s-parent","reason":"clear"}"#,
+        &sock,
+        false,
+    );
+    assert_eq!(done["code"], 0, "{done}");
+    let requests = collect_requests(&listener, 0, Duration::from_millis(800));
+    assert!(
+        requests.is_empty(),
+        "a reason=clear SessionEnd is a re-key, not an exit: {requests:?}"
+    );
+
+    // Positive control: a real end reason still releases, with the proof.
+    let done = run_hook_detached(
+        root.path(),
+        "exit-release",
+        "release",
+        r#"{"session_id":"s-parent","reason":"prompt_input_exit"}"#,
         &sock,
         false,
     );

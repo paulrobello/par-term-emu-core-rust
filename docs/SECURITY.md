@@ -1488,8 +1488,8 @@ sections; the numbers live here.
 | `EVENT_RING_CAPACITY` | 1,024 | `crates/par-mux/src/mux/events.rs:27` | Lifecycle events retained by the daemon's replay ring. |
 | `MAX_FOREGROUND_NAME_LEN` | 128 | `crates/par-mux/src/mux/foreground.rs:42` | Bytes of a pane's foreground command name served by pane-info. |
 | `MAX_REPORT_VALUE_LEN` | 4,096 | `crates/par-mux/src/mux/hooks/mod.rs:148` | Bytes accepted for one hook or agent report value sent from a pane. |
-| `MAX_GIT_BRANCH_LEN` | 128 | `crates/par-mux/src/mux/host_probe.rs:174` | Bytes of git branch name the host probe serves for one pane cwd. |
-| `MAX_PROJECT_LEN` | 128 | `crates/par-mux/src/mux/host_probe.rs:289` | Bytes of project name the host probe serves for one pane cwd. |
+| `MAX_GIT_BRANCH_LEN` | 128 | `crates/par-mux/src/mux/host_probe.rs:176` | Bytes of git branch name the host probe serves for one pane cwd. |
+| `MAX_PROJECT_LEN` | 128 | `crates/par-mux/src/mux/host_probe.rs:291` | Bytes of project name the host probe serves for one pane cwd. |
 | `MAX_STREAM_LINE_BYTES` | 64 MiB | `crates/par-mux/src/mux/pane_stream.rs:29` | Bytes accumulated from one daemon line by a pane stream client before it closes the connection. |
 | `CONTROL_CHUNK` | 4,096 | `crates/par-mux/src/mux/pane_stream.rs:34` | Stdin bytes a control-pane client forwards per send-keys line. |
 | `MAX_PERSISTED_SCROLLBACK_CELLS` | 100,000 | `crates/par-mux/src/mux/persist/format.rs:50` | Scrollback cells restored per pane from an untrusted on-disk state file. |

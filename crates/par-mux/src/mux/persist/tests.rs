@@ -1206,9 +1206,14 @@ fn restore_note_observer_events_arrive_after_the_terminal_lock_drops() {
 
 /// serde(default): a save file written before pane cwds existed carries
 /// no `cwd` key and must decode — and spawn — with the factory default.
+/// The save-side tree runs on [`RecordingFactory`]'s silent sleeper like
+/// `held_dead_tree`: the default factory spawns the user's login shell,
+/// whose first prompt (iTerm2 shell integration's OSC 1337 CurrentDir,
+/// an OSC 7 alias) overwrote the test's OSC 7 `/tmp` cwd under full-gate
+/// load and stripped nothing (measured 2026-11-27, checkall-ci).
 #[test]
 fn a_save_file_without_the_cwd_field_still_loads() {
-    let mut tree = tree();
+    let mut tree = MuxTree::new(Box::new(RecordingFactory::default()));
     let session = tree.new_session("old", 80, 24).unwrap();
     let window = tree.session(session).unwrap().windows[0];
     let pane_id = tree.window(window).unwrap().panes()[0];

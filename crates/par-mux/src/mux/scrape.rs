@@ -1579,9 +1579,7 @@ contains = ["Override Idle"]
                 );
             }
             assert!(
-                pane.seq_by_source.is_empty()
-                    && pane.telemetry.is_none()
-                    && pane.host_telemetry.is_none(),
+                pane.seq_by_source.is_empty() && pane.telemetry.is_none(),
                 "the typed half of the claim is cleared too"
             );
         }

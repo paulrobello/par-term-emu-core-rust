@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+- **mux: a Claude Code `/clear` no longer blanks the roster's project name.**
+  Claude fires SessionEnd(reason=`clear`) at `/clear`; the shipped claude
+  hook now stays silent on that reason (a re-key, not an exit —
+  SessionStart(clear) re-registers the claim moments later), and the
+  daemon's `clear_agent_claim` no longer wipes the host probe's sample,
+  whose project field attributes the pane's directory, not the agent's
+  claim. Pinned by `a_clear_reason_session_end_does_not_release_the_claim`
+  and `a_release_keeps_the_host_probe_project`.
+
 ## [0.91.0] - 2026-11-26
 
 ### Added

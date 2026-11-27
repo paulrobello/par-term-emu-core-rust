@@ -47,8 +47,10 @@ pub(crate) struct Stamped<T> {
 
 /// A pane's host-probed telemetry (ARC-113), stored typed on
 /// [`crate::mux::pane::MuxPane::host_telemetry`] — sibling of the
-/// hook-reported telemetry, cleared with the claim likewise. The roster
-/// renders it through [`fresh_host_telemetry_b64`] with no JSON parse.
+/// hook-reported telemetry, but pane-attributed: it survives a claim
+/// clear (`clear_agent_claim`), because its project/branch fields
+/// describe the pane's directory, not the agent. The roster renders it
+/// through [`fresh_host_telemetry_b64`] with no JSON parse.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub(crate) struct HostTelemetry {
     pub(crate) disk_free_percent: Option<Stamped<u64>>,

@@ -381,11 +381,14 @@ impl AgentClaim {
 
 /// Clear a pane's whole agent claim — the metadata keys and the typed
 /// telemetry and sequence state — as `pane.release_agent` and the scrape
-/// tick's liveness sweep (`scrape.rs`) both do.
+/// tick's liveness sweep (`scrape.rs`) both do. The host probe's sample
+/// survives the clear: its project/branch fields attribute the PANE's
+/// directory, not the agent's claim, and wiping them blanked the roster's
+/// project line for a probe cycle on every claim clear (claude's /clear
+/// fires SessionEnd(reason=clear) → release → re-claim within moments).
 pub(crate) fn clear_agent_claim(pane: &mut MuxPane) {
     pane.clear_metadata(AGENT_CLAIM_KEYS);
     pane.telemetry = None;
-    pane.host_telemetry = None;
     pane.seq_by_source.clear();
 }
 

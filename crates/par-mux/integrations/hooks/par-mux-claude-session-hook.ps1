@@ -121,6 +121,15 @@ if ($action -eq "release") {
     # as proof of ownership: the daemon no-ops a release whose proof does
     # not match the claim's session (a nested claude's exit never owns the
     # parent's claim).
+    # Claude fires SessionEnd(reason="clear") when the user runs /clear —
+    # a re-key, not an exit: the agent keeps running and
+    # SessionStart(source=clear) re-registers the claim moments later.
+    # Releasing there wiped the pane host telemetry with the claim and
+    # blanked the roster project line for a probe cycle on every /clear
+    # (the daemon clear_agent_claim; fixed to keep it on its side too).
+    if ($payload -and $payload.reason -eq "clear") {
+        exit 0
+    }
     $params = [ordered]@{
         pane_id = "$($env:PAR_MUX_PANE_ID)"
         source = "par-mux:claude"
