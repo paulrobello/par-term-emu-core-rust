@@ -35,6 +35,12 @@ pub struct CwdChange {
 }
 
 /// Terminal change event
+///
+/// ARC-012: this enum is under a variant-count ratchet (`make
+/// terminal-event-check`, part of `checkall`); a new variant must also land
+/// its `event_fields.rs` branch and, when Python-visible, the `_native.pyi`
+/// stub update in the same commit, and growing past the recorded baseline is
+/// a reviewed decision in `scripts/check_terminal_event.py`.
 #[derive(Debug, Clone, PartialEq)]
 pub enum TerminalEvent {
     /// Bell event occurred
