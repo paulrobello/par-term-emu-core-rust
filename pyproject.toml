@@ -51,10 +51,12 @@ keywords = [
     "unicode",
     "true-color",
 ]
-dependencies = [
-    "pillow>=13.0.0",
-]
-
+# ARC-004: no hard runtime dependencies. The shipped Python layer imports
+# nothing; screenshot rendering lives entirely in Rust (embedded fonts via
+# swash). Pillow is optional — the `image` extra below installs it for the
+# screenshot tests (tests/test_screenshot.py) and sixel examples that load
+# PNGs; `make setup-venv` uses `uv sync --all-extras` so dev environments
+# keep it.
 [project.license]
 file = "LICENSE"
 

@@ -1099,7 +1099,7 @@ The lists below cover the workspace as a whole. The terminal-side crates (`vte`,
 - `uv` - Fast Python package installer and resolver (recommended)
 
 **Runtime dependencies:**
-- `pillow` - Image processing for sixel examples and screenshot features
+- None — screenshot rendering lives in Rust; `pillow` is optional via the `image` extra (screenshot tests, sixel examples)
 
 **Testing:**
 - `pytest` - Testing framework

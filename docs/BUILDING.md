@@ -125,7 +125,7 @@ The `setup-venv` target creates a `.venv` directory and syncs all development de
 - **pre-commit** (≥4.6.2) - Git hook framework
 - **rich** (≥15.0.0) - Rich text formatting for examples
 - **websockets** (≥17.2) - WebSocket client for streaming examples
-- **pillow** (≥12.3.0) - Image processing for graphics features (required dependency)
+- **pillow** (≥13.0.0) - Image processing for screenshot tests and sixel examples (optional; installed via the `image` extra, included by `setup-venv`'s `--all-extras`)
 
 ### Development Build
 
