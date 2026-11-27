@@ -7,8 +7,8 @@
 # Installs par-term-streamer and/or par-mux into ~/.cargo/bin (or --bin-dir),
 # verifying every download against its release SHA-256 before anything is
 # moved into place, and against the release's detached minisign signature
-# (<asset>.minisig) when one is published. Never touches launchd or any other
-# service.
+# (<asset>.minisig), which every release publishes (SEC-002). Never touches
+# launchd or any other service.
 #
 # Self-test (no network): bash install.sh --self-test
 
@@ -19,11 +19,12 @@ API_LATEST="https://api.github.com/repos/${REPO}/releases/latest"
 DL_BASE="https://github.com/${REPO}/releases/download"
 
 # Release-signing public key (minisign key ID 7D5A457F1AB85B55); the private key
-# stays offline with the owner. Activation contract: this hardens, never blocks,
-# until activated. Releases published before the first signed release carry no
-# <asset>.minisig, so an absent sidecar (or a missing minisign CLI) warns and the
-# install proceeds on the SHA-256 gate alone. A present sidecar that does not
-# verify against this key aborts the install.
+# stays offline with the owner. Fail-closed contract (SEC-002): the SHA-256
+# sidecar shares the release channel with the artifact, so integrity alone
+# cannot prove authenticity. A missing <asset>.minisig sidecar, a missing
+# minisign CLI, or a sidecar that does not verify against this key aborts the
+# install — releases predating the first signed release are unreachable from
+# this installer by design.
 MINISIGN_PUB_KEY='untrusted comment: minisign public key 7D5A457F1AB85B55
 RWRVW7gaf0VafV4bihSeMbq2JiaTYTanOpdm5EkgpPk65edfjHsAnA+t'
 
@@ -331,11 +332,11 @@ install_one() { # $1=streamer|streamer-mux|mux  $2=version $3=os $4=arch $5=dest
     verify_signature "$asset_file" "$sig_file" "$MINISIGN_PUB_KEY" || sig_rc=$?
     case "$sig_rc" in
       0) log "minisign signature verified (key 7D5A457F1AB85B55)" ;;
-      2) log "warning: ${asset}.minisig is published but the minisign CLI is not installed; authenticity NOT verified (install minisign to enable)" ;;
+      2) die "minisign signature verification requires the minisign CLI, which is not installed; refusing unverified install (install minisign, e.g. 'brew install minisign' or 'cargo install minisign')" ;;
       *) die "minisign signature verification FAILED for ${asset}; nothing was installed" ;;
     esac
   else
-    log "warning: release v${version} publishes no ${asset}.minisig; authenticity NOT verified (SHA-256 integrity only)"
+    die "release v${version} publishes no ${asset}.minisig; refusing unverified install (SEC-002: SHA-256 integrity alone cannot prove authenticity)"
   fi
 
   if [ "$kind" = "mux" ]; then

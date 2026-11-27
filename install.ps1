@@ -62,11 +62,12 @@ function Get-ChecksumFromSums([string]$SumsText, [string]$AssetName) {
 }
 
 # Release-signing public key (minisign key ID 7D5A457F1AB85B55); the private key
-# stays offline with the owner. Activation contract: this hardens, never blocks,
-# until activated. Releases published before the first signed release carry no
-# <asset>.minisig, so an absent sidecar (or a missing minisign CLI) warns and the
-# install proceeds on the SHA-256 gate alone. A present sidecar that does not
-# verify against this key aborts the install.
+# stays offline with the owner. Fail-closed contract (SEC-002): the SHA-256
+# sidecar shares the release channel with the artifact, so integrity alone
+# cannot prove authenticity. A missing <asset>.minisig sidecar, a missing
+# minisign CLI, or a sidecar that does not verify against this key aborts the
+# install — releases predating the first signed release are unreachable from
+# this installer by design.
 $MinisignPubKey = @'
 untrusted comment: minisign public key 7D5A457F1AB85B55
 RWRVW7gaf0VafV4bihSeMbq2JiaTYTanOpdm5EkgpPk65edfjHsAnA+t
@@ -189,10 +190,10 @@ try {
                 }
                 Write-Host "install.ps1: minisign signature verified (key 7D5A457F1AB85B55)"
             } else {
-                Write-Host "install.ps1: warning: $asset.minisig is published but the minisign CLI is not installed; authenticity NOT verified" -ForegroundColor Yellow
+                Die "minisign signature verification requires the minisign CLI, which is not installed; refusing unverified install (install minisign, e.g. 'winget install minisign' or 'cargo install minisign')"
             }
         } else {
-            Write-Host "install.ps1: warning: release v$version publishes no $asset.minisig; authenticity NOT verified (SHA-256 integrity only)" -ForegroundColor Yellow
+            Die "release v$version publishes no $asset.minisig; refusing unverified install (SEC-002: SHA-256 integrity alone cannot prove authenticity)"
         }
 
         $dest = Join-Path $BinDir $target.DestName
