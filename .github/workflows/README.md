@@ -10,6 +10,7 @@ This directory contains the GitHub Actions workflows that build, test, and publi
 | **Release and Publish** | `release.yml` | Manual (`workflow_dispatch`) | Thin wrapper that dispatches `deployment.yml` on `main` |
 | **CI** | `ci.yml` | Every pull request + manual (`workflow_dispatch`) | Version check + multi-OS test/lint/build gate (no publish) |
 | **Fuzz** | `fuzz.yml` | Manual (`workflow_dispatch`) + nightly schedule (`17 6 * * *`) | 10-min bounded libFuzzer run per target over every target in the matrix; crash artifacts uploaded on failure |
+| **Dependency Audit** | `deps-audit.yml` | Weekly schedule (Mondays `23 7 * * 1`) + manual (`workflow_dispatch`) | cargo-deny advisories/sources/bans over the workspace + frontend and Python dependency audits |
 | **Publish 🐍 📦 to TestPyPI** | `publish-testpypi.yml` | Manual (`workflow_dispatch`) | Build + publish to TestPyPI + verify install |
 | **Publish to crates.io** | `publish-crates.yml` | Manual (`workflow_dispatch`) | Standalone crates.io publish (idempotent; for republishing without a full release) |
 | **Claude Code** | `claude.yml` | `@claude` mention in an issue/PR comment or issue body | Run a Claude Code session on GitHub that answers the mention |
