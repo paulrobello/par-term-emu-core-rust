@@ -998,6 +998,16 @@ This is the accepted posture, not an oversight:
   (SEC-002) unless `--allow-unauthenticated`
   (`PAR_TERM_ALLOW_UNAUTHENTICATED`) acknowledges that anyone who can reach
   the port gets an interactive shell.
+- **Input is fail-closed too (audit finding SEC-001, breaking default
+  change)**: new clients connect **read-only** by default.
+  `StreamingConfig::default().default_read_only` is now `true`, the Python
+  `StreamingConfig()` constructor matches, and `par-term-streamer` requires
+  the new `--read-write` flag before any client can type. With defaults, a
+  no-auth loopback server is watch-only: local users can observe the PTYs
+  but cannot inject keystrokes into them. Interactive deployments opt in
+  with `--read-write` (binary) or `default_read_only = false` (library /
+  Python) — on shared hosts pair `--read-write` with `--api-key` or HTTP
+  Basic Auth.
 
 ### Transport Security (TLS)
 
@@ -1477,9 +1487,10 @@ Every update path (`self_update.rs` for `par-term-streamer` and `par-mux`, the s
 - **Pinned key**: minisign key ID `7D5A457F1AB85B55`, embedded in `crates/par-term-emu-core/src/self_update.rs` (`RELEASE_PUBLIC_KEY`), `install.sh`, and `install.ps1`. The signing key material lives as the passwordless `MINISIGN_SECRET_KEY` secret on the approval-gated `release` GitHub environment (required reviewer: the owner; both this repo and par-term share the keypair); the owner's encrypted original stays offline on their machine.
 - **Order**: SHA-256 integrity first, then signature authenticity, both before anything is staged, extracted, or installed.
 - **Bad signature is a hard failure.** A `.minisig` that is present but does not verify against the pinned key aborts the update and leaves the installed binary unchanged.
-- **Activation contract**: this hardens, never blocks, until activated. Releases published before the first signed release have no `.minisig`, so an absent sidecar prints a loud warning and proceeds on the SHA-256 gate alone (the shell installers also warn and proceed when a `.minisig` is published but the `minisign` CLI is not installed). CI signs at the cut (deployment.yml's `Sign release assets with minisign` step and par-term's `release.yml`, both gated on the `release` environment); `scripts/sign-release.sh` remains the manual fallback and `scripts/check-release-signatures.sh` verifies a cut's assets. The warn-on-absent window closes when the first signed release ships: from then on a missing sidecar on a signed-era release should become a refusal.
-- **Signing**: `MINISIGN_SECRET_KEY=<keyfile> scripts/sign-release.sh <artifact>...` writes `<artifact>.minisig` and re-verifies each against the pinned key.
-- **Not covered**: theft of the offline private key, and the interval before activation.
+- **Missing sidecar is a hard failure in the Rust update paths.** `verify_release_signature` (`self_update.rs`, serving `par-term-streamer` and `par-mux` self-updates) and the streamer's `--download-frontend` both refuse a release that publishes no `.minisig` at all: releases predating the first signed release are unreachable from those updaters by design, and a stripped sidecar is treated as a downgrade attempt. The first-run installers remain the softer surface: `install.sh` / `install.ps1` warn and proceed when a release publishes no `.minisig`, and when a sidecar is published but the `minisign` CLI is not installed.
+- **Signing**: CI signs at the cut (deployment.yml's `Sign release assets with minisign` step and par-term's `release.yml`, both gated on the `release` environment); `scripts/sign-release.sh` remains the manual fallback and `scripts/check-release-signatures.sh` verifies a cut's assets.
+- **Signing locally**: `MINISIGN_SECRET_KEY=<keyfile> scripts/sign-release.sh <artifact>...` writes `<artifact>.minisig` and re-verifies each against the pinned key.
+- **Not covered**: theft of the offline private key.
 
 ## Resource Limits Reference
 

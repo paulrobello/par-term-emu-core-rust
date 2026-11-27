@@ -772,7 +772,7 @@ mod streaming_tests {
             assert_eq!(config.max_clients, 1000);
             assert!(config.send_initial_screen);
             assert_eq!(config.keepalive_interval, 30);
-            assert!(!config.default_read_only);
+            assert!(config.default_read_only);
             assert!(!config.enable_http);
             assert_eq!(config.web_root, "./web_term");
             assert_eq!(config.initial_cols, 0);

@@ -208,6 +208,14 @@ pub struct Args {
     )]
     pub csp_connect_origins: Option<Vec<String>>,
 
+    /// Allow connected clients to send input (keystrokes) to the PTY.
+    /// Fail-closed (audit SEC-001): clients connect read-only unless this
+    /// flag is passed, so a no-auth loopback server cannot be typed into by
+    /// every local user. On shared hosts combine --read-write with
+    /// --api-key or HTTP Basic Auth so input stays authenticated.
+    #[arg(long)]
+    pub read_write: bool,
+
     /// Acknowledge binding a non-loopback host with no authentication
     /// (SEC-002). Without this flag the server refuses to start in that
     /// configuration: anyone who can reach the port gets an interactive
@@ -521,6 +529,13 @@ mod tests {
                 .input_rate_limit,
             0
         );
+    }
+
+    #[test]
+    fn read_write_defaults_off_clients_connect_read_only() {
+        // Audit SEC-001: fail closed — input requires --read-write.
+        assert!(!parse(&[]).unwrap().read_write);
+        assert!(parse(&["--read-write"]).unwrap().read_write);
     }
 
     #[test]

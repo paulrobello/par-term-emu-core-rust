@@ -366,7 +366,11 @@ pub struct StreamingConfig {
     pub send_initial_screen: bool,
     /// Keepalive ping interval in seconds (0 = disabled)
     pub keepalive_interval: u64,
-    /// Default mode for new clients (true = read-only, false = read-write)
+    /// Default mode for new clients (true = read-only, false = read-write).
+    /// Defaults to `true` (audit finding SEC-001): a no-auth loopback
+    /// streamer exposes the owner's PTYs to every local user, so new clients
+    /// watch until the operator explicitly opts into input with
+    /// `default_read_only: false` (or the standalone server's `--read-write`).
     pub default_read_only: bool,
     /// Enable HTTP static file serving
     pub enable_http: bool,
@@ -489,7 +493,7 @@ impl Default for StreamingConfig {
             max_clients: 1000,
             send_initial_screen: true,
             keepalive_interval: 30,
-            default_read_only: false,
+            default_read_only: true,
             enable_http: false,
             web_root: "./web_term".to_string(),
             initial_cols: 0,
@@ -648,7 +652,7 @@ mod tests {
         assert_eq!(config.max_clients, 1000);
         assert!(config.send_initial_screen);
         assert_eq!(config.keepalive_interval, 30);
-        assert!(!config.default_read_only);
+        assert!(config.default_read_only);
         assert_eq!(config.max_sessions, 10);
         assert_eq!(config.session_idle_timeout, 900);
         assert!(config.presets.is_empty());
@@ -876,7 +880,7 @@ mod tests {
     #[tokio::test]
     async fn test_streaming_config_default_read_only() {
         let config = StreamingConfig::default();
-        assert!(!config.default_read_only);
+        assert!(config.default_read_only);
     }
     #[tokio::test]
     async fn test_streaming_config_default_max_sessions() {

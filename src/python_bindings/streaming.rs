@@ -35,7 +35,7 @@ impl Clone for PyStreamingConfig {
 #[pymethods]
 impl PyStreamingConfig {
     #[new]
-    #[pyo3(signature = (max_clients=1000, send_initial_screen=true, keepalive_interval=30, default_read_only=false, initial_cols=0, initial_rows=0, enable_http=false, web_root="./web_term", max_clients_per_session=0, input_rate_limit_bytes_per_sec=0, enable_system_stats=false, system_stats_interval_secs=5, api_key=None, allow_api_key_in_query=false, allowed_origins=None, kitty_file_media="temp_only", allow_pane_create=false, csp_connect_origins=None, allow_legacy_password_hashes=false))]
+    #[pyo3(signature = (max_clients=1000, send_initial_screen=true, keepalive_interval=30, default_read_only=true, initial_cols=0, initial_rows=0, enable_http=false, web_root="./web_term", max_clients_per_session=0, input_rate_limit_bytes_per_sec=0, enable_system_stats=false, system_stats_interval_secs=5, api_key=None, allow_api_key_in_query=false, allowed_origins=None, kitty_file_media="temp_only", allow_pane_create=false, csp_connect_origins=None, allow_legacy_password_hashes=false))]
     #[allow(
         clippy::too_many_arguments,
         reason = "Python keyword arguments, one per StreamingConfig field; a struct would change the Python API"
@@ -287,15 +287,17 @@ impl PyStreamingConfig {
     /// Get default read-only mode
     ///
     /// Returns:
-    ///     bool: True if clients start in read-only mode by default
+    ///     bool: True if clients start in read-only mode by default.
+    ///     Defaults to True (SEC-001): new clients watch until input is
+    ///     explicitly enabled with `default_read_only = False`.
     ///
     /// Example:
     ///     >>> config = StreamingConfig()
     ///     >>> config.default_read_only
-    ///     False
-    ///     >>> config.default_read_only = True
-    ///     >>> config.default_read_only
     ///     True
+    ///     >>> config.default_read_only = False
+    ///     >>> config.default_read_only
+    ///     False
     #[getter]
     fn default_read_only(&self) -> bool {
         self.inner.default_read_only

@@ -1078,7 +1078,9 @@ async fn next_wire_message(
 /// mux-control channel (the streamer's per-session daemon connection
 /// surface, reached here over the shared WebSocket dispatch), and the
 /// pane receives the bracket-pasted materialized path. The daemon-side
-/// file holds exactly the bytes the client sent.
+/// file holds exactly the bytes the client sent. The server opts into
+/// writable clients explicitly (audit SEC-001 default is read-only) —
+/// uploads materialize to a pane input path.
 #[test]
 fn a_client_upload_reaches_the_pane_as_a_bracket_pasted_path() {
     use crate::streaming::protocol::ClientMessage;
@@ -1086,7 +1088,18 @@ fn a_client_upload_reaches_the_pane_as_a_bracket_pasted_path() {
     let rt = runtime();
     let _entered = rt.enter();
     let (_dir, socket, _serving, mut control, pane) = daemon();
-    let server = streaming(&socket);
+    let factory = Arc::new(
+        MuxSessionFactory::new(socket, MuxPaneSelector::FromSessionId).with_reply_timeout(CEILING),
+    );
+    let server = Arc::new(StreamingServer::with_factory(
+        "127.0.0.1:0".to_string(),
+        StreamingConfig {
+            default_read_only: false,
+            ..StreamingConfig::default()
+        },
+        Arc::clone(&factory) as Arc<dyn SessionFactory>,
+    ));
+    factory.set_streaming_server(Arc::clone(&server));
     let session = mirror(&server, &pane);
     let pane_num: u32 = pane.trim_start_matches('%').parse().expect("pane number");
 

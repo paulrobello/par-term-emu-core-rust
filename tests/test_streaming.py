@@ -109,7 +109,7 @@ def test_streaming_config_creation():
     assert config.max_clients == 1000
     assert config.send_initial_screen is True
     assert config.keepalive_interval == 30
-    assert config.default_read_only is False
+    assert config.default_read_only is True
     assert config.max_sessions == 10
     assert config.session_idle_timeout == 900
 

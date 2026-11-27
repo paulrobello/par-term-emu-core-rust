@@ -419,7 +419,6 @@ async fn main() -> Result<()> {
 
     let config = build_config(
         &args,
-        &run_mode,
         (cols, rows),
         tls_config,
         http_basic_auth.clone(),
@@ -676,7 +675,6 @@ fn load_tls(args: &Args) -> Result<Option<TlsConfig>> {
 /// The streaming server configuration for these CLI arguments.
 fn build_config(
     args: &Args,
-    run_mode: &RunMode,
     (cols, rows): (u16, u16),
     tls: Option<TlsConfig>,
     http_basic_auth: Option<HttpBasicAuthConfig>,
@@ -686,8 +684,10 @@ fn build_config(
         max_clients: args.max_clients,
         send_initial_screen: true,
         keepalive_interval: args.keepalive,
-        // Macro playback has no PTY writer: its viewers watch, they cannot type.
-        default_read_only: matches!(run_mode, RunMode::Macro { .. }),
+        // Audit SEC-001: fail closed — clients connect read-only unless the
+        // operator passes --read-write. Macro playback stays structurally
+        // read-only: it has no PTY writer, so --read-write is a no-op there.
+        default_read_only: !args.read_write,
         enable_http: args.enable_http,
         web_root: args.web_root.clone(),
         initial_cols: cols,
