@@ -166,8 +166,9 @@ async fn fetch_expected_sha256(client: &reqwest::Client, url: &str) -> Result<St
 /// cap: Bytes accepted from a `.minisig` detached-signature sidecar (SEC-001).
 const MAX_SIGNATURE_BYTES: usize = 4 * 1024;
 
-/// Download a detached signature sidecar. A listed sidecar that cannot be
-/// fetched is fatal: only an unlisted one takes the warn path.
+/// Download a detached signature sidecar. A sidecar that is listed but cannot
+/// be fetched is fatal, as is an unlisted one (SEC-002: the gate is
+/// fail-closed).
 async fn fetch_signature(client: &reqwest::Client, url: &str) -> Result<Vec<u8>> {
     let response = client
         .get(url)
@@ -185,25 +186,18 @@ async fn fetch_signature(client: &reqwest::Client, url: &str) -> Result<Vec<u8>>
         .context("Signature sidecar response exceeded its 4 KiB cap")
 }
 
-/// Authenticity gate (SEC-001), run after the SHA-256 integrity gate. A bad
-/// signature is an error; an absent sidecar returns a warning to print (see
-/// the activation contract on `RELEASE_PUBLIC_KEY`).
+/// Authenticity gate (SEC-001/SEC-002), run after the SHA-256 integrity gate.
+/// Fail-closed: a missing sidecar, a bad signature, or a wrong key is an
+/// error, never a warning.
 fn check_archive_signature(
     public_key: &str,
     bytes: &[u8],
     signature: Option<&[u8]>,
     archive_name: &str,
-) -> Result<Option<String>> {
-    use par_term_emu_core::self_update::{verify_release_signature, SignatureStatus};
-    match verify_release_signature(public_key, bytes, signature)
-        .map_err(|e| anyhow::anyhow!("{e}. Refusing to extract."))?
-    {
-        SignatureStatus::Verified => Ok(None),
-        SignatureStatus::Absent => Ok(Some(format!(
-            "WARNING: release publishes no {archive_name}.minisig; archive authenticity is NOT \
-             verified (SHA-256 integrity only)."
-        ))),
-    }
+) -> Result<()> {
+    use par_term_emu_core::self_update::verify_release_signature;
+    verify_release_signature(public_key, bytes, signature)
+        .map_err(|e| anyhow::anyhow!("{e} ({archive_name}.minisig). Refusing to extract."))
 }
 
 /// Guard the destructive web-root replacement (SEC-007): an existing
@@ -362,22 +356,21 @@ pub async fn download_frontend(version: &str, web_root: &str, force: bool) -> Re
         }
     }
 
-    // SEC-001: detached-signature authenticity, after integrity and before
-    // the web root is touched.
+    // SEC-001/SEC-002: detached-signature authenticity, after integrity and
+    // before the web root is touched. A release without the sidecar is
+    // refused, not warned past.
     let signature_name = format!("{}.minisig", archive_asset.name);
     let signature = match release.assets.iter().find(|a| a.name == signature_name) {
         Some(a) => Some(fetch_signature(&client, &a.browser_download_url).await?),
         None => None,
     };
-    match check_archive_signature(
+    check_archive_signature(
         par_term_emu_core::self_update::RELEASE_PUBLIC_KEY,
         &archive_bytes,
         signature.as_deref(),
         &archive_asset.name,
-    )? {
-        None => println!("Signature verified (minisign key 7D5A457F1AB85B55)"),
-        Some(warning) => eprintln!("{warning}"),
-    }
+    )?;
+    println!("Signature verified (minisign key 7D5A457F1AB85B55)");
 
     // Create web root directory if it doesn't exist
     let web_root_path = Path::new(web_root);
@@ -680,7 +673,7 @@ mod tests {
     }
 
     #[test]
-    fn archive_signature_gate_verifies_rejects_tamper_and_warns_when_absent() {
+    fn archive_signature_gate_verifies_rejects_tamper_and_refuses_absent() {
         let pair = minisign::KeyPair::generate_unencrypted_keypair().unwrap();
         let sig = minisign::sign(
             Some(&pair.pk),
@@ -692,18 +685,13 @@ mod tests {
         .unwrap()
         .to_string();
         let pk = pair.pk.to_box().unwrap().into_string();
-        assert!(
-            check_archive_signature(&pk, b"archive", Some(sig.as_bytes()), "a.tar.gz")
-                .unwrap()
-                .is_none()
-        );
+        assert!(check_archive_signature(&pk, b"archive", Some(sig.as_bytes()), "a.tar.gz").is_ok());
         let err = check_archive_signature(&pk, b"archivX", Some(sig.as_bytes()), "a.tar.gz")
             .expect_err("tampered archive must fail");
         assert!(format!("{err:#}").contains("Refusing to extract"));
-        let warning = check_archive_signature(&pk, b"archive", None, "a.tar.gz")
-            .unwrap()
-            .expect("absent sidecar must warn");
-        assert!(warning.contains("NOT"));
+        let err = check_archive_signature(&pk, b"archive", None, "a.tar.gz")
+            .expect_err("absent sidecar must refuse");
+        assert!(format!("{err:#}").contains("Refusing to extract"));
     }
 
     #[tokio::test]

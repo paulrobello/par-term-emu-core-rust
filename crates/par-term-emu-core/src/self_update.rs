@@ -125,39 +125,27 @@ pub fn checksum(text: &str, name: &str) -> Result<String, String> {
 /// artifacts must be signed with. The matching private key stays offline on the
 /// owner's machine and is never part of this repository or its CI.
 ///
-/// Activation contract: this hardens, never blocks, until activated. Releases
-/// published before the first signed release carry no `<asset>.minisig`
-/// sidecar, so an absent sidecar warns loudly and the update proceeds on the
-/// SHA-256 gate alone. A sidecar that is present but does not verify against
-/// this key is a hard failure. The warn-on-absent window closes when the owner
-/// signs a release: from then on a stripped sidecar is a downgrade attempt and
-/// the absent branch in [`verify_release_signature`] should become a refusal.
+/// Fail-closed (SEC-002): the SHA-256 sidecar shares the release channel with
+/// the artifact, so integrity alone cannot prove authenticity. A release that
+/// publishes no `<asset>.minisig` sidecar is refused — releases predating the
+/// first signed release are unreachable from this updater by design, and a
+/// stripped sidecar is treated as a downgrade attempt.
 pub const RELEASE_PUBLIC_KEY: &str = "untrusted comment: minisign public key 7D5A457F1AB85B55\n\
 RWRVW7gaf0VafV4bihSeMbq2JiaTYTanOpdm5EkgpPk65edfjHsAnA+t\n";
 
 /// Cap on a downloaded `.minisig` sidecar.
 const SIGNATURE_CAP: u64 = 4 * 1024;
 
-/// Outcome of the authenticity gate that follows the SHA-256 integrity gate.
-#[derive(Debug, PartialEq, Eq)]
-pub enum SignatureStatus {
-    /// The detached signature verified against the pinned key.
-    Verified,
-    /// No sidecar was published; the caller must surface a warning.
-    Absent,
-}
-
 /// Verify `bytes` against an optional detached minisign signature using
-/// `public_key` (the two-line `.pub` text). Bad signature, wrong key ID, or an
-/// unparsable sidecar is an error; only a missing sidecar yields
-/// [`SignatureStatus::Absent`].
+/// `public_key` (the two-line `.pub` text). Fail-closed: a missing sidecar, a
+/// bad signature, a wrong key ID, or an unparsable sidecar is an error.
 pub fn verify_release_signature(
     public_key: &str,
     bytes: &[u8],
     signature: Option<&[u8]>,
-) -> Result<SignatureStatus, String> {
+) -> Result<(), String> {
     let Some(signature) = signature else {
-        return Ok(SignatureStatus::Absent);
+        return Err("release signature is missing; refusing unverified update".into());
     };
     let key = minisign_verify::PublicKey::decode(public_key)
         .map_err(|e| format!("pinned release public key is invalid: {e}"))?;
@@ -168,7 +156,7 @@ pub fn verify_release_signature(
     key.verify(bytes, &signature, true).map_err(|e| {
         format!("release signature verification failed: {e}; installed binary unchanged")
     })?;
-    Ok(SignatureStatus::Verified)
+    Ok(())
 }
 
 fn verify(bytes: &[u8], expected: &str) -> Result<(), String> {
@@ -422,24 +410,10 @@ fn update_release_with_key(
     let bytes = download(url(&name)?, 256 * 1024 * 1024)?;
     verify(&bytes, &expected)?;
     // Authenticity after integrity: the checksum sidecar shares the release
-    // channel with the artifact, a detached signature does not.
-    let signature_url = assets
-        .iter()
-        .find(|a| a["name"].as_str() == Some(format!("{name}.minisig").as_str()))
-        .and_then(|a| a["browser_download_url"].as_str());
-    let signature = signature_url
-        .map(|u| download(u, SIGNATURE_CAP))
-        .transpose()?;
-    let warning = match verify_release_signature(public_key, &bytes, signature.as_deref())? {
-        SignatureStatus::Verified => None,
-        SignatureStatus::Absent => Some(format!(
-            "WARNING: release {tag} publishes no {name}.minisig; authenticity is NOT verified \
-             (SHA-256 integrity only)"
-        )),
-    };
-    if let Some(w) = &warning {
-        eprintln!("{w}");
-    }
+    // channel with the artifact, a detached signature does not. Fail-closed
+    // (SEC-002): a release without the sidecar is refused, not warned past.
+    let signature = download(url(&format!("{name}.minisig"))?, SIGNATURE_CAP)?;
+    verify_release_signature(public_key, &bytes, Some(&signature))?;
     let payload = if binary == Binary::Mux {
         let dir = tempfile::tempdir_in(exe.parent().ok_or("executable has no parent")?)
             .map_err(|e| e.to_string())?;
@@ -473,11 +447,7 @@ fn update_release_with_key(
         .collect::<String>();
     let backup = install_verified(exe, &payload, &digest)?;
     Ok(Outcome {
-        report: format!(
-            "updated to {tag} ({name}); backup: {}{}",
-            backup.display(),
-            warning.map(|w| format!("; {w}")).unwrap_or_default()
-        ),
+        report: format!("updated to {tag} ({name}); backup: {}", backup.display()),
         installed: true,
     })
 }
@@ -582,9 +552,11 @@ mod tests {
             std::env::consts::ARCH,
         )
         .unwrap();
+        let (pk, sig) = signed_fixture(b"abc");
         let release = serde_json::json!({"tag_name": "v99.0.0", "assets": [
             {"name": name, "browser_download_url": "https://example.test/binary"},
-            {"name": format!("{name}.sha256"), "browser_download_url": "https://example.test/checksum"}
+            {"name": format!("{name}.sha256"), "browser_download_url": "https://example.test/checksum"},
+            {"name": format!("{name}.minisig"), "browser_download_url": "https://example.test/sig"}
         ]});
         let download = |url: &str, _cap| {
             Ok(if url.ends_with("checksum") {
@@ -592,11 +564,13 @@ mod tests {
                     "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad  {name}\n"
                 )
                 .into_bytes()
+            } else if url.ends_with("sig") {
+                sig.clone().into_bytes()
             } else {
                 b"corrupted".to_vec()
             })
         };
-        let err = update_release(
+        let err = update_release_with_key(
             Binary::Streamer,
             "1.0.0",
             &exe,
@@ -604,6 +578,7 @@ mod tests {
             false,
             &release,
             download,
+            &pk,
         )
         .unwrap_err();
         assert!(err.contains("SHA-256 mismatch"));
@@ -616,19 +591,19 @@ mod tests {
                 download(url, cap)
             }
         };
-        assert!(
-            update_release(
-                Binary::Streamer,
-                "1.0.0",
-                &exe,
-                false,
-                false,
-                &release,
-                good
-            )
-            .unwrap()
-            .installed
-        );
+        let ok = update_release_with_key(
+            Binary::Streamer,
+            "1.0.0",
+            &exe,
+            false,
+            false,
+            &release,
+            good,
+            &pk,
+        )
+        .unwrap();
+        assert!(ok.installed);
+        assert!(ok.report.contains(&name));
         assert_eq!(std::fs::read(&exe).unwrap(), b"abc");
         assert_eq!(
             std::fs::read(dir.path().join("streamer.previous")).unwrap(),
@@ -651,18 +626,22 @@ mod tests {
         )
         .unwrap();
         let digest = "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad";
+        let (pk, sig) = signed_fixture(b"abc");
         let release = serde_json::json!({"tag_name": "v99.0.0", "assets": [
             {"name": name, "browser_download_url": "https://example.test/mux-binary"},
-            {"name": format!("{name}.sha256"), "browser_download_url": "https://example.test/mux-checksum"}
+            {"name": format!("{name}.sha256"), "browser_download_url": "https://example.test/mux-checksum"},
+            {"name": format!("{name}.minisig"), "browser_download_url": "https://example.test/mux-sig"}
         ]});
         let download = |url: &str, _cap| {
             Ok(if url.ends_with("mux-checksum") {
                 format!("{digest}  {name}\n").into_bytes()
+            } else if url.ends_with("mux-sig") {
+                sig.clone().into_bytes()
             } else {
                 b"abc".to_vec()
             })
         };
-        let outcome = update_release(
+        let outcome = update_release_with_key(
             Binary::StreamerMux,
             "1.0.0",
             &exe,
@@ -670,6 +649,7 @@ mod tests {
             false,
             &release,
             download,
+            &pk,
         )
         .unwrap();
         assert!(outcome.installed);
@@ -680,7 +660,7 @@ mod tests {
             {"name": "par-term-streamer-test", "browser_download_url": "https://example.test/binary"},
             {"name": "par-term-streamer-test.sha256", "browser_download_url": "https://example.test/checksum"}
         ]});
-        let err = update_release(
+        let err = update_release_with_key(
             Binary::StreamerMux,
             "1.0.0",
             &exe,
@@ -688,6 +668,7 @@ mod tests {
             false,
             &plain_only,
             |_, _| panic!("wrong-variant release must not be downloaded"),
+            &pk,
         )
         .unwrap_err();
         assert!(
@@ -728,11 +709,13 @@ mod tests {
             .iter()
             .map(|b| format!("{b:02x}"))
             .collect::<String>();
+        let (pk, sig) = signed_fixture(&bytes);
         let release = serde_json::json!({"tag_name": "v99.0.0", "assets": [
             {"name": name, "browser_download_url": "https://example.test/archive"},
-            {"name": "par-mux-v99.0.0-SHA256SUMS.txt", "browser_download_url": "https://example.test/sums"}
+            {"name": "par-mux-v99.0.0-SHA256SUMS.txt", "browser_download_url": "https://example.test/sums"},
+            {"name": format!("{name}.minisig"), "browser_download_url": "https://example.test/sig"}
         ]});
-        let result = update_release(
+        let result = update_release_with_key(
             Binary::Mux,
             "1.0.0",
             &exe,
@@ -742,10 +725,13 @@ mod tests {
             |url, _| {
                 Ok(if url.ends_with("sums") {
                     format!("{digest}  {name}\n").into_bytes()
+                } else if url.ends_with("sig") {
+                    sig.clone().into_bytes()
                 } else {
                     bytes.clone()
                 })
             },
+            &pk,
         )
         .unwrap();
         assert!(result.installed);
@@ -896,12 +882,9 @@ mod tests {
     }
 
     #[test]
-    fn signature_verifies_rejects_tamper_and_absent_warns() {
+    fn signature_verifies_rejects_tamper_and_refuses_missing() {
         let (pk, sig_text) = signed_fixture(b"artifact");
-        assert_eq!(
-            verify_release_signature(&pk, b"artifact", Some(sig_text.as_bytes())).unwrap(),
-            SignatureStatus::Verified
-        );
+        assert!(verify_release_signature(&pk, b"artifact", Some(sig_text.as_bytes())).is_ok());
         assert!(verify_release_signature(&pk, b"artifacT", Some(sig_text.as_bytes())).is_err());
         assert!(verify_release_signature(&pk, b"artifact", Some(b"garbage")).is_err());
         // A valid signature from a different key must not verify against the pinned key.
@@ -911,14 +894,12 @@ mod tests {
             Some(sig_text.as_bytes())
         )
         .is_err());
-        assert_eq!(
-            verify_release_signature(&pk, b"artifact", None).unwrap(),
-            SignatureStatus::Absent
-        );
+        let err = verify_release_signature(&pk, b"artifact", None).unwrap_err();
+        assert!(err.contains("missing"), "{err}");
     }
 
     #[test]
-    fn update_aborts_on_bad_signature_and_warns_when_absent() {
+    fn update_aborts_on_bad_or_missing_signature() {
         let dir = tempfile::tempdir().unwrap();
         let exe = dir.path().join("streamer");
         std::fs::write(&exe, b"original").unwrap();
@@ -968,7 +949,7 @@ mod tests {
         .unwrap_err();
         assert!(err.contains("signature"), "{err}");
         assert_eq!(std::fs::read(&exe).unwrap(), b"original");
-        // Valid signature installs.
+        // Valid signature installs, with no warning plumbing in the report.
         let ok = update_release_with_key(
             Binary::Streamer,
             "1.0.0",
@@ -981,9 +962,9 @@ mod tests {
         )
         .unwrap();
         assert!(ok.installed && !ok.report.contains("WARNING"));
-        // Absent sidecar warns and proceeds.
+        // Absent sidecar: hard refusal, installation untouched.
         std::fs::write(&exe, b"original").unwrap();
-        let warned = update_release_with_key(
+        let err = update_release_with_key(
             Binary::Streamer,
             "1.0.0",
             &exe,
@@ -993,7 +974,8 @@ mod tests {
             serve(String::new()),
             &pk,
         )
-        .unwrap();
-        assert!(warned.installed && warned.report.contains("WARNING"));
+        .unwrap_err();
+        assert!(err.contains("refusing unverified update"), "{err}");
+        assert_eq!(std::fs::read(&exe).unwrap(), b"original");
     }
 }
