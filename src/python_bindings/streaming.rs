@@ -35,7 +35,7 @@ impl Clone for PyStreamingConfig {
 #[pymethods]
 impl PyStreamingConfig {
     #[new]
-    #[pyo3(signature = (max_clients=1000, send_initial_screen=true, keepalive_interval=30, default_read_only=true, initial_cols=0, initial_rows=0, enable_http=false, web_root="./web_term", max_clients_per_session=0, input_rate_limit_bytes_per_sec=0, enable_system_stats=false, system_stats_interval_secs=5, api_key=None, allow_api_key_in_query=false, allowed_origins=None, kitty_file_media="temp_only", allow_pane_create=false, csp_connect_origins=None, allow_legacy_password_hashes=false))]
+    #[pyo3(signature = (max_clients=1000, send_initial_screen=true, keepalive_interval=30, default_read_only=true, initial_cols=0, initial_rows=0, enable_http=false, web_root="./web_term", max_clients_per_session=0, input_rate_limit_bytes_per_sec=1048576, enable_system_stats=false, system_stats_interval_secs=5, api_key=None, allow_api_key_in_query=false, allowed_origins=None, kitty_file_media="temp_only", allow_pane_create=false, csp_connect_origins=None, allow_legacy_password_hashes=false))]
     #[allow(
         clippy::too_many_arguments,
         reason = "Python keyword arguments, one per StreamingConfig field; a struct would change the Python API"
@@ -494,7 +494,8 @@ impl PyStreamingConfig {
         self.inner.max_clients_per_session = max_clients_per_session;
     }
 
-    /// Get the input rate limit in bytes per second (0 = unlimited)
+    /// Get the input rate limit in bytes per second (0 = unlimited).
+    /// Defaults to 1048576 (1 MiB/s; audit finding SEC-003).
     ///
     /// Returns:
     ///     int: Per-client input limit in bytes/second, or 0 for unlimited
@@ -502,7 +503,7 @@ impl PyStreamingConfig {
     /// Example:
     ///     >>> config = StreamingConfig()
     ///     >>> config.input_rate_limit_bytes_per_sec
-    ///     0
+    ///     1048576
     ///     >>> config.input_rate_limit_bytes_per_sec = 65536
     ///     >>> config.input_rate_limit_bytes_per_sec
     ///     65536

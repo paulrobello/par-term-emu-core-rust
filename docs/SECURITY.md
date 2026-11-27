@@ -1082,10 +1082,11 @@ par-term-streamer --enable-http --allowed-origins https://app.example.com,https:
 
 ### Input Safety
 
-- Client input is rate-limited per connection. `par-term-streamer --input-rate-limit`
-  defaults to 1048576 bytes/s (1 MiB/s; `0` = unlimited). The library
-  `StreamingConfig.input_rate_limit_bytes_per_sec` defaults to `0`
-  (unlimited), so embedders set it explicitly.
+- Client input is rate-limited per connection (audit finding SEC-003).
+  `par-term-streamer --input-rate-limit` and the library
+  `StreamingConfig.input_rate_limit_bytes_per_sec` both default to
+  1048576 bytes/s (1 MiB/s; `0` = unlimited), well above human typing and
+  normal pastes while bounding runaway clients.
 - Read-only clients are enforced before PTY writes.
 - Terminal-size updates are validated server-side.
 - File transfers are capped in memory (`DEFAULT_MAX_TRANSFER_SIZE`; no

@@ -392,7 +392,9 @@ pub struct StreamingConfig {
     pub presets: HashMap<String, String>,
     /// Maximum clients per session (0 = unlimited)
     pub max_clients_per_session: usize,
-    /// Input rate limit in bytes per second (0 = unlimited)
+    /// Input rate limit in bytes per second (0 = unlimited). Defaults to
+    /// 1 MiB/s (audit finding SEC-003): generous enough for typing and
+    /// pastes while bounding a runaway client's input rate.
     pub input_rate_limit_bytes_per_sec: usize,
     /// Enable system resource statistics collection
     pub enable_system_stats: bool,
@@ -504,7 +506,7 @@ impl Default for StreamingConfig {
             session_idle_timeout: 900,
             presets: HashMap::new(),
             max_clients_per_session: 0,
-            input_rate_limit_bytes_per_sec: 0,
+            input_rate_limit_bytes_per_sec: 1_048_576,
             enable_system_stats: false,
             system_stats_interval_secs: 5,
             api_key: None,
@@ -657,7 +659,7 @@ mod tests {
         assert_eq!(config.session_idle_timeout, 900);
         assert!(config.presets.is_empty());
         assert_eq!(config.max_clients_per_session, 0);
-        assert_eq!(config.input_rate_limit_bytes_per_sec, 0);
+        assert_eq!(config.input_rate_limit_bytes_per_sec, 1_048_576);
     }
     /// SEC-201 / SEC-206: cleartext passwords and legacy hash formats produce
     /// an operator warning that never contains the secret; bcrypt does not.
@@ -905,7 +907,7 @@ mod tests {
     #[tokio::test]
     async fn test_streaming_config_default_input_rate_limit() {
         let config = StreamingConfig::default();
-        assert_eq!(config.input_rate_limit_bytes_per_sec, 0);
+        assert_eq!(config.input_rate_limit_bytes_per_sec, 1_048_576);
     }
     #[tokio::test]
     async fn test_streaming_config_default_enable_http() {
