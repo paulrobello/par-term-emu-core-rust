@@ -321,6 +321,9 @@ async fn axum_http_path_forwards_mouse_to_pty_writer() {
     let server = {
         let config = StreamingConfig {
             enable_http: true,
+            // audit SEC-001: clients are read-only by default; this test
+            // exercises the input path, so it opts into write access.
+            default_read_only: false,
             ..Default::default()
         };
         Arc::new(StreamingServer::with_config(
@@ -442,7 +445,16 @@ async fn sequential_inputs_reach_the_pty_in_order() {
 
     let terminal = Arc::new(RwLock::new(Terminal::new(80, 24)));
     let captured = Arc::new(Mutex::new(Vec::<u8>::new()));
-    let server = Arc::new(StreamingServer::new(terminal, addr.clone()));
+    // audit SEC-001: clients are read-only by default; this test exercises
+    // the input path, so it opts into write access.
+    let server = Arc::new(StreamingServer::with_config(
+        terminal,
+        addr.clone(),
+        StreamingConfig {
+            default_read_only: false,
+            ..Default::default()
+        },
+    ));
     server.set_pty_writer(Arc::new(Mutex::new(Box::new(SlowCaptureWriter {
         per_write: Duration::from_micros(200),
         captured: Arc::clone(&captured),
