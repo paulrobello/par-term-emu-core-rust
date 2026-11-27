@@ -511,11 +511,19 @@ pub(super) async fn static_host_guard_middleware(
 /// for a compromised page; the former opt-in
 /// (`allow_blob_connect_src`, card 01a19895bd) had no remaining threat
 /// model and was removed with this change.
+///
+/// Audit 2026-11-27 (SEC-006 companion): the frontend self-hosts its fonts,
+/// so the fonts.googleapis.com / fonts.gstatic.com / cdn.jsdelivr.net
+/// entries are gone. The https://github.com img-src entry records the
+/// footer navigation links the ENH-059 guard pins: anchors are navigations
+/// CSP does not govern, but the guard requires every origin the export
+/// references to appear in this constant, and img-src is the narrowest
+/// directive that can carry it.
 pub(super) const CONTENT_SECURITY_POLICY: &str = "default-src 'self'; \
     script-src 'self' 'unsafe-inline' 'wasm-unsafe-eval'; \
-    style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; \
-    font-src 'self' data: https://fonts.gstatic.com https://cdn.jsdelivr.net; \
-    img-src 'self' data: blob:; \
+    style-src 'self' 'unsafe-inline'; \
+    font-src 'self' data:; \
+    img-src 'self' data: blob: https://github.com; \
     connect-src 'self' ws: wss: blob:; \
     object-src 'none'; base-uri 'self'; form-action 'self'; \
     frame-ancestors 'none'";
