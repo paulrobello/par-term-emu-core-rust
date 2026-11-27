@@ -7,6 +7,6 @@
 - **Gate the Windows target before deploying**: if the release range contains any mux/PTY/cfg-gated Rust change, run `make cross-target-check` (or full `make checkall-ci`) before the push — `make checkall` compiles only the host target, and the 0.79.0 cut burned a full deploy run (42298463237) on a Windows-only `PeerCreds` method/width mismatch that only this check catches.
 - Commit and push
 - Run `make deploy` to trigger the release workflow — it now publishes in dependency order derive → `par-term-emu-core` → `par-mux` → root, each member step polling the crates.io index before the next publish. The `CARGO_REGISTRY_TOKEN` secret carries the needed crates.io scopes and the train has run end to end successfully (0.61.0, 2026-10-16: all 31 jobs green, verified live on both registries) — still watch the run.
-- After deploy completes run `make install`
+- After deploy completes run `git pull; make install clean`
 
 $ARGUMENTS
