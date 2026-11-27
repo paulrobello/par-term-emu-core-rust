@@ -1,7 +1,7 @@
 .PHONY: help build build-release build-streaming dev-streaming app test test-rust test-rust-streaming test-python test-pty coverage coverage-html coverage-python clean install install-force python-install python-uninstall par-mux-install par-mux-uninstall streamer-uninstall uninstall dev fmt lint check \
         examples examples-basic examples-pty examples-streaming examples-all setup-venv watch test-integrations \
         typecheck clippy fmt-python lint-python lint-check checkall checkall-ci test-mux-ci test-python-streaming-ci cross-target-check check-features check-feature-combos bench pre-commit-install pre-commit-uninstall \
-        caps-table caps-table-check gen-extensions extensions-check ffi-header ffi-header-check ffi-surface-check core-version-check doc-hidden-check reexports-check api-surface-check python-features-check terminal-fields-check mux-docs-check mux-schema mux-schema-check completions completions-check _completions-into env-docs-check pinned-tests-check stub-docs-check doc-links-check release-check derive-version-check workflow-toolchain-check set-version version-train-check audit-deps \
+        caps-table caps-table-check gen-extensions extensions-check ffi-header ffi-header-check ffi-surface-check core-version-check package-exclude-check doc-hidden-check reexports-check api-surface-check python-features-check terminal-fields-check mux-docs-check mux-schema mux-schema-check completions completions-check _completions-into env-docs-check pinned-tests-check stub-docs-check doc-links-check release-check derive-version-check workflow-toolchain-check set-version version-train-check audit-deps \
         mux-manual-seed mux-package-check rustdoc-check \
         pre-commit-run pre-commit-update deploy \
         proto-generate proto-rust proto-typescript proto-clean \
@@ -78,6 +78,7 @@ help:
 	@echo "  mux-manual-seed - Build the attach daemon and seed the docs/MANUAL-PASS.md demo (daemon + session + split on /tmp/manual-mux)"
 	@echo "  derive-version-check - Fail when Cargo.toml's par-term-emu-derive dependency spec differs from derive/Cargo.toml's version (ARC-008)"
 	@echo "  core-version-check - Fail when crates/par-term-emu-core's version or the root's exact pin on it drifts from the root version (ARC-007)"
+	@echo "  package-exclude-check - Fail when the root [package] exclude list drifts from the ARC-011 baseline or cargo package --list ships a forbidden path (ARC-011)"
 	@echo "  workflow-toolchain-check - Fail when a workflow rust-toolchain/toolchain pin is older than Cargo.toml's rust-version floor (card 01a1f77c)"
 	@echo "  set-version VERSION=X.Y.Z - Rewrite the whole version train (5 versions, 3 exact pins, Cargo.lock) in one step; derive excluded (ARC-009)"
 	@echo "  version-train-check - Self-test the set-version writer against a temp copy of the train (ARC-009)"
@@ -647,6 +648,13 @@ core-version-check:
 	python3 scripts/check_core_version.py
 	python3 scripts/check_core_version.py --self-test
 
+# ARC-011: the root [package] exclude list is baseline-locked and the real
+# `cargo package --list` output must contain no forbidden path, so agent
+# config dirs and repo-infra files can never reach a published crate again.
+package-exclude-check:
+	python3 scripts/check_package_exclude.py
+	python3 scripts/check_package_exclude.py --self-test
+
 # Card 01a1f77c: the 0.84.1 deploy run burned on maturin-action pins left at
 # 1.99.0 after rust-version rose to 1.100 — a divergence local gates never see.
 workflow-toolchain-check:
@@ -761,7 +769,7 @@ doc-links-check:
 
 # ENH-036: release-time gate, deliberately NOT part of checkall — mid-cycle
 # the top CHANGELOG section is legitimately incomplete. Run before tagging.
-release-check: derive-version-check core-version-check
+release-check: derive-version-check core-version-check package-exclude-check
 	python3 scripts/check_release_notes.py && python3 scripts/check_release_notes.py --self-test
 
 # SEC-001: verify a cut's built assets all carry minisign signatures that
@@ -793,7 +801,7 @@ audit-deps:
 	uvx --python-preference only-system pip-audit --strict -r $$reqs; \
 	status=$$?; rm -f $$reqs; exit $$status
 
-checkall: extensions-check ffi-header-check ffi-surface-check derive-version-check core-version-check workflow-toolchain-check version-train-check doc-hidden-check reexports-check api-surface-check python-features-check terminal-fields-check mux-docs-check caps-table-check mux-schema-check completions-check env-docs-check otel-check mux-otel-check pinned-tests-check stub-docs-check mux-package-check rustdoc-check doc-links-check lint-check test-integrations test-rust test-rust-streaming stub-check test-python test-web
+checkall: extensions-check ffi-header-check ffi-surface-check derive-version-check core-version-check package-exclude-check workflow-toolchain-check version-train-check doc-hidden-check reexports-check api-surface-check python-features-check terminal-fields-check mux-docs-check caps-table-check mux-schema-check completions-check env-docs-check otel-check mux-otel-check pinned-tests-check stub-docs-check mux-package-check rustdoc-check doc-links-check lint-check test-integrations test-rust test-rust-streaming stub-check test-python test-web
 	@echo ""
 	@echo "======================================================================"
 	@echo "  All code quality checks passed!"

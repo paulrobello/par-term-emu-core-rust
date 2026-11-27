@@ -49,6 +49,12 @@ repository = "https://github.com/paulrobello/par-term-emu-core-rust"
 documentation = "https://github.com/paulrobello/par-term-emu-core-rust/blob/main/README.md"
 keywords = ["terminal", "emulator", "vt100", "pty", "sixel"]
 categories = ["command-line-utilities", "development-tools", "api-bindings"]
+# ARC-011: release packaging was drift-prone by exclusion — anything not
+# listed shipped to crates.io, which is how agent config dirs, AGENTS.md,
+# AUDIT.md, and a stray empty file reached the published crate. This list is
+# baseline-locked by `make package-exclude-check` (part of checkall), which
+# also runs `cargo package --list` and fails when any forbidden path appears
+# in the packaged set. Editing this list is a reviewed decision.
 exclude = [
     "*.png",
     "*.jpg",
@@ -67,9 +73,17 @@ exclude = [
     "shell_integration/",
     ".github/",
     ".gitignore",
+    ".gitattributes",
+    ".claude/",
+    ".codex/",
+    ".config/",
+    ".gemini/",
+    ".impeccable/",
+    ".parsightignore",
+    ".pre-commit-config.yaml",
+    "AGENTS.md",
+    "AUDIT.md",
     "CLAUDE.md",
-    "handoff.md",
-    "streaming.md",
     "Makefile",
     "pyproject.toml",
     "python/",
