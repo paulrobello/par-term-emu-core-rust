@@ -2228,13 +2228,13 @@ StreamingConfig(
     max_clients: int = 1000,
     send_initial_screen: bool = True,
     keepalive_interval: int = 30,
-    default_read_only: bool = False,
+    default_read_only: bool = True,
     initial_cols: int = 0,
     initial_rows: int = 0,
     enable_http: bool = False,
     web_root: str = "./web_term",
     max_clients_per_session: int = 0,
-    input_rate_limit_bytes_per_sec: int = 0,
+    input_rate_limit_bytes_per_sec: int = 1048576,
     enable_system_stats: bool = False,
     system_stats_interval_secs: int = 5,
     api_key: str | None = None,
@@ -2260,7 +2260,7 @@ StreamingConfig(
 - `max_sessions: int` - Maximum concurrent terminal sessions (default 10; assign directly: `config.max_sessions = 10`)
 - `session_idle_timeout: int` - Idle session timeout in seconds (default 900; assign directly: `config.session_idle_timeout = 900`)
 - `max_clients_per_session: int` - Maximum clients per session (0=unlimited)
-- `input_rate_limit_bytes_per_sec: int` - Input rate limit (0=unlimited)
+- `input_rate_limit_bytes_per_sec: int` - Input rate limit in bytes/sec (default 1048576; 0=unlimited)
 - `api_key: str | None` - API key for authenticating API routes (masked in `__repr__`)
 - `allow_api_key_in_query: bool` - Allow API key authentication via query parameter (disabled by default for security)
 - `allowed_origins: list[str] | None` - Allowed browser `Origin` values for WebSocket/CORS requests (CSRF defense, SEC-005); `None` uses the default policy (loopback + non-browser clients allowed, remote browser origins rejected)

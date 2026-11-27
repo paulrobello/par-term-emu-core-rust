@@ -495,7 +495,7 @@ config = terminal_core.StreamingConfig(
     max_clients=50,
     send_initial_screen=True,
     keepalive_interval=30,
-    default_read_only=False,
+    default_read_only=True,
     initial_cols=120,
     initial_rows=40,
     enable_http=True,
@@ -580,7 +580,7 @@ server.start()
 | `max_clients` | usize | 1000 | Maximum concurrent client connections |
 | `send_initial_screen` | bool | true | Send screen snapshot on connect |
 | `keepalive_interval` | u64 | 30 | Ping interval in seconds (0=disabled) |
-| `default_read_only` | bool | false | New clients read-only by default |
+| `default_read_only` | bool | true | New clients read-only by default (set false to restore client write access) |
 | `enable_http` | bool | false | Enable HTTP static file serving (requires Axum) |
 | `web_root` | String | "./web_term" | Web root directory for static files |
 | `initial_cols` | u16 | 0 | Initial terminal columns (0=use terminal's current size) |
@@ -591,7 +591,7 @@ server.start()
 | `session_idle_timeout` | u64 | 900 | Idle session timeout in seconds (0=never timeout) |
 | `presets` | HashMap | {} | Shell presets: name → command mapping |
 | `max_clients_per_session` | usize | 0 | Maximum clients per session (0=unlimited) |
-| `input_rate_limit_bytes_per_sec` | usize | 0 | Input rate limit (0=unlimited) |
+| `input_rate_limit_bytes_per_sec` | usize | 1048576 | Input rate limit in bytes/sec (0=unlimited) |
 | `enable_system_stats` | bool | false | Enable system resource statistics collection (CPU, memory, disk, network) |
 | `system_stats_interval_secs` | u64 | 5 | System stats collection interval in seconds |
 | `api_key` | Option\<String\> | None | API key for authenticating API routes (`/ws`, `/sessions`, `/stats`). Accepted via `Authorization: Bearer <key>`, `X-API-Key: <key>` header, or `?api_key=<key>` query param. When both API key and Basic Auth are configured, either satisfies auth. Static files remain unprotected so the web frontend loads without auth. |
@@ -605,7 +605,7 @@ config = terminal_core.StreamingConfig(
     max_clients=100,
     send_initial_screen=True,
     keepalive_interval=30,
-    default_read_only=False,
+    default_read_only=True,
     initial_cols=120,
     initial_rows=40,
 )
@@ -624,7 +624,7 @@ let config = StreamingConfig {
     max_clients: 100,
     send_initial_screen: true,
     keepalive_interval: 30,
-    default_read_only: false,
+    default_read_only: true,
     enable_http: true,
     web_root: "./web_term".to_string(),
     initial_cols: 120,

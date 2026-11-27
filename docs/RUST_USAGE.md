@@ -423,7 +423,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         max_clients: 100,
         send_initial_screen: true,
         keepalive_interval: 30,
-        default_read_only: false,
+        default_read_only: true,
         enable_http: true,
         web_root: "./web_term".to_string(),
         initial_cols: 0,  // 0 = use terminal's current size
@@ -434,7 +434,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         session_idle_timeout: 900,
         presets: std::collections::HashMap::new(),
         max_clients_per_session: 0,
-        input_rate_limit_bytes_per_sec: 0,
+        input_rate_limit_bytes_per_sec: 1048576,
         enable_system_stats: false,
         system_stats_interval_secs: 5,
         api_key: None,
