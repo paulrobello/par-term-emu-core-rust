@@ -62,7 +62,7 @@ The intended embedding shape is a **damage-driven render loop** (below): the hos
 **Cross-cutting contracts** (from the header):
 
 - **Single-threaded handles.** No concurrent calls on one `Terminal`; synchronize externally if you share it.
-- **No panic catching.** No entry point catches a Rust panic — a panic inside any call aborts the host process (Rust 1.81+ abort-on-FFI-unwind semantics). Allocation failure is likewise fatal: this surface has no error channel, so out-of-memory aborts by design.
+- **No export aborts the host.** Every entry point wraps its body in `catch_unwind` panic containment: a panic anywhere in the call chain (including a panicking observer callback) is caught, logged to stderr as a one-line diagnostic, and mapped to that export's sentinel — the same value its null guards return (`0` for counts and totals, `false` for booleans, `NULL` for handle and snapshot returns, a no-op for `void` calls). The process survives, and the terminal handle stays usable afterward. Containment is survival, not transactionality: state a panic interrupted may be partially applied, so a host that receives a sentinel should treat the terminal's screen as unknown and re-sync. Allocation failure is the one unrecoverable path: out-of-memory aborts before any unwind, by design.
 - **Reads target the active grid.** While the alternate screen is active, `ptec_terminal_scrollback_count` returns 0 — the alternate screen has no scrollback.
 
 ## Building

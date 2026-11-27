@@ -729,6 +729,40 @@ unsafe fn dirty_ranges_export(
     unsafe { write_ranges(out, cap, |f| each(term_ref, f)) }
 }
 
+/// Panic containment for the C ABI (QA-001): run `body` and, on a panic,
+/// map it to `R::default()` — the same sentinel the export's null guards
+/// return (0, false, NULL, no-op) — instead of letting the unwind cross
+/// `extern "C"`, which aborts the C host process. The panic message is
+/// written to stderr as a best-effort diagnostic; the host decides what a
+/// sentinel return means for its render loop.
+///
+/// Export bodies wrap only the post-null-guard work: the guards themselves
+/// are plain pointer checks that cannot panic. State a panic interrupts may
+/// be partially applied (e.g. half a VT sequence processed); containment
+/// guarantees process survival and memory safety, not transactionality.
+fn ffi_guard<R: Default>(body: impl FnOnce() -> R) -> R {
+    match std::panic::catch_unwind(std::panic::AssertUnwindSafe(body)) {
+        Ok(value) => value,
+        Err(payload) => {
+            let message = if let Some(s) = payload.downcast_ref::<&str>() {
+                (*s).to_string()
+            } else if let Some(s) = payload.downcast_ref::<String>() {
+                s.clone()
+            } else {
+                "unknown panic".to_string()
+            };
+            // Best-effort only: `eprintln!` would itself panic on a closed
+            // stderr, and that panic would unwind out of `extern "C"`.
+            use std::io::Write;
+            let _ = writeln!(
+                std::io::stderr(),
+                "ptec_terminal FFI: panic contained: {message}"
+            );
+            R::default()
+        }
+    }
+}
+
 /// ABI version of the C surface (ARC-063). Must equal
 /// `TERM_CORE_ABI_VERSION` in include/terminal_core_layout.h (included from
 /// the cbindgen-generated include/terminal_core.h); bump both on any layout
@@ -751,7 +785,7 @@ pub const TERM_CORE_ABI_VERSION: u32 = 6;
 /// Safe to call at any time — it touches no terminal state.
 #[no_mangle]
 pub extern "C" fn ptec_terminal_abi_version() -> u32 {
-    TERM_CORE_ABI_VERSION
+    ffi_guard(|| TERM_CORE_ABI_VERSION)
 }
 
 /// Create a terminal for C embedding.
@@ -771,11 +805,13 @@ pub unsafe extern "C" fn ptec_terminal_create(
     if cols == 0 || rows == 0 {
         return std::ptr::null_mut();
     }
-    Box::into_raw(Box::new(Terminal::with_scrollback(
-        cols as usize,
-        rows as usize,
-        scrollback as usize,
-    )))
+    ffi_guard(|| {
+        Box::into_raw(Box::new(Terminal::with_scrollback(
+            cols as usize,
+            rows as usize,
+            scrollback as usize,
+        )))
+    })
 }
 
 /// Free a `Terminal` created by `ptec_terminal_create`.
@@ -786,9 +822,11 @@ pub unsafe extern "C" fn ptec_terminal_create(
 #[no_mangle]
 pub unsafe extern "C" fn ptec_terminal_free(term: *mut Terminal) {
     if !term.is_null() {
-        // SAFETY: non-null, and per this fn's contract it came from
-        // `ptec_terminal_create`'s `Box::into_raw` and is not used afterwards.
-        drop(unsafe { Box::from_raw(term) });
+        ffi_guard(|| {
+            // SAFETY: non-null, and per this fn's contract it came from
+            // `ptec_terminal_create`'s `Box::into_raw` and is not used afterwards.
+            drop(unsafe { Box::from_raw(term) });
+        });
     }
 }
 
@@ -802,13 +840,15 @@ pub unsafe extern "C" fn ptec_terminal_feed(term: *mut Terminal, bytes: *const u
     if term.is_null() || bytes.is_null() {
         return;
     }
-    // SAFETY: `term` is non-null (checked above) and, per this fn's
-    // contract, points to a live `Terminal` with no other live borrow.
-    let term_ref = unsafe { &mut *term };
-    // SAFETY: `bytes` is non-null (checked above) and the caller guarantees
-    // it is valid for reads of `len` bytes.
-    let data = unsafe { std::slice::from_raw_parts(bytes, len as usize) };
-    term_ref.process(data);
+    ffi_guard(|| {
+        // SAFETY: `term` is non-null (checked above) and, per this fn's
+        // contract, points to a live `Terminal` with no other live borrow.
+        let term_ref = unsafe { &mut *term };
+        // SAFETY: `bytes` is non-null (checked above) and the caller guarantees
+        // it is valid for reads of `len` bytes.
+        let data = unsafe { std::slice::from_raw_parts(bytes, len as usize) };
+        term_ref.process(data);
+    });
 }
 
 /// Resize the terminal grid. A zero `cols` or `rows` is a no-op.
@@ -823,10 +863,12 @@ pub unsafe extern "C" fn ptec_terminal_resize(term: *mut Terminal, cols: u32, ro
     if term.is_null() || cols == 0 || rows == 0 {
         return;
     }
-    // SAFETY: `term` is non-null (checked above) and, per this fn's
-    // contract, points to a live `Terminal` with no other live borrow.
-    let term_ref = unsafe { &mut *term };
-    term_ref.resize(cols as usize, rows as usize);
+    ffi_guard(|| {
+        // SAFETY: `term` is non-null (checked above) and, per this fn's
+        // contract, points to a live `Terminal` with no other live borrow.
+        let term_ref = unsafe { &mut *term };
+        term_ref.resize(cols as usize, rows as usize);
+    });
 }
 
 /// Enable the opt-in xterm.js-style reflow resize (`Terminal::set_xterm_resize`):
@@ -843,10 +885,12 @@ pub unsafe extern "C" fn ptec_terminal_set_xterm_resize(term: *mut Terminal, on:
     if term.is_null() {
         return;
     }
-    // SAFETY: `term` is non-null (checked above) and, per this fn's
-    // contract, points to a live `Terminal` with no other live borrow.
-    let term_ref = unsafe { &mut *term };
-    term_ref.set_xterm_resize(on);
+    ffi_guard(|| {
+        // SAFETY: `term` is non-null (checked above) and, per this fn's
+        // contract, points to a live `Terminal` with no other live borrow.
+        let term_ref = unsafe { &mut *term };
+        term_ref.set_xterm_resize(on);
+    });
 }
 
 /// Enable the opt-in per-code-point emoji width mode
@@ -863,10 +907,12 @@ pub unsafe extern "C" fn ptec_terminal_set_codepoint_widths(term: *mut Terminal,
     if term.is_null() {
         return;
     }
-    // SAFETY: `term` is non-null (checked above) and, per this fn's
-    // contract, points to a live `Terminal` with no other live borrow.
-    let term_ref = unsafe { &mut *term };
-    term_ref.set_codepoint_widths(on);
+    ffi_guard(|| {
+        // SAFETY: `term` is non-null (checked above) and, per this fn's
+        // contract, points to a live `Terminal` with no other live borrow.
+        let term_ref = unsafe { &mut *term };
+        term_ref.set_codepoint_widths(on);
+    });
 }
 
 /// Coalesce ascending row numbers into inclusive ranges.
@@ -907,8 +953,10 @@ pub unsafe extern "C" fn ptec_terminal_dirty_ranges(
     out: *mut TermRowRange,
     cap: u32,
 ) -> u32 {
-    // SAFETY: this fn's contract is `dirty_ranges_export`'s.
-    unsafe { dirty_ranges_export(term, out, cap, |t, f| t.for_each_dirty_range(f)) }
+    ffi_guard(|| {
+        // SAFETY: this fn's contract is `dirty_ranges_export`'s.
+        unsafe { dirty_ranges_export(term, out, cap, |t, f| t.for_each_dirty_range(f)) }
+    })
 }
 
 /// Current damage generation. A renderer remembers this value between
@@ -924,9 +972,11 @@ pub unsafe extern "C" fn ptec_terminal_damage_generation(term: *const Terminal) 
     if term.is_null() {
         return 0;
     }
-    // SAFETY: `term` is non-null (checked above) and, per this fn's
-    // contract, points to a live `Terminal` not mutably borrowed elsewhere.
-    unsafe { &*term }.damage_generation()
+    ffi_guard(|| {
+        // SAFETY: `term` is non-null (checked above) and, per this fn's
+        // contract, points to a live `Terminal` not mutably borrowed elsewhere.
+        unsafe { &*term }.damage_generation()
+    })
 }
 
 /// Coalesced dirty-row ranges since generation `gen`, from an earlier
@@ -946,8 +996,10 @@ pub unsafe extern "C" fn ptec_terminal_dirty_ranges_since(
     out: *mut TermRowRange,
     cap: u32,
 ) -> u32 {
-    // SAFETY: this fn's contract is `dirty_ranges_export`'s.
-    unsafe { dirty_ranges_export(term, out, cap, |t, f| t.for_each_dirty_range_since(gen, f)) }
+    ffi_guard(|| {
+        // SAFETY: this fn's contract is `dirty_ranges_export`'s.
+        unsafe { dirty_ranges_export(term, out, cap, |t, f| t.for_each_dirty_range_since(gen, f)) }
+    })
 }
 
 /// Scroll-aware damage since generation `gen` (ENH-038): writes how the
@@ -968,25 +1020,27 @@ pub unsafe extern "C" fn ptec_terminal_scroll_delta_since(
     if term.is_null() || out.is_null() {
         return false;
     }
-    // SAFETY: `term` is non-null (checked above) and, per this fn's
-    // contract, points to a live `Terminal` not mutably borrowed elsewhere.
-    let term_ref = unsafe { &*term };
-    let report = term_ref.scroll_damage_since(gen);
-    // SAFETY: `out` is non-null (checked above) and the caller guarantees
-    // it points to a writable `TermScrollDelta`.
-    unsafe {
-        out.write(TermScrollDelta {
-            delta: report.delta,
-            top: report.top,
-            bottom: report.bottom,
-            flags: if report.full_redraw {
-                TERM_SCROLL_FULL_REDRAW
-            } else {
-                0
-            },
-        });
-    }
-    true
+    ffi_guard(|| {
+        // SAFETY: `term` is non-null (checked above) and, per this fn's
+        // contract, points to a live `Terminal` not mutably borrowed elsewhere.
+        let term_ref = unsafe { &*term };
+        let report = term_ref.scroll_damage_since(gen);
+        // SAFETY: `out` is non-null (checked above) and the caller guarantees
+        // it points to a writable `TermScrollDelta`.
+        unsafe {
+            out.write(TermScrollDelta {
+                delta: report.delta,
+                top: report.top,
+                bottom: report.bottom,
+                flags: if report.full_redraw {
+                    TERM_SCROLL_FULL_REDRAW
+                } else {
+                    0
+                },
+            });
+        }
+        true
+    })
 }
 
 /// Coalesced *content*-dirty row ranges since generation `gen` (ENH-038):
@@ -1008,12 +1062,14 @@ pub unsafe extern "C" fn ptec_terminal_content_dirty_ranges_since(
     out: *mut TermRowRange,
     cap: u32,
 ) -> u32 {
-    // SAFETY: this fn's contract is `dirty_ranges_export`'s.
-    unsafe {
-        dirty_ranges_export(term, out, cap, |t, f| {
-            t.for_each_content_dirty_range_since(gen, f)
-        })
-    }
+    ffi_guard(|| {
+        // SAFETY: this fn's contract is `dirty_ranges_export`'s.
+        unsafe {
+            dirty_ranges_export(term, out, cap, |t, f| {
+                t.for_each_content_dirty_range_since(gen, f)
+            })
+        }
+    })
 }
 
 /// Mark the screen clean (all damage consumed).
@@ -1025,9 +1081,11 @@ pub unsafe extern "C" fn ptec_terminal_mark_clean(term: *mut Terminal) {
     if term.is_null() {
         return;
     }
-    // SAFETY: `term` is non-null (checked above) and, per this fn's
-    // contract, points to a live `Terminal` with no other live borrow.
-    unsafe { &mut *term }.mark_clean();
+    ffi_guard(|| {
+        // SAFETY: `term` is non-null (checked above) and, per this fn's
+        // contract, points to a live `Terminal` with no other live borrow.
+        unsafe { &mut *term }.mark_clean();
+    });
 }
 
 /// Copy a run of grid cells into a caller-owned buffer (pinned readback —
@@ -1050,16 +1108,18 @@ pub unsafe extern "C" fn ptec_terminal_read_row(
     if term.is_null() {
         return 0;
     }
-    // SAFETY: `term` is non-null (checked above) and, per this fn's
-    // contract, points to a live `Terminal` not mutably borrowed elsewhere.
-    let term_ref = unsafe { &*term };
-    let grid = term_ref.active_grid();
-    let Some(row_cells) = grid.row(row as usize) else {
-        return 0;
-    };
-    // SAFETY: the caller guarantees `out` is NULL or valid for `cap` writes,
-    // which is `copy_row`'s contract.
-    unsafe { copy_row(term_ref, row_cells, grid.cols() as u32, col_start, out, cap) }
+    ffi_guard(|| {
+        // SAFETY: `term` is non-null (checked above) and, per this fn's
+        // contract, points to a live `Terminal` not mutably borrowed elsewhere.
+        let term_ref = unsafe { &*term };
+        let grid = term_ref.active_grid();
+        let Some(row_cells) = grid.row(row as usize) else {
+            return 0;
+        };
+        // SAFETY: the caller guarantees `out` is NULL or valid for `cap` writes,
+        // which is `copy_row`'s contract.
+        unsafe { copy_row(term_ref, row_cells, grid.cols() as u32, col_start, out, cap) }
+    })
 }
 
 /// Copy a run of scrollback cells into a caller-owned buffer.
@@ -1082,25 +1142,27 @@ pub unsafe extern "C" fn ptec_terminal_read_scrollback_row(
     if term.is_null() {
         return 0;
     }
-    // SAFETY: `term` is non-null (checked above) and, per this fn's
-    // contract, points to a live `Terminal` not mutably borrowed elsewhere.
-    let term_ref = unsafe { &*term };
-    let grid = term_ref.active_grid();
-    let Some(line_cells) = grid.scrollback_line(line as usize) else {
-        return 0;
-    };
-    // SAFETY: the caller guarantees `out` is NULL or valid for `cap` writes,
-    // which is `copy_row`'s contract.
-    unsafe {
-        copy_row(
-            term_ref,
-            line_cells,
-            grid.cols() as u32,
-            col_start,
-            out,
-            cap,
-        )
-    }
+    ffi_guard(|| {
+        // SAFETY: `term` is non-null (checked above) and, per this fn's
+        // contract, points to a live `Terminal` not mutably borrowed elsewhere.
+        let term_ref = unsafe { &*term };
+        let grid = term_ref.active_grid();
+        let Some(line_cells) = grid.scrollback_line(line as usize) else {
+            return 0;
+        };
+        // SAFETY: the caller guarantees `out` is NULL or valid for `cap` writes,
+        // which is `copy_row`'s contract.
+        unsafe {
+            copy_row(
+                term_ref,
+                line_cells,
+                grid.cols() as u32,
+                col_start,
+                out,
+                cap,
+            )
+        }
+    })
 }
 
 /// Copy the full grapheme cluster of one screen cell — the base character
@@ -1128,34 +1190,36 @@ pub unsafe extern "C" fn ptec_terminal_read_cell_grapheme(
     if term.is_null() {
         return 0;
     }
-    // SAFETY: `term` is non-null (checked above) and, per this fn's
-    // contract, points to a live `Terminal` not mutably borrowed elsewhere.
-    let term_ref = unsafe { &*term };
-    let Some(cell) = term_ref.active_grid().get(col as usize, row as usize) else {
-        return 0;
-    };
-    let mut buf = [0u8; 4];
-    let mut total = cell.c().encode_utf8(&mut buf).len();
-    for ch in cell.combining() {
-        total += ch.len_utf8();
-    }
-    if !out.is_null() && cap > 0 {
-        let mut written = 0usize;
-        let cap = cap as usize;
-        for ch in std::iter::once(cell.c()).chain(cell.combining().iter().copied()) {
-            let bytes = ch.encode_utf8(&mut buf).as_bytes();
-            let take = bytes.len().min(cap - written);
-            // SAFETY: `written + take <= cap`, `out` is non-null, and the
-            // caller guarantees `out` is valid for `cap` byte writes; `buf`
-            // is a stack array, so the ranges cannot overlap.
-            unsafe { std::ptr::copy_nonoverlapping(bytes.as_ptr(), out.add(written), take) };
-            written += take;
-            if written == cap {
-                break;
+    ffi_guard(|| {
+        // SAFETY: `term` is non-null (checked above) and, per this fn's
+        // contract, points to a live `Terminal` not mutably borrowed elsewhere.
+        let term_ref = unsafe { &*term };
+        let Some(cell) = term_ref.active_grid().get(col as usize, row as usize) else {
+            return 0;
+        };
+        let mut buf = [0u8; 4];
+        let mut total = cell.c().encode_utf8(&mut buf).len();
+        for ch in cell.combining() {
+            total += ch.len_utf8();
+        }
+        if !out.is_null() && cap > 0 {
+            let mut written = 0usize;
+            let cap = cap as usize;
+            for ch in std::iter::once(cell.c()).chain(cell.combining().iter().copied()) {
+                let bytes = ch.encode_utf8(&mut buf).as_bytes();
+                let take = bytes.len().min(cap - written);
+                // SAFETY: `written + take <= cap`, `out` is non-null, and the
+                // caller guarantees `out` is valid for `cap` byte writes; `buf`
+                // is a stack array, so the ranges cannot overlap.
+                unsafe { std::ptr::copy_nonoverlapping(bytes.as_ptr(), out.add(written), take) };
+                written += take;
+                if written == cap {
+                    break;
+                }
             }
         }
-    }
-    u32::try_from(total).unwrap_or(u32::MAX)
+        u32::try_from(total).unwrap_or(u32::MAX)
+    })
 }
 
 /// Number of lines currently held in scrollback.
@@ -1167,9 +1231,11 @@ pub unsafe extern "C" fn ptec_terminal_scrollback_count(term: *const Terminal) -
     if term.is_null() {
         return 0;
     }
-    // SAFETY: `term` is non-null (checked above) and, per this fn's
-    // contract, points to a live `Terminal` not mutably borrowed elsewhere.
-    unsafe { &*term }.active_grid().scrollback_len() as u32
+    ffi_guard(|| {
+        // SAFETY: `term` is non-null (checked above) and, per this fn's
+        // contract, points to a live `Terminal` not mutably borrowed elsewhere.
+        unsafe { &*term }.active_grid().scrollback_len() as u32
+    })
 }
 
 /// Total lines ever pushed into scrollback.
@@ -1191,9 +1257,11 @@ pub unsafe extern "C" fn ptec_terminal_scrollback_total_scrolled(term: *const Te
     if term.is_null() {
         return 0;
     }
-    // SAFETY: `term` is non-null (checked above) and, per this fn's
-    // contract, points to a live `Terminal` not mutably borrowed elsewhere.
-    unsafe { &*term }.active_grid().total_lines_scrolled() as u64
+    ffi_guard(|| {
+        // SAFETY: `term` is non-null (checked above) and, per this fn's
+        // contract, points to a live `Terminal` not mutably borrowed elsewhere.
+        unsafe { &*term }.active_grid().total_lines_scrolled() as u64
+    })
 }
 
 /// Change the scrollback capacity while the terminal runs
@@ -1209,10 +1277,12 @@ pub unsafe extern "C" fn ptec_terminal_set_max_scrollback(term: *mut Terminal, m
     if term.is_null() {
         return;
     }
-    // SAFETY: `term` is non-null (checked above) and, per this fn's
-    // contract, points to a live `Terminal` with no other live borrow.
-    let term_ref = unsafe { &mut *term };
-    term_ref.set_max_scrollback(max as usize);
+    ffi_guard(|| {
+        // SAFETY: `term` is non-null (checked above) and, per this fn's
+        // contract, points to a live `Terminal` with no other live borrow.
+        let term_ref = unsafe { &mut *term };
+        term_ref.set_max_scrollback(max as usize);
+    });
 }
 
 /// Remove a graphic by ID from the screen placements and the scrollback
@@ -1227,10 +1297,12 @@ pub unsafe extern "C" fn ptec_terminal_remove_graphic_everywhere(term: *mut Term
     if term.is_null() {
         return;
     }
-    // SAFETY: `term` is non-null (checked above) and, per this fn's
-    // contract, points to a live `Terminal` with no other live borrow.
-    let term_ref = unsafe { &mut *term };
-    term_ref.graphics_store_mut().remove_graphic_everywhere(id);
+    ffi_guard(|| {
+        // SAFETY: `term` is non-null (checked above) and, per this fn's
+        // contract, points to a live `Terminal` with no other live borrow.
+        let term_ref = unsafe { &mut *term };
+        term_ref.graphics_store_mut().remove_graphic_everywhere(id);
+    });
 }
 
 /// Read cursor position/style.
@@ -1245,28 +1317,30 @@ pub unsafe extern "C" fn ptec_terminal_get_cursor(
     if term.is_null() || out.is_null() {
         return;
     }
-    // SAFETY: `term` is non-null (checked above) and, per this fn's
-    // contract, points to a live `Terminal` not mutably borrowed elsewhere.
-    let term_ref = unsafe { &*term };
-    let cursor = term_ref.cursor();
-    let style = match cursor.style {
-        crate::cursor::CursorStyle::BlinkingBlock => 0u8,
-        crate::cursor::CursorStyle::SteadyBlock => 1,
-        crate::cursor::CursorStyle::BlinkingUnderline => 2,
-        crate::cursor::CursorStyle::SteadyUnderline => 3,
-        crate::cursor::CursorStyle::BlinkingBar => 4,
-        crate::cursor::CursorStyle::SteadyBar => 5,
-    };
-    // SAFETY: `out` is non-null (checked above) and the caller guarantees it
-    // is valid for one `TermCursorState` write.
-    unsafe {
-        *out = TermCursorState {
-            col: cursor.col as u32,
-            row: cursor.row as u32,
-            visible: cursor.visible,
-            style,
+    ffi_guard(|| {
+        // SAFETY: `term` is non-null (checked above) and, per this fn's
+        // contract, points to a live `Terminal` not mutably borrowed elsewhere.
+        let term_ref = unsafe { &*term };
+        let cursor = term_ref.cursor();
+        let style = match cursor.style {
+            crate::cursor::CursorStyle::BlinkingBlock => 0u8,
+            crate::cursor::CursorStyle::SteadyBlock => 1,
+            crate::cursor::CursorStyle::BlinkingUnderline => 2,
+            crate::cursor::CursorStyle::SteadyUnderline => 3,
+            crate::cursor::CursorStyle::BlinkingBar => 4,
+            crate::cursor::CursorStyle::SteadyBar => 5,
         };
-    }
+        // SAFETY: `out` is non-null (checked above) and the caller guarantees it
+        // is valid for one `TermCursorState` write.
+        unsafe {
+            *out = TermCursorState {
+                col: cursor.col as u32,
+                row: cursor.row as u32,
+                visible: cursor.visible,
+                style,
+            };
+        }
+    });
 }
 
 /// Read per-frame mode state.
@@ -1278,27 +1352,29 @@ pub unsafe extern "C" fn ptec_terminal_get_modes(term: *const Terminal, out: *mu
     if term.is_null() || out.is_null() {
         return;
     }
-    // SAFETY: `term` is non-null (checked above) and, per this fn's
-    // contract, points to a live `Terminal` not mutably borrowed elsewhere.
-    let term_ref = unsafe { &*term };
-    let mouse_mode = mouse_mode_code(term_ref.mouse_mode());
-    let (cols, rows) = term_ref.size();
-    // SAFETY: `out` is non-null (checked above) and the caller guarantees it
-    // is valid for one `TermModeState` write.
-    unsafe {
-        *out = TermModeState {
-            alt_screen: term_ref.is_alt_screen_active(),
-            bracketed_paste: term_ref.bracketed_paste(),
-            application_cursor: term_ref.application_cursor(),
-            origin_mode: term_ref.origin_mode(),
-            insert_mode: term_ref.insert_mode(),
-            auto_wrap: term_ref.auto_wrap_mode(),
-            mouse_mode,
-            kitty_flags: term_ref.keyboard_flags(),
-            cols: cols as u32,
-            rows: rows as u32,
-        };
-    }
+    ffi_guard(|| {
+        // SAFETY: `term` is non-null (checked above) and, per this fn's
+        // contract, points to a live `Terminal` not mutably borrowed elsewhere.
+        let term_ref = unsafe { &*term };
+        let mouse_mode = mouse_mode_code(term_ref.mouse_mode());
+        let (cols, rows) = term_ref.size();
+        // SAFETY: `out` is non-null (checked above) and the caller guarantees it
+        // is valid for one `TermModeState` write.
+        unsafe {
+            *out = TermModeState {
+                alt_screen: term_ref.is_alt_screen_active(),
+                bracketed_paste: term_ref.bracketed_paste(),
+                application_cursor: term_ref.application_cursor(),
+                origin_mode: term_ref.origin_mode(),
+                insert_mode: term_ref.insert_mode(),
+                auto_wrap: term_ref.auto_wrap_mode(),
+                mouse_mode,
+                kitty_flags: term_ref.keyboard_flags(),
+                cols: cols as u32,
+                rows: rows as u32,
+            };
+        }
+    });
 }
 
 /// Encode a key event against the terminal's negotiated input state
@@ -1318,9 +1394,11 @@ pub unsafe extern "C" fn ptec_terminal_encode_key(
     out: *mut u8,
     cap: u32,
 ) -> u32 {
-    // SAFETY: forwards this fn's own contract; a NULL `opts` is allowed by
-    // `ptec_terminal_encode_key_ex`.
-    unsafe { ptec_terminal_encode_key_ex(term, ev, std::ptr::null(), out, cap) }
+    ffi_guard(|| {
+        // SAFETY: forwards this fn's own contract; a NULL `opts` is allowed by
+        // `ptec_terminal_encode_key_ex`.
+        unsafe { ptec_terminal_encode_key_ex(term, ev, std::ptr::null(), out, cap) }
+    })
 }
 
 /// [`ptec_terminal_encode_key`] with explicit macOS Option-key modes
@@ -1345,27 +1423,29 @@ pub unsafe extern "C" fn ptec_terminal_encode_key_ex(
     if term.is_null() || ev.is_null() {
         return 0;
     }
-    // SAFETY: `term` is non-null (checked above) and, per this fn's
-    // contract, points to a live `Terminal` not mutably borrowed elsewhere.
-    let term_ref = unsafe { &*term };
-    // SAFETY: `ev` is non-null (checked above) and the caller guarantees it
-    // is valid for reads of one `TermKeyEvent`.
-    let ev_ref = unsafe { &*ev };
-    // SAFETY: `as_ref` maps NULL to `None`; otherwise the caller guarantees
-    // `opts` is valid for reads of one `TermKeyOptions`.
-    let opts_ref = match unsafe { opts.as_ref() } {
-        Some(o) => o,
-        None => &crate::keyboard::KeyEncodeOptions::default(),
-    };
-    let bytes = crate::keyboard::encode_key_with(ev_ref, term_ref, opts_ref);
-    let fill = (bytes.len() as u32).min(cap);
-    if fill > 0 && !out.is_null() {
-        // SAFETY: `fill <= cap`, `out` is non-null, and the caller guarantees
-        // `out` is valid for `cap` byte writes; `bytes` is a separate
-        // allocation, so the ranges cannot overlap.
-        unsafe { std::ptr::copy_nonoverlapping(bytes.as_ptr(), out, fill as usize) };
-    }
-    bytes.len() as u32
+    ffi_guard(|| {
+        // SAFETY: `term` is non-null (checked above) and, per this fn's
+        // contract, points to a live `Terminal` not mutably borrowed elsewhere.
+        let term_ref = unsafe { &*term };
+        // SAFETY: `ev` is non-null (checked above) and the caller guarantees it
+        // is valid for reads of one `TermKeyEvent`.
+        let ev_ref = unsafe { &*ev };
+        // SAFETY: `as_ref` maps NULL to `None`; otherwise the caller guarantees
+        // `opts` is valid for reads of one `TermKeyOptions`.
+        let opts_ref = match unsafe { opts.as_ref() } {
+            Some(o) => o,
+            None => &crate::keyboard::KeyEncodeOptions::default(),
+        };
+        let bytes = crate::keyboard::encode_key_with(ev_ref, term_ref, opts_ref);
+        let fill = (bytes.len() as u32).min(cap);
+        if fill > 0 && !out.is_null() {
+            // SAFETY: `fill <= cap`, `out` is non-null, and the caller guarantees
+            // `out` is valid for `cap` byte writes; `bytes` is a separate
+            // allocation, so the ranges cannot overlap.
+            unsafe { std::ptr::copy_nonoverlapping(bytes.as_ptr(), out, fill as usize) };
+        }
+        bytes.len() as u32
+    })
 }
 
 // ---------------------------------------------------------------------------
@@ -1384,11 +1464,13 @@ pub unsafe extern "C" fn ptec_terminal_get_state(term: *const Terminal) -> *mut 
     if term.is_null() {
         return std::ptr::null_mut();
     }
-    // SAFETY: `term` is non-null (checked above) and, per this fn's
-    // contract, points to a live `Terminal` not mutably borrowed elsewhere.
-    let term_ref = unsafe { &*term };
-    let state = SharedState::from_terminal(term_ref);
-    Box::into_raw(Box::new(state))
+    ffi_guard(|| {
+        // SAFETY: `term` is non-null (checked above) and, per this fn's
+        // contract, points to a live `Terminal` not mutably borrowed elsewhere.
+        let term_ref = unsafe { &*term };
+        let state = SharedState::from_terminal(term_ref);
+        Box::into_raw(Box::new(state))
+    })
 }
 
 /// Free a `SharedState` previously returned by `ptec_terminal_get_state`.
@@ -1399,11 +1481,13 @@ pub unsafe extern "C" fn ptec_terminal_get_state(term: *const Terminal) -> *mut 
 #[no_mangle]
 pub unsafe extern "C" fn ptec_terminal_free_state(state: *mut SharedState) {
     if !state.is_null() {
-        // SAFETY: non-null, and per this fn's contract it came from
-        // `ptec_terminal_get_state`'s `Box::into_raw` and is not used afterwards.
-        unsafe {
-            let _ = Box::from_raw(state);
-        }
+        ffi_guard(|| {
+            // SAFETY: non-null, and per this fn's contract it came from
+            // `ptec_terminal_get_state`'s `Box::into_raw` and is not used afterwards.
+            unsafe {
+                let _ = Box::from_raw(state);
+            }
+        });
     }
 }
 
@@ -1423,11 +1507,13 @@ pub unsafe extern "C" fn ptec_terminal_add_observer(
     if term.is_null() {
         return 0;
     }
-    // SAFETY: `term` is non-null (checked above) and, per this fn's
-    // contract, points to a live `Terminal` with no other live borrow.
-    let term_ref = unsafe { &mut *term };
-    let observer = FfiObserver::new(vtable);
-    term_ref.add_observer(Arc::new(observer))
+    ffi_guard(|| {
+        // SAFETY: `term` is non-null (checked above) and, per this fn's
+        // contract, points to a live `Terminal` with no other live borrow.
+        let term_ref = unsafe { &mut *term };
+        let observer = FfiObserver::new(vtable);
+        term_ref.add_observer(Arc::new(observer))
+    })
 }
 
 /// Remove a previously registered observer.
@@ -1441,10 +1527,12 @@ pub unsafe extern "C" fn ptec_terminal_remove_observer(term: *mut Terminal, id: 
     if term.is_null() {
         return false;
     }
-    // SAFETY: `term` is non-null (checked above) and, per this fn's
-    // contract, points to a live `Terminal` with no other live borrow.
-    let term_ref = unsafe { &mut *term };
-    term_ref.remove_observer(id)
+    ffi_guard(|| {
+        // SAFETY: `term` is non-null (checked above) and, per this fn's
+        // contract, points to a live `Terminal` with no other live borrow.
+        let term_ref = unsafe { &mut *term };
+        term_ref.remove_observer(id)
+    })
 }
 
 #[cfg(test)]
@@ -1491,6 +1579,71 @@ mod tests {
         assert_eq!(size_of::<crate::keyboard::TermKeyEvent>(), 8);
         assert_eq!(offset_of!(crate::keyboard::TermKeyEvent, codepoint), 4);
         assert_eq!(size_of::<crate::keyboard::KeyEncodeOptions>(), 2);
+    }
+
+    // ------------------------------------------------------------------
+    // Panic containment (QA-001): every export wraps its body in
+    // `ffi_guard`, so a panic maps to that export's sentinel instead of
+    // unwinding through `extern "C"` and aborting the host process.
+    // ------------------------------------------------------------------
+
+    #[test]
+    fn ffi_guard_maps_panics_to_default_sentinels() {
+        assert_eq!(ffi_guard(|| -> u32 { panic!("u32 guard") }), 0);
+        assert_eq!(ffi_guard(|| -> u64 { panic!("u64 guard") }), 0);
+        assert!(!ffi_guard(|| -> bool { panic!("bool guard") }));
+        assert!(ffi_guard(|| -> *mut std::ffi::c_void { panic!("ptr guard") }).is_null());
+        ffi_guard(|| -> () { panic!("unit guard") });
+    }
+
+    #[test]
+    fn ffi_guard_passes_values_through() {
+        assert_eq!(ffi_guard(|| 7u32), 7);
+    }
+
+    /// The panicking observer of `ffi_export_contains_panic_from_rust_observer`.
+    /// The flag is set before panicking so the test cannot pass vacuously if
+    /// event delivery ever stops firing observers during `process()`.
+    static OBSERVER_PANICKED: std::sync::atomic::AtomicBool =
+        std::sync::atomic::AtomicBool::new(false);
+
+    struct PanickingObserver;
+    impl TerminalObserver for PanickingObserver {
+        fn on_screen_event(&self, _event: &TerminalEvent) {
+            OBSERVER_PANICKED.store(true, std::sync::atomic::Ordering::SeqCst);
+            panic!("rust observer panic must stay inside the FFI guard");
+        }
+    }
+
+    #[test]
+    fn ffi_export_contains_panic_from_rust_observer() {
+        OBSERVER_PANICKED.store(false, std::sync::atomic::Ordering::SeqCst);
+        let term = unsafe { ptec_terminal_create(20, 5, 100) };
+        assert!(!term.is_null());
+
+        // SAFETY: `term` is a live handle from `ptec_terminal_create` with
+        // no other borrow; the Rust-side registration needs `&mut`.
+        unsafe { (&mut *term).add_observer(Arc::new(PanickingObserver)) };
+
+        // BEL fires BellRang; observers dispatch inline at the tail of
+        // `Terminal::process`, in plain Rust frames inside this export's
+        // `ffi_guard`. (A panicking `extern "C"` callback cannot simulate
+        // this: its own ABI boundary aborts on unwind before the export's
+        // guard sees anything — that abort is the host callback's contract,
+        // not a failure of containment.)
+        let bel = b"\x07";
+        unsafe { ptec_terminal_feed(term, bel.as_ptr(), bel.len() as u32) };
+
+        assert!(
+            OBSERVER_PANICKED.load(std::sync::atomic::Ordering::SeqCst),
+            "observer never fired — containment was not exercised"
+        );
+
+        // The export returned normally; the terminal is still queryable.
+        let state = unsafe { ptec_terminal_get_state(term) };
+        assert!(!state.is_null());
+        unsafe { ptec_terminal_free_state(state) };
+        unsafe { ptec_terminal_free(term) };
     }
 
     // ------------------------------------------------------------------
