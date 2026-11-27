@@ -1468,16 +1468,22 @@ fn a_release_keeps_the_host_probe_project() {
     {
         let mut guard = tree.lock();
         let pane = guard.pane_mut(pane_id).expect("pane exists");
+        // Current-time stamps: the roster token ages fields older than the
+        // freshness window, so a probe-fresh sample is what survives.
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|elapsed| elapsed.as_millis() as u64)
+            .unwrap_or(0);
         pane.host_telemetry = Some(crate::mux::host_probe::HostTelemetry {
             disk_free_percent: Some(crate::mux::host_probe::Stamped {
                 value: 42,
-                sampled_at_unix_ms: 1_000,
+                sampled_at_unix_ms: now,
             }),
             git_branch: None,
             git_dirty: None,
             project: Some(crate::mux::host_probe::Stamped {
                 value: "par-term-emu-core-rust".to_string(),
-                sampled_at_unix_ms: 1_000,
+                sampled_at_unix_ms: now,
             }),
         });
     }
@@ -1518,6 +1524,22 @@ fn a_release_keeps_the_host_probe_project() {
         project,
         Some("par-term-emu-core-rust"),
         "the host-attributed project survives a release and re-claim"
+    );
+    // The wire level the roster row actually serves: the fresh
+    // host_telemetry token carries the project the client renders.
+    let token = crate::mux::host_probe::fresh_host_telemetry_b64(pane.host_telemetry.as_ref())
+        .expect("the fresh token survives too");
+    use base64::Engine as _;
+    let json: serde_json::Value = serde_json::from_slice(
+        &base64::engine::general_purpose::STANDARD
+            .decode(token)
+            .expect("the token is standard base64"),
+    )
+    .expect("the token is canonical JSON");
+    assert_eq!(
+        json["project"]["value"].as_str(),
+        Some("par-term-emu-core-rust"),
+        "the roster row's host_telemetry token carries the project"
     );
 }
 
