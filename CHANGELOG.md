@@ -41,6 +41,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   PIL-importing tooling.
 
 ### Fixed
+- **graphics: a chunked Kitty transmission now survives an interleaved Kitty
+  command.** The protocol allows other escape codes between `m=1` chunks, but
+  a single shared parser let an interleaved command with a different `a=`
+  action (an `a=q` probe or an `a=p` put) hijack the in-flight transmission —
+  the probe case silently discarded the accumulated pixel data at dispatch,
+  the put case wiped it. The open transmission is now parked and restored
+  around interleaved commands; bare `m=` frames and same-action final-chunk
+  re-announcements (kitty-doom's chunked `a=f`) keep merging. Pinned by
+  `chunked_transmission_survives_interleaved_probe` and
+  `chunked_transmission_survives_interleaved_put` (card 01a21eed, filed by
+  par-term).
 - **mux: a Claude Code `/clear` no longer blanks the roster's project name.**
   Claude fires SessionEnd(reason=`clear`) at `/clear`; the shipped claude
   hook now stays silent on that reason (a re-key, not an exit —
